@@ -1,46 +1,93 @@
+param(
+    [ValidateSet("Debug", "Release", "RelWithDebInfo", "MinSizeRel")]
+    [string]$Configuration = "Debug",
+
+    [switch]$RunTests
+)
+
 $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $picoRoot = Resolve-Path (Join-Path $scriptDir "..")
 $buildDir = Join-Path $picoRoot "Build"
+$vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 
-$cmakeCommand = Get-Command cmake -ErrorAction SilentlyContinue
-$cmakePath = if ($cmakeCommand) { $cmakeCommand.Source } else { $null }
+function Find-CMake
+{
+    $command = Get-Command cmake -ErrorAction SilentlyContinue
+    if ($command)
+    {
+        return $command.Source
+    }
 
-if (-not $cmakePath) {
-    $candidates = @(
-        "${env:ProgramFiles}\CMake\bin\cmake.exe",
-        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    )
+    $standaloneCMake = "${env:ProgramFiles}\CMake\bin\cmake.exe"
+    if (Test-Path $standaloneCMake)
+    {
+        return $standaloneCMake
+    }
 
-    foreach ($candidate in $candidates) {
-        if ($candidate.EndsWith("vswhere.exe") -and (Test-Path $candidate)) {
-            $vsPath = & $candidate -latest -products * -requires Microsoft.VisualStudio.Component.VC.CMake.Project -property installationPath
-            if (-not $vsPath) {
-                $vsPath = & $candidate -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+    if (Test-Path $vsWhere)
+    {
+        $vsPath = & $vsWhere `
+            -latest `
+            -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+        if ($vsPath)
+        {
+            $visualStudioCMake =
+                Join-Path $vsPath "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+            if (Test-Path $visualStudioCMake)
+            {
+                return $visualStudioCMake
             }
-
-            if (-not $vsPath) {
-                continue
-            }
-
-            $vsCmake = Join-Path $vsPath "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-            if (Test-Path $vsCmake) {
-                $cmakePath = $vsCmake
-                break
-            }
-        } elseif (Test-Path $candidate) {
-            $cmakePath = $candidate
-            break
         }
+    }
+
+    return $null
+}
+
+$cmakePath = Find-CMake
+if (-not $cmakePath)
+{
+    throw "CMake was not found. Run Scripts\CheckEnvironment.ps1 for setup guidance."
+}
+
+$ctestPath = Join-Path (Split-Path -Parent $cmakePath) "ctest.exe"
+if ($RunTests -and -not (Test-Path $ctestPath))
+{
+    throw "CTest was not found next to CMake: $ctestPath"
+}
+
+Write-Host "Configuring Pico with Visual Studio 2022 (x64)..."
+& $cmakePath `
+    -S $picoRoot `
+    -B $buildDir `
+    -G "Visual Studio 17 2022" `
+    -A x64
+if ($LASTEXITCODE -ne 0)
+{
+    throw "CMake configure failed with exit code $LASTEXITCODE."
+}
+
+Write-Host "Building Pico ($Configuration)..."
+& $cmakePath --build $buildDir --config $Configuration --parallel
+if ($LASTEXITCODE -ne 0)
+{
+    throw "Pico build failed with exit code $LASTEXITCODE."
+}
+
+if ($RunTests)
+{
+    Write-Host "Running Pico tests ($Configuration)..."
+    & $ctestPath `
+        --test-dir $buildDir `
+        -C $Configuration `
+        --output-on-failure
+    if ($LASTEXITCODE -ne 0)
+    {
+        throw "Pico tests failed with exit code $LASTEXITCODE."
     }
 }
 
-if (-not $cmakePath) {
-    throw "CMake was not found. Install CMake or Visual Studio with the C++ CMake tools component."
-}
-
-New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
-
-& $cmakePath -S $picoRoot -B $buildDir
-& $cmakePath --build $buildDir --config Debug
+Write-Host "Pico $Configuration build completed successfully."

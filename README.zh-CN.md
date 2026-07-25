@@ -4,6 +4,42 @@
 
 Pico 是一个以学习为目的、参考 Unreal Engine 架构设计的小型 C++ 引擎。
 
+## 环境要求
+
+- Windows 10 或 Windows 11（x64）
+- Visual Studio 2022，并安装 **使用 C++ 的桌面开发** 工作负载
+- MSVC v143 和 Windows 10/11 SDK
+- CMake 3.22 或更高版本
+- Git for Windows
+
+GLFW 和 Dear ImGui 已包含在 `ThirdParty` 中，全新拉取代码后不需要再下载其他引擎依赖。
+
+## 在 Windows 上复现项目
+
+克隆私有仓库，然后在 Pico 根目录运行初始化脚本：
+
+```powershell
+git clone https://github.com/<你的用户名>/Pico.git
+Set-Location Pico
+powershell -ExecutionPolicy Bypass -File .\Scripts\SetupWindows.ps1
+```
+
+该脚本会依次检查环境、生成 Visual Studio 2022 x64 工程、编译全部目标并运行所有测试。所有构建产物只会写入 `Build`。
+
+构建并测试其他配置：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\SetupWindows.ps1 -Configuration Release
+```
+
+Debug 初始化成功后，可以运行：
+
+```powershell
+.\Build\Debug\PicoLaunch.exe -frames=5
+.\Build\Debug\PicoReflectionDemo.exe
+.\Build\Debug\PicoInspector.exe
+```
+
 ## Visual Studio 工作流程
 
 在 Visual Studio 2022 中，可以通过以下两种方式打开 Pico。
@@ -44,7 +80,7 @@ Build\Pico.sln
 
 在这种模式下，Visual Studio 显示的是生成后的 `PicoCore`、`PicoLaunch` 等项目，而不是磁盘上的实际文件夹结构。
 
-## 构建
+## 手动构建
 
 在 Pico 根目录运行：
 
