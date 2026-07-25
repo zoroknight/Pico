@@ -1,0 +1,729 @@
+#include "TestRunner.h"
+
+#include "Pico/Developer/ReflectionDebug.h"
+#include "Pico/Object/Class.h"
+#include "Pico/Object/ClassRegistry.h"
+#include "Pico/Object/Archive.h"
+#include "Pico/Object/Object.h"
+#include "Pico/Object/ObjectGlobals.h"
+#include "Pico/Object/ObjectRegistry.h"
+#include "Pico/Object/ObjectSerialization.h"
+#include "Pico/Object/ObjectSystem.h"
+#include "Pico/Object/Property.h"
+
+#include <algorithm>
+#include <cstddef>
+#include <filesystem>
+#include <fstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace
+{
+class PTestObject : public Pico::PObject
+{
+public:
+    static const Pico::PClass* StaticClass()
+    {
+        static Pico::PClass Class(
+            Pico::FName("PTestObject"),
+            Pico::PObject::StaticClass(),
+            sizeof(PTestObject),
+            &PTestObject::ConstructInstance);
+        static const bool bPropertiesAdded = AddProperties(Class);
+        (void)bPropertiesAdded;
+        return &Class;
+    }
+
+    Pico::int32 GetHealth() const
+    {
+        return Health;
+    }
+
+    float GetSpeed() const
+    {
+        return Speed;
+    }
+
+    bool IsAlive() const
+    {
+        return bAlive;
+    }
+
+    bool SawIdentityDuringConstruction() const
+    {
+        return bSawIdentityDuringConstruction;
+    }
+
+    bool DidPostInitProperties() const
+    {
+        return bDidPostInitProperties;
+    }
+
+    bool DidPostLoad() const
+    {
+        return bDidPostLoad;
+    }
+
+    Pico::int32 GetHealthSeenInPostLoad() const
+    {
+        return HealthSeenInPostLoad;
+    }
+
+protected:
+    explicit PTestObject(const Pico::FObjectConstructionParams& Params)
+        : PObject(Params)
+        , bSawIdentityDuringConstruction(
+            GetClass() == Params.Class
+            && GetOuter() == Params.Outer
+            && GetName() == Params.Name)
+    {
+    }
+
+    void PostInitProperties() override
+    {
+        bDidPostInitProperties = true;
+    }
+
+    void PostLoad() override
+    {
+        bDidPostLoad = true;
+        HealthSeenInPostLoad = Health;
+    }
+
+private:
+    static bool AddProperties(Pico::PClass& Class)
+    {
+        return Class.AddProperty(Pico::PProperty(
+                   Pico::FName("Health"),
+                   Pico::EPropertyType::Int32,
+                   offsetof(PTestObject, Health),
+                   sizeof(Health)))
+            && Class.AddProperty(Pico::PProperty(
+                Pico::FName("Speed"),
+                Pico::EPropertyType::Float,
+                offsetof(PTestObject, Speed),
+                sizeof(Speed)))
+            && Class.AddProperty(Pico::PProperty(
+                Pico::FName("bAlive"),
+                Pico::EPropertyType::Bool,
+                offsetof(PTestObject, bAlive),
+                sizeof(bAlive)));
+    }
+
+    static Pico::FObjectPtr ConstructInstance(const Pico::FObjectConstructionParams& Params)
+    {
+        return Pico::FObjectPtr(new PTestObject(Params));
+    }
+
+    Pico::int32 Health = 100;
+    float Speed = 600.0f;
+    bool bAlive = true;
+    bool bSawIdentityDuringConstruction = false;
+    bool bDidPostInitProperties = false;
+    bool bDidPostLoad = false;
+    Pico::int32 HealthSeenInPostLoad = 0;
+};
+
+class PTestDerivedObject final : public PTestObject
+{
+public:
+    static const Pico::PClass* StaticClass()
+    {
+        static Pico::PClass Class(
+            Pico::FName("PTestDerivedObject"),
+            PTestObject::StaticClass(),
+            sizeof(PTestDerivedObject),
+            &PTestDerivedObject::ConstructInstance);
+        static const bool bPropertiesAdded = Class.AddProperty(Pico::PProperty(
+            Pico::FName("Score"),
+            Pico::EPropertyType::Int32,
+            offsetof(PTestDerivedObject, Score),
+            sizeof(Score)));
+        (void)bPropertiesAdded;
+        return &Class;
+    }
+
+    Pico::int32 GetScore() const
+    {
+        return Score;
+    }
+
+private:
+    explicit PTestDerivedObject(const Pico::FObjectConstructionParams& Params)
+        : PTestObject(Params)
+    {
+    }
+
+    static Pico::FObjectPtr ConstructInstance(const Pico::FObjectConstructionParams& Params)
+    {
+        return Pico::FObjectPtr(new PTestDerivedObject(Params));
+    }
+
+    Pico::int32 Score = 10;
+};
+
+class PThrowingPostInitObject final : public PTestObject
+{
+public:
+    static const Pico::PClass* StaticClass()
+    {
+        static const Pico::PClass Class(
+            Pico::FName("PThrowingPostInitObject"),
+            PTestObject::StaticClass(),
+            sizeof(PThrowingPostInitObject),
+            &PThrowingPostInitObject::ConstructInstance);
+        return &Class;
+    }
+
+protected:
+    explicit PThrowingPostInitObject(const Pico::FObjectConstructionParams& Params)
+        : PTestObject(Params)
+    {
+    }
+
+    void PostInitProperties() override
+    {
+        Pico::NewObject<PTestObject>(this, "CreatedBeforeFailure");
+        throw std::runtime_error("Expected PostInitProperties failure");
+    }
+
+private:
+    static Pico::FObjectPtr ConstructInstance(const Pico::FObjectConstructionParams& Params)
+    {
+        return Pico::FObjectPtr(new PThrowingPostInitObject(Params));
+    }
+};
+
+class PThrowingPostLoadObject final : public PTestObject
+{
+public:
+    static const Pico::PClass* StaticClass()
+    {
+        static const Pico::PClass Class(
+            Pico::FName("PThrowingPostLoadObject"),
+            PTestObject::StaticClass(),
+            sizeof(PThrowingPostLoadObject),
+            &PThrowingPostLoadObject::ConstructInstance);
+        return &Class;
+    }
+
+protected:
+    explicit PThrowingPostLoadObject(const Pico::FObjectConstructionParams& Params)
+        : PTestObject(Params)
+    {
+    }
+
+    void PostLoad() override
+    {
+        Pico::NewObject<PTestObject>(this, "CreatedBeforePostLoadFailure");
+        throw std::runtime_error("Expected PostLoad failure");
+    }
+
+private:
+    static Pico::FObjectPtr ConstructInstance(const Pico::FObjectConstructionParams& Params)
+    {
+        return Pico::FObjectPtr(new PThrowingPostLoadObject(Params));
+    }
+};
+
+void TestClassRegistry(FTestRunner& Runner)
+{
+    Runner.Expect(Pico::FClassRegistry::FindClass(Pico::FName("PObject")) == Pico::PObject::StaticClass(),
+        "Object system registers the intrinsic PObject class");
+    Runner.Expect(Pico::FClassRegistry::RegisterClass(PTestObject::StaticClass()), "Test class registers");
+    Runner.Expect(Pico::FClassRegistry::RegisterClass(PTestDerivedObject::StaticClass()), "Derived test class registers");
+    Runner.Expect(Pico::FClassRegistry::RegisterClass(PThrowingPostInitObject::StaticClass()),
+        "Post-init failure test class registers");
+    Runner.Expect(Pico::FClassRegistry::RegisterClass(PThrowingPostLoadObject::StaticClass()),
+        "Post-load failure test class registers");
+    Runner.Expect(Pico::FClassRegistry::FindClass(Pico::FName("PTestObject")) == PTestObject::StaticClass(),
+        "Class registry finds a class by name");
+    Runner.Expect(PTestDerivedObject::StaticClass()->IsChildOf(PTestObject::StaticClass()),
+        "Class metadata follows the direct superclass");
+    Runner.Expect(PTestDerivedObject::StaticClass()->IsChildOf(Pico::PObject::StaticClass()),
+        "Class metadata follows the full inheritance chain");
+    Runner.Expect(!PTestObject::StaticClass()->IsChildOf(PTestDerivedObject::StaticClass()),
+        "A base class is not a child of its derived class");
+    Runner.Expect(PTestDerivedObject::StaticClass()->GetSize() == sizeof(PTestDerivedObject),
+        "Class metadata records the native object size");
+
+    const Pico::PClass DuplicateName(
+        Pico::FName("PTestObject"), Pico::PObject::StaticClass(), sizeof(Pico::PObject), nullptr);
+    Runner.Expect(!Pico::FClassRegistry::RegisterClass(&DuplicateName),
+        "Class registry rejects a different class with a duplicate name");
+
+    const Pico::PClass UnregisteredSuperClass(
+        Pico::FName("UnregisteredSuperClass"), Pico::PObject::StaticClass(), sizeof(Pico::PObject), nullptr);
+    const Pico::PClass OrphanClass(
+        Pico::FName("OrphanClass"), &UnregisteredSuperClass, sizeof(Pico::PObject), nullptr);
+    Runner.Expect(!Pico::FClassRegistry::RegisterClass(&OrphanClass),
+        "Class registry requires the superclass to be registered first");
+}
+
+void TestObjectCreationAndIdentity(FTestRunner& Runner)
+{
+    PTestObject* Root = Pico::NewObject<PTestObject>(nullptr, "Root", Pico::EObjectFlags::Transient);
+    Runner.Expect(Root != nullptr, "Template NewObject creates a registered object");
+    if (Root == nullptr)
+    {
+        return;
+    }
+
+    Runner.Expect(Root->SawIdentityDuringConstruction(), "Object identity is available during construction");
+    Runner.Expect(Root->DidPostInitProperties(), "Object registry calls PostInitProperties after registration");
+    Runner.Expect(Root->IsA(PTestObject::StaticClass()) && Root->IsA(Pico::PObject::StaticClass()),
+        "Object IsA follows its class hierarchy");
+    Runner.Expect(Pico::HasAnyFlags(Root->GetFlags(), Pico::EObjectFlags::Transient),
+        "Object stores its creation flags");
+    Runner.Expect(Root->GetPathName() == "Root", "Root object path uses its local name");
+    Runner.Expect(Pico::ResolveObject(Root->GetHandle()) == Root, "Object handle resolves to the live object");
+    Runner.Expect(Pico::FindObject(nullptr, Pico::FName("Root")) == Root,
+        "Object registry finds an object by outer and name");
+
+    PTestDerivedObject* Child = Pico::NewObject<PTestDerivedObject>(Root, "Child");
+    Runner.Expect(Child != nullptr, "NewObject creates a derived child object");
+    if (Child == nullptr)
+    {
+        Pico::DestroyObject(Root);
+        return;
+    }
+
+    Runner.Expect(Child->GetClass() == PTestDerivedObject::StaticClass(), "Derived object keeps its exact runtime class");
+    Runner.Expect(Child->GetOuter() == Root, "Child object keeps its outer");
+    Runner.Expect(Child->GetPathName() == "Root.Child", "Child path includes the outer path");
+
+    Pico::PObject* DynamicObject = Pico::NewObject(PTestDerivedObject::StaticClass(), nullptr, "Dynamic");
+    Runner.Expect(DynamicObject != nullptr && DynamicObject->GetClass() == PTestDerivedObject::StaticClass(),
+        "Dynamic NewObject constructs from PClass metadata");
+
+    Runner.Expect(Pico::NewObject<PTestObject>(nullptr, "Root") == nullptr,
+        "NewObject rejects a duplicate name in the same outer");
+    Runner.Expect(!Pico::DestroyObject(Root), "Object registry refuses to destroy an outer with live children");
+
+    const Pico::FObjectHandle OldChildHandle = Child->GetHandle();
+    Runner.Expect(Pico::DestroyObject(Child), "DestroyObject removes a leaf object");
+    Runner.Expect(Pico::ResolveObject(OldChildHandle) == nullptr, "Destroyed object handle no longer resolves");
+
+    PTestDerivedObject* Replacement = Pico::NewObject<PTestDerivedObject>(Root, "Child");
+    Runner.Expect(Replacement != nullptr, "A destroyed object name can be reused");
+    if (Replacement != nullptr)
+    {
+        Runner.Expect(Replacement->GetHandle() != OldChildHandle, "A reused object slot receives a new serial");
+        Runner.Expect(Pico::ResolveObject(OldChildHandle) == nullptr, "Old handle stays invalid after slot reuse");
+        Runner.Expect(Pico::DestroyObject(Replacement), "Replacement child can be destroyed");
+    }
+
+    Runner.Expect(Pico::DestroyObject(Root), "Outer can be destroyed after its children");
+    if (DynamicObject != nullptr)
+    {
+        Runner.Expect(Pico::DestroyObject(DynamicObject), "Dynamically constructed object can be destroyed");
+    }
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Explicit destruction leaves no live objects");
+
+    const std::size_t ObjectCountBeforeFailure = Pico::FObjectRegistry::GetObjectCount();
+    bool bCaughtPostInitFailure = false;
+    try
+    {
+        Pico::NewObject<PThrowingPostInitObject>(nullptr, "ThrowingObject");
+    }
+    catch (const std::runtime_error&)
+    {
+        bCaughtPostInitFailure = true;
+    }
+
+    Runner.Expect(bCaughtPostInitFailure, "PostInitProperties failures propagate to the caller");
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == ObjectCountBeforeFailure,
+        "PostInitProperties failure rolls back the object and children it created");
+    Runner.Expect(Pico::FindObject(nullptr, Pico::FName("ThrowingObject")) == nullptr,
+        "PostInitProperties failure leaves no half-registered parent object");
+}
+
+void TestPropertyReflection(FTestRunner& Runner)
+{
+    const Pico::PClass* TestClass = PTestObject::StaticClass();
+    const Pico::PProperty* HealthProperty = TestClass->FindProperty(Pico::FName("Health"));
+    const Pico::PProperty* SpeedProperty = TestClass->FindProperty(Pico::FName("Speed"));
+    const Pico::PProperty* AliveProperty = TestClass->FindProperty(Pico::FName("bAlive"));
+
+    Runner.Expect(TestClass->GetProperties().size() == 3, "Class exposes its directly declared properties");
+    Runner.Expect(HealthProperty != nullptr && HealthProperty->GetOwnerClass() == TestClass,
+        "Property records its declaring class");
+    Runner.Expect(SpeedProperty != nullptr && SpeedProperty->GetType() == Pico::EPropertyType::Float,
+        "Property records its value type");
+    Runner.Expect(AliveProperty != nullptr && AliveProperty->GetSize() == sizeof(bool),
+        "Property records its native size");
+    Runner.Expect(TestClass->FindProperty(Pico::FName("Missing")) == nullptr,
+        "Missing property lookup returns null");
+
+    PTestObject* Object = Pico::NewObject<PTestObject>(nullptr, "PropertyObject");
+    Runner.Expect(Object != nullptr, "Object for property reflection is created");
+    if (Object == nullptr)
+    {
+        return;
+    }
+
+    Pico::int32 Health = 0;
+    float Speed = 0.0f;
+    bool bAlive = false;
+    Runner.Expect(HealthProperty != nullptr && HealthProperty->GetValue(Object, Health) && Health == 100,
+        "Int32 property reads its instance value");
+    Runner.Expect(SpeedProperty != nullptr && SpeedProperty->GetValue(Object, Speed) && Speed == 600.0f,
+        "Float property reads its instance value");
+    Runner.Expect(AliveProperty != nullptr && AliveProperty->GetValue(Object, bAlive) && bAlive,
+        "Bool property reads its instance value");
+    Runner.Expect(HealthProperty != nullptr && HealthProperty->SetValue(Object, Pico::int32 { 75 })
+            && Object->GetHealth() == 75,
+        "Property writes its instance value");
+    Runner.Expect(HealthProperty != nullptr && HealthProperty->GetValuePtr<float>(Object) == nullptr,
+        "Property rejects access through the wrong value type");
+
+    PTestDerivedObject* Derived = Pico::NewObject<PTestDerivedObject>(nullptr, "DerivedPropertyObject");
+    Runner.Expect(Derived != nullptr, "Derived object for inherited property reflection is created");
+    if (Derived != nullptr)
+    {
+        const Pico::PProperty* InheritedHealth = Derived->GetClass()->FindProperty(Pico::FName("Health"));
+        const Pico::PProperty* ScoreProperty = Derived->GetClass()->FindProperty(Pico::FName("Score"));
+        Pico::int32 DerivedHealth = 0;
+        Pico::int32 Score = 0;
+        Runner.Expect(InheritedHealth == HealthProperty,
+            "Derived class lookup finds a property declared by its superclass");
+        Runner.Expect(InheritedHealth != nullptr
+                && InheritedHealth->GetValue(Derived, DerivedHealth)
+                && DerivedHealth == 100,
+            "Superclass property reads from a derived instance");
+        Runner.Expect(ScoreProperty != nullptr
+                && ScoreProperty->GetValue(Derived, Score)
+                && Score == Derived->GetScore(),
+            "Derived class exposes its directly declared property");
+        Runner.Expect(ScoreProperty != nullptr && ScoreProperty->GetValuePtr<Pico::int32>(Object) == nullptr,
+            "Derived-only property rejects a base instance");
+        Pico::DestroyObject(Derived);
+    }
+
+    Pico::DestroyObject(Object);
+}
+
+void TestReflectionObservation(FTestRunner& Runner)
+{
+    const std::vector<const Pico::PClass*> Classes = Pico::FClassRegistry::GetClasses();
+    Runner.Expect(
+        Classes.size() == Pico::FClassRegistry::GetClassCount(),
+        "Class registry exposes a complete read-only snapshot");
+    Runner.Expect(
+        std::is_sorted(
+            Classes.begin(),
+            Classes.end(),
+            [](const Pico::PClass* Left, const Pico::PClass* Right)
+            {
+                return Left->GetName().ToString() < Right->GetName().ToString();
+            }),
+        "Class registry snapshot has deterministic name order");
+    Runner.Expect(
+        std::find(Classes.begin(), Classes.end(), PTestDerivedObject::StaticClass()) != Classes.end(),
+        "Class registry snapshot includes registered derived classes");
+
+    PTestObject* Root = Pico::NewObject<PTestObject>(nullptr, "ObservedRoot");
+    PTestDerivedObject* Child =
+        Root != nullptr ? Pico::NewObject<PTestDerivedObject>(Root, "ObservedChild") : nullptr;
+    const std::vector<Pico::PObject*> Objects = Pico::FObjectRegistry::GetObjects();
+    Runner.Expect(
+        Root != nullptr && Child != nullptr
+            && std::find(Objects.begin(), Objects.end(), Root) != Objects.end()
+            && std::find(Objects.begin(), Objects.end(), Child) != Objects.end(),
+        "Object registry snapshot includes live root and child objects");
+
+    const std::string ClassDump = Pico::DumpClass(PTestDerivedObject::StaticClass());
+    Runner.Expect(
+        ClassDump.find("Class: PTestDerivedObject") != std::string::npos
+            && ClassDump.find("Health") != std::string::npos
+            && ClassDump.find("Score") != std::string::npos,
+        "Class dump includes inherited and directly declared properties");
+
+    const std::string ObjectDump = Pico::DumpObject(Child);
+    Runner.Expect(
+        ObjectDump.find("Object: ObservedRoot.ObservedChild") != std::string::npos
+            && ObjectDump.find("Health = 100") != std::string::npos
+            && ObjectDump.find("Score = 10") != std::string::npos,
+        "Object dump exposes identity and reflected values");
+
+    if (Child != nullptr)
+    {
+        Pico::DestroyObject(Child);
+    }
+    if (Root != nullptr)
+    {
+        Pico::DestroyObject(Root);
+    }
+}
+
+void TestObjectSerialization(FTestRunner& Runner)
+{
+    PTestDerivedObject* Source = Pico::NewObject<PTestDerivedObject>(
+        nullptr,
+        "SerializedObject",
+        Pico::EObjectFlags::Transient);
+    Runner.Expect(Source != nullptr, "Object for serialization is created");
+    if (Source == nullptr)
+    {
+        return;
+    }
+
+    const Pico::PClass* Class = Source->GetClass();
+    const Pico::PProperty* HealthProperty = Class->FindProperty(Pico::FName("Health"));
+    const Pico::PProperty* SpeedProperty = Class->FindProperty(Pico::FName("Speed"));
+    const Pico::PProperty* AliveProperty = Class->FindProperty(Pico::FName("bAlive"));
+    const Pico::PProperty* ScoreProperty = Class->FindProperty(Pico::FName("Score"));
+    const bool bValuesChanged =
+        HealthProperty != nullptr && HealthProperty->SetValue(Source, Pico::int32 { 75 })
+        && SpeedProperty != nullptr && SpeedProperty->SetValue(Source, 321.5f)
+        && AliveProperty != nullptr && AliveProperty->SetValue(Source, false)
+        && ScoreProperty != nullptr && ScoreProperty->SetValue(Source, Pico::int32 { 9001 });
+    Runner.Expect(bValuesChanged, "Reflected values are changed before saving");
+
+    Pico::FMemoryWriter Writer;
+    Runner.Expect(Pico::SaveObject(Writer, Source), "Object saves to a memory archive");
+    const std::vector<Pico::uint8>& Data = Writer.GetData();
+    const std::string ClassName = "PTestDerivedObject";
+    const auto ClassNamePosition = std::search(
+        Data.begin(),
+        Data.end(),
+        ClassName.begin(),
+        ClassName.end());
+    Runner.Expect(ClassNamePosition != Data.end(), "Archive stores class names as text instead of FName indices");
+
+    Runner.Expect(Pico::DestroyObject(Source), "Source object is destroyed before loading");
+
+    Pico::EObjectSerializationError SerializationError = Pico::EObjectSerializationError::InvalidArchive;
+    Pico::FMemoryReader Reader(Data);
+    Pico::PObject* LoadedBase = Pico::LoadObject(Reader, nullptr, &SerializationError);
+    Runner.Expect(
+        LoadedBase != nullptr && SerializationError == Pico::EObjectSerializationError::None,
+        "Object loads from a memory archive without an error");
+    Runner.Expect(LoadedBase != nullptr && LoadedBase->GetClass() == PTestDerivedObject::StaticClass(),
+        "Loading resolves the saved class name through the class registry");
+    Runner.Expect(LoadedBase != nullptr && LoadedBase->GetName() == Pico::FName("SerializedObject"),
+        "Loading restores the object name");
+    Runner.Expect(LoadedBase != nullptr
+            && Pico::HasAnyFlags(LoadedBase->GetFlags(), Pico::EObjectFlags::Transient),
+        "Loading restores object flags");
+
+    if (LoadedBase != nullptr)
+    {
+        Pico::int32 Health = 0;
+        float Speed = 0.0f;
+        bool bAlive = true;
+        Pico::int32 Score = 0;
+        const bool bValuesRestored =
+            HealthProperty->GetValue(LoadedBase, Health) && Health == 75
+            && SpeedProperty->GetValue(LoadedBase, Speed) && Speed == 321.5f
+            && AliveProperty->GetValue(LoadedBase, bAlive) && !bAlive
+            && ScoreProperty->GetValue(LoadedBase, Score) && Score == 9001;
+        Runner.Expect(bValuesRestored, "Loading restores inherited and directly declared reflected properties");
+        const auto* LoadedObject = static_cast<const PTestDerivedObject*>(LoadedBase);
+        Runner.Expect(
+            LoadedObject->DidPostLoad() && LoadedObject->GetHealthSeenInPostLoad() == 75,
+            "PostLoad runs after serialized property values are applied");
+    }
+
+    const std::filesystem::path FilePath =
+        std::filesystem::temp_directory_path() / "PicoObjectSerializationTest.pobj";
+    Runner.Expect(LoadedBase != nullptr && Pico::SaveObjectToFile(FilePath, LoadedBase, &SerializationError),
+        "Object saves to a persistent file");
+    if (LoadedBase != nullptr)
+    {
+        ScoreProperty->SetValue(LoadedBase, Pico::int32 { 1234 });
+    }
+    Runner.Expect(LoadedBase != nullptr && Pico::SaveObjectToFile(FilePath, LoadedBase, &SerializationError),
+        "Saving again safely replaces an existing persistent file");
+    if (LoadedBase != nullptr)
+    {
+        Pico::DestroyObject(LoadedBase);
+    }
+
+    Pico::PObject* FileLoadedObject = Pico::LoadObjectFromFile(FilePath, nullptr, &SerializationError);
+    Runner.Expect(FileLoadedObject != nullptr, "Object loads from a persistent file");
+    if (FileLoadedObject != nullptr)
+    {
+        Pico::int32 Score = 0;
+        Runner.Expect(
+            ScoreProperty->GetValue(FileLoadedObject, Score) && Score == 1234,
+            "File replacement preserves the most recently saved values");
+        Pico::DestroyObject(FileLoadedObject);
+    }
+    Runner.Expect(
+        !std::filesystem::exists(std::filesystem::path(FilePath).concat(".tmp"))
+            && !std::filesystem::exists(std::filesystem::path(FilePath).concat(".bak")),
+        "Successful file replacement leaves no temporary files");
+
+    {
+        std::ofstream TrailingFile(FilePath, std::ios::binary | std::ios::app);
+        TrailingFile.put(static_cast<char>(0x7f));
+    }
+    Runner.Expect(
+        Pico::LoadObjectFromFile(FilePath, nullptr, &SerializationError) == nullptr
+            && SerializationError == Pico::EObjectSerializationError::TrailingData,
+        "File loading reports unexpected trailing data");
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0,
+        "Trailing file data rolls back the loaded object");
+
+    std::error_code ErrorCode;
+    std::filesystem::remove(FilePath, ErrorCode);
+
+    std::vector<Pico::uint8> TruncatedData = Data;
+    if (!TruncatedData.empty())
+    {
+        TruncatedData.pop_back();
+    }
+    const std::size_t ObjectCountBeforeFailure = Pico::FObjectRegistry::GetObjectCount();
+    Pico::FMemoryReader TruncatedReader(TruncatedData);
+    Runner.Expect(
+        Pico::LoadObject(TruncatedReader, nullptr, &SerializationError) == nullptr
+            && SerializationError == Pico::EObjectSerializationError::InvalidArchive,
+        "Loading identifies a truncated archive");
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == ObjectCountBeforeFailure,
+        "A malformed archive leaves no half-loaded object");
+
+    std::vector<Pico::uint8> UnsupportedVersionData = Data;
+    UnsupportedVersionData[4] = 2;
+    UnsupportedVersionData[5] = 0;
+    UnsupportedVersionData[6] = 0;
+    UnsupportedVersionData[7] = 0;
+    Pico::FMemoryReader UnsupportedVersionReader(UnsupportedVersionData);
+    Runner.Expect(
+        Pico::LoadObject(UnsupportedVersionReader, nullptr, &SerializationError) == nullptr
+            && SerializationError == Pico::EObjectSerializationError::UnsupportedVersion,
+        "Loading reports an unsupported format version");
+
+    std::vector<Pico::uint8> MissingClassData = Data;
+    const auto MissingClassPosition = std::search(
+        MissingClassData.begin(),
+        MissingClassData.end(),
+        ClassName.begin(),
+        ClassName.end());
+    if (MissingClassPosition != MissingClassData.end())
+    {
+        *MissingClassPosition = static_cast<Pico::uint8>('Q');
+    }
+    Pico::FMemoryReader MissingClassReader(MissingClassData);
+    Runner.Expect(
+        Pico::LoadObject(MissingClassReader, nullptr, &SerializationError) == nullptr
+            && SerializationError == Pico::EObjectSerializationError::ClassNotFound,
+        "Loading reports a class name that is no longer registered");
+
+    std::vector<Pico::uint8> RemovedPropertyData = Data;
+    const std::string ScoreName = "Score";
+    const std::string RemovedPropertyName = "GoneX";
+    const auto RemovedPropertyPosition = std::search(
+        RemovedPropertyData.begin(),
+        RemovedPropertyData.end(),
+        ScoreName.begin(),
+        ScoreName.end());
+    if (RemovedPropertyPosition != RemovedPropertyData.end())
+    {
+        std::copy(RemovedPropertyName.begin(), RemovedPropertyName.end(), RemovedPropertyPosition);
+    }
+    Pico::FMemoryReader RemovedPropertyReader(RemovedPropertyData);
+    Pico::PObject* RemovedPropertyObject =
+        Pico::LoadObject(RemovedPropertyReader, nullptr, &SerializationError);
+    Pico::int32 RemovedPropertyScore = 0;
+    Runner.Expect(
+        RemovedPropertyObject != nullptr
+            && ScoreProperty->GetValue(RemovedPropertyObject, RemovedPropertyScore)
+            && RemovedPropertyScore == 10,
+        "Loading ignores a serialized property that no longer exists");
+    if (RemovedPropertyObject != nullptr)
+    {
+        Pico::DestroyObject(RemovedPropertyObject);
+    }
+
+    std::vector<Pico::uint8> ChangedTypeData = Data;
+    const auto ChangedTypePosition = std::search(
+        ChangedTypeData.begin(),
+        ChangedTypeData.end(),
+        ScoreName.begin(),
+        ScoreName.end());
+    if (ChangedTypePosition != ChangedTypeData.end())
+    {
+        *(ChangedTypePosition + ScoreName.size()) = static_cast<Pico::uint8>(Pico::EPropertyType::Float);
+    }
+    Pico::FMemoryReader ChangedTypeReader(ChangedTypeData);
+    Runner.Expect(
+        Pico::LoadObject(ChangedTypeReader, nullptr, &SerializationError) == nullptr
+            && SerializationError == Pico::EObjectSerializationError::PropertyTypeMismatch,
+        "Loading rejects a known property whose reflected type changed");
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == ObjectCountBeforeFailure,
+        "A property type mismatch rolls back the newly created object");
+
+    Pico::FMemoryReader FirstDuplicateReader(Data);
+    Pico::PObject* FirstDuplicateObject =
+        Pico::LoadObject(FirstDuplicateReader, nullptr, &SerializationError);
+    Pico::FMemoryReader SecondDuplicateReader(Data);
+    Runner.Expect(
+        FirstDuplicateObject != nullptr
+            && Pico::LoadObject(SecondDuplicateReader, nullptr, &SerializationError) == nullptr
+            && SerializationError == Pico::EObjectSerializationError::ObjectCreationFailed,
+        "Loading reports an object name collision");
+    if (FirstDuplicateObject != nullptr)
+    {
+        Pico::DestroyObject(FirstDuplicateObject);
+    }
+
+    PThrowingPostLoadObject* ThrowingSource =
+        Pico::NewObject<PThrowingPostLoadObject>(nullptr, "ThrowingPostLoadObject");
+    Pico::FMemoryWriter ThrowingWriter;
+    Runner.Expect(
+        ThrowingSource != nullptr && Pico::SaveObject(ThrowingWriter, ThrowingSource, &SerializationError),
+        "PostLoad rollback fixture saves successfully");
+    if (ThrowingSource != nullptr)
+    {
+        Pico::DestroyObject(ThrowingSource);
+    }
+    const std::size_t CountBeforePostLoadFailure = Pico::FObjectRegistry::GetObjectCount();
+    Pico::FMemoryReader ThrowingReader(ThrowingWriter.GetData());
+    Runner.Expect(
+        Pico::LoadObject(ThrowingReader, nullptr, &SerializationError) == nullptr
+            && SerializationError == Pico::EObjectSerializationError::PostLoadFailed,
+        "Loading reports a PostLoad failure");
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == CountBeforePostLoadFailure,
+        "PostLoad failure rolls back the object and children it created");
+}
+
+void TestShutdownAndReinitialize(FTestRunner& Runner)
+{
+    PTestObject* Root = Pico::NewObject<PTestObject>(nullptr, "ShutdownRoot");
+    PTestDerivedObject* Child = Root != nullptr
+        ? Pico::NewObject<PTestDerivedObject>(Root, "ShutdownChild")
+        : nullptr;
+    const Pico::FObjectHandle OldHandle = Child != nullptr ? Child->GetHandle() : Pico::FObjectHandle {};
+
+    Pico::PObjectSystem::Shutdown();
+    Runner.Expect(!Pico::PObjectSystem::IsInitialized(), "Object system reports shutdown state");
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Object system shutdown destroys all objects");
+    Runner.Expect(Pico::FClassRegistry::GetClassCount() == 0, "Object system shutdown clears class registration");
+    Runner.Expect(Pico::ResolveObject(OldHandle) == nullptr, "Handles remain invalid after system shutdown");
+
+    Runner.Expect(Pico::PObjectSystem::Init(), "Object system can initialize again after shutdown");
+    Runner.Expect(Pico::FClassRegistry::GetClassCount() == 1, "Reinitialization restores only intrinsic classes");
+}
+}
+
+int main()
+{
+    FTestRunner Runner;
+    Runner.Expect(Pico::PObjectSystem::Init(), "Object system initializes");
+
+    if (Pico::PObjectSystem::IsInitialized())
+    {
+        TestClassRegistry(Runner);
+        TestObjectCreationAndIdentity(Runner);
+        TestPropertyReflection(Runner);
+        TestReflectionObservation(Runner);
+        TestObjectSerialization(Runner);
+        TestShutdownAndReinitialize(Runner);
+        Pico::PObjectSystem::Shutdown();
+    }
+
+    return Runner.Finish();
+}

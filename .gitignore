@@ -1,0 +1,39 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# CMake build trees and generated files
+Build/
+BuildVerify/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+
+# Compiler and linker output
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.lib
+*.exp
+
+# Runtime-generated data
+Saved/
+imgui.ini
+*.log
+
+# Temporary and operating-system files
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
