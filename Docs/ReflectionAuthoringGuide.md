@@ -37,7 +37,7 @@ private:
 ```cpp
 const PClass* PDemoCharacter::StaticClass()
 {
-    static PClass Class(
+    static PClass Class = PClass::Create<PDemoCharacter>(
         FName("PDemoCharacter"),
         PObject::StaticClass(),
         sizeof(PDemoCharacter),
@@ -53,6 +53,7 @@ const PClass* PDemoCharacter::StaticClass()
 父类
 C++ 对象大小
 构造函数入口
+原生 C++ 类型令牌
 ```
 
 ## 3. 连接对象构造
@@ -70,23 +71,26 @@ FObjectPtr PDemoCharacter::ConstructInstance(const FObjectConstructionParams& Pa
 
 ## 4. 注册属性元数据
 
-每个 `PProperty`保存属性名称、类型、相对对象首地址的偏移和大小：
+每个 `PProperty`保存属性名称、类型、大小和由成员指针生成的类型安全访问函数：
 
 ```cpp
-Class.AddProperty(PProperty(
-    FName("Health"),
-    EPropertyType::Int32,
-    offsetof(PDemoCharacter, Health),
-    sizeof(Health)));
+PProperty::Create<&PDemoCharacter::Health>(FName("Health"));
 ```
 
-此后反射系统可以通过：
+同一个类的属性应当组成批次后一次提交：
 
-```text
-对象首地址 + Health 偏移
+```cpp
+std::vector<PProperty> Properties;
+Properties.push_back(
+    PProperty::Create<&PDemoCharacter::Health>(FName("Health")));
+Properties.push_back(
+    PProperty::Create<&PDemoCharacter::MoveSpeed>(FName("MoveSpeed")));
+Class.AddProperties(std::move(Properties));
 ```
 
-找到具体实例中的 `Health`变量。
+如果批次中任一属性无效，整个批次都不会写入 `PClass`。类注册成功后元数据会被封存，不能在运行过程中继续增加属性。
+
+成员指针方式不依赖多态 C++ 对象的内存偏移。访问函数仍然向序列化和 Inspector 提供通用地址，但会先检查对象类型和属性类型。
 
 当前阶段必须显式注册属性。它对应 UE 生成代码最终建立元数据的结果，但 Pico 暂时没有 UHT 和 `UPROPERTY`宏。
 

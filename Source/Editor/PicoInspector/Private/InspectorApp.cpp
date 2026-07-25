@@ -197,10 +197,9 @@ void FInspectorApp::DrawClassDetails(const PClass* Class)
     for (const PProperty* Property : GetAllProperties(Class))
     {
         ImGui::Text(
-            "%s  %s  offset %zu",
+            "%s  %s",
             Property->GetName().ToString().c_str(),
-            GetPropertyTypeName(Property->GetType()).data(),
-            Property->GetOffset());
+            GetPropertyTypeName(Property->GetType()).data());
         ImGui::TextDisabled("Declared by %s", Property->GetOwnerClass()->GetName().ToString().c_str());
     }
 }

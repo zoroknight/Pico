@@ -36,6 +36,7 @@ public:
     FObjectHandle GetHandle() const;
     std::string GetPathName() const;
     bool IsA(const PClass* Class) const;
+    bool IsBeginningDestroy() const;
 
 protected:
     static void* operator new(std::size_t Size);
@@ -45,6 +46,7 @@ protected:
     virtual ~PObject() = default;
     virtual void PostInitProperties();
     virtual void PostLoad();
+    virtual void BeginDestroy();
 
 private:
     static FObjectPtr ConstructInstance(const FObjectConstructionParams& Params);
@@ -58,5 +60,6 @@ private:
     FName NamePrivate;
     EObjectFlags FlagsPrivate = EObjectFlags::None;
     FObjectHandle HandlePrivate;
+    bool bBeginningDestroy = false;
 };
 }

@@ -41,6 +41,12 @@ bool FClassRegistry::RegisterClass(const PClass* Class)
         return false;
     }
 
+    if (!Class->IsMetadataValid())
+    {
+        PICO_LOG(LogObject, Error, "Class '{}' has invalid property metadata", Class->GetName().ToString());
+        return false;
+    }
+
     const auto Existing = Classes.find(Class->GetName());
     if (Existing != Classes.end())
     {
@@ -50,6 +56,12 @@ bool FClassRegistry::RegisterClass(const PClass* Class)
         }
 
         PICO_LOG(LogObject, Error, "Class name '{}' is already registered", Class->GetName().ToString());
+        return false;
+    }
+
+    if (!Class->FinalizeMetadata())
+    {
+        PICO_LOG(LogObject, Error, "Class '{}' metadata could not be finalized", Class->GetName().ToString());
         return false;
     }
 

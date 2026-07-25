@@ -4,12 +4,33 @@
 #include "Pico/Core/Types.h"
 
 #include <cstddef>
+#include <memory>
 #include <type_traits>
 
 namespace Pico
 {
 class PClass;
 class PObject;
+
+namespace Detail
+{
+template <typename T>
+const void* GetNativeTypeToken()
+{
+    static const int Token = 0;
+    return &Token;
+}
+}
+
+template <typename TMemberPointer>
+struct TMemberPointerTraits;
+
+template <typename TObject, typename TValue>
+struct TMemberPointerTraits<TValue TObject::*>
+{
+    using ObjectType = TObject;
+    using ValueType = TValue;
+};
 
 enum class EPropertyType : uint8
 {
@@ -61,11 +82,35 @@ constexpr EPropertyType GetPropertyType()
 class PProperty
 {
 public:
-    PProperty(FName InName, EPropertyType InType, std::size_t InOffset, std::size_t InSize);
+    template <auto Member>
+    static PProperty Create(FName InName)
+    {
+        static_assert(std::is_member_object_pointer_v<decltype(Member)>, "Reflected properties require a data member");
+
+        using FMemberTraits = TMemberPointerTraits<decltype(Member)>;
+        using TObject = typename FMemberTraits::ObjectType;
+        using TValue = typename FMemberTraits::ValueType;
+        static_assert(std::is_base_of_v<PObject, TObject>, "Reflected properties require a PObject-derived owner");
+        static_assert(!std::is_const_v<TValue>, "Reflected properties cannot target const data members");
+        static_assert(TIsSupportedPropertyType<TValue>, "Unsupported reflected property type");
+
+        return PProperty(
+            InName,
+            GetPropertyType<TValue>(),
+            sizeof(TValue),
+            Detail::GetNativeTypeToken<TObject>(),
+            [](PObject* Object) -> void*
+            {
+                return std::addressof(static_cast<TObject*>(Object)->*Member);
+            },
+            [](const PObject* Object) -> const void*
+            {
+                return std::addressof(static_cast<const TObject*>(Object)->*Member);
+            });
+    }
 
     FName GetName() const;
     EPropertyType GetType() const;
-    std::size_t GetOffset() const;
     std::size_t GetSize() const;
     const PClass* GetOwnerClass() const;
 
@@ -110,6 +155,19 @@ public:
     }
 
 private:
+    using FMutableAccessor = void* (*)(PObject*);
+    using FConstAccessor = const void* (*)(const PObject*);
+
+    PProperty(
+        FName InName,
+        EPropertyType InType,
+        std::size_t InSize,
+        const void* InOwnerTypeToken,
+        FMutableAccessor InMutableAccessor,
+        FConstAccessor InConstAccessor);
+
+    bool HasValidAccessors() const;
+    const void* GetOwnerTypeToken() const;
     void* GetValueAddress(PObject* Object, EPropertyType ExpectedType, std::size_t ExpectedSize) const;
     const void* GetValueAddress(
         const PObject* Object,
@@ -120,8 +178,10 @@ private:
 
     FName Name;
     EPropertyType Type;
-    std::size_t Offset = 0;
     std::size_t Size = 0;
+    const void* OwnerTypeToken = nullptr;
+    FMutableAccessor MutableAccessor = nullptr;
+    FConstAccessor ConstAccessor = nullptr;
     const PClass* OwnerClass = nullptr;
 };
 }

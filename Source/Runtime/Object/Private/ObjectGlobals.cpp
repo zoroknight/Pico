@@ -34,9 +34,10 @@ PObject* NewObject(const PClass* Class, PObject* Outer, FName Name, EObjectFlags
         return nullptr;
     }
 
-    if (Outer != nullptr && ResolveObject(Outer->GetHandle()) != Outer)
+    if (Outer != nullptr
+        && (ResolveObject(Outer->GetHandle()) != Outer || Outer->IsBeginningDestroy()))
     {
-        PICO_LOG(LogObject, Error, "NewObject requires a live registered outer");
+        PICO_LOG(LogObject, Error, "NewObject requires a live outer that is not being destroyed");
         return nullptr;
     }
 

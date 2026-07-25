@@ -31,6 +31,7 @@ The first implementation is case-sensitive and reserves both an empty string and
 - a superclass pointer
 - the native object size
 - a constructor function
+- a process-local native C++ type token
 
 Classes register explicitly with `FClassRegistry`. A superclass must already be registered, which makes initialization order deterministic and testable.
 
@@ -101,15 +102,15 @@ The object system currently assumes registration, creation, and destruction occu
 
 - its `FName`
 - its `EPropertyType`
-- its byte offset from the object address
 - its native size
 - the `PClass` that declares it
+- typed member access functions generated from a C++ member pointer
 
 The first supported value types are deliberately limited to `int32`, `float`, and `bool`. `PClass::FindProperty` searches the current class first and then follows `SuperClass`, while `GetProperties` returns only the properties declared directly by that class.
 
-Property values are accessed through type-checked `GetValue`, `SetValue`, and `GetValuePtr` operations. Access fails when the requested C++ type does not match, the object is not an instance of the declaring class, or the property range falls outside the object's native size.
+Property values are accessed through type-checked `GetValue`, `SetValue`, and `GetValuePtr` operations. Access fails when the requested C++ type does not match, the object is not an instance of the declaring class, or the generated member accessor is invalid.
 
-Registration is explicit and uses byte offsets. Property storage keeps returned `PProperty` addresses stable as more properties are registered. Reflection macros and generated registration remain deferred until the manual metadata path has a serialization consumer.
+Registration is explicit and uses `PProperty::Create<&TObject::Member>`. A class adds properties as one transaction, so an invalid member cannot leave a partially registered schema. Class registration finalizes metadata and rejects invalid classes. Property storage keeps returned `PProperty` addresses stable. Reflection macros and generated registration remain deferred until the manual metadata path has a serialization consumer.
 
 ## Stage 2.3: Serialization
 

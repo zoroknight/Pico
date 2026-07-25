@@ -24,7 +24,11 @@ PObject::PObject(const FObjectConstructionParams& Params)
 
 const PClass* PObject::StaticClass()
 {
-    static const PClass Class(FName("PObject"), nullptr, sizeof(PObject), &PObject::ConstructInstance);
+    static const PClass Class = PClass::Create<PObject>(
+        FName("PObject"),
+        nullptr,
+        sizeof(PObject),
+        &PObject::ConstructInstance);
     return &Class;
 }
 
@@ -80,11 +84,20 @@ bool PObject::IsA(const PClass* Class) const
     return ClassPrivate != nullptr && ClassPrivate->IsChildOf(Class);
 }
 
+bool PObject::IsBeginningDestroy() const
+{
+    return bBeginningDestroy;
+}
+
 void PObject::PostInitProperties()
 {
 }
 
 void PObject::PostLoad()
+{
+}
+
+void PObject::BeginDestroy()
 {
 }
 }

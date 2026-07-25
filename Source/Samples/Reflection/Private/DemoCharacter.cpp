@@ -4,25 +4,30 @@
 #include "Pico/Object/ClassRegistry.h"
 #include "Pico/Object/Property.h"
 
-#include <cstddef>
+#include <utility>
+#include <vector>
 
 namespace Pico
 {
 const PClass* PDemoCharacter::StaticClass()
 {
-    static PClass Class(
+    static PClass Class = PClass::Create<PDemoCharacter>(
         FName("PDemoCharacter"),
         PObject::StaticClass(),
         sizeof(PDemoCharacter),
         &PDemoCharacter::ConstructInstance);
     static const bool bPropertiesAdded = AddProperties(Class);
-    (void)bPropertiesAdded;
+    if (!bPropertiesAdded)
+    {
+        return nullptr;
+    }
     return &Class;
 }
 
 bool PDemoCharacter::RegisterClass()
 {
-    return FClassRegistry::RegisterClass(StaticClass());
+    const PClass* Class = StaticClass();
+    return Class != nullptr && FClassRegistry::RegisterClass(Class);
 }
 
 int32 PDemoCharacter::GetHealth() const
@@ -62,20 +67,10 @@ FObjectPtr PDemoCharacter::ConstructInstance(const FObjectConstructionParams& Pa
 
 bool PDemoCharacter::AddProperties(PClass& Class)
 {
-    return Class.AddProperty(PProperty(
-               FName("Health"),
-               EPropertyType::Int32,
-               offsetof(PDemoCharacter, Health),
-               sizeof(Health)))
-        && Class.AddProperty(PProperty(
-            FName("MoveSpeed"),
-            EPropertyType::Float,
-            offsetof(PDemoCharacter, MoveSpeed),
-            sizeof(MoveSpeed)))
-        && Class.AddProperty(PProperty(
-            FName("bAlive"),
-            EPropertyType::Bool,
-            offsetof(PDemoCharacter, bAlive),
-            sizeof(bAlive)));
+    std::vector<PProperty> Properties;
+    Properties.push_back(PProperty::Create<&PDemoCharacter::Health>(FName("Health")));
+    Properties.push_back(PProperty::Create<&PDemoCharacter::MoveSpeed>(FName("MoveSpeed")));
+    Properties.push_back(PProperty::Create<&PDemoCharacter::bAlive>(FName("bAlive")));
+    return Class.AddProperties(std::move(Properties));
 }
 }

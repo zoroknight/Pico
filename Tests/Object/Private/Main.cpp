@@ -17,6 +17,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -26,14 +27,29 @@ class PTestObject : public Pico::PObject
 public:
     static const Pico::PClass* StaticClass()
     {
-        static Pico::PClass Class(
+        static Pico::PClass Class = Pico::PClass::Create<PTestObject>(
             Pico::FName("PTestObject"),
             Pico::PObject::StaticClass(),
             sizeof(PTestObject),
             &PTestObject::ConstructInstance);
         static const bool bPropertiesAdded = AddProperties(Class);
-        (void)bPropertiesAdded;
+        if (!bPropertiesAdded)
+        {
+            return &Class;
+        }
         return &Class;
+    }
+
+    static bool TryAddPropertyAfterRegistration()
+    {
+        auto* Class = const_cast<Pico::PClass*>(StaticClass());
+        return Class->AddProperty(
+            Pico::PProperty::Create<&PTestObject::Health>(Pico::FName("LateHealth")));
+    }
+
+    static Pico::PProperty CreateHealthPropertyForTest(Pico::FName Name)
+    {
+        return Pico::PProperty::Create<&PTestObject::Health>(Name);
     }
 
     Pico::int32 GetHealth() const
@@ -95,21 +111,14 @@ protected:
 private:
     static bool AddProperties(Pico::PClass& Class)
     {
-        return Class.AddProperty(Pico::PProperty(
-                   Pico::FName("Health"),
-                   Pico::EPropertyType::Int32,
-                   offsetof(PTestObject, Health),
-                   sizeof(Health)))
-            && Class.AddProperty(Pico::PProperty(
-                Pico::FName("Speed"),
-                Pico::EPropertyType::Float,
-                offsetof(PTestObject, Speed),
-                sizeof(Speed)))
-            && Class.AddProperty(Pico::PProperty(
-                Pico::FName("bAlive"),
-                Pico::EPropertyType::Bool,
-                offsetof(PTestObject, bAlive),
-                sizeof(bAlive)));
+        std::vector<Pico::PProperty> Properties;
+        Properties.push_back(
+            Pico::PProperty::Create<&PTestObject::Health>(Pico::FName("Health")));
+        Properties.push_back(
+            Pico::PProperty::Create<&PTestObject::Speed>(Pico::FName("Speed")));
+        Properties.push_back(
+            Pico::PProperty::Create<&PTestObject::bAlive>(Pico::FName("bAlive")));
+        return Class.AddProperties(std::move(Properties));
     }
 
     static Pico::FObjectPtr ConstructInstance(const Pico::FObjectConstructionParams& Params)
@@ -131,17 +140,17 @@ class PTestDerivedObject final : public PTestObject
 public:
     static const Pico::PClass* StaticClass()
     {
-        static Pico::PClass Class(
+        static Pico::PClass Class = Pico::PClass::Create<PTestDerivedObject>(
             Pico::FName("PTestDerivedObject"),
             PTestObject::StaticClass(),
             sizeof(PTestDerivedObject),
             &PTestDerivedObject::ConstructInstance);
-        static const bool bPropertiesAdded = Class.AddProperty(Pico::PProperty(
-            Pico::FName("Score"),
-            Pico::EPropertyType::Int32,
-            offsetof(PTestDerivedObject, Score),
-            sizeof(Score)));
-        (void)bPropertiesAdded;
+        static const bool bPropertiesAdded = Class.AddProperty(
+            Pico::PProperty::Create<&PTestDerivedObject::Score>(Pico::FName("Score")));
+        if (!bPropertiesAdded)
+        {
+            return &Class;
+        }
         return &Class;
     }
 
@@ -169,7 +178,7 @@ class PThrowingPostInitObject final : public PTestObject
 public:
     static const Pico::PClass* StaticClass()
     {
-        static const Pico::PClass Class(
+        static const Pico::PClass Class = Pico::PClass::Create<PThrowingPostInitObject>(
             Pico::FName("PThrowingPostInitObject"),
             PTestObject::StaticClass(),
             sizeof(PThrowingPostInitObject),
@@ -201,7 +210,7 @@ class PThrowingPostLoadObject final : public PTestObject
 public:
     static const Pico::PClass* StaticClass()
     {
-        static const Pico::PClass Class(
+        static const Pico::PClass Class = Pico::PClass::Create<PThrowingPostLoadObject>(
             Pico::FName("PThrowingPostLoadObject"),
             PTestObject::StaticClass(),
             sizeof(PThrowingPostLoadObject),
@@ -228,6 +237,117 @@ private:
     }
 };
 
+class PInvalidMetadataObject final : public Pico::PObject
+{
+public:
+    static const Pico::PClass* StaticClass()
+    {
+        static Pico::PClass Class = Pico::PClass::Create<PInvalidMetadataObject>(
+            Pico::FName("PInvalidMetadataObject"),
+            Pico::PObject::StaticClass(),
+            sizeof(PInvalidMetadataObject),
+            &PInvalidMetadataObject::ConstructInstance);
+        static const bool bPropertiesAdded = AddInvalidProperties(Class);
+        (void)bPropertiesAdded;
+        return &Class;
+    }
+
+private:
+    explicit PInvalidMetadataObject(const Pico::FObjectConstructionParams& Params)
+        : PObject(Params)
+    {
+    }
+
+    static bool AddInvalidProperties(Pico::PClass& Class)
+    {
+        std::vector<Pico::PProperty> Properties;
+        Properties.push_back(
+            Pico::PProperty::Create<&PInvalidMetadataObject::First>(Pico::FName("Duplicate")));
+        Properties.push_back(
+            Pico::PProperty::Create<&PInvalidMetadataObject::Second>(Pico::FName("Duplicate")));
+        return Class.AddProperties(std::move(Properties));
+    }
+
+    static Pico::FObjectPtr ConstructInstance(const Pico::FObjectConstructionParams& Params)
+    {
+        return Pico::FObjectPtr(new PInvalidMetadataObject(Params));
+    }
+
+    Pico::int32 First = 1;
+    Pico::int32 Second = 2;
+};
+
+class PWrongOwnerMetadataObject final : public Pico::PObject
+{
+public:
+    static const Pico::PClass* StaticClass()
+    {
+        static Pico::PClass Class = Pico::PClass::Create<PWrongOwnerMetadataObject>(
+            Pico::FName("PWrongOwnerMetadataObject"),
+            Pico::PObject::StaticClass(),
+            sizeof(PWrongOwnerMetadataObject),
+            &PWrongOwnerMetadataObject::ConstructInstance);
+        static const bool bPropertyAdded =
+            Class.AddProperty(PTestObject::CreateHealthPropertyForTest(Pico::FName("ForeignHealth")));
+        (void)bPropertyAdded;
+        return &Class;
+    }
+
+private:
+    explicit PWrongOwnerMetadataObject(const Pico::FObjectConstructionParams& Params)
+        : PObject(Params)
+    {
+    }
+
+    static Pico::FObjectPtr ConstructInstance(const Pico::FObjectConstructionParams& Params)
+    {
+        return Pico::FObjectPtr(new PWrongOwnerMetadataObject(Params));
+    }
+};
+
+std::vector<std::string> GBeginDestroyOrder;
+bool GHandlesResolvedDuringBeginDestroy = true;
+bool GChildCreationRejectedDuringBeginDestroy = false;
+
+class PBeginDestroyObject final : public Pico::PObject
+{
+public:
+    static const Pico::PClass* StaticClass()
+    {
+        static const Pico::PClass Class = Pico::PClass::Create<PBeginDestroyObject>(
+            Pico::FName("PBeginDestroyObject"),
+            Pico::PObject::StaticClass(),
+            sizeof(PBeginDestroyObject),
+            &PBeginDestroyObject::ConstructInstance);
+        return &Class;
+    }
+
+protected:
+    explicit PBeginDestroyObject(const Pico::FObjectConstructionParams& Params)
+        : PObject(Params)
+    {
+    }
+
+    void BeginDestroy() override
+    {
+        GBeginDestroyOrder.push_back(GetName().ToString());
+        GHandlesResolvedDuringBeginDestroy =
+            GHandlesResolvedDuringBeginDestroy && Pico::ResolveObject(GetHandle()) == this;
+
+        if (GetName() == Pico::FName("DestroyRoot"))
+        {
+            GChildCreationRejectedDuringBeginDestroy =
+                Pico::NewObject<PTestObject>(this, "CreatedDuringBeginDestroy") == nullptr;
+        }
+    }
+
+private:
+    static Pico::FObjectPtr ConstructInstance(const Pico::FObjectConstructionParams& Params)
+    {
+        return Pico::FObjectPtr(new PBeginDestroyObject(Params));
+    }
+};
+
 void TestClassRegistry(FTestRunner& Runner)
 {
     Runner.Expect(Pico::FClassRegistry::FindClass(Pico::FName("PObject")) == Pico::PObject::StaticClass(),
@@ -238,6 +358,8 @@ void TestClassRegistry(FTestRunner& Runner)
         "Post-init failure test class registers");
     Runner.Expect(Pico::FClassRegistry::RegisterClass(PThrowingPostLoadObject::StaticClass()),
         "Post-load failure test class registers");
+    Runner.Expect(Pico::FClassRegistry::RegisterClass(PBeginDestroyObject::StaticClass()),
+        "BeginDestroy test class registers");
     Runner.Expect(Pico::FClassRegistry::FindClass(Pico::FName("PTestObject")) == PTestObject::StaticClass(),
         "Class registry finds a class by name");
     Runner.Expect(PTestDerivedObject::StaticClass()->IsChildOf(PTestObject::StaticClass()),
@@ -260,6 +382,27 @@ void TestClassRegistry(FTestRunner& Runner)
         Pico::FName("OrphanClass"), &UnregisteredSuperClass, sizeof(Pico::PObject), nullptr);
     Runner.Expect(!Pico::FClassRegistry::RegisterClass(&OrphanClass),
         "Class registry requires the superclass to be registered first");
+
+    const Pico::PClass* InvalidMetadataClass = PInvalidMetadataObject::StaticClass();
+    Runner.Expect(!InvalidMetadataClass->IsMetadataValid(),
+        "A failed property batch marks class metadata invalid");
+    Runner.Expect(InvalidMetadataClass->GetProperties().empty(),
+        "A failed property batch leaves no partially registered properties");
+    Runner.Expect(!Pico::FClassRegistry::RegisterClass(InvalidMetadataClass),
+        "Class registry rejects invalid property metadata");
+
+    const Pico::PClass* WrongOwnerClass = PWrongOwnerMetadataObject::StaticClass();
+    Runner.Expect(!WrongOwnerClass->IsMetadataValid() && WrongOwnerClass->GetProperties().empty(),
+        "A member pointer from another native class is rejected atomically");
+    Runner.Expect(!Pico::FClassRegistry::RegisterClass(WrongOwnerClass),
+        "Class registry rejects mismatched native owner metadata");
+
+    Runner.Expect(PTestObject::StaticClass()->IsMetadataFinalized(),
+        "Class registration finalizes property metadata");
+    Runner.Expect(!PTestObject::TryAddPropertyAfterRegistration(),
+        "Finalized class metadata rejects later mutation");
+    Runner.Expect(PTestObject::StaticClass()->IsMetadataValid(),
+        "Rejected late mutation does not corrupt finalized metadata");
 }
 
 void TestObjectCreationAndIdentity(FTestRunner& Runner)
@@ -403,6 +546,33 @@ void TestPropertyReflection(FTestRunner& Runner)
     }
 
     Pico::DestroyObject(Object);
+}
+
+void TestBeginDestroy(FTestRunner& Runner)
+{
+    GBeginDestroyOrder.clear();
+    GHandlesResolvedDuringBeginDestroy = true;
+    GChildCreationRejectedDuringBeginDestroy = false;
+
+    PBeginDestroyObject* Root =
+        Pico::NewObject<PBeginDestroyObject>(nullptr, "DestroyRoot");
+    PBeginDestroyObject* Child =
+        Root != nullptr ? Pico::NewObject<PBeginDestroyObject>(Root, "DestroyChild") : nullptr;
+    const Pico::FObjectHandle RootHandle = Root != nullptr ? Root->GetHandle() : Pico::FObjectHandle {};
+    const Pico::FObjectHandle ChildHandle = Child != nullptr ? Child->GetHandle() : Pico::FObjectHandle {};
+
+    Runner.Expect(Root != nullptr && Child != nullptr, "BeginDestroy test object tree is created");
+    Pico::FObjectRegistry::DestroyObjectTree(Root);
+
+    Runner.Expect(
+        GBeginDestroyOrder == std::vector<std::string> { "DestroyChild", "DestroyRoot" },
+        "BeginDestroy runs exactly once in child-before-parent order");
+    Runner.Expect(GHandlesResolvedDuringBeginDestroy,
+        "Object handles remain resolvable while BeginDestroy runs");
+    Runner.Expect(GChildCreationRejectedDuringBeginDestroy,
+        "An object being destroyed cannot receive new child objects");
+    Runner.Expect(Pico::ResolveObject(RootHandle) == nullptr && Pico::ResolveObject(ChildHandle) == nullptr,
+        "Object tree handles are invalid after destruction");
 }
 
 void TestReflectionObservation(FTestRunner& Runner)
@@ -719,6 +889,7 @@ int main()
         TestClassRegistry(Runner);
         TestObjectCreationAndIdentity(Runner);
         TestPropertyReflection(Runner);
+        TestBeginDestroy(Runner);
         TestReflectionObservation(Runner);
         TestObjectSerialization(Runner);
         TestShutdownAndReinitialize(Runner);

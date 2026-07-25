@@ -99,7 +99,7 @@ std::string DumpClass(const PClass* Class)
     {
         Stream << "  " << Property->GetName().ToString()
                << "  " << GetPropertyTypeName(Property->GetType())
-               << "  Offset=" << Property->GetOffset()
+               << "  Access=MemberPointer"
                << "  DeclaredBy=" << Property->GetOwnerClass()->GetName().ToString()
                << '\n';
     }

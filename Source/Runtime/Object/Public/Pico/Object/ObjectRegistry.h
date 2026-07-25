@@ -22,5 +22,8 @@ public:
     static PObject* FindObject(PObject* Outer, FName Name);
     static std::vector<PObject*> GetObjects();
     static std::size_t GetObjectCount();
+
+private:
+    static void CallBeginDestroy(PObject* Object);
 };
 }

@@ -3,6 +3,7 @@
 #include "Pico/Core/Log.h"
 #include "Pico/Object/Object.h"
 
+#include <exception>
 #include <vector>
 
 namespace Pico
@@ -70,6 +71,33 @@ void DestroyObjectTreeInternal(PObject* Root)
 }
 }
 
+void FObjectRegistry::CallBeginDestroy(PObject* Object)
+{
+    if (Object == nullptr || Object->bBeginningDestroy)
+    {
+        return;
+    }
+
+    Object->bBeginningDestroy = true;
+    try
+    {
+        Object->BeginDestroy();
+    }
+    catch (const std::exception& Exception)
+    {
+        PICO_LOG(
+            LogObject,
+            Error,
+            "BeginDestroy for '{}' threw an exception: {}",
+            Object->GetPathName(),
+            Exception.what());
+    }
+    catch (...)
+    {
+        PICO_LOG(LogObject, Error, "BeginDestroy for '{}' threw an unknown exception", Object->GetPathName());
+    }
+}
+
 PObject* FObjectRegistry::AddObject(FObjectPtr Object)
 {
     if (Object == nullptr || Object->GetClass() == nullptr || Object->GetName().IsNone())
@@ -78,9 +106,15 @@ PObject* FObjectRegistry::AddObject(FObjectPtr Object)
         return nullptr;
     }
 
-    if (Object->GetOuter() != nullptr && ResolveObject(Object->GetOuter()->GetHandle()) != Object->GetOuter())
+    if (Object->GetOuter() != nullptr
+        && (ResolveObject(Object->GetOuter()->GetHandle()) != Object->GetOuter()
+            || Object->GetOuter()->IsBeginningDestroy()))
     {
-        PICO_LOG(LogObject, Error, "Outer for '{}' is not a live registered object", Object->GetName().ToString());
+        PICO_LOG(
+            LogObject,
+            Error,
+            "Outer for '{}' is not live or is being destroyed",
+            Object->GetName().ToString());
         return nullptr;
     }
 
@@ -152,6 +186,7 @@ bool FObjectRegistry::DestroyObject(PObject* Object)
 
     std::vector<FObjectSlot>& Slots = GetObjectSlots();
     FObjectSlot& Slot = Slots[Handle.Index];
+    CallBeginDestroy(Object);
     FObjectPtr OwnedObject = std::move(Slot.Object);
     OwnedObject->HandlePrivate = {};
     Slot.Serial = 0;
@@ -190,6 +225,7 @@ void FObjectRegistry::DestroyAllObjects()
             {
                 if (Slot.Object != nullptr)
                 {
+                    CallBeginDestroy(Slot.Object.get());
                     Slot.Object->HandlePrivate = {};
                     Slot.Object.reset();
                     Slot.Serial = 0;

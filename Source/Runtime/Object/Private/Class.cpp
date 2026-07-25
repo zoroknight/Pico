@@ -8,10 +8,21 @@
 namespace Pico
 {
 PClass::PClass(FName InName, const PClass* InSuperClass, std::size_t InSize, FConstructFunction InConstructor)
+    : PClass(InName, InSuperClass, InSize, InConstructor, nullptr)
+{
+}
+
+PClass::PClass(
+    FName InName,
+    const PClass* InSuperClass,
+    std::size_t InSize,
+    FConstructFunction InConstructor,
+    const void* InNativeTypeToken)
     : Name(InName)
     , SuperClass(InSuperClass)
     , Size(InSize)
     , Constructor(InConstructor)
+    , NativeTypeToken(InNativeTypeToken)
 {
 }
 
@@ -60,12 +71,57 @@ FObjectPtr PClass::ConstructObject(const FObjectConstructionParams& Params) cons
 
 bool PClass::AddProperty(PProperty Property)
 {
+    std::vector<PProperty> NewProperties;
+    NewProperties.push_back(std::move(Property));
+    return AddProperties(std::move(NewProperties));
+}
+
+bool PClass::AddProperties(std::vector<PProperty> InProperties)
+{
+    if (bMetadataFinalized || !bMetadataValid || InProperties.empty())
+    {
+        return false;
+    }
+
+    for (std::size_t Index = 0; Index < InProperties.size(); ++Index)
+    {
+        if (!ValidateProperty(
+                InProperties[Index],
+                std::span<const PProperty>(InProperties.data(), Index)))
+        {
+            bMetadataValid = false;
+            return false;
+        }
+    }
+
+    for (PProperty& Property : InProperties)
+    {
+        Property.OwnerClass = this;
+        Properties.push_back(std::move(Property));
+    }
+    return true;
+}
+
+bool PClass::IsMetadataValid() const
+{
+    return bMetadataValid;
+}
+
+bool PClass::IsMetadataFinalized() const
+{
+    return bMetadataFinalized;
+}
+
+bool PClass::ValidateProperty(
+    const PProperty& Property,
+    std::span<const PProperty> PendingProperties) const
+{
     const std::size_t TypeSize = GetPropertyTypeSize(Property.GetType());
     if (Property.GetName().IsNone()
         || TypeSize == 0
         || Property.GetSize() != TypeSize
-        || Property.GetOffset() > Size
-        || Property.GetSize() > Size - Property.GetOffset())
+        || Property.GetOwnerTypeToken() != NativeTypeToken
+        || !Property.HasValidAccessors())
     {
         return false;
     }
@@ -82,13 +138,34 @@ bool PClass::AddProperty(PProperty Property)
         return false;
     }
 
+    const auto PendingDuplicate = std::find_if(
+        PendingProperties.begin(),
+        PendingProperties.end(),
+        [&Property](const PProperty& Candidate)
+        {
+            return Candidate.GetName() == Property.GetName();
+        });
+    if (PendingDuplicate != PendingProperties.end())
+    {
+        return false;
+    }
+
     if (SuperClass != nullptr && SuperClass->FindProperty(Property.GetName()) != nullptr)
     {
         return false;
     }
 
-    Property.OwnerClass = this;
-    Properties.push_back(std::move(Property));
+    return true;
+}
+
+bool PClass::FinalizeMetadata() const
+{
+    if (!bMetadataValid)
+    {
+        return false;
+    }
+
+    bMetadataFinalized = true;
     return true;
 }
 
