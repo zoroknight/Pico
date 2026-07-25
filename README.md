@@ -1,5 +1,7 @@
 # Pico
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 Pico is a small learning-oriented C++ engine inspired by Unreal Engine architecture.
 
 ## Visual Studio Workflow
