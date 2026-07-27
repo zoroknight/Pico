@@ -14,6 +14,13 @@ namespace Pico
 class PObject;
 struct FObjectConstructionParams;
 
+enum class EClassMetadataError
+{
+    None,
+    InvalidProperty,
+    InvalidSuperClass
+};
+
 class PClass
 {
 public:
@@ -47,6 +54,7 @@ public:
     bool AddProperties(std::vector<PProperty> InProperties);
     bool IsMetadataValid() const;
     bool IsMetadataFinalized() const;
+    EClassMetadataError GetMetadataError() const;
     const PProperty* FindProperty(FName PropertyName) const;
     const std::deque<PProperty>& GetProperties() const;
 
@@ -71,5 +79,6 @@ private:
     std::deque<PProperty> Properties;
     bool bMetadataValid = true;
     mutable bool bMetadataFinalized = false;
+    EClassMetadataError MetadataError = EClassMetadataError::None;
 };
 }

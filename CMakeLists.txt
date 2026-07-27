@@ -23,6 +23,7 @@ add_library(PicoCore STATIC
     Source/Runtime/Core/Private/CommandLine.cpp
     Source/Runtime/Core/Private/Config.cpp
     Source/Runtime/Core/Private/Log.cpp
+    Source/Runtime/Core/Private/Math/Math.cpp
     Source/Runtime/Core/Private/Name.cpp
     Source/Runtime/Core/Private/Paths.cpp
     Source/Runtime/Core/Private/Time.cpp
@@ -262,6 +263,8 @@ else()
 endif()
 
 include(CTest)
+
+add_subdirectory(Projects/PicoSandbox)
 
 if(BUILD_TESTING)
     add_test(NAME PicoCoreTests COMMAND PicoCoreTests)

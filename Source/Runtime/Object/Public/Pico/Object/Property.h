@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Pico/Core/Name.h"
+#include "Pico/Core/Math/Transform.h"
 #include "Pico/Core/Types.h"
 
 #include <cstddef>
@@ -36,7 +37,10 @@ enum class EPropertyType : uint8
 {
     Int32,
     Float,
-    Bool
+    Bool,
+    Vector3,
+    Rotator,
+    Transform
 };
 
 constexpr std::size_t GetPropertyTypeSize(EPropertyType Type)
@@ -49,6 +53,12 @@ constexpr std::size_t GetPropertyTypeSize(EPropertyType Type)
         return sizeof(float);
     case EPropertyType::Bool:
         return sizeof(bool);
+    case EPropertyType::Vector3:
+        return sizeof(FVector3);
+    case EPropertyType::Rotator:
+        return sizeof(FRotator);
+    case EPropertyType::Transform:
+        return sizeof(FTransform);
     }
 
     return 0;
@@ -58,7 +68,10 @@ template <typename TValue>
 inline constexpr bool TIsSupportedPropertyType =
     std::is_same_v<TValue, int32>
     || std::is_same_v<TValue, float>
-    || std::is_same_v<TValue, bool>;
+    || std::is_same_v<TValue, bool>
+    || std::is_same_v<TValue, FVector3>
+    || std::is_same_v<TValue, FRotator>
+    || std::is_same_v<TValue, FTransform>;
 
 template <typename TValue>
 constexpr EPropertyType GetPropertyType()
@@ -73,9 +86,21 @@ constexpr EPropertyType GetPropertyType()
     {
         return EPropertyType::Float;
     }
-    else
+    else if constexpr (std::is_same_v<TValue, bool>)
     {
         return EPropertyType::Bool;
+    }
+    else if constexpr (std::is_same_v<TValue, FVector3>)
+    {
+        return EPropertyType::Vector3;
+    }
+    else if constexpr (std::is_same_v<TValue, FRotator>)
+    {
+        return EPropertyType::Rotator;
+    }
+    else
+    {
+        return EPropertyType::Transform;
     }
 }
 

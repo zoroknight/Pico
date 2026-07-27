@@ -10,6 +10,7 @@
 #include "Pico/Object/ObjectSerialization.h"
 #include "Pico/Object/ObjectSystem.h"
 #include "Pico/Object/Property.h"
+#include "Pico/Object/ReflectionMacros.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -22,6 +23,85 @@
 
 namespace
 {
+class PMacroObject : public Pico::PObject
+{
+    PICO_DECLARE_CLASS(PMacroObject, Pico::PObject)
+
+public:
+    Pico::int32 GetMacroValue() const
+    {
+        return MacroValue;
+    }
+
+protected:
+    explicit PMacroObject(const Pico::FObjectConstructionParams& Params)
+        : PObject(Params)
+    {
+    }
+
+private:
+    Pico::int32 MacroValue = 42;
+};
+
+PICO_DEFINE_CLASS(PMacroObject)
+
+bool PMacroObject::RegisterProperties(Pico::PClass& Class)
+{
+    std::vector<Pico::PProperty> Properties;
+    PICO_ADD_PROPERTY(Properties, MacroValue);
+    return Class.AddProperties(std::move(Properties));
+}
+
+class PMacroDerivedObject final : public PMacroObject
+{
+    PICO_DECLARE_CLASS(PMacroDerivedObject, PMacroObject)
+
+protected:
+    explicit PMacroDerivedObject(const Pico::FObjectConstructionParams& Params)
+        : PMacroObject(Params)
+    {
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PMacroDerivedObject)
+
+class PInvalidMacroObject : public Pico::PObject
+{
+    PICO_DECLARE_CLASS(PInvalidMacroObject, Pico::PObject)
+
+protected:
+    explicit PInvalidMacroObject(const Pico::FObjectConstructionParams& Params)
+        : PObject(Params)
+    {
+    }
+
+private:
+    Pico::int32 DuplicateValue = 0;
+};
+
+PICO_DEFINE_CLASS(PInvalidMacroObject)
+
+bool PInvalidMacroObject::RegisterProperties(Pico::PClass& Class)
+{
+    std::vector<Pico::PProperty> Properties;
+    PICO_ADD_PROPERTY(Properties, DuplicateValue);
+    PICO_ADD_PROPERTY(Properties, DuplicateValue);
+    return Class.AddProperties(std::move(Properties));
+}
+
+class PInvalidMacroDerivedObject final : public PInvalidMacroObject
+{
+    PICO_DECLARE_CLASS(PInvalidMacroDerivedObject, PInvalidMacroObject)
+
+protected:
+    explicit PInvalidMacroDerivedObject(const Pico::FObjectConstructionParams& Params)
+        : PInvalidMacroObject(Params)
+    {
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PInvalidMacroDerivedObject)
+
 class PTestObject : public Pico::PObject
 {
 public:
@@ -360,6 +440,8 @@ void TestClassRegistry(FTestRunner& Runner)
         "Post-load failure test class registers");
     Runner.Expect(Pico::FClassRegistry::RegisterClass(PBeginDestroyObject::StaticClass()),
         "BeginDestroy test class registers");
+    Runner.Expect(PMacroObject::RegisterClass(), "Macro-declared class registers");
+    Runner.Expect(PMacroDerivedObject::RegisterClass(), "Macro-declared no-property class registers");
     Runner.Expect(Pico::FClassRegistry::FindClass(Pico::FName("PTestObject")) == PTestObject::StaticClass(),
         "Class registry finds a class by name");
     Runner.Expect(PTestDerivedObject::StaticClass()->IsChildOf(PTestObject::StaticClass()),
@@ -403,6 +485,69 @@ void TestClassRegistry(FTestRunner& Runner)
         "Finalized class metadata rejects later mutation");
     Runner.Expect(PTestObject::StaticClass()->IsMetadataValid(),
         "Rejected late mutation does not corrupt finalized metadata");
+}
+
+void TestReflectionMacros(FTestRunner& Runner)
+{
+    const Pico::PClass* MacroClass = PMacroObject::StaticClass();
+    const Pico::PClass* DerivedClass = PMacroDerivedObject::StaticClass();
+    Runner.Expect(
+        MacroClass != nullptr
+            && MacroClass->GetName() == Pico::FName("PMacroObject")
+            && MacroClass->GetSuperClass() == Pico::PObject::StaticClass(),
+        "Class macros derive metadata name and superclass from C++ types");
+    Runner.Expect(
+        DerivedClass != nullptr
+            && DerivedClass->GetSuperClass() == MacroClass
+            && DerivedClass->GetProperties().empty(),
+        "No-property macro defines derived class metadata without local properties");
+
+    const Pico::PClass* InvalidMacroClass = PInvalidMacroObject::StaticClass();
+    const Pico::PClass* InvalidDerivedClass = PInvalidMacroDerivedObject::StaticClass();
+    Runner.Expect(
+        InvalidMacroClass != nullptr
+            && !InvalidMacroClass->IsMetadataValid()
+            && InvalidMacroClass->GetMetadataError() == Pico::EClassMetadataError::InvalidProperty,
+        "Class macros preserve invalid property metadata for diagnostics");
+    Runner.Expect(
+        InvalidDerivedClass != nullptr
+            && InvalidDerivedClass->GetSuperClass() == InvalidMacroClass
+            && !InvalidDerivedClass->IsMetadataValid()
+            && InvalidDerivedClass->GetMetadataError() == Pico::EClassMetadataError::InvalidSuperClass,
+        "Derived macro metadata propagates an invalid superclass");
+    Runner.Expect(
+        !PInvalidMacroObject::RegisterClass()
+            && !PInvalidMacroDerivedObject::RegisterClass()
+            && Pico::FClassRegistry::FindClass(Pico::FName("PInvalidMacroObject")) == nullptr
+            && Pico::FClassRegistry::FindClass(Pico::FName("PInvalidMacroDerivedObject")) == nullptr,
+        "Class registry rejects invalid macro metadata without losing its hierarchy");
+
+    Pico::PObject* DynamicObject =
+        Pico::NewObject(DerivedClass, nullptr, "MacroDynamicObject");
+    Runner.Expect(
+        DynamicObject != nullptr && DynamicObject->GetClass() == DerivedClass,
+        "Class macros generate metadata-driven construction");
+
+    const Pico::PProperty* MacroValueProperty =
+        DerivedClass != nullptr
+            ? DerivedClass->FindProperty(Pico::FName("MacroValue"))
+            : nullptr;
+    Pico::int32 MacroValue = 0;
+    Runner.Expect(
+        MacroValueProperty != nullptr
+            && MacroValueProperty->GetValue(DynamicObject, MacroValue)
+            && MacroValue == 42,
+        "Property macro exposes a private inherited member");
+    Runner.Expect(
+        MacroValueProperty != nullptr
+            && MacroValueProperty->SetValue(DynamicObject, Pico::int32 { 99 })
+            && static_cast<PMacroDerivedObject*>(DynamicObject)->GetMacroValue() == 99,
+        "Property macro preserves type-checked writes");
+
+    if (DynamicObject != nullptr)
+    {
+        Pico::DestroyObject(DynamicObject);
+    }
 }
 
 void TestObjectCreationAndIdentity(FTestRunner& Runner)
@@ -712,6 +857,25 @@ void TestObjectSerialization(FTestRunner& Runner)
         Pico::DestroyObject(LoadedBase);
     }
 
+    std::vector<Pico::uint8> Version1Data = Data;
+    Version1Data[4] = 1;
+    Version1Data[5] = 0;
+    Version1Data[6] = 0;
+    Version1Data[7] = 0;
+    Pico::FMemoryReader Version1Reader(Version1Data);
+    Pico::PObject* Version1Object = Pico::LoadObject(Version1Reader, nullptr, &SerializationError);
+    Runner.Expect(
+        Version1Object != nullptr && SerializationError == Pico::EObjectSerializationError::None,
+        "Version 2 reader remains compatible with version 1 scalar archives");
+    if (Version1Object != nullptr)
+    {
+        Pico::int32 Version1Score = 0;
+        Runner.Expect(
+            ScoreProperty->GetValue(Version1Object, Version1Score) && Version1Score == 9001,
+            "Version 1 compatibility restores scalar property values");
+        Pico::DestroyObject(Version1Object);
+    }
+
     Pico::PObject* FileLoadedObject = Pico::LoadObjectFromFile(FilePath, nullptr, &SerializationError);
     Runner.Expect(FileLoadedObject != nullptr, "Object loads from a persistent file");
     if (FileLoadedObject != nullptr)
@@ -756,7 +920,7 @@ void TestObjectSerialization(FTestRunner& Runner)
         "A malformed archive leaves no half-loaded object");
 
     std::vector<Pico::uint8> UnsupportedVersionData = Data;
-    UnsupportedVersionData[4] = 2;
+    UnsupportedVersionData[4] = 99;
     UnsupportedVersionData[5] = 0;
     UnsupportedVersionData[6] = 0;
     UnsupportedVersionData[7] = 0;
@@ -876,6 +1040,17 @@ void TestShutdownAndReinitialize(FTestRunner& Runner)
 
     Runner.Expect(Pico::PObjectSystem::Init(), "Object system can initialize again after shutdown");
     Runner.Expect(Pico::FClassRegistry::GetClassCount() == 1, "Reinitialization restores only intrinsic classes");
+    Runner.Expect(PMacroObject::RegisterClass() && PMacroDerivedObject::RegisterClass(),
+        "Macro-declared classes can register again after object-system restart");
+
+    PMacroDerivedObject* MacroObject =
+        Pico::NewObject<PMacroDerivedObject>(nullptr, "MacroAfterRestart");
+    Runner.Expect(MacroObject != nullptr && MacroObject->GetMacroValue() == 42,
+        "Macro-generated construction remains valid after object-system restart");
+    if (MacroObject != nullptr)
+    {
+        Pico::DestroyObject(MacroObject);
+    }
 }
 }
 
@@ -887,6 +1062,7 @@ int main()
     if (Pico::PObjectSystem::IsInitialized())
     {
         TestClassRegistry(Runner);
+        TestReflectionMacros(Runner);
         TestObjectCreationAndIdentity(Runner);
         TestPropertyReflection(Runner);
         TestBeginDestroy(Runner);

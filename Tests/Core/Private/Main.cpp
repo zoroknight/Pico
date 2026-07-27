@@ -3,6 +3,7 @@
 #include "Pico/Core/App.h"
 #include "Pico/Core/CommandLine.h"
 #include "Pico/Core/Config.h"
+#include "Pico/Core/Math/Math.h"
 #include "Pico/Core/Name.h"
 #include "Pico/Core/Paths.h"
 #include "Pico/Core/Time.h"
@@ -130,6 +131,95 @@ void TestFrameTimer(FTestRunner& Runner)
     Runner.Expect(Timer.GetAverageFrameTimeMS() >= 0.0, "Frame timer produces a non-negative average frame time");
     Runner.Expect(Timer.GetAverageFPS() >= 0.0, "Frame timer produces a non-negative average FPS");
 }
+
+void TestVectorMath(FTestRunner& Runner)
+{
+    const Pico::FVector3 Vector(3.0f, 4.0f, 0.0f);
+    Runner.Expect(Pico::IsNearlyEqual(Vector.Size(), 5.0f), "Vector reports its Euclidean length");
+    Runner.Expect(
+        Vector.GetSafeNormal().Equals(Pico::FVector3(0.6f, 0.8f, 0.0f)),
+        "Vector produces a safe normalized copy");
+    Runner.Expect(
+        Pico::IsNearlyEqual(
+            Pico::FVector3::Dot(Pico::FVector3::ForwardVector, Pico::FVector3::RightVector),
+            0.0f),
+        "Perpendicular vectors have a zero dot product");
+    Runner.Expect(
+        Pico::FVector3::Cross(Pico::FVector3::ForwardVector, Pico::FVector3::RightVector)
+            .Equals(Pico::FVector3::UpVector),
+        "Forward cross right produces the up axis");
+    Runner.Expect(
+        Pico::FVector3::ZeroVector.GetSafeNormal().Equals(Pico::FVector3::ZeroVector),
+        "Normalizing a zero vector stays finite");
+}
+
+void TestRotationMath(FTestRunner& Runner)
+{
+    const Pico::FQuat Yaw90 = Pico::FRotator(0.0f, 90.0f, 0.0f).Quaternion();
+    Runner.Expect(
+        Yaw90.RotateVector(Pico::FVector3::ForwardVector).Equals(Pico::FVector3::RightVector),
+        "Positive yaw rotates forward toward right");
+
+    const Pico::FRotator SourceRotation(10.0f, 45.0f, 20.0f);
+    const Pico::FRotator RoundTripRotation = SourceRotation.Quaternion().Rotator();
+    Runner.Expect(
+        RoundTripRotation.Equals(SourceRotation, 0.001f),
+        "Rotator converts to a quaternion and back");
+
+    Pico::FQuat InvalidRotation(0.0f, 0.0f, 0.0f, 0.0f);
+    Runner.Expect(
+        !InvalidRotation.Normalize() && InvalidRotation.Equals(Pico::FQuat::Identity),
+        "Normalizing a zero quaternion falls back to identity");
+}
+
+void TestTransformMath(FTestRunner& Runner)
+{
+    const Pico::FTransform Transform(
+        Pico::FRotator(0.0f, 90.0f, 0.0f),
+        Pico::FVector3(100.0f, 20.0f, 5.0f),
+        Pico::FVector3(2.0f, 2.0f, 2.0f));
+    const Pico::FVector3 LocalPoint(10.0f, 0.0f, 0.0f);
+    const Pico::FVector3 WorldPoint = Transform.TransformPosition(LocalPoint);
+    Runner.Expect(
+        WorldPoint.Equals(Pico::FVector3(100.0f, 40.0f, 5.0f)),
+        "Transform applies scale, rotation, and translation in order");
+    Runner.Expect(
+        Transform.InverseTransformPosition(WorldPoint).Equals(LocalPoint),
+        "InverseTransformPosition restores a local point");
+    Runner.Expect(
+        Transform.ToMatrix().TransformPosition(LocalPoint).Equals(WorldPoint),
+        "Transform and matrix position results agree");
+
+    const Pico::FTransform Parent(
+        Pico::FRotator(0.0f, 90.0f, 0.0f),
+        Pico::FVector3(100.0f, 0.0f, 0.0f),
+        Pico::FVector3::OneVector);
+    const Pico::FTransform Local(
+        Pico::FRotator::ZeroRotator,
+        Pico::FVector3(20.0f, 0.0f, 0.0f),
+        Pico::FVector3::OneVector);
+    const Pico::FTransform World = Local * Parent;
+    Runner.Expect(
+        World.Translation.Equals(Pico::FVector3(100.0f, 20.0f, 0.0f)),
+        "Local times parent follows UE-style transform composition");
+    Runner.Expect(
+        World.GetRelativeTransform(Parent).Equals(Local),
+        "Relative transform recovers local transform from world and parent");
+
+    const Pico::FMatrix4 ComposedMatrix = Parent.ToMatrix() * Local.ToMatrix();
+    Runner.Expect(
+        World.ToMatrix().Equals(ComposedMatrix),
+        "Transform composition matches matrix composition without shear");
+
+    const Pico::FTransform ZeroScale(
+        Pico::FQuat::Identity,
+        Pico::FVector3::ZeroVector,
+        Pico::FVector3(0.0f, 1.0f, 1.0f));
+    Runner.Expect(
+        ZeroScale.InverseTransformVector(Pico::FVector3::OneVector)
+            .Equals(Pico::FVector3(0.0f, 1.0f, 1.0f)),
+        "Inverse transform protects zero scale components");
+}
 }
 
 int main(int Argc, char** Argv)
@@ -143,5 +233,8 @@ int main(int Argc, char** Argv)
     TestAppOwnsProjectName(Runner);
     TestName(Runner);
     TestFrameTimer(Runner);
+    TestVectorMath(Runner);
+    TestRotationMath(Runner);
+    TestTransformMath(Runner);
     return Runner.Finish();
 }

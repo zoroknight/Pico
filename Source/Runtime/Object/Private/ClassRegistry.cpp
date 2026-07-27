@@ -30,6 +30,24 @@ bool FClassRegistry::RegisterClass(const PClass* Class)
 
     FClassMap& Classes = GetClassMap();
     const PClass* SuperClass = Class->GetSuperClass();
+    if (!Class->IsMetadataValid())
+    {
+        if (Class->GetMetadataError() == EClassMetadataError::InvalidSuperClass && SuperClass != nullptr)
+        {
+            PICO_LOG(
+                LogObject,
+                Error,
+                "Class '{}' inherits invalid metadata from superclass '{}'",
+                Class->GetName().ToString(),
+                SuperClass->GetName().ToString());
+        }
+        else
+        {
+            PICO_LOG(LogObject, Error, "Class '{}' has invalid property metadata", Class->GetName().ToString());
+        }
+        return false;
+    }
+
     if (SuperClass != nullptr && FindClass(SuperClass->GetName()) != SuperClass)
     {
         PICO_LOG(
@@ -38,12 +56,6 @@ bool FClassRegistry::RegisterClass(const PClass* Class)
             "Class '{}' requires its superclass '{}' to be registered first",
             Class->GetName().ToString(),
             SuperClass->GetName().ToString());
-        return false;
-    }
-
-    if (!Class->IsMetadataValid())
-    {
-        PICO_LOG(LogObject, Error, "Class '{}' has invalid property metadata", Class->GetName().ToString());
         return false;
     }
 

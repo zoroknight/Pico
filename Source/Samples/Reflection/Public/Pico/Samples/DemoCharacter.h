@@ -1,17 +1,14 @@
 #pragma once
 
-#include "Pico/Object/Object.h"
+#include "Pico/Object/ReflectionMacros.h"
 
 namespace Pico
 {
-class PClass;
-
 class PDemoCharacter final : public PObject
 {
-public:
-    static const PClass* StaticClass();
-    static bool RegisterClass();
+    PICO_DECLARE_CLASS(PDemoCharacter, PObject)
 
+public:
     int32 GetHealth() const;
     float GetMoveSpeed() const;
     bool IsAlive() const;
@@ -22,9 +19,6 @@ protected:
     void PostLoad() override;
 
 private:
-    static FObjectPtr ConstructInstance(const FObjectConstructionParams& Params);
-    static bool AddProperties(PClass& Class);
-
     int32 Health = 100;
     float MoveSpeed = 600.0f;
     bool bAlive = true;

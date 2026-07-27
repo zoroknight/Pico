@@ -10,16 +10,19 @@ Source/Samples/Reflection/Private/DemoCharacter.cpp
 Source/Programs/ReflectionDemo/Private/Main.cpp
 ```
 
-## 1. 定义普通 C++ 类
+## 1. 声明反射类
 
-`PDemoCharacter`首先是一个普通的 `PObject`派生类：
+包含 `ReflectionMacros.h`，并在 `PObject`派生类中使用 `PICO_DECLARE_CLASS`：
 
 ```cpp
+#include "Pico/Object/ReflectionMacros.h"
+
 class PDemoCharacter final : public PObject
 {
+    PICO_DECLARE_CLASS(PDemoCharacter, PObject)
+
 public:
-    static const PClass* StaticClass();
-    static bool RegisterClass();
+    int32 GetHealth() const;
 
 private:
     int32 Health = 100;
@@ -28,73 +31,66 @@ private:
 };
 ```
 
-这三个成员变量此时只有 C++ 含义。反射系统还不知道它们存在。
+该宏声明 `ThisClass`、`Super`、`StaticClass`、`RegisterClass`、动态构造入口和属性注册入口。宏结尾会将访问级别切换为 `private`，所以后续成员应显式写出 `public`、`protected`或 `private`。
 
-## 2. 创建 PClass 元数据
+这些字段此时仍然只有 C++ 含义，只有加入属性批次的成员才会反射。
 
-`StaticClass`返回描述 `PDemoCharacter`的唯一 `PClass`：
+## 2. 定义类元数据和构造入口
+
+在 CPP 中使用：
 
 ```cpp
-const PClass* PDemoCharacter::StaticClass()
-{
-    static PClass Class = PClass::Create<PDemoCharacter>(
-        FName("PDemoCharacter"),
-        PObject::StaticClass(),
-        sizeof(PDemoCharacter),
-        &PDemoCharacter::ConstructInstance);
-    return &Class;
-}
+PICO_DEFINE_CLASS(PDemoCharacter)
 ```
 
-这里依次连接：
+宏会从 C++ 类型本身推导并连接：
 
 ```text
-类型名称
-父类
-C++ 对象大小
-构造函数入口
-原生 C++ 类型令牌
+PDemoCharacter
+→ "PDemoCharacter"
+→ PObject::StaticClass()
+→ sizeof(PDemoCharacter)
+→ PDemoCharacter::ConstructInstance
+→ PDemoCharacter 原生类型令牌
 ```
 
-## 3. 连接对象构造
+因此重命名或复制类时，不需要在多个手写位置同步类型名、父类、大小和构造入口。
 
-`PClass`不直接知道具体 C++ 类型，因此通过函数指针创建实例：
+没有属性的类型使用：
 
 ```cpp
-FObjectPtr PDemoCharacter::ConstructInstance(const FObjectConstructionParams& Params)
+PICO_DEFINE_CLASS_NO_PROPERTIES(PEmptyObject)
+```
+
+宏只生成当前手写反射流程的 C++，没有全局静态自动注册，也没有额外运行时开销。
+
+## 3. 注册属性元数据
+
+实现宏声明的 `RegisterProperties`：
+
+```cpp
+bool PDemoCharacter::RegisterProperties(PClass& Class)
 {
-    return FObjectPtr(new PDemoCharacter(Params));
+    std::vector<PProperty> Properties;
+    PICO_ADD_PROPERTY(Properties, Health);
+    PICO_ADD_PROPERTY(Properties, MoveSpeed);
+    PICO_ADD_PROPERTY(Properties, bAlive);
+    return Class.AddProperties(std::move(Properties));
 }
 ```
 
-随后 `NewObject`可以只拿着 `PClass*`动态创建 `PDemoCharacter`。
-
-## 4. 注册属性元数据
-
-每个 `PProperty`保存属性名称、类型、大小和由成员指针生成的类型安全访问函数：
+`PICO_ADD_PROPERTY`把成员名同时用于 C++ 成员指针和反射名称，等价于：
 
 ```cpp
-PProperty::Create<&PDemoCharacter::Health>(FName("Health"));
-```
-
-同一个类的属性应当组成批次后一次提交：
-
-```cpp
-std::vector<PProperty> Properties;
 Properties.push_back(
     PProperty::Create<&PDemoCharacter::Health>(FName("Health")));
-Properties.push_back(
-    PProperty::Create<&PDemoCharacter::MoveSpeed>(FName("MoveSpeed")));
-Class.AddProperties(std::move(Properties));
 ```
 
-如果批次中任一属性无效，整个批次都不会写入 `PClass`。类注册成功后元数据会被封存，不能在运行过程中继续增加属性。
+属性仍然组成一个事务批次。任一属性无效时，整个批次不会写入 `PClass`；类注册成功后元数据会被封存。
 
-成员指针方式不依赖多态 C++ 对象的内存偏移。访问函数仍然向序列化和 Inspector 提供通用地址，但会先检查对象类型和属性类型。
+宏没有改变成员指针访问、原生类型令牌验证、序列化或 Inspector。它只减少重复代码。
 
-当前阶段必须显式注册属性。它对应 UE 生成代码最终建立元数据的结果，但 Pico 暂时没有 UHT 和 `UPROPERTY`宏。
-
-## 5. 注册类型
+## 4. 注册类型
 
 对象系统初始化后，将 `PClass`放入 Class Registry：
 
@@ -105,7 +101,9 @@ PDemoCharacter::RegisterClass();
 
 注册的内容不是实例，而是“如何识别和创建 `PDemoCharacter`”的类型元数据。
 
-## 6. 创建对象
+当前宏不会自动注册类。Engine 等模块仍应使用显式、父类优先的集中注册函数。未来的 PicoHeaderTool 可以生成这些函数，但底层仍调用同一个 `FClassRegistry`。
+
+## 5. 创建对象
 
 模板形式：
 
@@ -130,7 +128,7 @@ PClass::ConstructObject
 → PostInitProperties
 ```
 
-## 7. 通过反射读写属性
+## 6. 通过反射读写属性
 
 下面的代码没有直接访问 `Player->Health`：
 
@@ -143,7 +141,7 @@ HealthProperty->SetValue(Player, int32 { 75 });
 
 Inspector 的属性控件也走同一条链路。它不知道当前对象是 `PDemoCharacter`，只读取 `PClass`和 `PProperty`。
 
-## 8. 保存并重新加载
+## 7. 保存并重新加载
 
 ```cpp
 SaveObjectToFile("Player.pobj", Player);
@@ -197,7 +195,7 @@ Details：通过 PProperty 读取和修改的实例属性
 按照下面的顺序自行完成一次：
 
 1. 在 `PDemoCharacter`中加入 `int32 Mana = 50`。
-2. 在 `AddProperties`中注册 `Mana`。
+2. 在 `RegisterProperties`中使用 `PICO_ADD_PROPERTY`注册 `Mana`。
 3. 编译并运行 `PicoReflectionDemo`。
 4. 确认 `DumpClass`和 `DumpObject`中出现 `Mana`。
 5. 打开 Inspector，将 `Mana`修改为其他值。

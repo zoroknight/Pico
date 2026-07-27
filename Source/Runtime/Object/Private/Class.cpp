@@ -24,6 +24,11 @@ PClass::PClass(
     , Constructor(InConstructor)
     , NativeTypeToken(InNativeTypeToken)
 {
+    if (SuperClass != nullptr && !SuperClass->IsMetadataValid())
+    {
+        bMetadataValid = false;
+        MetadataError = EClassMetadataError::InvalidSuperClass;
+    }
 }
 
 FName PClass::GetName() const
@@ -90,6 +95,7 @@ bool PClass::AddProperties(std::vector<PProperty> InProperties)
                 std::span<const PProperty>(InProperties.data(), Index)))
         {
             bMetadataValid = false;
+            MetadataError = EClassMetadataError::InvalidProperty;
             return false;
         }
     }
@@ -110,6 +116,11 @@ bool PClass::IsMetadataValid() const
 bool PClass::IsMetadataFinalized() const
 {
     return bMetadataFinalized;
+}
+
+EClassMetadataError PClass::GetMetadataError() const
+{
+    return MetadataError;
 }
 
 bool PClass::ValidateProperty(

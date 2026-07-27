@@ -53,6 +53,50 @@ void AppendPropertyValue(std::ostringstream& Stream, const PProperty& Property, 
         Stream << (Property.GetValue(&Object, Value) ? (Value ? "true" : "false") : "<unavailable>");
         break;
     }
+    case EPropertyType::Vector3:
+    {
+        FVector3 Value;
+        if (Property.GetValue(&Object, Value))
+        {
+            Stream << '(' << Value.X << ", " << Value.Y << ", " << Value.Z << ')';
+        }
+        else
+        {
+            Stream << "<unavailable>";
+        }
+        break;
+    }
+    case EPropertyType::Rotator:
+    {
+        FRotator Value;
+        if (Property.GetValue(&Object, Value))
+        {
+            Stream << "(Pitch=" << Value.Pitch
+                   << ", Yaw=" << Value.Yaw
+                   << ", Roll=" << Value.Roll << ')';
+        }
+        else
+        {
+            Stream << "<unavailable>";
+        }
+        break;
+    }
+    case EPropertyType::Transform:
+    {
+        FTransform Value;
+        if (Property.GetValue(&Object, Value))
+        {
+            const FRotator Rotation = Value.Rotation.Rotator();
+            Stream << "(Location=" << Value.Translation.X << ',' << Value.Translation.Y << ',' << Value.Translation.Z
+                   << " Rotation=" << Rotation.Pitch << ',' << Rotation.Yaw << ',' << Rotation.Roll
+                   << " Scale=" << Value.Scale.X << ',' << Value.Scale.Y << ',' << Value.Scale.Z << ')';
+        }
+        else
+        {
+            Stream << "<unavailable>";
+        }
+        break;
+    }
     }
 }
 }
@@ -67,6 +111,12 @@ std::string_view GetPropertyTypeName(EPropertyType Type)
         return "Float";
     case EPropertyType::Bool:
         return "Bool";
+    case EPropertyType::Vector3:
+        return "Vector3";
+    case EPropertyType::Rotator:
+        return "Rotator";
+    case EPropertyType::Transform:
+        return "Transform";
     }
 
     return "Unknown";

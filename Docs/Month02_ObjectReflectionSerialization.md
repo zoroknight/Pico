@@ -157,7 +157,7 @@ The serialization tests cover memory and file round trips, inherited properties,
 Stage 2.1 intentionally does not implement:
 
 - function reflection
-- reflection macros or a header parser
+- a header parser or generated reflection code
 - garbage collection or weak pointer wrappers
 - class default objects and archetypes
 - Actor, Component, RPC, or replication

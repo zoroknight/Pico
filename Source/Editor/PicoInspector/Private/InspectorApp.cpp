@@ -35,6 +35,75 @@ void CopyText(std::span<char> Destination, const std::string& Source)
     std::memcpy(Destination.data(), Source.data(), CopyLength);
     Destination[CopyLength] = '\0';
 }
+
+bool DrawVector3Control(const char* Label, FVector3& Value, float Speed = 0.1f)
+{
+    float Components[] = { Value.X, Value.Y, Value.Z };
+    if (!ImGui::DragFloat3(Label, Components, Speed))
+    {
+        return false;
+    }
+
+    Value = FVector3(Components[0], Components[1], Components[2]);
+    return true;
+}
+
+bool DrawRotatorControl(const char* Label, FRotator& Value)
+{
+    float Components[] = { Value.Pitch, Value.Yaw, Value.Roll };
+    if (!ImGui::DragFloat3(Label, Components, 0.25f))
+    {
+        return false;
+    }
+
+    Value = FRotator(Components[0], Components[1], Components[2]).GetNormalized();
+    return true;
+}
+
+bool DrawTransformControl(FTransform& Value)
+{
+    FRotator Rotation = Value.Rotation.Rotator();
+    bool bChanged = false;
+    if (ImGui::BeginTable(
+            "##TransformComponents",
+            2,
+            ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings))
+    {
+        ImGui::TableSetupColumn("Component", ImGuiTableColumnFlags_WidthFixed, 62.0f);
+        ImGui::TableSetupColumn("Values", ImGuiTableColumnFlags_WidthStretch);
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Location");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-1.0f);
+        bChanged |= DrawVector3Control("##Location", Value.Translation);
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Rotation");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-1.0f);
+        bChanged |= DrawRotatorControl("##Rotation", Rotation);
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Scale");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-1.0f);
+        bChanged |= DrawVector3Control("##Scale", Value.Scale, 0.01f);
+        ImGui::EndTable();
+    }
+
+    if (bChanged)
+    {
+        Value.Rotation = Rotation.Quaternion();
+    }
+    return bChanged;
+}
 }
 
 FInspectorApp::FInspectorApp()
@@ -269,6 +338,39 @@ void FInspectorApp::DrawPropertyEditor(PObject* Object, const PProperty* Propert
         bool Value = false;
         if (Property->GetValue(Object, Value)
             && ImGui::Checkbox("##Value", &Value))
+        {
+            Property->SetValue(Object, Value);
+            SetStatus("Changed " + PropertyName);
+        }
+        break;
+    }
+    case EPropertyType::Vector3:
+    {
+        FVector3 Value;
+        if (Property->GetValue(Object, Value)
+            && DrawVector3Control("##Value", Value))
+        {
+            Property->SetValue(Object, Value);
+            SetStatus("Changed " + PropertyName);
+        }
+        break;
+    }
+    case EPropertyType::Rotator:
+    {
+        FRotator Value;
+        if (Property->GetValue(Object, Value)
+            && DrawRotatorControl("##Value", Value))
+        {
+            Property->SetValue(Object, Value);
+            SetStatus("Changed " + PropertyName);
+        }
+        break;
+    }
+    case EPropertyType::Transform:
+    {
+        FTransform Value;
+        if (Property->GetValue(Object, Value)
+            && DrawTransformControl(Value))
         {
             Property->SetValue(Object, Value);
             SetStatus("Changed " + PropertyName);
