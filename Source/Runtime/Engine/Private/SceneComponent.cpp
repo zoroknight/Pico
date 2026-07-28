@@ -1,7 +1,10 @@
 #include "Pico/Engine/SceneComponent.h"
 
+#include "Pico/Engine/Actor.h"
 #include "Pico/Object/Class.h"
+#include "Pico/Object/ObjectGlobals.h"
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -19,6 +22,100 @@ bool PSceneComponent::RegisterProperties(PClass& Class)
 PSceneComponent::PSceneComponent(const FObjectConstructionParams& Params)
     : PActorComponent(Params)
 {
+}
+
+PSceneComponent* PSceneComponent::GetAttachParent() const
+{
+    return ResolveSceneComponent(AttachParentHandle);
+}
+
+std::vector<PSceneComponent*> PSceneComponent::GetAttachChildren() const
+{
+    std::vector<PSceneComponent*> Children;
+    Children.reserve(AttachChildrenHandles.size());
+    for (const FObjectHandle Handle : AttachChildrenHandles)
+    {
+        if (PSceneComponent* Child = ResolveSceneComponent(Handle))
+        {
+            Children.push_back(Child);
+        }
+    }
+    return Children;
+}
+
+bool PSceneComponent::IsAttachedTo(const PSceneComponent* Component) const
+{
+    if (Component == nullptr)
+    {
+        return false;
+    }
+
+    const PSceneComponent* Parent = GetAttachParent();
+    while (Parent != nullptr)
+    {
+        if (Parent == Component)
+        {
+            return true;
+        }
+        Parent = Parent->GetAttachParent();
+    }
+    return false;
+}
+
+bool PSceneComponent::AttachToComponent(
+    PSceneComponent* Parent,
+    EAttachmentTransformRule Rule)
+{
+    PActor* Owner = GetOwner();
+    if (Parent == nullptr
+        || Parent == this
+        || Owner == nullptr
+        || Parent->GetOwner() != Owner
+        || IsBeginningDestroy()
+        || Parent->IsBeginningDestroy()
+        || Owner->GetRootComponent() == this
+        || Parent->IsAttachedTo(this))
+    {
+        return false;
+    }
+
+    if (GetAttachParent() == Parent)
+    {
+        return true;
+    }
+
+    const FTransform WorldTransform = GetWorldTransform();
+    if (PSceneComponent* PreviousParent = GetAttachParent())
+    {
+        PreviousParent->RemoveAttachChild(GetHandle());
+    }
+
+    AttachParentHandle = Parent->GetHandle();
+    Parent->AddAttachChild(GetHandle());
+    if (Rule == EAttachmentTransformRule::KeepWorld)
+    {
+        RelativeTransform = WorldTransform.GetRelativeTransform(Parent->GetWorldTransform());
+    }
+    return true;
+}
+
+bool PSceneComponent::DetachFromComponent(EAttachmentTransformRule Rule)
+{
+    PSceneComponent* Parent = GetAttachParent();
+    if (Parent == nullptr)
+    {
+        AttachParentHandle = {};
+        return false;
+    }
+
+    const FTransform WorldTransform = GetWorldTransform();
+    Parent->RemoveAttachChild(GetHandle());
+    AttachParentHandle = {};
+    if (Rule == EAttachmentTransformRule::KeepWorld)
+    {
+        RelativeTransform = WorldTransform;
+    }
+    return true;
 }
 
 const FTransform& PSceneComponent::GetRelativeTransform() const
@@ -63,12 +160,65 @@ void PSceneComponent::SetRelativeScale(const FVector3& Scale)
 
 FTransform PSceneComponent::GetWorldTransform() const
 {
-    return RelativeTransform;
+    const PSceneComponent* Parent = GetAttachParent();
+    return Parent != nullptr
+        ? RelativeTransform * Parent->GetWorldTransform()
+        : RelativeTransform;
 }
 
 void PSceneComponent::SetWorldTransform(const FTransform& Transform)
 {
-    // Until an attachment tree exists, a scene component's relative space is world space.
-    RelativeTransform = Transform;
+    const PSceneComponent* Parent = GetAttachParent();
+    RelativeTransform = Parent != nullptr
+        ? Transform.GetRelativeTransform(Parent->GetWorldTransform())
+        : Transform;
+}
+
+void PSceneComponent::BeginDestroy()
+{
+    const FTransform WorldTransform = GetWorldTransform();
+    if (PSceneComponent* Parent = GetAttachParent())
+    {
+        Parent->RemoveAttachChild(GetHandle());
+    }
+    AttachParentHandle = {};
+    RelativeTransform = WorldTransform;
+
+    const std::vector<PSceneComponent*> Children = GetAttachChildren();
+    for (PSceneComponent* Child : Children)
+    {
+        if (Child == nullptr || Child->IsBeginningDestroy())
+        {
+            continue;
+        }
+
+        const FTransform ChildWorldTransform = Child->GetWorldTransform();
+        Child->AttachParentHandle = {};
+        Child->RelativeTransform = ChildWorldTransform;
+    }
+    AttachChildrenHandles.clear();
+    PActorComponent::BeginDestroy();
+}
+
+PSceneComponent* PSceneComponent::ResolveSceneComponent(FObjectHandle Handle) const
+{
+    PObject* Object = ResolveObject(Handle);
+    return Object != nullptr && Object->IsA(PSceneComponent::StaticClass())
+        ? static_cast<PSceneComponent*>(Object)
+        : nullptr;
+}
+
+void PSceneComponent::AddAttachChild(FObjectHandle Handle)
+{
+    if (std::find(AttachChildrenHandles.begin(), AttachChildrenHandles.end(), Handle)
+        == AttachChildrenHandles.end())
+    {
+        AttachChildrenHandles.push_back(Handle);
+    }
+}
+
+void PSceneComponent::RemoveAttachChild(FObjectHandle Handle)
+{
+    std::erase(AttachChildrenHandles, Handle);
 }
 }

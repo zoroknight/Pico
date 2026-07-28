@@ -33,6 +33,9 @@ GameWorld
 
 Each editor frame ticks the same `PWorld` that the scene panels inspect.
 
+Month 03.9 extends the Outliner to display the real `PSceneComponent` attachment hierarchy and
+allows child scene components to be created from the toolbar.
+
 ## Persistence Boundary
 
 Editor actions only mutate live objects in the current `FObjectRegistry` session. Spawning,
@@ -76,6 +79,5 @@ selecting an owned scene component as root, and destroying Actors or components.
 
 - OpenGL scene viewport and camera
 - Primitive and static-mesh components
-- SceneComponent parent/child attachment
 - World/Actor/component graph serialization
 - Undo/redo and editor transactions

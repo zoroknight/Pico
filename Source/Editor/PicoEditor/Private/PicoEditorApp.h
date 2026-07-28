@@ -42,6 +42,7 @@ private:
     PSceneComponent* AddSceneRoot(PActor* Actor);
     void SpawnActor();
     void AddRootToSelectedActor();
+    void AddChildToSelectedComponent();
     void SetSelectedComponentAsRoot();
     void DestroySelectedObject();
     void Select(PObject* Object);
@@ -50,6 +51,7 @@ private:
     FObjectHandle WorldHandle;
     FObjectHandle SelectedObjectHandle;
     unsigned int NextActorNumber = 1;
+    unsigned int NextComponentNumber = 1;
     std::string Status;
     bool bStatusIsError = false;
 };

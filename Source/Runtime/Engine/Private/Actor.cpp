@@ -103,7 +103,15 @@ PSceneComponent* PActor::GetRootComponent() const
 
 bool PActor::SetRootComponent(PSceneComponent* Component)
 {
-    if (Component == nullptr || !OwnsComponent(Component))
+    if (Component == nullptr
+        || Component->IsBeginningDestroy()
+        || !OwnsComponent(Component))
+    {
+        return false;
+    }
+
+    if (Component->GetAttachParent() != nullptr
+        && !Component->DetachFromComponent(EAttachmentTransformRule::KeepWorld))
     {
         return false;
     }

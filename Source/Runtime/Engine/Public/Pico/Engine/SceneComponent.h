@@ -3,13 +3,27 @@
 #include "Pico/Core/Math/Transform.h"
 #include "Pico/Engine/ActorComponent.h"
 
+#include <vector>
+
 namespace Pico
 {
+enum class EAttachmentTransformRule
+{
+    KeepRelative,
+    KeepWorld
+};
+
 class PSceneComponent : public PActorComponent
 {
     PICO_DECLARE_CLASS(PSceneComponent, PActorComponent)
 
 public:
+    PSceneComponent* GetAttachParent() const;
+    std::vector<PSceneComponent*> GetAttachChildren() const;
+    bool IsAttachedTo(const PSceneComponent* Component) const;
+    bool AttachToComponent(PSceneComponent* Parent, EAttachmentTransformRule Rule);
+    bool DetachFromComponent(EAttachmentTransformRule Rule);
+
     const FTransform& GetRelativeTransform() const;
     void SetRelativeTransform(const FTransform& Transform);
 
@@ -27,8 +41,15 @@ public:
 
 protected:
     explicit PSceneComponent(const FObjectConstructionParams& Params);
+    void BeginDestroy() override;
 
 private:
+    PSceneComponent* ResolveSceneComponent(FObjectHandle Handle) const;
+    void AddAttachChild(FObjectHandle Handle);
+    void RemoveAttachChild(FObjectHandle Handle);
+
+    FObjectHandle AttachParentHandle;
+    std::vector<FObjectHandle> AttachChildrenHandles;
     FTransform RelativeTransform;
 };
 }

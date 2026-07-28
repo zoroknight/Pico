@@ -525,6 +525,169 @@ void TestActorComponentsAndSceneTransform(FTestRunner& Runner)
     Pico::PObjectSystem::Shutdown();
 }
 
+void TestSceneComponentAttachmentHierarchy(FTestRunner& Runner)
+{
+    if (!InitializeWorldTypes(Runner))
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Pico::PWorld* World = Pico::NewObject<Pico::PWorld>(nullptr, "AttachmentWorld");
+    Runner.Expect(World != nullptr && World->Initialize(), "An attachment test world initializes");
+    if (World == nullptr)
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Pico::PActor* Actor = World->SpawnActor<Pico::PActor>("HierarchyActor");
+    Pico::PSceneComponent* Root =
+        Actor != nullptr ? Actor->CreateComponent<Pico::PSceneComponent>("Root") : nullptr;
+    Pico::PSceneComponent* Middle =
+        Actor != nullptr ? Actor->CreateComponent<Pico::PSceneComponent>("Middle") : nullptr;
+    Pico::PSceneComponent* Leaf =
+        Actor != nullptr ? Actor->CreateComponent<Pico::PSceneComponent>("Leaf") : nullptr;
+    const bool bComponentsReady =
+        Actor != nullptr
+        && Root != nullptr
+        && Middle != nullptr
+        && Leaf != nullptr
+        && Actor->SetRootComponent(Root);
+    Runner.Expect(bComponentsReady, "An Actor creates a root and two attachable scene components");
+    if (!bComponentsReady)
+    {
+        Pico::DestroyObjectTree(World);
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Root->SetRelativeTransform(Pico::FTransform(
+        Pico::FRotator(),
+        Pico::FVector3(100.0f, 0.0f, 0.0f),
+        Pico::FVector3(2.0f, 2.0f, 2.0f)));
+    Middle->SetRelativeLocation(Pico::FVector3(10.0f, 0.0f, 0.0f));
+    Leaf->SetRelativeLocation(Pico::FVector3(5.0f, 0.0f, 0.0f));
+
+    Runner.Expect(
+        Middle->AttachToComponent(Root, Pico::EAttachmentTransformRule::KeepRelative),
+        "A scene component attaches to the root while keeping its relative transform");
+    Runner.Expect(
+        Leaf->AttachToComponent(Middle, Pico::EAttachmentTransformRule::KeepRelative),
+        "A scene component attaches below another child");
+    Runner.Expect(Middle->GetAttachParent() == Root, "The middle component resolves its attach parent");
+    Runner.Expect(Leaf->IsAttachedTo(Root), "A descendant recognizes an ancestor");
+    Runner.Expect(
+        Root->GetAttachChildren().size() == 1 && Root->GetAttachChildren()[0] == Middle,
+        "The root exposes its direct attach child");
+    Runner.Expect(
+        Middle->GetWorldTransform().Translation.Equals(Pico::FVector3(120.0f, 0.0f, 0.0f)),
+        "A child world transform includes parent translation and scale");
+    Runner.Expect(
+        Leaf->GetWorldTransform().Translation.Equals(Pico::FVector3(130.0f, 0.0f, 0.0f)),
+        "A nested child world transform includes the complete parent chain");
+
+    const Pico::FTransform RequestedMiddleWorld(Pico::FVector3(150.0f, 20.0f, 0.0f));
+    Middle->SetWorldTransform(RequestedMiddleWorld);
+    Runner.Expect(
+        Middle->GetWorldTransform().Equals(RequestedMiddleWorld, 0.001f),
+        "Setting a child world transform converts it into parent-relative space");
+
+    const Pico::FTransform WorldBeforeDetach = Middle->GetWorldTransform();
+    Runner.Expect(
+        Middle->DetachFromComponent(Pico::EAttachmentTransformRule::KeepWorld),
+        "A child detaches from its parent");
+    Runner.Expect(Middle->GetAttachParent() == nullptr, "A detached component has no attach parent");
+    Runner.Expect(
+        Middle->GetWorldTransform().Equals(WorldBeforeDetach, 0.001f),
+        "KeepWorld preserves a component world transform while detaching");
+    Runner.Expect(
+        Root->GetAttachChildren().empty(),
+        "Detaching a child removes it from the former parent");
+
+    Runner.Expect(
+        Middle->AttachToComponent(Root, Pico::EAttachmentTransformRule::KeepWorld),
+        "A detached component can reattach while keeping world space");
+    Runner.Expect(
+        Middle->GetWorldTransform().Equals(WorldBeforeDetach, 0.001f),
+        "KeepWorld preserves a component world transform while attaching");
+    Runner.Expect(
+        Middle->AttachToComponent(Root, Pico::EAttachmentTransformRule::KeepRelative)
+            && Root->GetAttachChildren().size() == 1,
+        "Reattaching to the same parent is idempotent");
+
+    const Pico::FTransform RelativeBeforeDetach = Middle->GetRelativeTransform();
+    Runner.Expect(
+        Middle->DetachFromComponent(Pico::EAttachmentTransformRule::KeepRelative),
+        "A child can detach while keeping relative space");
+    Runner.Expect(
+        Middle->GetRelativeTransform().Equals(RelativeBeforeDetach, 0.001f)
+            && Middle->GetWorldTransform().Equals(RelativeBeforeDetach, 0.001f),
+        "KeepRelative leaves the stored relative transform unchanged");
+    Runner.Expect(
+        Middle->AttachToComponent(Root, Pico::EAttachmentTransformRule::KeepRelative),
+        "A component can reattach after a KeepRelative detach");
+    Runner.Expect(
+        Middle->GetRelativeTransform().Equals(RelativeBeforeDetach, 0.001f),
+        "KeepRelative leaves the stored relative transform unchanged while attaching");
+    Runner.Expect(
+        !Middle->AttachToComponent(Leaf, Pico::EAttachmentTransformRule::KeepRelative),
+        "A component rejects attachment to one of its descendants");
+    Runner.Expect(
+        !Root->AttachToComponent(Middle, Pico::EAttachmentTransformRule::KeepRelative),
+        "An Actor root component cannot attach below another component");
+
+    Pico::PActor* OtherActor = World->SpawnActor<Pico::PActor>("OtherActor");
+    Pico::PSceneComponent* OtherRoot =
+        OtherActor != nullptr
+        ? OtherActor->CreateComponent<Pico::PSceneComponent>("OtherRoot")
+        : nullptr;
+    Runner.Expect(
+        OtherActor != nullptr && OtherRoot != nullptr && OtherActor->SetRootComponent(OtherRoot),
+        "A second Actor creates its own root component");
+    Runner.Expect(
+        !Middle->AttachToComponent(OtherRoot, Pico::EAttachmentTransformRule::KeepWorld),
+        "Scene components reject cross-Actor attachment");
+
+    const Pico::FTransform LeafWorldBeforeParentDestroy = Leaf->GetWorldTransform();
+    const Pico::FObjectHandle MiddleHandle = Middle->GetHandle();
+    Runner.Expect(Pico::DestroyObject(Middle), "An attached parent component can be destroyed independently");
+    Runner.Expect(Pico::ResolveObject(MiddleHandle) == nullptr, "Destroying an attached parent invalidates its handle");
+    Runner.Expect(Leaf->GetAttachParent() == nullptr, "Destroying a parent detaches its live children");
+    Runner.Expect(
+        Leaf->GetWorldTransform().Equals(LeafWorldBeforeParentDestroy, 0.001f),
+        "Children keep their world transform when an attach parent is destroyed");
+    Runner.Expect(Root->GetAttachChildren().empty(), "A destroyed child leaves its parent child list");
+
+    Pico::PSceneComponent* ReplacementRoot =
+        Actor->CreateComponent<Pico::PSceneComponent>("ReplacementRoot");
+    Runner.Expect(ReplacementRoot != nullptr, "The Actor creates a replacement root candidate");
+    if (ReplacementRoot == nullptr)
+    {
+        Pico::DestroyObjectTree(World);
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+    ReplacementRoot->SetRelativeLocation(Pico::FVector3(25.0f, 0.0f, 0.0f));
+    Runner.Expect(
+        ReplacementRoot->AttachToComponent(Root, Pico::EAttachmentTransformRule::KeepRelative),
+        "A future root may initially be attached to the current root");
+    const Pico::FTransform ReplacementWorld = ReplacementRoot->GetWorldTransform();
+    Runner.Expect(
+        Actor->SetRootComponent(ReplacementRoot),
+        "An attached owned scene component can become the Actor root");
+    Runner.Expect(
+        ReplacementRoot->GetAttachParent() == nullptr,
+        "Promoting a component to root detaches it from its former parent");
+    Runner.Expect(
+        ReplacementRoot->GetWorldTransform().Equals(ReplacementWorld, 0.001f),
+        "Promoting a component to root preserves its world transform");
+
+    Pico::DestroyObjectTree(World);
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Attachment lifecycle leaves no registered objects");
+    Pico::PObjectSystem::Shutdown();
+}
+
 void TestEngineLoopWorldLifecycle(FTestRunner& Runner)
 {
     char Program[] = "PicoEngineTests";
@@ -610,6 +773,7 @@ int main()
     TestActorSpawnLifecycleAndOwnership(Runner);
     TestActorDestroyDuringTick(Runner);
     TestActorComponentsAndSceneTransform(Runner);
+    TestSceneComponentAttachmentHierarchy(Runner);
     TestEngineLoopWorldLifecycle(Runner);
     TestTwoFrameLifecycle(Runner);
     TestZeroFrameLifecycle(Runner);

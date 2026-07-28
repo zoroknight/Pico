@@ -111,6 +111,17 @@ FPicoEditorApp::FPicoEditorApp(PWorld* World)
     : WorldHandle(World != nullptr ? World->GetHandle() : FObjectHandle {})
 {
     PActor* CubeActor = CreateActorWithRoot("CubeActor");
+    if (CubeActor != nullptr)
+    {
+        PSceneComponent* Root = CubeActor->GetRootComponent();
+        PSceneComponent* Child = CubeActor->CreateComponent<PSceneComponent>("ChildComponent");
+        if (Root != nullptr
+            && Child != nullptr
+            && Child->AttachToComponent(Root, EAttachmentTransformRule::KeepRelative))
+        {
+            Child->SetRelativeLocation(FVector3(100.0f, 0.0f, 0.0f));
+        }
+    }
     Select(CubeActor != nullptr ? static_cast<PObject*>(CubeActor) : static_cast<PObject*>(World));
     SetStatus(
         CubeActor != nullptr
@@ -201,6 +212,14 @@ void FPicoEditorApp::DrawToolbar()
     if (ImGui::Button("Add Scene Root"))
     {
         AddRootToSelectedActor();
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(SelectedSceneComponent == nullptr);
+    if (ImGui::Button("Add Child"))
+    {
+        AddChildToSelectedComponent();
     }
     ImGui::EndDisabled();
 
@@ -325,8 +344,24 @@ void FPicoEditorApp::DrawActorNode(PActor* Actor)
     }
     if (bOpen && !Components.empty())
     {
+        PSceneComponent* RootComponent = Actor->GetRootComponent();
+        if (RootComponent != nullptr)
+        {
+            DrawComponentNode(RootComponent, Actor);
+        }
+
         for (PActorComponent* Component : Components)
         {
+            if (Component == RootComponent)
+            {
+                continue;
+            }
+
+            if (Component->IsA(PSceneComponent::StaticClass())
+                && static_cast<PSceneComponent*>(Component)->GetAttachParent() != nullptr)
+            {
+                continue;
+            }
             DrawComponentNode(Component, Actor);
         }
         ImGui::TreePop();
@@ -341,11 +376,23 @@ void FPicoEditorApp::DrawComponentNode(PActorComponent* Component, PActor* Owner
         return;
     }
 
+    PSceneComponent* SceneComponent =
+        Component->IsA(PSceneComponent::StaticClass())
+        ? static_cast<PSceneComponent*>(Component)
+        : nullptr;
+    const std::vector<PSceneComponent*> Children =
+        SceneComponent != nullptr
+        ? SceneComponent->GetAttachChildren()
+        : std::vector<PSceneComponent*> {};
+
     PushObjectId(Component);
     ImGuiTreeNodeFlags Flags =
-        ImGuiTreeNodeFlags_Leaf
-        | ImGuiTreeNodeFlags_NoTreePushOnOpen
+        ImGuiTreeNodeFlags_OpenOnArrow
         | ImGuiTreeNodeFlags_SpanAvailWidth;
+    if (Children.empty())
+    {
+        Flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+    }
     if (SelectedObjectHandle == Component->GetHandle())
     {
         Flags |= ImGuiTreeNodeFlags_Selected;
@@ -357,10 +404,18 @@ void FPicoEditorApp::DrawComponentNode(PActorComponent* Component, PActor* Owner
         Label += " [Root]";
     }
 
-    ImGui::TreeNodeEx(Label.c_str(), Flags);
-    if (ImGui::IsItemClicked())
+    const bool bOpen = ImGui::TreeNodeEx(Label.c_str(), Flags);
+    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
     {
         Select(Component);
+    }
+    if (bOpen && !Children.empty())
+    {
+        for (PSceneComponent* Child : Children)
+        {
+            DrawComponentNode(Child, Owner);
+        }
+        ImGui::TreePop();
     }
     PopObjectId();
 }
@@ -454,7 +509,19 @@ void FPicoEditorApp::DrawSceneComponentDetails(PSceneComponent* Component)
     ImGui::Text(
         "Role: %s",
         Owner != nullptr && Owner->GetRootComponent() == Component ? "RootComponent" : "SceneComponent");
+    PSceneComponent* Parent = Component->GetAttachParent();
+    ImGui::Text(
+        "Attach Parent: %s",
+        Parent != nullptr ? Parent->GetPathName().c_str() : "None");
+    ImGui::Text("Attach Children: %zu", Component->GetAttachChildren().size());
     ImGui::Text("Registered: %s", Component->IsRegistered() ? "true" : "false");
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("World Transform");
+    FTransform WorldTransform = Component->GetWorldTransform();
+    ImGui::BeginDisabled();
+    DrawTransformControl("WorldTransform", WorldTransform);
+    ImGui::EndDisabled();
 
     DrawReflectedProperties(Component);
 }
@@ -651,6 +718,44 @@ void FPicoEditorApp::AddRootToSelectedActor()
 
     Select(Root);
     SetStatus("Added " + Root->GetPathName());
+}
+
+void FPicoEditorApp::AddChildToSelectedComponent()
+{
+    PObject* Object = GetSelectedObject();
+    PSceneComponent* Parent =
+        Object != nullptr && Object->IsA(PSceneComponent::StaticClass())
+        ? static_cast<PSceneComponent*>(Object)
+        : nullptr;
+    PActor* Owner = Parent != nullptr ? Parent->GetOwner() : nullptr;
+    if (Owner == nullptr)
+    {
+        SetStatus("Selected object cannot own a scene child", true);
+        return;
+    }
+
+    PSceneComponent* Child = nullptr;
+    std::string Name;
+    do
+    {
+        Name = "SceneComponent_" + std::to_string(NextComponentNumber++);
+        Child = Owner->CreateComponent<PSceneComponent>(Name);
+    }
+    while (Child == nullptr && NextComponentNumber < 10000);
+
+    if (Child == nullptr
+        || !Child->AttachToComponent(Parent, EAttachmentTransformRule::KeepRelative))
+    {
+        if (Child != nullptr)
+        {
+            DestroyObject(Child);
+        }
+        SetStatus("Could not add a child to the selected component", true);
+        return;
+    }
+
+    Select(Child);
+    SetStatus("Attached " + Child->GetPathName() + " to " + Parent->GetPathName());
 }
 
 void FPicoEditorApp::SetSelectedComponentAsRoot()
