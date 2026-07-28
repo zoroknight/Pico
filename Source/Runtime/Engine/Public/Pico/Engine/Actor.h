@@ -1,10 +1,17 @@
 #pragma once
 
+#include "Pico/Core/Math/Transform.h"
+#include "Pico/Engine/ActorComponent.h"
 #include "Pico/Object/ReflectionMacros.h"
+
+#include <string_view>
+#include <type_traits>
+#include <vector>
 
 namespace Pico
 {
 class PLevel;
+class PSceneComponent;
 class PWorld;
 
 class PActor : public PObject
@@ -17,6 +24,37 @@ public:
     bool HasBegunPlay() const;
     bool IsPendingDestroy() const;
     bool Destroy();
+
+    PActorComponent* CreateComponent(const PClass* ComponentClass, FName Name);
+    PActorComponent* CreateComponent(const PClass* ComponentClass, std::string_view Name);
+
+    template <typename TComponent>
+    TComponent* CreateComponent(FName Name)
+    {
+        static_assert(
+            std::is_base_of_v<PActorComponent, TComponent>,
+            "CreateComponent only constructs PActorComponent-derived types");
+        return static_cast<TComponent*>(CreateComponent(TComponent::StaticClass(), Name));
+    }
+
+    template <typename TComponent>
+    TComponent* CreateComponent(std::string_view Name)
+    {
+        return CreateComponent<TComponent>(FName(Name));
+    }
+
+    std::vector<PActorComponent*> GetComponents() const;
+    PSceneComponent* GetRootComponent() const;
+    bool SetRootComponent(PSceneComponent* Component);
+
+    FTransform GetActorTransform() const;
+    bool SetActorTransform(const FTransform& Transform);
+    FVector3 GetActorLocation() const;
+    bool SetActorLocation(const FVector3& Location);
+    FRotator GetActorRotation() const;
+    bool SetActorRotation(const FRotator& Rotation);
+    FVector3 GetActorScale() const;
+    bool SetActorScale(const FVector3& Scale);
 
     virtual void BeginPlay();
     virtual void Tick(float DeltaSeconds);
@@ -31,9 +69,15 @@ private:
     void DispatchTick(float DeltaSeconds);
     void DispatchEndPlay();
     void MarkPendingDestroy();
+    PActorComponent* ResolveComponent(FObjectHandle Handle) const;
+    bool OwnsComponent(const PActorComponent* Component) const;
+    void RegisterAllComponents();
+    void UnregisterAllComponents();
 
     friend class PWorld;
 
+    std::vector<FObjectHandle> ComponentHandles;
+    FObjectHandle RootComponentHandle;
     bool bHasBegunPlay = false;
     bool bHasEndedPlay = false;
     bool bPendingDestroy = false;

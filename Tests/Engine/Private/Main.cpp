@@ -2,8 +2,10 @@
 
 #include "Pico/Core/App.h"
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectRegistry.h"
@@ -83,6 +85,33 @@ protected:
 
 PICO_DEFINE_CLASS_NO_PROPERTIES(PSelfDestroyActor)
 
+class PCountingSceneComponent : public Pico::PSceneComponent
+{
+    PICO_DECLARE_CLASS(PCountingSceneComponent, Pico::PSceneComponent)
+
+public:
+    inline static int TotalRegisterCount = 0;
+    inline static int TotalUnregisterCount = 0;
+
+protected:
+    explicit PCountingSceneComponent(const Pico::FObjectConstructionParams& Params)
+        : PSceneComponent(Params)
+    {
+    }
+
+    void OnRegister() override
+    {
+        ++TotalRegisterCount;
+    }
+
+    void OnUnregister() override
+    {
+        ++TotalUnregisterCount;
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PCountingSceneComponent)
+
 bool InitializeWorldTypes(FTestRunner& Runner)
 {
     Pico::PObjectSystem::Shutdown();
@@ -93,17 +122,26 @@ bool InitializeWorldTypes(FTestRunner& Runner)
         return false;
     }
 
+    const bool bActorComponentRegistered = Pico::PActorComponent::RegisterClass();
+    const bool bSceneComponentRegistered = Pico::PSceneComponent::RegisterClass();
+    const bool bCountingSceneComponentRegistered = PCountingSceneComponent::RegisterClass();
     const bool bActorRegistered = Pico::PActor::RegisterClass();
     const bool bCountingActorRegistered = PCountingActor::RegisterClass();
     const bool bSelfDestroyActorRegistered = PSelfDestroyActor::RegisterClass();
     const bool bLevelRegistered = Pico::PLevel::RegisterClass();
     const bool bWorldRegistered = Pico::PWorld::RegisterClass();
+    Runner.Expect(bActorComponentRegistered, "PActorComponent registers with the class registry");
+    Runner.Expect(bSceneComponentRegistered, "PSceneComponent registers with the class registry");
+    Runner.Expect(bCountingSceneComponentRegistered, "A test scene component registers with the class registry");
     Runner.Expect(bActorRegistered, "PActor registers with the class registry");
     Runner.Expect(bCountingActorRegistered, "A test actor registers with the class registry");
     Runner.Expect(bSelfDestroyActorRegistered, "A self-destroying test actor registers with the class registry");
     Runner.Expect(bLevelRegistered, "PLevel registers with the class registry");
     Runner.Expect(bWorldRegistered, "PWorld registers with the class registry");
-    return bActorRegistered
+    return bActorComponentRegistered
+        && bSceneComponentRegistered
+        && bCountingSceneComponentRegistered
+        && bActorRegistered
         && bCountingActorRegistered
         && bSelfDestroyActorRegistered
         && bLevelRegistered
@@ -324,6 +362,169 @@ void TestActorDestroyDuringTick(FTestRunner& Runner)
     Pico::PObjectSystem::Shutdown();
 }
 
+void TestActorComponentsAndSceneTransform(FTestRunner& Runner)
+{
+    PCountingSceneComponent::TotalRegisterCount = 0;
+    PCountingSceneComponent::TotalUnregisterCount = 0;
+
+    if (!InitializeWorldTypes(Runner))
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Pico::PWorld* World = Pico::NewObject<Pico::PWorld>(nullptr, "ComponentWorld");
+    Runner.Expect(World != nullptr && World->Initialize(), "A component test world initializes");
+    if (World == nullptr)
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Pico::PActor* Actor = World->SpawnActor<Pico::PActor>("CubeActor");
+    Runner.Expect(Actor != nullptr, "World spawns a plain actor for component tests");
+    if (Actor == nullptr)
+    {
+        Pico::DestroyObjectTree(World);
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Runner.Expect(
+        Actor->GetActorTransform().Equals(Pico::FTransform::Identity),
+        "An actor without a root component has an identity transform");
+    Runner.Expect(
+        !Actor->SetActorTransform(Pico::FTransform(Pico::FVector3(1.0f, 2.0f, 3.0f))),
+        "An actor without a root component rejects transform changes");
+    Runner.Expect(
+        !Actor->SetActorLocation(Pico::FVector3(1.0f, 2.0f, 3.0f)),
+        "An actor without a root component rejects location changes");
+
+    PCountingSceneComponent* Root =
+        Actor->CreateComponent<PCountingSceneComponent>("RootComponent");
+    Runner.Expect(Root != nullptr, "Actor creates a reflected scene component");
+    Runner.Expect(
+        Root != nullptr && Root->GetPathName() == "ComponentWorld.PersistentLevel.CubeActor.RootComponent",
+        "A component uses the actor as its outer path");
+    Runner.Expect(Root != nullptr && Root->GetOwner() == Actor, "A component resolves its owning actor");
+    Runner.Expect(Root != nullptr && Root->GetWorld() == World, "A component resolves its owning world");
+    Runner.Expect(Actor->GetComponents().size() == 1, "Actor exposes its created component");
+    Runner.Expect(Actor->SetRootComponent(Root), "Actor accepts an owned scene component as root");
+    Runner.Expect(Actor->GetRootComponent() == Root, "Actor returns its root scene component");
+    Runner.Expect(
+        Actor->CreateComponent(Pico::PLevel::StaticClass(), "NotAComponent") == nullptr,
+        "Actor rejects creating a non-component class");
+    Runner.Expect(
+        Actor->CreateComponent<PCountingSceneComponent>("RootComponent") == nullptr,
+        "Duplicate component names are rejected per actor");
+
+    const Pico::FTransform ExpectedTransform(
+        Pico::FRotator(0.0f, 90.0f, 0.0f),
+        Pico::FVector3(100.0f, 0.0f, 50.0f),
+        Pico::FVector3(1.0f, 2.0f, 1.0f));
+    Root->SetRelativeTransform(ExpectedTransform);
+    Runner.Expect(
+        Root->GetRelativeTransform().Equals(ExpectedTransform, 0.001f),
+        "Scene component stores a relative transform");
+    Runner.Expect(
+        Root->GetWorldTransform().Equals(ExpectedTransform, 0.001f),
+        "Without attachment, scene component world transform equals relative transform");
+    Runner.Expect(
+        Actor->GetActorTransform().Equals(ExpectedTransform, 0.001f),
+        "Actor transform is provided by its root component");
+
+    const Pico::FTransform ActorTransform(
+        Pico::FRotator(15.0f, 30.0f, 5.0f),
+        Pico::FVector3(25.0f, 50.0f, 75.0f),
+        Pico::FVector3(1.5f, 2.0f, 0.5f));
+    Runner.Expect(Actor->SetActorTransform(ActorTransform), "Actor sets its root world transform");
+    Runner.Expect(
+        Root->GetWorldTransform().Equals(ActorTransform, 0.001f),
+        "Setting actor transform updates the root component");
+
+    Runner.Expect(
+        Actor->SetActorLocation(Pico::FVector3(120.0f, 10.0f, 25.0f)),
+        "Actor exposes a location setter");
+    Runner.Expect(
+        Actor->SetActorRotation(Pico::FRotator(10.0f, 45.0f, 5.0f)),
+        "Actor exposes a rotation setter");
+    Runner.Expect(
+        Actor->SetActorScale(Pico::FVector3(2.0f, 2.0f, 0.5f)),
+        "Actor exposes a scale setter");
+    Runner.Expect(
+        Actor->GetActorLocation().Equals(Pico::FVector3(120.0f, 10.0f, 25.0f)),
+        "Actor location is read from the root component");
+    Runner.Expect(
+        Actor->GetActorRotation().Equals(Pico::FRotator(10.0f, 45.0f, 5.0f), 0.001f),
+        "Actor rotation is read from the root component");
+    Runner.Expect(
+        Actor->GetActorScale().Equals(Pico::FVector3(2.0f, 2.0f, 0.5f)),
+        "Actor scale is read from the root component");
+
+    Root->SetRelativeLocation(Pico::FVector3(120.0f, 10.0f, 25.0f));
+    Root->SetRelativeRotation(Pico::FRotator(10.0f, 45.0f, 5.0f));
+    Root->SetRelativeScale(Pico::FVector3(2.0f, 2.0f, 0.5f));
+    Runner.Expect(
+        Root->GetRelativeLocation().Equals(Pico::FVector3(120.0f, 10.0f, 25.0f)),
+        "Scene component exposes location setters");
+    Runner.Expect(
+        Root->GetRelativeRotation().Equals(Pico::FRotator(10.0f, 45.0f, 5.0f), 0.001f),
+        "Scene component exposes rotation setters");
+    Runner.Expect(
+        Root->GetRelativeScale().Equals(Pico::FVector3(2.0f, 2.0f, 0.5f)),
+        "Scene component exposes scale setters");
+
+    Pico::PActor* StaleRootActor = World->SpawnActor<Pico::PActor>("StaleRootActor");
+    Pico::PSceneComponent* StaleRoot = StaleRootActor != nullptr
+        ? StaleRootActor->CreateComponent<Pico::PSceneComponent>("RootComponent")
+        : nullptr;
+    Runner.Expect(
+        StaleRootActor != nullptr &&
+            StaleRoot != nullptr &&
+            StaleRootActor->SetRootComponent(StaleRoot),
+        "A second actor accepts a root component");
+    Runner.Expect(
+        StaleRoot != nullptr && Pico::DestroyObject(StaleRoot),
+        "An independently destroyed root component is released");
+    Runner.Expect(
+        StaleRootActor != nullptr && StaleRootActor->GetRootComponent() == nullptr,
+        "A stale root handle resolves to null");
+    Runner.Expect(
+        StaleRootActor != nullptr &&
+            StaleRootActor->GetActorTransform().Equals(Pico::FTransform::Identity),
+        "An actor with a stale root handle falls back to identity");
+    Runner.Expect(
+        StaleRootActor != nullptr &&
+            !StaleRootActor->SetActorLocation(Pico::FVector3(1.0f, 2.0f, 3.0f)),
+        "An actor with a stale root handle rejects transform changes");
+
+    World->Tick(0.1f);
+    Runner.Expect(Root->IsRegistered(), "Actor BeginPlay registers owned components");
+    Runner.Expect(PCountingSceneComponent::TotalRegisterCount == 1, "Component OnRegister runs once");
+
+    PCountingSceneComponent* LateComponent =
+        Actor->CreateComponent<PCountingSceneComponent>("LateComponent");
+    Runner.Expect(
+        LateComponent != nullptr && LateComponent->IsRegistered(),
+        "Components created after BeginPlay register immediately");
+    Runner.Expect(PCountingSceneComponent::TotalRegisterCount == 2, "Late component OnRegister runs once");
+
+    const Pico::FObjectHandle RootHandle = Root->GetHandle();
+    const Pico::FObjectHandle LateHandle = LateComponent != nullptr
+        ? LateComponent->GetHandle()
+        : Pico::FObjectHandle {};
+    Runner.Expect(World->DestroyActor(Actor), "Destroying an actor with components succeeds");
+    Runner.Expect(
+        PCountingSceneComponent::TotalUnregisterCount == 2,
+        "Destroying an actor unregisters owned components");
+    Runner.Expect(Pico::ResolveObject(RootHandle) == nullptr, "Destroying an actor invalidates root component handle");
+    Runner.Expect(Pico::ResolveObject(LateHandle) == nullptr, "Destroying an actor invalidates all component handles");
+
+    Pico::DestroyObjectTree(World);
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Component lifecycle leaves no registered objects");
+    Pico::PObjectSystem::Shutdown();
+}
+
 void TestEngineLoopWorldLifecycle(FTestRunner& Runner)
 {
     char Program[] = "PicoEngineTests";
@@ -408,6 +609,7 @@ int main()
     TestWorldOwnershipAndStaleHandles(Runner);
     TestActorSpawnLifecycleAndOwnership(Runner);
     TestActorDestroyDuringTick(Runner);
+    TestActorComponentsAndSceneTransform(Runner);
     TestEngineLoopWorldLifecycle(Runner);
     TestTwoFrameLifecycle(Runner);
     TestZeroFrameLifecycle(Runner);

@@ -1,7 +1,12 @@
 #include "Pico/Engine/Actor.h"
 
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/World.h"
+#include "Pico/Object/Class.h"
+#include "Pico/Object/ObjectGlobals.h"
+
+#include <algorithm>
 
 namespace Pico
 {
@@ -42,6 +47,127 @@ bool PActor::Destroy()
     return World != nullptr && World->DestroyActor(this);
 }
 
+PActorComponent* PActor::CreateComponent(const PClass* ComponentClass, FName Name)
+{
+    if (IsBeginningDestroy() || IsPendingDestroy())
+    {
+        return nullptr;
+    }
+
+    if (ComponentClass == nullptr || !ComponentClass->IsChildOf(PActorComponent::StaticClass()))
+    {
+        return nullptr;
+    }
+
+    PObject* Object = NewObject(ComponentClass, this, Name);
+    if (Object == nullptr)
+    {
+        return nullptr;
+    }
+
+    PActorComponent* Component = static_cast<PActorComponent*>(Object);
+    ComponentHandles.push_back(Component->GetHandle());
+    if (HasBegunPlay())
+    {
+        Component->RegisterComponent();
+    }
+    return Component;
+}
+
+PActorComponent* PActor::CreateComponent(const PClass* ComponentClass, std::string_view Name)
+{
+    return CreateComponent(ComponentClass, FName(Name));
+}
+
+std::vector<PActorComponent*> PActor::GetComponents() const
+{
+    std::vector<PActorComponent*> Components;
+    Components.reserve(ComponentHandles.size());
+    for (const FObjectHandle Handle : ComponentHandles)
+    {
+        if (PActorComponent* Component = ResolveComponent(Handle))
+        {
+            Components.push_back(Component);
+        }
+    }
+    return Components;
+}
+
+PSceneComponent* PActor::GetRootComponent() const
+{
+    PActorComponent* Component = ResolveComponent(RootComponentHandle);
+    return Component != nullptr && Component->IsA(PSceneComponent::StaticClass())
+        ? static_cast<PSceneComponent*>(Component)
+        : nullptr;
+}
+
+bool PActor::SetRootComponent(PSceneComponent* Component)
+{
+    if (Component == nullptr || !OwnsComponent(Component))
+    {
+        return false;
+    }
+
+    RootComponentHandle = Component->GetHandle();
+    return true;
+}
+
+FTransform PActor::GetActorTransform() const
+{
+    const PSceneComponent* RootComponent = GetRootComponent();
+    return RootComponent != nullptr
+        ? RootComponent->GetWorldTransform()
+        : FTransform::Identity;
+}
+
+bool PActor::SetActorTransform(const FTransform& Transform)
+{
+    PSceneComponent* RootComponent = GetRootComponent();
+    if (RootComponent == nullptr)
+    {
+        return false;
+    }
+
+    RootComponent->SetWorldTransform(Transform);
+    return true;
+}
+
+FVector3 PActor::GetActorLocation() const
+{
+    return GetActorTransform().Translation;
+}
+
+bool PActor::SetActorLocation(const FVector3& Location)
+{
+    FTransform Transform = GetActorTransform();
+    Transform.Translation = Location;
+    return SetActorTransform(Transform);
+}
+
+FRotator PActor::GetActorRotation() const
+{
+    return GetActorTransform().Rotation.Rotator();
+}
+
+bool PActor::SetActorRotation(const FRotator& Rotation)
+{
+    FTransform Transform = GetActorTransform();
+    Transform.Rotation = Rotation.Quaternion();
+    return SetActorTransform(Transform);
+}
+
+FVector3 PActor::GetActorScale() const
+{
+    return GetActorTransform().Scale;
+}
+
+bool PActor::SetActorScale(const FVector3& Scale)
+{
+    FTransform Transform = GetActorTransform();
+    Transform.Scale = Scale;
+    return SetActorTransform(Transform);
+}
+
 void PActor::BeginPlay()
 {
 }
@@ -57,6 +183,8 @@ void PActor::EndPlay()
 void PActor::BeginDestroy()
 {
     DispatchEndPlay();
+    ComponentHandles.clear();
+    RootComponentHandle = {};
     PObject::BeginDestroy();
 }
 
@@ -65,6 +193,7 @@ void PActor::DispatchBeginPlay()
     if (!bHasBegunPlay && !bPendingDestroy)
     {
         bHasBegunPlay = true;
+        RegisterAllComponents();
         BeginPlay();
     }
 }
@@ -83,11 +212,60 @@ void PActor::DispatchEndPlay()
     {
         bHasEndedPlay = true;
         EndPlay();
+        UnregisterAllComponents();
     }
 }
 
 void PActor::MarkPendingDestroy()
 {
     bPendingDestroy = true;
+}
+
+PActorComponent* PActor::ResolveComponent(FObjectHandle Handle) const
+{
+    PObject* Object = ResolveObject(Handle);
+    return Object != nullptr && Object->IsA(PActorComponent::StaticClass())
+        ? static_cast<PActorComponent*>(Object)
+        : nullptr;
+}
+
+bool PActor::OwnsComponent(const PActorComponent* Component) const
+{
+    if (Component == nullptr || Component->GetOwner() != this)
+    {
+        return false;
+    }
+
+    return std::any_of(
+        ComponentHandles.begin(),
+        ComponentHandles.end(),
+        [this, Component](FObjectHandle Handle)
+        {
+            return ResolveComponent(Handle) == Component;
+        });
+}
+
+void PActor::RegisterAllComponents()
+{
+    const std::vector<PActorComponent*> Components = GetComponents();
+    for (PActorComponent* Component : Components)
+    {
+        if (Component != nullptr)
+        {
+            Component->RegisterComponent();
+        }
+    }
+}
+
+void PActor::UnregisterAllComponents()
+{
+    const std::vector<PActorComponent*> Components = GetComponents();
+    for (PActorComponent* Component : Components)
+    {
+        if (Component != nullptr)
+        {
+            Component->UnregisterComponent();
+        }
+    }
 }
 }

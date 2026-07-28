@@ -7,7 +7,9 @@
 #include "Pico/Core/Paths.h"
 #include "Pico/Core/Types.h"
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectSystem.h"
@@ -100,7 +102,11 @@ int FEngineLoop::Init()
 
     bObjectSystemInitialized = true;
 
-    if (!PActor::RegisterClass() || !PLevel::RegisterClass() || !PWorld::RegisterClass())
+    if (!PActorComponent::RegisterClass()
+        || !PSceneComponent::RegisterClass()
+        || !PActor::RegisterClass()
+        || !PLevel::RegisterClass()
+        || !PWorld::RegisterClass())
     {
         PICO_LOG(LogEngine, Error, "Init: engine class registration failed");
         return 1;

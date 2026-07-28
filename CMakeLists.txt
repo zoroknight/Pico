@@ -112,8 +112,10 @@ set_target_properties(PicoReflectionSample PROPERTIES FOLDER "Pico/Samples")
 
 add_library(PicoEngine STATIC
     Source/Runtime/Engine/Private/Actor.cpp
+    Source/Runtime/Engine/Private/ActorComponent.cpp
     Source/Runtime/Engine/Private/EngineLoop.cpp
     Source/Runtime/Engine/Private/Level.cpp
+    Source/Runtime/Engine/Private/SceneComponent.cpp
     Source/Runtime/Engine/Private/World.cpp
 )
 
