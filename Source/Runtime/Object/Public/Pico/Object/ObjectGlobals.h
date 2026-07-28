@@ -32,6 +32,7 @@ TObject* NewObject(PObject* Outer, std::string_view Name, EObjectFlags Flags = E
 }
 
 bool DestroyObject(PObject* Object);
+void DestroyObjectTree(PObject* Root);
 PObject* ResolveObject(FObjectHandle Handle);
 PObject* FindObject(PObject* Outer, FName Name);
 }

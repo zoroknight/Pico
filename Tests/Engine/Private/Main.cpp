@@ -1,11 +1,362 @@
 #include "TestRunner.h"
 
 #include "Pico/Core/App.h"
+#include "Pico/Engine/Actor.h"
 #include "Pico/Engine/EngineLoop.h"
+#include "Pico/Engine/Level.h"
+#include "Pico/Engine/World.h"
+#include "Pico/Object/ObjectGlobals.h"
+#include "Pico/Object/ObjectRegistry.h"
 #include "Pico/Object/ObjectSystem.h"
+
+#include <cmath>
+#include <limits>
 
 namespace
 {
+class PCountingActor : public Pico::PActor
+{
+    PICO_DECLARE_CLASS(PCountingActor, Pico::PActor)
+
+public:
+    int BeginPlayCount = 0;
+    int TickCount = 0;
+    int EndPlayCount = 0;
+    float LastDeltaSeconds = 0.0f;
+    inline static int TotalEndPlayCount = 0;
+
+    void BeginPlay() override
+    {
+        ++BeginPlayCount;
+    }
+
+    void Tick(float DeltaSeconds) override
+    {
+        ++TickCount;
+        LastDeltaSeconds = DeltaSeconds;
+    }
+
+    void EndPlay() override
+    {
+        ++EndPlayCount;
+        ++TotalEndPlayCount;
+    }
+
+protected:
+    explicit PCountingActor(const Pico::FObjectConstructionParams& Params)
+        : PActor(Params)
+    {
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PCountingActor)
+
+class PSelfDestroyActor : public Pico::PActor
+{
+    PICO_DECLARE_CLASS(PSelfDestroyActor, Pico::PActor)
+
+public:
+    int TickCount = 0;
+    int EndPlayCount = 0;
+    inline static int TotalTickCount = 0;
+    inline static int TotalEndPlayCount = 0;
+
+    void Tick(float) override
+    {
+        ++TickCount;
+        ++TotalTickCount;
+        Destroy();
+    }
+
+    void EndPlay() override
+    {
+        ++EndPlayCount;
+        ++TotalEndPlayCount;
+    }
+
+protected:
+    explicit PSelfDestroyActor(const Pico::FObjectConstructionParams& Params)
+        : PActor(Params)
+    {
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PSelfDestroyActor)
+
+bool InitializeWorldTypes(FTestRunner& Runner)
+{
+    Pico::PObjectSystem::Shutdown();
+    const bool bObjectSystemInitialized = Pico::PObjectSystem::Init();
+    Runner.Expect(bObjectSystemInitialized, "World tests initialize the object system");
+    if (!bObjectSystemInitialized)
+    {
+        return false;
+    }
+
+    const bool bActorRegistered = Pico::PActor::RegisterClass();
+    const bool bCountingActorRegistered = PCountingActor::RegisterClass();
+    const bool bSelfDestroyActorRegistered = PSelfDestroyActor::RegisterClass();
+    const bool bLevelRegistered = Pico::PLevel::RegisterClass();
+    const bool bWorldRegistered = Pico::PWorld::RegisterClass();
+    Runner.Expect(bActorRegistered, "PActor registers with the class registry");
+    Runner.Expect(bCountingActorRegistered, "A test actor registers with the class registry");
+    Runner.Expect(bSelfDestroyActorRegistered, "A self-destroying test actor registers with the class registry");
+    Runner.Expect(bLevelRegistered, "PLevel registers with the class registry");
+    Runner.Expect(bWorldRegistered, "PWorld registers with the class registry");
+    return bActorRegistered
+        && bCountingActorRegistered
+        && bSelfDestroyActorRegistered
+        && bLevelRegistered
+        && bWorldRegistered;
+}
+
+void TestWorldLifecycle(FTestRunner& Runner)
+{
+    if (!InitializeWorldTypes(Runner))
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Pico::PWorld* World = Pico::NewObject<Pico::PWorld>(nullptr, "TestWorld");
+    Runner.Expect(World != nullptr, "NewObject constructs a reflected PWorld");
+    if (World == nullptr)
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Runner.Expect(World->GetState() == Pico::EWorldState::Uninitialized, "A new world starts uninitialized");
+    Runner.Expect(World->Initialize(), "World initialization succeeds");
+    Runner.Expect(!World->Initialize(), "World initialization cannot run twice");
+
+    Pico::PLevel* PersistentLevel = World->GetPersistentLevel();
+    Runner.Expect(PersistentLevel != nullptr, "World initialization creates a persistent level");
+    Runner.Expect(World->GetCurrentLevel() == PersistentLevel, "The persistent level is current by default");
+    Runner.Expect(PersistentLevel != nullptr && PersistentLevel->GetWorld() == World, "A level resolves its owning world");
+    Runner.Expect(
+        PersistentLevel != nullptr && PersistentLevel->GetPathName() == "TestWorld.PersistentLevel",
+        "The persistent level uses the object outer path");
+    Runner.Expect(World->GetLevels().size() == 1, "A new world contains one level");
+
+    Pico::PLevel* GameplayLevel = World->CreateLevel("Gameplay");
+    Runner.Expect(GameplayLevel != nullptr, "World creates an additional level");
+    Runner.Expect(World->CreateLevel("Gameplay") == nullptr, "Duplicate level names are rejected within one world");
+    Runner.Expect(World->GetLevels().size() == 2, "The world exposes both live levels");
+    Runner.Expect(World->SetCurrentLevel(GameplayLevel), "An owned level can become current");
+    Runner.Expect(World->GetCurrentLevel() == GameplayLevel, "The selected level becomes current");
+    Runner.Expect(!World->RemoveLevel(PersistentLevel), "The persistent level cannot be removed");
+
+    const Pico::FObjectHandle GameplayHandle = GameplayLevel != nullptr
+        ? GameplayLevel->GetHandle()
+        : Pico::FObjectHandle {};
+    Runner.Expect(World->RemoveLevel(GameplayLevel), "A non-persistent level can be removed");
+    Runner.Expect(Pico::ResolveObject(GameplayHandle) == nullptr, "Removing a level invalidates its object handle");
+    Runner.Expect(World->GetCurrentLevel() == PersistentLevel, "Removing the current level falls back to persistent");
+
+    World->Tick(0.25f);
+    World->Tick(-1.0f);
+    World->Tick(std::numeric_limits<float>::infinity());
+    Runner.Expect(World->GetTickCount() == 1, "Only a valid world tick increments the tick count");
+    Runner.Expect(std::abs(World->GetTimeSeconds() - 0.25) < 0.000001, "World time accumulates valid delta seconds");
+
+    const Pico::FObjectHandle PersistentLevelHandle = PersistentLevel != nullptr
+        ? PersistentLevel->GetHandle()
+        : Pico::FObjectHandle {};
+    World->TearDown();
+    World->TearDown();
+    Runner.Expect(World->GetState() == Pico::EWorldState::TornDown, "World teardown is idempotent");
+    Runner.Expect(World->GetLevels().empty(), "World teardown destroys all levels");
+    Runner.Expect(Pico::ResolveObject(PersistentLevelHandle) == nullptr, "Teardown invalidates the persistent level");
+    Runner.Expect(!World->Initialize(), "A torn-down world cannot be initialized again");
+    Runner.Expect(World->CreateLevel("LateLevel") == nullptr, "A torn-down world cannot create levels");
+
+    const Pico::FObjectHandle WorldHandle = World->GetHandle();
+    Runner.Expect(Pico::DestroyObject(World), "A torn-down world can be destroyed");
+    Runner.Expect(Pico::ResolveObject(WorldHandle) == nullptr, "Destroying a world invalidates its handle");
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "World lifecycle leaves no registered objects");
+    Pico::PObjectSystem::Shutdown();
+}
+
+void TestWorldOwnershipAndStaleHandles(FTestRunner& Runner)
+{
+    if (!InitializeWorldTypes(Runner))
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Pico::PWorld* FirstWorld = Pico::NewObject<Pico::PWorld>(nullptr, "FirstWorld");
+    Pico::PWorld* SecondWorld = Pico::NewObject<Pico::PWorld>(nullptr, "SecondWorld");
+    const bool bWorldsReady = FirstWorld != nullptr
+        && SecondWorld != nullptr
+        && FirstWorld->Initialize()
+        && SecondWorld->Initialize();
+    Runner.Expect(bWorldsReady, "Two independent worlds initialize");
+
+    if (bWorldsReady)
+    {
+        Pico::PLevel* TemporaryLevel = FirstWorld->CreateLevel("Temporary");
+        Runner.Expect(TemporaryLevel != nullptr, "The first world creates a temporary level");
+        Runner.Expect(!SecondWorld->SetCurrentLevel(TemporaryLevel), "A world rejects a level owned by another world");
+        Runner.Expect(FirstWorld->SetCurrentLevel(TemporaryLevel), "The owning world accepts its level");
+
+        const Pico::FObjectHandle StaleHandle = TemporaryLevel != nullptr
+            ? TemporaryLevel->GetHandle()
+            : Pico::FObjectHandle {};
+        Runner.Expect(Pico::DestroyObject(TemporaryLevel), "A level can be destroyed through the object API");
+        Runner.Expect(Pico::ResolveObject(StaleHandle) == nullptr, "The externally destroyed level handle becomes stale");
+        Runner.Expect(
+            FirstWorld->GetCurrentLevel() == FirstWorld->GetPersistentLevel(),
+            "A stale current level falls back to the persistent level");
+        Runner.Expect(FirstWorld->GetLevels().size() == 1, "Stale level handles are omitted from world queries");
+
+        Pico::PLevel* ReplacementLevel = FirstWorld->CreateLevel("Replacement");
+        Runner.Expect(ReplacementLevel != nullptr, "A replacement level can reuse registry storage");
+        Runner.Expect(Pico::ResolveObject(StaleHandle) == nullptr, "Slot reuse does not revive a stale handle");
+        Runner.Expect(
+            ReplacementLevel != nullptr && ReplacementLevel->GetHandle() != StaleHandle,
+            "A reused slot receives a new serial number");
+    }
+
+    Pico::DestroyObjectTree(FirstWorld);
+    Pico::DestroyObjectTree(SecondWorld);
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Destroying both world trees removes every object");
+    Pico::PObjectSystem::Shutdown();
+}
+
+void TestActorSpawnLifecycleAndOwnership(FTestRunner& Runner)
+{
+    PCountingActor::TotalEndPlayCount = 0;
+
+    if (!InitializeWorldTypes(Runner))
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Pico::PWorld* World = Pico::NewObject<Pico::PWorld>(nullptr, "ActorWorld");
+    Runner.Expect(World != nullptr && World->Initialize(), "An actor test world initializes");
+    if (World == nullptr)
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    PCountingActor* Hero = World->SpawnActor<PCountingActor>("Hero");
+    Runner.Expect(Hero != nullptr, "World spawns a reflected actor into the current level");
+    Runner.Expect(Hero != nullptr && Hero->GetWorld() == World, "A spawned actor resolves its owning world");
+    Runner.Expect(
+        Hero != nullptr && Hero->GetLevel() == World->GetCurrentLevel(),
+        "A spawned actor is outered to the current level");
+    Runner.Expect(
+        Hero != nullptr && Hero->GetPathName() == "ActorWorld.PersistentLevel.Hero",
+        "A spawned actor uses the level object path");
+    Runner.Expect(World->GetCurrentLevel()->GetActors().size() == 1, "The level exposes its spawned actor");
+    Runner.Expect(
+        World->SpawnActor(Pico::PLevel::StaticClass(), "NotAnActor") == nullptr,
+        "World rejects spawning a non-actor class");
+    Runner.Expect(World->SpawnActor<PCountingActor>("Hero") == nullptr, "Duplicate actor names are rejected per level");
+
+    World->Tick(0.5f);
+    Runner.Expect(Hero->BeginPlayCount == 1, "The first world tick begins play for existing actors");
+    Runner.Expect(Hero->TickCount == 1, "The first world tick ticks begun actors");
+    Runner.Expect(std::abs(Hero->LastDeltaSeconds - 0.5f) < 0.000001f, "Actor tick receives world delta seconds");
+
+    PCountingActor* LateActor = World->SpawnActor<PCountingActor>("LateActor");
+    Runner.Expect(
+        LateActor != nullptr && LateActor->BeginPlayCount == 1,
+        "Actors spawned after BeginPlay begin immediately");
+    const Pico::FObjectHandle LateActorHandle = LateActor != nullptr
+        ? LateActor->GetHandle()
+        : Pico::FObjectHandle {};
+    const int EndPlayCountBeforeDestroy = PCountingActor::TotalEndPlayCount;
+    Runner.Expect(World->DestroyActor(LateActor), "World destroys an owned actor");
+    Runner.Expect(
+        PCountingActor::TotalEndPlayCount == EndPlayCountBeforeDestroy + 1,
+        "Destroying an actor dispatches EndPlay");
+    Runner.Expect(Pico::ResolveObject(LateActorHandle) == nullptr, "Destroyed actor handles become invalid");
+    Runner.Expect(World->GetCurrentLevel()->GetActors().size() == 1, "Destroyed actors leave the level actor list");
+
+    const Pico::FObjectHandle HeroHandle = Hero->GetHandle();
+    Pico::DestroyObject(Hero);
+    Runner.Expect(Pico::ResolveObject(HeroHandle) == nullptr, "Externally destroyed actor handles become stale");
+    Runner.Expect(World->GetCurrentLevel()->GetActors().empty(), "Stale actor handles are omitted from level queries");
+
+    Pico::DestroyObjectTree(World);
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Actor lifecycle leaves no registered objects");
+    Pico::PObjectSystem::Shutdown();
+}
+
+void TestActorDestroyDuringTick(FTestRunner& Runner)
+{
+    PSelfDestroyActor::TotalTickCount = 0;
+    PSelfDestroyActor::TotalEndPlayCount = 0;
+
+    if (!InitializeWorldTypes(Runner))
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Pico::PWorld* World = Pico::NewObject<Pico::PWorld>(nullptr, "DestroyDuringTickWorld");
+    Runner.Expect(World != nullptr && World->Initialize(), "A destroy-during-tick world initializes");
+    if (World == nullptr)
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    PSelfDestroyActor* SelfDestroyingActor = World->SpawnActor<PSelfDestroyActor>("SelfDestroyingActor");
+    Runner.Expect(SelfDestroyingActor != nullptr, "World spawns a self-destroying actor");
+    const Pico::FObjectHandle ActorHandle = SelfDestroyingActor != nullptr
+        ? SelfDestroyingActor->GetHandle()
+        : Pico::FObjectHandle {};
+
+    World->Tick(0.25f);
+    Runner.Expect(PSelfDestroyActor::TotalTickCount == 1, "The self-destroying actor ticks once");
+    Runner.Expect(PSelfDestroyActor::TotalEndPlayCount == 1, "Self-destroy during tick dispatches EndPlay once");
+    Runner.Expect(Pico::ResolveObject(ActorHandle) == nullptr, "Self-destroy during tick releases the actor at frame end");
+    Runner.Expect(World->GetCurrentLevel()->GetActors().empty(), "Self-destroy removes the actor from its level");
+
+    Pico::DestroyObjectTree(World);
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Destroy-during-tick leaves no registered objects");
+    Pico::PObjectSystem::Shutdown();
+}
+
+void TestEngineLoopWorldLifecycle(FTestRunner& Runner)
+{
+    char Program[] = "PicoEngineTests";
+    char Frames[] = "-frames=3";
+    char MaxFPS[] = "-maxfps=0";
+    char* Arguments[] = { Program, Frames, MaxFPS };
+
+    Pico::FEngineLoop EngineLoop;
+    Runner.Expect(EngineLoop.PreInit(3, Arguments) == 0, "Engine loop pre-initialization succeeds");
+    Runner.Expect(EngineLoop.GetWorld() == nullptr, "No world exists before engine initialization");
+    Runner.Expect(EngineLoop.Init() == 0, "Engine initialization creates the runtime world");
+
+    Pico::PWorld* World = EngineLoop.GetWorld();
+    Runner.Expect(World != nullptr, "The initialized engine exposes its world");
+    Runner.Expect(
+        World != nullptr && World->GetState() == Pico::EWorldState::Initialized,
+        "The engine world is initialized");
+    Runner.Expect(
+        World != nullptr && World->GetPersistentLevel() != nullptr,
+        "The engine world has a persistent level");
+
+    EngineLoop.Tick();
+    EngineLoop.Tick();
+    Runner.Expect(World != nullptr && World->GetTickCount() == 2, "Engine ticks are forwarded to the world");
+    Runner.Expect(Pico::FApp::GetFrameCounter() == 2, "Engine frame and world tick counts advance together");
+
+    EngineLoop.Exit();
+    EngineLoop.Exit();
+    Runner.Expect(EngineLoop.GetWorld() == nullptr, "Engine exit invalidates the active world handle");
+    Runner.Expect(!Pico::PObjectSystem::IsInitialized(), "Engine exit shuts down the object system");
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Engine exit leaves no registered objects");
+}
+
 void TestTwoFrameLifecycle(FTestRunner& Runner)
 {
     char Program[] = "PicoEngineTests";
@@ -53,6 +404,11 @@ void TestInvalidFrameLimit(FTestRunner& Runner)
 int main()
 {
     FTestRunner Runner;
+    TestWorldLifecycle(Runner);
+    TestWorldOwnershipAndStaleHandles(Runner);
+    TestActorSpawnLifecycleAndOwnership(Runner);
+    TestActorDestroyDuringTick(Runner);
+    TestEngineLoopWorldLifecycle(Runner);
     TestTwoFrameLifecycle(Runner);
     TestZeroFrameLifecycle(Runner);
     TestInvalidFrameLimit(Runner);

@@ -63,6 +63,11 @@ bool DestroyObject(PObject* Object)
     return FObjectRegistry::DestroyObject(Object);
 }
 
+void DestroyObjectTree(PObject* Root)
+{
+    FObjectRegistry::DestroyObjectTree(Root);
+}
+
 PObject* ResolveObject(FObjectHandle Handle)
 {
     return FObjectRegistry::ResolveObject(Handle);

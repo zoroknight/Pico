@@ -1,9 +1,12 @@
 #pragma once
 
 #include "Pico/Core/Time.h"
+#include "Pico/Object/ObjectTypes.h"
 
 namespace Pico
 {
+class PWorld;
+
 class FEngineLoop
 {
 public:
@@ -13,9 +16,11 @@ public:
     void Exit();
 
     bool ShouldExit() const;
+    PWorld* GetWorld() const;
 
 private:
     FFrameTimer FrameTimer;
+    FObjectHandle WorldHandle;
     int MaxFrameCount = -1;
     double MaxFPS = 60.0;
     bool bPreInitialized = false;
