@@ -6,6 +6,7 @@
 #include "Pico/Core/Math/Math.h"
 #include "Pico/Core/Name.h"
 #include "Pico/Core/Paths.h"
+#include "Pico/Core/ProjectDescriptor.h"
 #include "Pico/Core/Time.h"
 
 #include <chrono>
@@ -36,7 +37,7 @@ void TestCommandLine(FTestRunner& Runner)
 
 void TestConfig(FTestRunner& Runner)
 {
-    const std::filesystem::path FixturePath = Pico::FPaths::GetProjectRootDir()
+    const std::filesystem::path FixturePath = Pico::FPaths::GetEngineRootDir()
         / "Tests" / "Core" / "Fixtures" / "CoreTest.ini";
 
     Pico::FConfigFile Config;
@@ -57,38 +58,108 @@ void TestConfig(FTestRunner& Runner)
 
 void TestPaths(FTestRunner& Runner)
 {
-    const std::filesystem::path& ProjectRoot = Pico::FPaths::GetProjectRootDir();
-    const std::filesystem::path ExpectedProjectRoot = ProjectRoot;
+    const std::filesystem::path EngineRoot = Pico::FPaths::GetEngineRootDir();
     const std::filesystem::path ExecutablePath = Pico::FPaths::GetExecutablePath();
 
     Runner.Expect(!Pico::FPaths::GetExecutablePath().empty(), "Paths records the executable path");
-    Runner.Expect(!ProjectRoot.empty(), "Paths finds a project root");
-    Runner.Expect(std::filesystem::exists(ProjectRoot / "CMakeLists.txt"), "Project root contains CMakeLists.txt");
-    Runner.Expect(std::filesystem::exists(Pico::FPaths::GetProjectConfigFile("Pico.ini")),
-        "Paths resolves the project config file");
+    Runner.Expect(!EngineRoot.empty(), "Paths finds the engine root");
+    Runner.Expect(
+        std::filesystem::exists(EngineRoot / "CMakeLists.txt"),
+        "Engine root contains CMakeLists.txt");
+    Runner.Expect(
+        std::filesystem::exists(Pico::FPaths::GetEngineConfigFile("Pico.ini")),
+        "Paths resolves the engine config file");
+    Runner.Expect(
+        !Pico::FPaths::HasProject() && Pico::FPaths::GetProjectRootDir().empty(),
+        "Engine tools do not invent a project root");
 
     const auto UniqueSuffix = std::chrono::steady_clock::now().time_since_epoch().count();
-    const std::filesystem::path ForeignProject = std::filesystem::temp_directory_path()
-        / ("PicoCoreTests_ForeignProject_" + std::to_string(UniqueSuffix));
+    const std::filesystem::path TestRoot = std::filesystem::temp_directory_path()
+        / ("PicoCoreTests_ProjectBoundary_" + std::to_string(UniqueSuffix));
+    const std::filesystem::path ForeignDirectory = TestRoot / "Foreign";
+    const std::filesystem::path ProjectRoot = TestRoot / "SampleProject";
+    const std::filesystem::path ProjectFile = ProjectRoot / "SampleProject.pico";
     const std::filesystem::path OriginalWorkingDirectory = std::filesystem::current_path();
     std::error_code ErrorCode;
 
-    std::filesystem::create_directories(ForeignProject, ErrorCode);
-    std::ofstream(ForeignProject / "CMakeLists.txt") << "project(ForeignProject)\n";
-    std::filesystem::current_path(ForeignProject, ErrorCode);
+    std::filesystem::create_directories(ForeignDirectory, ErrorCode);
+    std::ofstream(ForeignDirectory / "CMakeLists.txt") << "project(ForeignProject)\n";
+    std::filesystem::current_path(ForeignDirectory, ErrorCode);
     const bool bChangedWorkingDirectory = !ErrorCode;
 
     if (bChangedWorkingDirectory)
     {
-        Pico::FPaths::Init(ExecutablePath.string());
+        Runner.Expect(
+            Pico::FPaths::Init(ExecutablePath.string()),
+            "Paths reinitialize from a foreign working directory");
     }
 
     std::filesystem::current_path(OriginalWorkingDirectory, ErrorCode);
     Runner.Expect(bChangedWorkingDirectory, "Path test enters a foreign CMake project");
-    Runner.Expect(Pico::FPaths::GetProjectRootDir() == ExpectedProjectRoot,
+    Runner.Expect(
+        Pico::FPaths::GetEngineRootDir() == EngineRoot,
         "Paths ignores an unrelated CMake project in the working directory");
 
-    std::filesystem::remove_all(ForeignProject, ErrorCode);
+    std::filesystem::create_directories(ProjectRoot / "Config", ErrorCode);
+    std::filesystem::create_directories(ProjectRoot / "Content", ErrorCode);
+    std::filesystem::create_directories(ProjectRoot / "Intermediate", ErrorCode);
+    std::filesystem::create_directories(ProjectRoot / "Saved", ErrorCode);
+    std::filesystem::create_directories(ProjectRoot / "Source", ErrorCode);
+    std::ofstream(ProjectFile)
+        << "[Project]\n"
+        << "Name=SampleProject\n"
+        << "FileVersion=1\n"
+        << "EngineVersion=0.1.0\n";
+
+    Pico::FProjectDescriptor Descriptor;
+    std::string DescriptorError;
+    Runner.Expect(
+        Pico::FProjectDescriptor::Load(ProjectFile, Descriptor, &DescriptorError),
+        "Project descriptor loads a valid .pico file");
+    Runner.Expect(
+        Descriptor.GetName() == "SampleProject"
+            && Descriptor.GetFileVersion() == 1
+            && Descriptor.GetRootDir() == std::filesystem::weakly_canonical(ProjectRoot),
+        "Project descriptor exposes stable project identity");
+
+    Runner.Expect(
+        Pico::FPaths::Init(ExecutablePath.string(), ProjectFile),
+        "Paths initialize an explicit external project");
+    Runner.Expect(
+        Pico::FPaths::HasProject()
+            && Pico::FPaths::GetProjectRootDir() == std::filesystem::weakly_canonical(ProjectRoot),
+        "Engine and project roots are independent");
+
+    std::filesystem::path WritePath;
+    Runner.Expect(
+        Pico::FPaths::TryGetProjectWritePath(
+            Pico::EProjectWriteRoot::Content,
+            std::filesystem::path("Maps") / "Main.pworld",
+            WritePath)
+            && WritePath == std::filesystem::weakly_canonical(
+                ProjectRoot / "Content" / "Maps" / "Main.pworld"),
+        "Content writes resolve inside the project");
+    Runner.Expect(
+        Pico::FPaths::IsProjectWritePath(WritePath),
+        "Resolved Content path is an approved project write path");
+    Runner.Expect(
+        !Pico::FPaths::TryGetProjectWritePath(
+            Pico::EProjectWriteRoot::Content,
+            std::filesystem::path("..") / "Source" / "Hacked.cpp",
+            WritePath),
+        "Relative traversal cannot escape a project write root");
+    Runner.Expect(
+        !Pico::FPaths::IsProjectWritePath(ProjectRoot / "Source" / "Generated.cpp"),
+        "Editor-generated files cannot target project Source");
+    Runner.Expect(
+        !Pico::FPaths::IsProjectWritePath(
+            EngineRoot / "Source" / "Runtime" / "Core" / "Private" / "Hacked.cpp"),
+        "Editor-generated files cannot target Engine Source");
+
+    Runner.Expect(
+        Pico::FPaths::Init(ExecutablePath.string()),
+        "Paths restore engine-only mode after project tests");
+    std::filesystem::remove_all(TestRoot, ErrorCode);
 }
 
 void TestAppOwnsProjectName(FTestRunner& Runner)

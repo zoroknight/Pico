@@ -26,6 +26,7 @@ add_library(PicoCore STATIC
     Source/Runtime/Core/Private/Math/Math.cpp
     Source/Runtime/Core/Private/Name.cpp
     Source/Runtime/Core/Private/Paths.cpp
+    Source/Runtime/Core/Private/ProjectDescriptor.cpp
     Source/Runtime/Core/Private/Time.cpp
 )
 
@@ -207,6 +208,35 @@ if(PICO_BUILD_INSPECTOR)
     )
 
     set_target_properties(PicoInspector PROPERTIES FOLDER "Programs")
+
+    add_executable(PicoEditor
+        Source/Editor/PicoEditor/Private/Main.cpp
+        Source/Editor/PicoEditor/Private/PicoEditorApp.cpp
+        Source/Editor/PicoEditor/Private/PicoEditorApp.h
+    )
+
+    target_link_libraries(PicoEditor
+        PRIVATE
+            PicoImGui
+            PicoEngine
+            PicoReflectionTools
+    )
+
+    target_compile_definitions(PicoEditor
+        PRIVATE
+            PICO_DEFAULT_PROJECT_FILE="${PICO_ROOT_DIR}/Projects/PicoSandbox/PicoSandbox.pico"
+    )
+
+    set_target_properties(PicoEditor PROPERTIES
+        FOLDER "Programs"
+        VS_DPI_AWARE "PerMonitor"
+    )
+
+    if(MSVC)
+        target_compile_options(PicoEditor PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(PicoEditor PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
 endif()
 
 add_executable(PicoCoreTests

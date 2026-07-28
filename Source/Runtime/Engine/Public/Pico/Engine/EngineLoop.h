@@ -3,6 +3,8 @@
 #include "Pico/Core/Time.h"
 #include "Pico/Object/ObjectTypes.h"
 
+#include <filesystem>
+
 namespace Pico
 {
 class PWorld;
@@ -10,7 +12,10 @@ class PWorld;
 class FEngineLoop
 {
 public:
-    int PreInit(int Argc, char** Argv);
+    int PreInit(
+        int Argc,
+        char** Argv,
+        const std::filesystem::path& ProjectFile = {});
     int Init();
     void Tick();
     void Exit();

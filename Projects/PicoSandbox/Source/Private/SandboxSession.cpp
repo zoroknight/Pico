@@ -5,6 +5,7 @@
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectSystem.h"
 #include "Pico/Object/Property.h"
+#include "Pico/Core/Paths.h"
 #include "PicoSandbox/SandboxCharacter.h"
 #include "PicoSandbox/SandboxModule.h"
 
@@ -16,6 +17,10 @@ namespace PicoSandbox
 {
 namespace
 {
+#ifndef PICO_SANDBOX_PROJECT_FILE
+#define PICO_SANDBOX_PROJECT_FILE ""
+#endif
+
 template <typename TValue>
 bool SetReflectedValue(Pico::PObject* Object, const char* PropertyName, TValue Value)
 {
@@ -122,6 +127,15 @@ bool FSandboxSession::Save()
     if (Object == nullptr)
     {
         SetStep(ESandboxStep::Saved, ESandboxStepState::Failed, "Create an object before saving");
+        return false;
+    }
+
+    if (!Pico::FPaths::IsProjectWritePath(ObjectPath))
+    {
+        SetStep(
+            ESandboxStep::Saved,
+            ESandboxStepState::Failed,
+            "Save path is outside project Content, Intermediate, and Saved directories");
         return false;
     }
 
@@ -323,12 +337,25 @@ Pico::EObjectSerializationError FSandboxSession::GetLastSerializationError() con
 
 std::filesystem::path FSandboxSession::GetSandboxRootDirectory()
 {
-    return std::filesystem::path(PICO_SANDBOX_ROOT_DIR);
+    if (!Pico::FPaths::HasProject())
+    {
+        Pico::FPaths::Init("", std::filesystem::path(PICO_SANDBOX_PROJECT_FILE));
+    }
+    return Pico::FPaths::GetProjectRootDir();
 }
 
 std::filesystem::path FSandboxSession::GetDefaultObjectPath()
 {
-    return GetSandboxRootDirectory() / "Content" / "Objects" / "SandboxCharacter.pobj";
+    GetSandboxRootDirectory();
+    std::filesystem::path ObjectPath;
+    if (!Pico::FPaths::TryGetProjectWritePath(
+            Pico::EProjectWriteRoot::Content,
+            std::filesystem::path("Objects") / "SandboxCharacter.pobj",
+            ObjectPath))
+    {
+        return {};
+    }
+    return ObjectPath;
 }
 
 std::string_view FSandboxSession::GetStepName(ESandboxStep Step)

@@ -14,7 +14,7 @@ target_include_directories(PicoSandboxGame
 
 target_compile_definitions(PicoSandboxGame
     PRIVATE
-        PICO_SANDBOX_ROOT_DIR="${PICO_SANDBOX_ROOT_DIR}"
+        PICO_SANDBOX_PROJECT_FILE="${PICO_SANDBOX_ROOT_DIR}/PicoSandbox.pico"
 )
 
 target_link_libraries(PicoSandboxGame

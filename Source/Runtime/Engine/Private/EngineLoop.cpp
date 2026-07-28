@@ -5,6 +5,7 @@
 #include "Pico/Core/Config.h"
 #include "Pico/Core/Log.h"
 #include "Pico/Core/Paths.h"
+#include "Pico/Core/ProjectDescriptor.h"
 #include "Pico/Core/Types.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
@@ -28,7 +29,10 @@
 
 namespace Pico
 {
-int FEngineLoop::PreInit(int Argc, char** Argv)
+int FEngineLoop::PreInit(
+    int Argc,
+    char** Argv,
+    const std::filesystem::path& ProjectFile)
 {
     if (bPreInitialized || bInitialized)
     {
@@ -38,12 +42,71 @@ int FEngineLoop::PreInit(int Argc, char** Argv)
 
     bExited = false;
     FCommandLine::Init(Argc, Argv);
-    FPaths::Init(Argc > 0 ? Argv[0] : "");
-    FApp::Init(PICO_PROJECT_NAME);
+
+    std::filesystem::path RequestedProjectFile = ProjectFile;
+    if (RequestedProjectFile.empty())
+    {
+        if (const std::optional<std::string> ProjectArgument =
+                FCommandLine::GetValue("project"))
+        {
+            RequestedProjectFile = *ProjectArgument;
+        }
+    }
+    if (RequestedProjectFile.empty())
+    {
+        const std::vector<std::string>& Arguments = FCommandLine::GetArguments();
+        for (std::size_t Index = 1; Index < Arguments.size(); ++Index)
+        {
+            const std::filesystem::path PositionalPath(Arguments[Index]);
+            if (!Arguments[Index].starts_with("-")
+                && PositionalPath.extension() == ".pico")
+            {
+                RequestedProjectFile = PositionalPath;
+                break;
+            }
+        }
+    }
+
+    if (!FPaths::Init(Argc > 0 ? Argv[0] : "", RequestedProjectFile))
+    {
+        PICO_LOG(LogPaths, Error, "PreInit: engine or project paths could not be initialized");
+        return 1;
+    }
+
+    std::string ProjectName = PICO_PROJECT_NAME;
+    if (FPaths::HasProject())
+    {
+        FProjectDescriptor Descriptor;
+        std::string DescriptorError;
+        if (!FProjectDescriptor::Load(
+                FPaths::GetProjectFile(),
+                Descriptor,
+                &DescriptorError))
+        {
+            PICO_LOG(
+                LogPaths,
+                Error,
+                "PreInit: invalid project descriptor '{}': {}",
+                FPaths::GetProjectFile().string(),
+                DescriptorError);
+            return 1;
+        }
+        ProjectName = Descriptor.GetName();
+    }
+
+    FApp::Init(ProjectName);
     bPreInitialized = true;
 
     FConfigFile Config;
-    const std::filesystem::path ConfigPath = FPaths::GetProjectConfigFile("Pico.ini");
+    std::filesystem::path ConfigPath;
+    if (FPaths::HasProject())
+    {
+        ConfigPath = FPaths::GetProjectConfigFile("Pico.ini");
+    }
+    if (ConfigPath.empty() || !std::filesystem::is_regular_file(ConfigPath))
+    {
+        ConfigPath = FPaths::GetEngineConfigFile("Pico.ini");
+    }
     if (Config.Load(ConfigPath))
     {
         PICO_LOG(LogConfig, Info, "PreInit: loaded {}", ConfigPath.string());
@@ -79,7 +142,12 @@ int FEngineLoop::PreInit(int Argc, char** Argv)
     }
 
     PICO_LOG(LogEngine, Info, "PreInit: project={} version={}", FApp::GetProjectName(), PICO_VERSION);
-    PICO_LOG(LogPaths, Info, "PreInit: project root={}", FPaths::GetProjectRootDir().string());
+    PICO_LOG(LogPaths, Info, "PreInit: engine root={}", FPaths::GetEngineRootDir().string());
+    if (FPaths::HasProject())
+    {
+        PICO_LOG(LogPaths, Info, "PreInit: project file={}", FPaths::GetProjectFile().string());
+        PICO_LOG(LogPaths, Info, "PreInit: project root={}", FPaths::GetProjectRootDir().string());
+    }
     PICO_LOG(LogEngine, Info, "PreInit: max frames={}", MaxFrameCount);
     PICO_LOG(LogEngine, Info, "PreInit: max fps={}", MaxFPS);
 

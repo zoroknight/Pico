@@ -15,6 +15,21 @@ declare classes
 
 The project is intentionally outside `Source/Runtime`, `Source/Developer`, and `Source/Editor`. Its game code does not include any Pico `Private` header.
 
+`PicoSandbox.pico` is the project boundary descriptor. Opening it gives Pico two independent roots:
+
+```text
+EngineRoot  = <Pico repository>
+ProjectRoot = <Pico repository>/Projects/PicoSandbox
+```
+
+The sample lives in the engine repository because it is maintained as an engine example. The same
+descriptor and directory structure can be copied outside the repository without changing Engine
+source code.
+
+Project-authored files live under `Source`, persistent assets under `Content`, and generated/editor
+data under `Intermediate` or `Saved`. Editor write-path validation does not allow automatic writes
+to either Engine `Source` or project `Source`.
+
 ## Project Targets
 
 | Target | Purpose |
@@ -30,6 +45,7 @@ Build and run from the Pico repository root:
 cmake --build Build --config Debug --parallel
 .\Build\Projects\PicoSandbox\Debug\PicoSandboxDemo.exe
 .\Build\Projects\PicoSandbox\Debug\PicoSandboxEditor.exe
+.\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ctest --test-dir Build -C Debug --output-on-failure
 ```
 
