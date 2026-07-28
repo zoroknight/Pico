@@ -172,6 +172,17 @@ if(PICO_BUILD_INSPECTOR)
 
     find_package(OpenGL REQUIRED)
 
+    add_library(glad STATIC
+        ThirdParty/GLAD/src/gl.c
+    )
+
+    target_include_directories(glad
+        PUBLIC
+            ThirdParty/GLAD/include
+    )
+
+    set_target_properties(glad PROPERTIES FOLDER "ThirdParty")
+
     add_library(PicoImGui STATIC
         ThirdParty/ImGui/imgui.cpp
         ThirdParty/ImGui/imgui_draw.cpp
@@ -209,8 +220,7 @@ if(PICO_BUILD_INSPECTOR)
         PUBLIC
             PicoEngine
         PRIVATE
-            glfw
-            OpenGL::GL
+            glad
     )
 
     set_target_properties(PicoRender PROPERTIES FOLDER "Pico")

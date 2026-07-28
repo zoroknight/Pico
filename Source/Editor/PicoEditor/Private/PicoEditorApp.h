@@ -62,5 +62,6 @@ private:
     unsigned int NextComponentNumber = 1;
     std::string Status;
     bool bStatusIsError = false;
+    bool bResetDockLayout = false;
 };
 }

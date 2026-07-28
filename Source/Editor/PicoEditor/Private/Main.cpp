@@ -1,5 +1,6 @@
 #include "PicoEditorApp.h"
 
+#include "Pico/Core/Paths.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Render/SceneViewportRenderer.h"
 
@@ -121,7 +122,8 @@ int main(int Argc, char** Argv)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& IO = ImGui::GetIO();
-    IO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    IO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+    IO.IniFilename = nullptr;
     const float UiScale = FindUiScale(Argc, Argv);
     const std::filesystem::path InterfaceFont = "C:/Windows/Fonts/segoeui.ttf";
     if (std::filesystem::is_regular_file(InterfaceFont))
@@ -146,6 +148,24 @@ int main(int Argc, char** Argv)
     Pico::FEngineLoop EngineLoop;
     const std::filesystem::path ProjectFile = FindProjectFile(Argc, Argv);
     int ExitCode = EngineLoop.PreInit(Argc, Argv, ProjectFile);
+    std::string LayoutIniPath;
+    if (ExitCode == 0)
+    {
+        std::filesystem::path LayoutPath;
+        if (Pico::FPaths::TryGetProjectWritePath(
+                Pico::EProjectWriteRoot::Saved,
+                "Editor/PicoEditorLayout.ini",
+                LayoutPath))
+        {
+            std::error_code Error;
+            std::filesystem::create_directories(LayoutPath.parent_path(), Error);
+            if (!Error)
+            {
+                LayoutIniPath = LayoutPath.string();
+                IO.IniFilename = LayoutIniPath.c_str();
+            }
+        }
+    }
     if (ExitCode == 0)
     {
         ExitCode = EngineLoop.Init();
@@ -184,6 +204,10 @@ int main(int Argc, char** Argv)
 
     EngineLoop.Exit();
     ViewportRenderer.Shutdown();
+    if (!LayoutIniPath.empty())
+    {
+        ImGui::SaveIniSettingsToDisk(LayoutIniPath.c_str());
+    }
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();

@@ -25,6 +25,8 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 通过 `.pico` 打开引擎目录之外的项目边界。
 - 在 Outliner 和 Details 中查看、创建、修改和销毁运行时对象。
 - 在 OpenGL 3.3 编辑器视口中渲染 `PCubeComponent`。
+- 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
+- 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
 Debug 和 Release 均可完整构建，四个自动化测试程序全部通过。
 
@@ -53,7 +55,7 @@ PicoInspector       -> PicoReflectionTools
 | `PicoCore` | App状态、命令行、配置、日志、FName、路径、时间、数学和项目描述 |
 | `PicoObject` | `PObject`、`PClass`、`PProperty`、反射、注册表、Handle、Outer和序列化 |
 | `PicoEngine` | EngineLoop、World、Level、Actor、Component、挂接和可渲染场景数据 |
-| `PicoRender` | OpenGL函数、Shader、几何体、Framebuffer、场景遍历和绘制提交 |
+| `PicoRender` | 基于GLAD的OpenGL、Shader、几何体、Framebuffer、场景遍历和绘制提交 |
 | `PicoEditor` | Outliner、Details、运行时场景操作、编辑器相机和3D视口 |
 | `PicoReflectionTools` | 通用元数据检查和反射属性工具 |
 | `PicoSandbox` | 项目侧反射、序列化、编辑器和自动化测试示例 |
@@ -161,8 +163,12 @@ GameWorld
 - 按住鼠标中键拖动，可以平移相机。
 - 使用鼠标滚轮，可以拉近或拉远。
 - 使用工具栏，可以创建 Actor、增加场景子组件、设置 Root 或销毁运行时对象。
+- 拖动面板标签可以重新停靠或合并面板，使用 `Reset Layout` 恢复默认布局。
 
 当前编辑器场景修改只存在于运行时内存中。关闭编辑器后修改会被丢弃，也不会重写 C++ 源码。
+
+编辑器面板布局与场景数据相互独立，布局保存在
+`Projects/<ProjectName>/Saved/Editor/PicoEditorLayout.ini`。
 
 ## 程序和示例
 
@@ -225,7 +231,7 @@ Pico/
     Runtime/               Core、Object、Engine、Render和Launch
     Samples/               可复用的引擎侧示例
   Tests/                   Core、Object、Engine和Sandbox测试
-  ThirdParty/              GLFW和Dear ImGui
+  ThirdParty/              GLAD、GLFW和Dear ImGui
 ```
 
 ## 编写反射类
@@ -262,6 +268,8 @@ Pico 目前还没有类似 UHT 的头文件工具。未来的 PicoHeaderTool 可
 - [反射类编写指南](Docs/ReflectionAuthoringGuide.md)
 - [PicoSandbox指南](Projects/PicoSandbox/README.md)
 - [第三个月编辑器视口](Docs/Month03_10_Editor3DViewport.md)
+- [第三个月编辑器停靠布局](Docs/Month03_11_EditorDocking.md)
+- [第三个月GLAD集成](Docs/Month03_12_GLADIntegration.md)
 
 ## 路线图
 

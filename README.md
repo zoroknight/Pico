@@ -27,6 +27,8 @@ The first three development months are complete. Pico can currently:
 - Open a `.pico` project with separate engine and project roots.
 - Display runtime objects in an Outliner and Details panel.
 - Render `PCubeComponent` instances in an interactive OpenGL 3.3 editor viewport.
+- Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
+- Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
 Debug and Release configurations build successfully, and all four automated test executables pass.
 
@@ -55,7 +57,7 @@ PicoInspector       -> PicoReflectionTools
 | `PicoCore` | App state, command line, config, logging, names, paths, time, math, project descriptor |
 | `PicoObject` | `PObject`, `PClass`, `PProperty`, reflection, registry, handles, Outer graph, serialization |
 | `PicoEngine` | Engine loop, World, Level, Actor, components, attachment, primitive scene data |
-| `PicoRender` | OpenGL procedures, shaders, geometry, framebuffer, scene traversal and draw submission |
+| `PicoRender` | GLAD-backed OpenGL, shaders, geometry, framebuffer, scene traversal and draw submission |
 | `PicoEditor` | Runtime Outliner, Details, scene editing, editor camera and 3D viewport |
 | `PicoReflectionTools` | Generic metadata inspection and reflected-property helpers |
 | `PicoSandbox` | Project-side reflection, serialization, editor and testing example |
@@ -167,9 +169,13 @@ GameWorld
 - Middle-drag to pan.
 - Use the mouse wheel to zoom.
 - Use the toolbar to spawn Actors, add scene children, choose a root, or destroy runtime objects.
+- Drag panel tabs to rearrange or tab the workspace; use `Reset Layout` to restore the default.
 
 Editor scene changes currently live only in memory. Closing the editor discards them and does not
 rewrite C++ source.
+
+Editor panel layout is separate from scene data and persists in
+`Projects/<ProjectName>/Saved/Editor/PicoEditorLayout.ini`.
 
 ## Programs and Samples
 
@@ -232,7 +238,7 @@ Pico/
     Runtime/               Core, Object, Engine, Render and Launch
     Samples/               Reusable engine-side samples
   Tests/                   Core, Object, Engine and Sandbox tests
-  ThirdParty/              GLFW and Dear ImGui
+  ThirdParty/              GLAD, GLFW and Dear ImGui
 ```
 
 ## Reflection Authoring
@@ -270,6 +276,8 @@ See:
 - [Reflection Authoring Guide](Docs/ReflectionAuthoringGuide.md)
 - [PicoSandbox Guide](Projects/PicoSandbox/README.md)
 - [Month 3 Editor Viewport](Docs/Month03_10_Editor3DViewport.md)
+- [Month 3 Editor Docking](Docs/Month03_11_EditorDocking.md)
+- [Month 3 GLAD Integration](Docs/Month03_12_GLADIntegration.md)
 
 ## Roadmap
 

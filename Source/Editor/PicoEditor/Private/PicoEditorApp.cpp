@@ -15,6 +15,7 @@
 #include "Pico/Object/Property.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <cmath>
@@ -111,6 +112,34 @@ void PopObjectId()
     ImGui::PopID();
     ImGui::PopID();
 }
+
+void BuildDefaultDockLayout(ImGuiID DockspaceId, const ImVec2& DockspaceSize)
+{
+    ImGui::DockBuilderRemoveNode(DockspaceId);
+    ImGui::DockBuilderAddNode(DockspaceId, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(DockspaceId, DockspaceSize);
+
+    ImGuiID CenterNodeId = DockspaceId;
+    ImGuiID OutlinerNodeId = 0;
+    ImGuiID DetailsNodeId = 0;
+    ImGui::DockBuilderSplitNode(
+        CenterNodeId,
+        ImGuiDir_Left,
+        0.20f,
+        &OutlinerNodeId,
+        &CenterNodeId);
+    ImGui::DockBuilderSplitNode(
+        CenterNodeId,
+        ImGuiDir_Right,
+        0.28f,
+        &DetailsNodeId,
+        &CenterNodeId);
+
+    ImGui::DockBuilderDockWindow("Scene Outliner", OutlinerNodeId);
+    ImGui::DockBuilderDockWindow("Viewport", CenterNodeId);
+    ImGui::DockBuilderDockWindow("Details", DetailsNodeId);
+    ImGui::DockBuilderFinish(DockspaceId);
+}
 }
 
 FPicoEditorApp::FPicoEditorApp(PWorld* World, FSceneViewportRenderer* InViewportRenderer)
@@ -144,69 +173,71 @@ void FPicoEditorApp::Draw()
         SelectedObjectHandle = {};
     }
 
-    const ImGuiViewport* Viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(Viewport->WorkPos);
-    ImGui::SetNextWindowSize(Viewport->WorkSize);
+    const ImGuiViewport* MainViewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(MainViewport->WorkPos);
+    ImGui::SetNextWindowSize(MainViewport->WorkSize);
+    ImGui::SetNextWindowViewport(MainViewport->ID);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::Begin(
-        "Pico Editor",
+        "PicoEditorDockspaceHost",
         nullptr,
-        ImGuiWindowFlags_NoCollapse
+        ImGuiWindowFlags_MenuBar
+            | ImGuiWindowFlags_NoDocking
+            | ImGuiWindowFlags_NoTitleBar
+            | ImGuiWindowFlags_NoCollapse
             | ImGuiWindowFlags_NoMove
             | ImGuiWindowFlags_NoResize
             | ImGuiWindowFlags_NoScrollbar
             | ImGuiWindowFlags_NoScrollWithMouse
+            | ImGuiWindowFlags_NoBringToFrontOnFocus
+            | ImGuiWindowFlags_NoNavFocus
             | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PopStyleVar(3);
 
-    DrawToolbar();
-    ImGui::Separator();
-
-    const float PanelsWidth = ImGui::GetContentRegionAvail().x;
-    const float OutlinerWidth = std::clamp(PanelsWidth * 0.20f, 240.0f, 320.0f);
-    const float DetailsWidth = std::clamp(PanelsWidth * 0.30f, 360.0f, 480.0f);
-    const float ViewportWidth =
-        std::max(PanelsWidth - OutlinerWidth - DetailsWidth - 12.0f, 240.0f);
-    const float PanelsHeight =
-        std::max(ImGui::GetContentRegionAvail().y - 30.0f, 160.0f);
-    const float ViewportHeight = std::max(
-        PanelsHeight - ImGui::GetFrameHeight() - ImGui::GetStyle().CellPadding.y * 2.0f,
-        64.0f);
-    if (ImGui::BeginTable(
-            "EditorPanels",
-            3,
-            ImGuiTableFlags_Resizable
-                | ImGuiTableFlags_BordersInnerV
-                | ImGuiTableFlags_NoSavedSettings
-                | ImGuiTableFlags_SizingStretchProp,
-            ImVec2(0.0f, PanelsHeight)))
+    if (ImGui::BeginMenuBar())
     {
-        ImGui::TableSetupColumn(
-            "Scene Outliner",
-            ImGuiTableColumnFlags_WidthFixed,
-            OutlinerWidth);
-        ImGui::TableSetupColumn(
-            "Viewport",
-            ImGuiTableColumnFlags_WidthFixed,
-            ViewportWidth);
-        ImGui::TableSetupColumn(
-            "Details",
-            ImGuiTableColumnFlags_WidthFixed,
-            DetailsWidth);
-        ImGui::TableHeadersRow();
-        ImGui::TableNextRow();
-
-        ImGui::TableSetColumnIndex(0);
-        DrawSceneOutliner();
-        ImGui::TableSetColumnIndex(1);
-        DrawViewport(
-            ViewportWidth - ImGui::GetStyle().CellPadding.x * 2.0f,
-            ViewportHeight);
-        ImGui::TableSetColumnIndex(2);
-        DrawDetails();
-        ImGui::EndTable();
+        DrawToolbar();
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        DrawStatusBar();
+        ImGui::EndMenuBar();
     }
 
-    ImGui::Separator();
-    DrawStatusBar();
+    const ImGuiID DockspaceId = ImGui::GetID("PicoEditorDockspace");
+    const ImVec2 DockspaceSize = ImGui::GetContentRegionAvail();
+    const bool bNeedsDefaultLayout =
+        bResetDockLayout || ImGui::DockBuilderGetNode(DockspaceId) == nullptr;
+    ImGui::DockSpace(DockspaceId, ImVec2(0.0f, 0.0f));
+    if (bNeedsDefaultLayout)
+    {
+        BuildDefaultDockLayout(DockspaceId, DockspaceSize);
+        bResetDockLayout = false;
+    }
+    ImGui::End();
+
+    if (ImGui::Begin("Scene Outliner"))
+    {
+        DrawSceneOutliner();
+    }
+    ImGui::End();
+
+    if (ImGui::Begin(
+            "Viewport",
+            nullptr,
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+    {
+        const ImVec2 Available = ImGui::GetContentRegionAvail();
+        DrawViewport(Available.x, Available.y);
+    }
+    ImGui::End();
+
+    if (ImGui::Begin("Details"))
+    {
+        DrawDetails();
+    }
     ImGui::End();
 }
 
@@ -359,6 +390,12 @@ void FPicoEditorApp::DrawToolbar()
         DestroySelectedObject();
     }
     ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Reset Layout"))
+    {
+        bResetDockLayout = true;
+    }
 }
 
 void FPicoEditorApp::DrawSceneOutliner()
