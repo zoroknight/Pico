@@ -4,6 +4,8 @@
 
 Pico 是一个以学习为目的、参考 Unreal Engine 架构设计的小型 C++ 引擎。
 
+![带有实时 OpenGL 场景视口的 Pico 编辑器](Docs/Images/PicoEditorMonth03.png)
+
 ## 环境要求
 
 - Windows 10 或 Windows 11（x64）
@@ -38,6 +40,7 @@ Debug 初始化成功后，可以运行：
 .\Build\Debug\PicoLaunch.exe -frames=5
 .\Build\Debug\PicoReflectionDemo.exe
 .\Build\Debug\PicoInspector.exe
+.\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico -uiscale=1.4
 ```
 
 ## Visual Studio 工作流程

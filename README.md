@@ -4,6 +4,8 @@
 
 Pico is a small learning-oriented C++ engine inspired by Unreal Engine architecture.
 
+![Pico Editor with a live OpenGL scene viewport](Docs/Images/PicoEditorMonth03.png)
+
 ## Requirements
 
 - Windows 10 or Windows 11 (x64)
@@ -38,6 +40,7 @@ After a successful Debug setup:
 .\Build\Debug\PicoLaunch.exe -frames=5
 .\Build\Debug\PicoReflectionDemo.exe
 .\Build\Debug\PicoInspector.exe
+.\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico -uiscale=1.4
 ```
 
 ## Visual Studio Workflow

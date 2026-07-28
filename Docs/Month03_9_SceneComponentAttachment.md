@@ -77,4 +77,4 @@ same Actor and attaches it to the selected component.
 - Transform caching and dirty propagation
 - Drag-and-drop hierarchy editing
 - Attachment reference serialization
-- Primitive and static-mesh components
+- Static-mesh components

@@ -1,11 +1,14 @@
 #include "PicoEditorApp.h"
 
 #include "Pico/Developer/ReflectionDebug.h"
+#include "Pico/Core/Math/MathUtility.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/World.h"
+#include "Pico/Render/SceneViewportRenderer.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectGlobals.h"
@@ -13,6 +16,9 @@
 
 #include <imgui.h>
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -107,19 +113,20 @@ void PopObjectId()
 }
 }
 
-FPicoEditorApp::FPicoEditorApp(PWorld* World)
+FPicoEditorApp::FPicoEditorApp(PWorld* World, FSceneViewportRenderer* InViewportRenderer)
     : WorldHandle(World != nullptr ? World->GetHandle() : FObjectHandle {})
+    , ViewportRenderer(InViewportRenderer)
 {
     PActor* CubeActor = CreateActorWithRoot("CubeActor");
     if (CubeActor != nullptr)
     {
         PSceneComponent* Root = CubeActor->GetRootComponent();
-        PSceneComponent* Child = CubeActor->CreateComponent<PSceneComponent>("ChildComponent");
+        PCubeComponent* Child = CubeActor->CreateComponent<PCubeComponent>("CubeComponent");
         if (Root != nullptr
             && Child != nullptr
             && Child->AttachToComponent(Root, EAttachmentTransformRule::KeepRelative))
         {
-            Child->SetRelativeLocation(FVector3(100.0f, 0.0f, 0.0f));
+            Child->SetRelativeLocation(FVector3(0.0f, 0.0f, 50.0f));
         }
     }
     Select(CubeActor != nullptr ? static_cast<PObject*>(CubeActor) : static_cast<PObject*>(World));
@@ -146,28 +153,54 @@ void FPicoEditorApp::Draw()
         ImGuiWindowFlags_NoCollapse
             | ImGuiWindowFlags_NoMove
             | ImGuiWindowFlags_NoResize
+            | ImGuiWindowFlags_NoScrollbar
+            | ImGuiWindowFlags_NoScrollWithMouse
             | ImGuiWindowFlags_NoSavedSettings);
 
     DrawToolbar();
     ImGui::Separator();
 
+    const float PanelsWidth = ImGui::GetContentRegionAvail().x;
+    const float OutlinerWidth = std::clamp(PanelsWidth * 0.20f, 240.0f, 320.0f);
+    const float DetailsWidth = std::clamp(PanelsWidth * 0.30f, 360.0f, 480.0f);
+    const float ViewportWidth =
+        std::max(PanelsWidth - OutlinerWidth - DetailsWidth - 12.0f, 240.0f);
+    const float PanelsHeight =
+        std::max(ImGui::GetContentRegionAvail().y - 30.0f, 160.0f);
+    const float ViewportHeight = std::max(
+        PanelsHeight - ImGui::GetFrameHeight() - ImGui::GetStyle().CellPadding.y * 2.0f,
+        64.0f);
     if (ImGui::BeginTable(
             "EditorPanels",
-            2,
+            3,
             ImGuiTableFlags_Resizable
                 | ImGuiTableFlags_BordersInnerV
                 | ImGuiTableFlags_NoSavedSettings
                 | ImGuiTableFlags_SizingStretchProp,
-            ImVec2(0.0f, -30.0f)))
+            ImVec2(0.0f, PanelsHeight)))
     {
-        ImGui::TableSetupColumn("Scene Outliner", ImGuiTableColumnFlags_WidthFixed, 330.0f);
-        ImGui::TableSetupColumn("Details", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn(
+            "Scene Outliner",
+            ImGuiTableColumnFlags_WidthFixed,
+            OutlinerWidth);
+        ImGui::TableSetupColumn(
+            "Viewport",
+            ImGuiTableColumnFlags_WidthFixed,
+            ViewportWidth);
+        ImGui::TableSetupColumn(
+            "Details",
+            ImGuiTableColumnFlags_WidthFixed,
+            DetailsWidth);
         ImGui::TableHeadersRow();
         ImGui::TableNextRow();
 
         ImGui::TableSetColumnIndex(0);
         DrawSceneOutliner();
         ImGui::TableSetColumnIndex(1);
+        DrawViewport(
+            ViewportWidth - ImGui::GetStyle().CellPadding.x * 2.0f,
+            ViewportHeight);
+        ImGui::TableSetColumnIndex(2);
         DrawDetails();
         ImGui::EndTable();
     }
@@ -175,6 +208,86 @@ void FPicoEditorApp::Draw()
     ImGui::Separator();
     DrawStatusBar();
     ImGui::End();
+}
+
+void FPicoEditorApp::DrawViewport(float Width, float Height)
+{
+    if (ViewportRenderer == nullptr || !ViewportRenderer->IsInitialized())
+    {
+        ImGui::TextDisabled("Viewport unavailable");
+        return;
+    }
+
+    ImVec2 Available = ImGui::GetContentRegionAvail();
+    Available.x = std::max(Width, 64.0f);
+    Available.y = std::max(Height, 64.0f);
+    const ImGuiIO& IO = ImGui::GetIO();
+    const uint32 RenderWidth = static_cast<uint32>(std::clamp(
+        Available.x * IO.DisplayFramebufferScale.x,
+        64.0f,
+        4096.0f));
+    const uint32 RenderHeight = static_cast<uint32>(std::clamp(
+        Available.y * IO.DisplayFramebufferScale.y,
+        64.0f,
+        4096.0f));
+
+    const float YawRadians = DegreesToRadians(CameraYawDegrees);
+    const float PitchRadians = DegreesToRadians(CameraPitchDegrees);
+    const float CosPitch = std::cos(PitchRadians);
+    const FVector3 CameraOffset(
+        CameraDistance * CosPitch * std::cos(YawRadians),
+        CameraDistance * CosPitch * std::sin(YawRadians),
+        CameraDistance * std::sin(PitchRadians));
+
+    FSceneView View;
+    View.Target = CameraTarget;
+    View.Position = CameraTarget + CameraOffset;
+    if (!ViewportRenderer->Resize(RenderWidth, RenderHeight)
+        || !ViewportRenderer->Render(GetWorld(), View))
+    {
+        ImGui::TextDisabled("Viewport render failed");
+        return;
+    }
+
+    ImGui::Image(
+        reinterpret_cast<ImTextureID>(
+            static_cast<std::uintptr_t>(ViewportRenderer->GetColorTexture())),
+        Available,
+        ImVec2(0.0f, 1.0f),
+        ImVec2(1.0f, 0.0f));
+
+    if (!ImGui::IsItemHovered())
+    {
+        return;
+    }
+
+    if (IO.MouseWheel != 0.0f)
+    {
+        CameraDistance = std::clamp(
+            CameraDistance * std::pow(0.88f, IO.MouseWheel),
+            80.0f,
+            5000.0f);
+    }
+
+    if (ImGui::IsMouseDragging(ImGuiMouseButton_Right))
+    {
+        CameraYawDegrees -= IO.MouseDelta.x * 0.25f;
+        CameraPitchDegrees = std::clamp(
+            CameraPitchDegrees + IO.MouseDelta.y * 0.25f,
+            -85.0f,
+            85.0f);
+    }
+
+    if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
+    {
+        const FVector3 Forward = (View.Target - View.Position).GetSafeNormal();
+        const FVector3 Right =
+            FVector3::Cross(Forward, FVector3::UpVector).GetSafeNormal();
+        const FVector3 CameraUp = FVector3::Cross(Right, Forward).GetSafeNormal();
+        const float PanSpeed = CameraDistance * 0.0015f;
+        CameraTarget += Right * (-IO.MouseDelta.x * PanSpeed);
+        CameraTarget += CameraUp * (IO.MouseDelta.y * PanSpeed);
+    }
 }
 
 PWorld* FPicoEditorApp::GetWorld() const

@@ -1,6 +1,7 @@
 #include "PicoEditorApp.h"
 
 #include "Pico/Engine/EngineLoop.h"
+#include "Pico/Render/SceneViewportRenderer.h"
 
 #include <GLFW/glfw3.h>
 #include <backends/imgui_impl_glfw.h>
@@ -9,7 +10,9 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <string>
 #include <string_view>
 
 namespace
@@ -41,7 +44,34 @@ std::filesystem::path FindProjectFile(int Argc, char** Argv)
     return std::filesystem::path(PICO_DEFAULT_PROJECT_FILE);
 }
 
-void ApplyEditorStyle()
+float FindUiScale(int Argc, char** Argv)
+{
+    constexpr std::string_view ScalePrefix = "-uiscale=";
+    for (int Index = 1; Index < Argc; ++Index)
+    {
+        const std::string_view Argument = Argv[Index];
+        if (!Argument.starts_with(ScalePrefix))
+        {
+            continue;
+        }
+
+        const std::string Value(Argument.substr(ScalePrefix.size()));
+        char* End = nullptr;
+        const float Scale = std::strtof(Value.c_str(), &End);
+        if (End != Value.c_str() && End != nullptr && *End == '\0')
+        {
+            return std::clamp(Scale, 0.75f, 2.5f);
+        }
+    }
+    return 1.4f;
+}
+
+Pico::FOpenGLProcedure LoadOpenGLProcedure(const char* Name)
+{
+    return reinterpret_cast<Pico::FOpenGLProcedure>(glfwGetProcAddress(Name));
+}
+
+void ApplyEditorStyle(float Scale)
 {
     ImGui::StyleColorsDark();
     ImGuiStyle& Style = ImGui::GetStyle();
@@ -59,6 +89,7 @@ void ApplyEditorStyle()
     Style.Colors[ImGuiCol_FrameBg] = ImVec4(0.15f, 0.16f, 0.17f, 1.0f);
     Style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.21f, 0.23f, 0.24f, 1.0f);
     Style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.13f, 0.34f, 0.31f, 1.0f);
+    Style.ScaleAllSizes(Scale);
 }
 }
 
@@ -73,9 +104,10 @@ int main(int Argc, char** Argv)
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
     const GLFWvidmode* VideoMode = glfwGetVideoMode(glfwGetPrimaryMonitor());
-    const int WindowWidth = VideoMode != nullptr ? std::min(1280, VideoMode->width - 60) : 1200;
-    const int WindowHeight = VideoMode != nullptr ? std::min(760, VideoMode->height - 80) : 720;
+    const int WindowWidth = VideoMode != nullptr ? std::min(1600, VideoMode->width - 40) : 1400;
+    const int WindowHeight = VideoMode != nullptr ? std::min(900, VideoMode->height - 60) : 820;
     GLFWwindow* Window = glfwCreateWindow(WindowWidth, WindowHeight, "Pico Editor", nullptr, nullptr);
     if (Window == nullptr)
     {
@@ -90,11 +122,27 @@ int main(int Argc, char** Argv)
     ImGui::CreateContext();
     ImGuiIO& IO = ImGui::GetIO();
     IO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    ApplyEditorStyle();
+    const float UiScale = FindUiScale(Argc, Argv);
+    const std::filesystem::path InterfaceFont = "C:/Windows/Fonts/segoeui.ttf";
+    if (std::filesystem::is_regular_file(InterfaceFont))
+    {
+        IO.FontDefault = IO.Fonts->AddFontFromFileTTF(
+            InterfaceFont.string().c_str(),
+            16.0f * UiScale);
+    }
+    if (IO.FontDefault == nullptr)
+    {
+        ImFontConfig FontConfig;
+        FontConfig.SizePixels = 16.0f * UiScale;
+        IO.FontDefault = IO.Fonts->AddFontDefault(&FontConfig);
+    }
+    ApplyEditorStyle(UiScale);
 
     ImGui_ImplGlfw_InitForOpenGL(Window, true);
     ImGui_ImplOpenGL3_Init("#version 130");
 
+    Pico::FSceneViewportRenderer ViewportRenderer;
+    const bool bRendererInitialized = ViewportRenderer.Initialize(&LoadOpenGLProcedure);
     Pico::FEngineLoop EngineLoop;
     const std::filesystem::path ProjectFile = FindProjectFile(Argc, Argv);
     int ExitCode = EngineLoop.PreInit(Argc, Argv, ProjectFile);
@@ -103,9 +151,14 @@ int main(int Argc, char** Argv)
         ExitCode = EngineLoop.Init();
     }
 
+    if (ExitCode == 0 && !bRendererInitialized)
+    {
+        ExitCode = 1;
+    }
+
     if (ExitCode == 0)
     {
-        Pico::FPicoEditorApp App(EngineLoop.GetWorld());
+        Pico::FPicoEditorApp App(EngineLoop.GetWorld(), &ViewportRenderer);
         while (!glfwWindowShouldClose(Window) && !EngineLoop.ShouldExit())
         {
             glfwPollEvents();
@@ -130,6 +183,7 @@ int main(int Argc, char** Argv)
     }
 
     EngineLoop.Exit();
+    ViewportRenderer.Shutdown();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();

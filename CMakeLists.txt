@@ -114,8 +114,10 @@ set_target_properties(PicoReflectionSample PROPERTIES FOLDER "Pico/Samples")
 add_library(PicoEngine STATIC
     Source/Runtime/Engine/Private/Actor.cpp
     Source/Runtime/Engine/Private/ActorComponent.cpp
+    Source/Runtime/Engine/Private/CubeComponent.cpp
     Source/Runtime/Engine/Private/EngineLoop.cpp
     Source/Runtime/Engine/Private/Level.cpp
+    Source/Runtime/Engine/Private/PrimitiveComponent.cpp
     Source/Runtime/Engine/Private/SceneComponent.cpp
     Source/Runtime/Engine/Private/World.cpp
 )
@@ -194,6 +196,31 @@ if(PICO_BUILD_INSPECTOR)
     set_target_properties(PicoImGui PROPERTIES FOLDER "ThirdParty")
     set_target_properties(glfw PROPERTIES FOLDER "ThirdParty")
 
+    add_library(PicoRender STATIC
+        Source/Runtime/Render/Private/SceneViewportRenderer.cpp
+    )
+
+    target_include_directories(PicoRender
+        PUBLIC
+            Source/Runtime/Render/Public
+    )
+
+    target_link_libraries(PicoRender
+        PUBLIC
+            PicoEngine
+        PRIVATE
+            glfw
+            OpenGL::GL
+    )
+
+    set_target_properties(PicoRender PROPERTIES FOLDER "Pico")
+
+    if(MSVC)
+        target_compile_options(PicoRender PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(PicoRender PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
     add_executable(PicoInspector
         Source/Editor/PicoInspector/Private/InspectorApp.cpp
         Source/Editor/PicoInspector/Private/InspectorApp.h
@@ -219,6 +246,7 @@ if(PICO_BUILD_INSPECTOR)
         PRIVATE
             PicoImGui
             PicoEngine
+            PicoRender
             PicoReflectionTools
     )
 

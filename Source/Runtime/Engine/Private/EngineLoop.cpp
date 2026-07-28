@@ -9,7 +9,9 @@
 #include "Pico/Core/Types.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/ObjectGlobals.h"
@@ -172,6 +174,8 @@ int FEngineLoop::Init()
 
     if (!PActorComponent::RegisterClass()
         || !PSceneComponent::RegisterClass()
+        || !PPrimitiveComponent::RegisterClass()
+        || !PCubeComponent::RegisterClass()
         || !PActor::RegisterClass()
         || !PLevel::RegisterClass()
         || !PWorld::RegisterClass())

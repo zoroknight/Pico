@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Pico/Core/Math/Vector3.h"
 #include "Pico/Object/ObjectTypes.h"
 
 #include <string>
@@ -13,11 +14,12 @@ class PObject;
 class PProperty;
 class PSceneComponent;
 class PWorld;
+class FSceneViewportRenderer;
 
 class FPicoEditorApp
 {
 public:
-    explicit FPicoEditorApp(PWorld* World);
+    FPicoEditorApp(PWorld* World, FSceneViewportRenderer* ViewportRenderer);
 
     void Draw();
 
@@ -27,6 +29,7 @@ private:
 
     void DrawToolbar();
     void DrawSceneOutliner();
+    void DrawViewport(float Width, float Height);
     void DrawLevelNode(PLevel* Level);
     void DrawActorNode(PActor* Actor);
     void DrawComponentNode(PActorComponent* Component, PActor* Owner);
@@ -50,6 +53,11 @@ private:
 
     FObjectHandle WorldHandle;
     FObjectHandle SelectedObjectHandle;
+    FSceneViewportRenderer* ViewportRenderer = nullptr;
+    FVector3 CameraTarget = FVector3::ZeroVector;
+    float CameraYawDegrees = -45.0f;
+    float CameraPitchDegrees = 28.0f;
+    float CameraDistance = 850.0f;
     unsigned int NextActorNumber = 1;
     unsigned int NextComponentNumber = 1;
     std::string Status;

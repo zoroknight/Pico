@@ -3,8 +3,10 @@
 #include "Pico/Core/App.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/ObjectGlobals.h"
@@ -124,6 +126,8 @@ bool InitializeWorldTypes(FTestRunner& Runner)
 
     const bool bActorComponentRegistered = Pico::PActorComponent::RegisterClass();
     const bool bSceneComponentRegistered = Pico::PSceneComponent::RegisterClass();
+    const bool bPrimitiveComponentRegistered = Pico::PPrimitiveComponent::RegisterClass();
+    const bool bCubeComponentRegistered = Pico::PCubeComponent::RegisterClass();
     const bool bCountingSceneComponentRegistered = PCountingSceneComponent::RegisterClass();
     const bool bActorRegistered = Pico::PActor::RegisterClass();
     const bool bCountingActorRegistered = PCountingActor::RegisterClass();
@@ -132,6 +136,8 @@ bool InitializeWorldTypes(FTestRunner& Runner)
     const bool bWorldRegistered = Pico::PWorld::RegisterClass();
     Runner.Expect(bActorComponentRegistered, "PActorComponent registers with the class registry");
     Runner.Expect(bSceneComponentRegistered, "PSceneComponent registers with the class registry");
+    Runner.Expect(bPrimitiveComponentRegistered, "PPrimitiveComponent registers with the class registry");
+    Runner.Expect(bCubeComponentRegistered, "PCubeComponent registers with the class registry");
     Runner.Expect(bCountingSceneComponentRegistered, "A test scene component registers with the class registry");
     Runner.Expect(bActorRegistered, "PActor registers with the class registry");
     Runner.Expect(bCountingActorRegistered, "A test actor registers with the class registry");
@@ -140,6 +146,8 @@ bool InitializeWorldTypes(FTestRunner& Runner)
     Runner.Expect(bWorldRegistered, "PWorld registers with the class registry");
     return bActorComponentRegistered
         && bSceneComponentRegistered
+        && bPrimitiveComponentRegistered
+        && bCubeComponentRegistered
         && bCountingSceneComponentRegistered
         && bActorRegistered
         && bCountingActorRegistered
@@ -688,6 +696,65 @@ void TestSceneComponentAttachmentHierarchy(FTestRunner& Runner)
     Pico::PObjectSystem::Shutdown();
 }
 
+void TestPrimitiveComponentSceneData(FTestRunner& Runner)
+{
+    if (!InitializeWorldTypes(Runner))
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Pico::PWorld* World = Pico::NewObject<Pico::PWorld>(nullptr, "PrimitiveWorld");
+    Pico::PActor* Actor =
+        World != nullptr && World->Initialize()
+        ? World->SpawnActor<Pico::PActor>("CubeActor")
+        : nullptr;
+    Pico::PSceneComponent* Root =
+        Actor != nullptr ? Actor->CreateComponent<Pico::PSceneComponent>("Root") : nullptr;
+    Pico::PCubeComponent* Cube =
+        Actor != nullptr ? Actor->CreateComponent<Pico::PCubeComponent>("Cube") : nullptr;
+    const bool bSceneReady =
+        Actor != nullptr
+        && Root != nullptr
+        && Cube != nullptr
+        && Actor->SetRootComponent(Root)
+        && Cube->AttachToComponent(Root, Pico::EAttachmentTransformRule::KeepRelative);
+    Runner.Expect(bSceneReady, "An Actor creates and attaches a renderable cube component");
+
+    if (bSceneReady)
+    {
+        Runner.Expect(
+            Cube->IsA(Pico::PPrimitiveComponent::StaticClass())
+                && Cube->IsA(Pico::PSceneComponent::StaticClass()),
+            "A cube component participates in both renderable and spatial class hierarchies");
+        Runner.Expect(Cube->IsVisible(), "A cube component is visible by default");
+        Runner.Expect(
+            Cube->GetExtent().Equals(Pico::FVector3(50.0f)),
+            "A cube component starts with a fifty-unit half extent");
+
+        Root->SetRelativeLocation(Pico::FVector3(100.0f, 0.0f, 0.0f));
+        Cube->SetRelativeLocation(Pico::FVector3(25.0f, 0.0f, 50.0f));
+        Runner.Expect(
+            Cube->GetWorldTransform().Translation.Equals(Pico::FVector3(125.0f, 0.0f, 50.0f)),
+            "A renderable cube receives its world transform from the scene attachment hierarchy");
+
+        Cube->SetVisible(false);
+        Cube->SetColor(Pico::FVector3(0.8f, 0.2f, 0.1f));
+        Cube->SetExtent(Pico::FVector3(20.0f, 30.0f, 40.0f));
+        Runner.Expect(!Cube->IsVisible(), "Cube visibility is editable scene data");
+        Runner.Expect(
+            Cube->GetColor().Equals(Pico::FVector3(0.8f, 0.2f, 0.1f)),
+            "Cube color is editable scene data");
+        Runner.Expect(
+            Cube->GetExtent().Equals(Pico::FVector3(20.0f, 30.0f, 40.0f)),
+            "Cube extent is editable scene data");
+    }
+
+    Pico::DestroyObjectTree(World);
+    Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Primitive scene data leaves no registered objects");
+    Pico::PObjectSystem::Shutdown();
+}
+
 void TestEngineLoopWorldLifecycle(FTestRunner& Runner)
 {
     char Program[] = "PicoEngineTests";
@@ -774,6 +841,7 @@ int main()
     TestActorDestroyDuringTick(Runner);
     TestActorComponentsAndSceneTransform(Runner);
     TestSceneComponentAttachmentHierarchy(Runner);
+    TestPrimitiveComponentSceneData(Runner);
     TestEngineLoopWorldLifecycle(Runner);
     TestTwoFrameLifecycle(Runner);
     TestZeroFrameLifecycle(Runner);
