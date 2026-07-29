@@ -163,6 +163,8 @@ GameWorld
 - 右键 World、Level、Actor 或 Component 节点可执行对应的创建、重命名、设置根组件和删除操作。
 - 左键点击 Viewport 中的可见几何体会选中它所属的 Actor；选中 Actor 时会给它的全部可见
   CubeComponent 绘制白框，在 Outliner 中选择组件时只给该组件绘制白框。
+- 使用 `Ctrl+Z` 撤销，使用 `Ctrl+Y` 或 `Ctrl+Shift+Z` 重做离散的创建、删除、重命名、添加
+  组件和设置根组件操作。
 - 在 Details 中修改 Actor Transform，可以移动、旋转和缩放 Cube。
 - 修改 `CubeComponent` 的反射属性，可以调整相对 Transform、Extent、Color 和可见性。
 - 在 Viewport 中按住鼠标右键会捕获光标，移动鼠标可以稳定地转动视角。
@@ -284,7 +286,7 @@ Pico 目前还没有类似 UHT 的头文件工具。未来的 PicoHeaderTool 可
 - 事务式 World 重建与 `.pworld` 文件保存和加载
 - AssetRegistry和项目Content Browser
 - StaticMesh资产和模型导入
-- 选择、Transform Gizmo、撤销和重做
+- Transform Gizmo以及Transform/属性编辑事务
 - RenderScene缓存、材质、贴图和PBR
 
 更后面的阶段计划探索：

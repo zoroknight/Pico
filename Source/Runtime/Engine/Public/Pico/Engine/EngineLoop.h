@@ -9,6 +9,7 @@ namespace Pico
 {
 class PWorld;
 enum class EWorldSerializationError;
+struct FWorldAssetData;
 
 class FEngineLoop
 {
@@ -22,6 +23,9 @@ public:
     void Exit();
     bool LoadWorld(
         const std::filesystem::path& FilePath,
+        EWorldSerializationError* OutError = nullptr);
+    bool ReplaceWorld(
+        const FWorldAssetData& Data,
         EWorldSerializationError* OutError = nullptr);
 
     bool ShouldExit() const;

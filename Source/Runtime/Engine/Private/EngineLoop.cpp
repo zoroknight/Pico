@@ -298,23 +298,32 @@ bool FEngineLoop::LoadWorld(
     const std::filesystem::path& FilePath,
     EWorldSerializationError* OutError)
 {
+    FWorldAssetData Data;
+    if (!LoadWorldAssetDataFromFile(FilePath, Data, OutError))
+    {
+        return false;
+    }
+    return ReplaceWorld(Data, OutError);
+}
+
+bool FEngineLoop::ReplaceWorld(
+    const FWorldAssetData& Data,
+    EWorldSerializationError* OutError)
+{
     if (OutError != nullptr)
     {
         *OutError = EWorldSerializationError::None;
     }
     PWorld* OldWorld = GetWorld();
-    if (!bInitialized || bTickingWorld || OldWorld == nullptr)
+    if (!bInitialized
+        || bTickingWorld
+        || OldWorld == nullptr
+        || !ValidateWorldAssetData(Data, OutError))
     {
-        if (OutError != nullptr)
+        if (OutError != nullptr && *OutError == EWorldSerializationError::None)
         {
             *OutError = EWorldSerializationError::InvalidArgument;
         }
-        return false;
-    }
-
-    FWorldAssetData Data;
-    if (!LoadWorldAssetDataFromFile(FilePath, Data, OutError))
-    {
         return false;
     }
 

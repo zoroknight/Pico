@@ -187,6 +187,48 @@ bool ContainsComponent(
     }
     return false;
 }
+
+PObject* FindWorldObjectByPath(PWorld* World, std::string_view Path)
+{
+    if (World == nullptr || Path.empty())
+    {
+        return nullptr;
+    }
+    if (World->GetPathName() == Path)
+    {
+        return World;
+    }
+    for (PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr)
+        {
+            continue;
+        }
+        if (Level->GetPathName() == Path)
+        {
+            return Level;
+        }
+        for (PActor* Actor : Level->GetActors())
+        {
+            if (Actor == nullptr)
+            {
+                continue;
+            }
+            if (Actor->GetPathName() == Path)
+            {
+                return Actor;
+            }
+            for (PActorComponent* Component : Actor->GetComponents())
+            {
+                if (Component != nullptr && Component->GetPathName() == Path)
+                {
+                    return Component;
+                }
+            }
+        }
+    }
+    return nullptr;
+}
 }
 
 FPicoEditorApp::FPicoEditorApp(
@@ -244,6 +286,8 @@ void FPicoEditorApp::Draw()
     if (ImGui::BeginMenuBar())
     {
         DrawFileMenu();
+        ImGui::SameLine();
+        DrawEditMenu();
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
@@ -606,7 +650,21 @@ void FPicoEditorApp::HandleShortcuts()
         return;
     }
 
-    if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
+    if (IO.KeyCtrl
+        && IO.KeyShift
+        && ImGui::IsKeyPressed(ImGuiKey_Z, false))
+    {
+        Redo();
+    }
+    else if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false))
+    {
+        Undo();
+    }
+    else if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false))
+    {
+        Redo();
+    }
+    else if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
     {
         SaveWorld();
     }
@@ -638,6 +696,43 @@ void FPicoEditorApp::DrawFileMenu()
     if (ImGui::MenuItem("Save World", "Ctrl+S"))
     {
         SaveWorld();
+    }
+    ImGui::EndMenu();
+}
+
+void FPicoEditorApp::DrawEditMenu()
+{
+    if (!ImGui::BeginMenu("Edit"))
+    {
+        return;
+    }
+
+    std::string UndoLabel = "Undo";
+    if (TransactionManager.CanUndo())
+    {
+        UndoLabel += " " + std::string(TransactionManager.GetUndoDescription());
+    }
+    if (ImGui::MenuItem(
+            UndoLabel.c_str(),
+            "Ctrl+Z",
+            false,
+            TransactionManager.CanUndo()))
+    {
+        Undo();
+    }
+
+    std::string RedoLabel = "Redo";
+    if (TransactionManager.CanRedo())
+    {
+        RedoLabel += " " + std::string(TransactionManager.GetRedoDescription());
+    }
+    if (ImGui::MenuItem(
+            RedoLabel.c_str(),
+            "Ctrl+Y",
+            false,
+            TransactionManager.CanRedo()))
+    {
+        Redo();
     }
     ImGui::EndMenu();
 }
@@ -1338,6 +1433,11 @@ PSceneComponent* FPicoEditorApp::AddComponent(
 
 void FPicoEditorApp::SpawnEmptyActor()
 {
+    if (!BeginEditorTransaction("Create Empty Actor"))
+    {
+        return;
+    }
+
     std::string Name;
     PActor* Actor = nullptr;
     do
@@ -1357,16 +1457,26 @@ void FPicoEditorApp::SpawnEmptyActor()
 
     if (Actor == nullptr)
     {
+        CancelEditorTransaction();
         SetStatus("Failed to spawn an Actor", true);
         return;
     }
 
     Select(Actor);
+    if (!CommitEditorTransaction())
+    {
+        return;
+    }
     SetStatus("Spawned " + Actor->GetPathName());
 }
 
 void FPicoEditorApp::SpawnCubeActor()
 {
+    if (!BeginEditorTransaction("Create Cube Actor"))
+    {
+        return;
+    }
+
     std::string Name;
     PActor* Actor = nullptr;
     do
@@ -1378,11 +1488,16 @@ void FPicoEditorApp::SpawnCubeActor()
 
     if (Actor == nullptr)
     {
+        CancelEditorTransaction();
         SetStatus("Failed to spawn a Cube", true);
         return;
     }
 
     Select(Actor);
+    if (!CommitEditorTransaction())
+    {
+        return;
+    }
     SetStatus("Spawned " + Actor->GetPathName());
 }
 
@@ -1393,14 +1508,28 @@ void FPicoEditorApp::AddRootToSelectedActor()
         Object != nullptr && Object->IsA(PActor::StaticClass())
         ? static_cast<PActor*>(Object)
         : nullptr;
+    if (Actor == nullptr || !BeginEditorTransaction("Add Scene Root"))
+    {
+        if (Actor == nullptr)
+        {
+            SetStatus("Select an Actor without a root component", true);
+        }
+        return;
+    }
+
     PSceneComponent* Root = AddSceneRoot(Actor);
     if (Root == nullptr)
     {
+        CancelEditorTransaction();
         SetStatus("Selected Actor could not create a scene root", true);
         return;
     }
 
     Select(Root);
+    if (!CommitEditorTransaction())
+    {
+        return;
+    }
     SetStatus("Added " + Root->GetPathName());
 }
 
@@ -1425,14 +1554,26 @@ void FPicoEditorApp::AddComponentToSelection(bool bCubeComponent)
         return;
     }
 
+    const std::string TransactionDescription =
+        bCubeComponent ? "Add Cube Component" : "Add Scene Component";
+    if (!BeginEditorTransaction(TransactionDescription))
+    {
+        return;
+    }
+
     PSceneComponent* Component = AddComponent(Actor, Parent, bCubeComponent);
     if (Component == nullptr)
     {
+        CancelEditorTransaction();
         SetStatus("Could not add the selected component type", true);
         return;
     }
 
     Select(Component);
+    if (!CommitEditorTransaction())
+    {
+        return;
+    }
     SetStatus("Added " + Component->GetPathName());
 }
 
@@ -1454,12 +1595,25 @@ void FPicoEditorApp::SetSelectedComponentAsRoot()
         ? static_cast<PSceneComponent*>(Object)
         : nullptr;
     PActor* Owner = Component != nullptr ? Component->GetOwner() : nullptr;
-    if (Owner == nullptr || !Owner->SetRootComponent(Component))
+    if (Owner == nullptr || !BeginEditorTransaction("Set Root Component"))
     {
+        if (Owner == nullptr)
+        {
+            SetStatus("Selected component could not become the root", true);
+        }
+        return;
+    }
+    if (!Owner->SetRootComponent(Component))
+    {
+        CancelEditorTransaction();
         SetStatus("Selected component could not become the root", true);
         return;
     }
 
+    if (!CommitEditorTransaction())
+    {
+        return;
+    }
     SetStatus("Set " + Component->GetPathName() + " as RootComponent");
 }
 
@@ -1473,6 +1627,17 @@ void FPicoEditorApp::DestroySelectedObject()
     }
 
     const std::string Path = Object->GetPathName();
+    if (!Object->IsA(PActor::StaticClass())
+        && !Object->IsA(PActorComponent::StaticClass()))
+    {
+        SetStatus("Only Actors and Components can be destroyed", true);
+        return;
+    }
+    if (!BeginEditorTransaction("Delete " + Object->GetName().ToString()))
+    {
+        return;
+    }
+
     FObjectHandle SelectionAfterDestroy;
     bool bDestroyed = false;
     if (Object->IsA(PActor::StaticClass()))
@@ -1494,11 +1659,16 @@ void FPicoEditorApp::DestroySelectedObject()
 
     if (!bDestroyed)
     {
+        CancelEditorTransaction();
         SetStatus("Could not destroy " + Path, true);
         return;
     }
 
     Select(ResolveObject(SelectionAfterDestroy));
+    if (!CommitEditorTransaction())
+    {
+        return;
+    }
     SetStatus("Destroyed " + Path);
 }
 
@@ -1549,15 +1719,30 @@ bool FPicoEditorApp::CommitRename()
             true);
         return false;
     }
+    if (Object->GetName() == FName(NewName))
+    {
+        RenameObjectHandle = {};
+        SetStatus("Name unchanged");
+        return true;
+    }
 
     const std::string OldPath = Object->GetPathName();
+    if (!BeginEditorTransaction("Rename " + Object->GetName().ToString()))
+    {
+        return false;
+    }
     if (!RenameObject(Object, FName(NewName)))
     {
+        CancelEditorTransaction();
         SetStatus("The name is already used in this object scope", true);
         return false;
     }
 
     RenameObjectHandle = {};
+    if (!CommitEditorTransaction())
+    {
+        return false;
+    }
     SetStatus("Renamed " + OldPath + " to " + Object->GetPathName());
     return true;
 }
@@ -1610,6 +1795,7 @@ void FPicoEditorApp::OpenWorld()
         return;
     }
 
+    TransactionManager.Clear();
     Select(GetWorld());
     SetStatus("Opened " + WorldPath.string());
 }
@@ -1620,6 +1806,140 @@ bool FPicoEditorApp::GetDefaultWorldPath(std::filesystem::path& OutPath) const
         EProjectWriteRoot::Content,
         std::filesystem::path("Maps") / "EditorWorld.pworld",
         OutPath);
+}
+
+bool FPicoEditorApp::BeginEditorTransaction(std::string Description)
+{
+    PWorld* World = GetWorld();
+    if (World == nullptr)
+    {
+        SetStatus("Cannot begin a transaction without an active World", true);
+        return false;
+    }
+
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    if (!TransactionManager.Begin(
+            std::move(Description),
+            *World,
+            GetSelectedObjectPath(),
+            &Error))
+    {
+        SetStatus(
+            "Could not begin editor transaction: "
+                + std::string(ToString(Error)),
+            true);
+        return false;
+    }
+    return true;
+}
+
+bool FPicoEditorApp::CommitEditorTransaction()
+{
+    PWorld* World = GetWorld();
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    if (World == nullptr
+        || !TransactionManager.Commit(
+            *World,
+            GetSelectedObjectPath(),
+            &Error))
+    {
+        TransactionManager.Cancel();
+        SetStatus(
+            "Could not commit editor transaction: "
+                + std::string(ToString(Error)),
+            true);
+        return false;
+    }
+    return true;
+}
+
+void FPicoEditorApp::CancelEditorTransaction()
+{
+    TransactionManager.Cancel();
+}
+
+void FPicoEditorApp::Undo()
+{
+    if (!TransactionManager.CanUndo())
+    {
+        SetStatus("Nothing to undo");
+        return;
+    }
+
+    std::string Description;
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    const bool bSucceeded = TransactionManager.Undo(
+        [this](
+            const FEditorWorldSnapshot& Snapshot,
+            EWorldSerializationError* RestoreError)
+        {
+            return RestoreEditorSnapshot(Snapshot, RestoreError);
+        },
+        &Description,
+        &Error);
+    if (!bSucceeded)
+    {
+        SetStatus("Undo failed: " + std::string(ToString(Error)), true);
+        return;
+    }
+    SetStatus("Undid " + Description);
+}
+
+void FPicoEditorApp::Redo()
+{
+    if (!TransactionManager.CanRedo())
+    {
+        SetStatus("Nothing to redo");
+        return;
+    }
+
+    std::string Description;
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    const bool bSucceeded = TransactionManager.Redo(
+        [this](
+            const FEditorWorldSnapshot& Snapshot,
+            EWorldSerializationError* RestoreError)
+        {
+            return RestoreEditorSnapshot(Snapshot, RestoreError);
+        },
+        &Description,
+        &Error);
+    if (!bSucceeded)
+    {
+        SetStatus("Redo failed: " + std::string(ToString(Error)), true);
+        return;
+    }
+    SetStatus("Redid " + Description);
+}
+
+bool FPicoEditorApp::RestoreEditorSnapshot(
+    const FEditorWorldSnapshot& Snapshot,
+    EWorldSerializationError* OutError)
+{
+    if (EngineLoop == nullptr
+        || !EngineLoop->ReplaceWorld(Snapshot.WorldData, OutError))
+    {
+        return false;
+    }
+
+    PendingDestroyHandle = {};
+    RenameObjectHandle = {};
+    bOpenRenamePopup = false;
+    PWorld* World = GetWorld();
+    PObject* Selection = FindWorldObjectByPath(
+        World,
+        Snapshot.SelectedObjectPath);
+    Select(
+        Selection != nullptr || Snapshot.SelectedObjectPath.empty()
+            ? Selection
+            : static_cast<PObject*>(World));
+    return true;
+}
+
+std::string FPicoEditorApp::GetSelectedObjectPath() const
+{
+    PObject* Object = GetSelectedObject();
+    return Object != nullptr ? Object->GetPathName() : std::string {};
 }
 
 void FPicoEditorApp::Select(PObject* Object)

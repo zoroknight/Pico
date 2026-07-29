@@ -234,6 +234,28 @@ if(PICO_BUILD_INSPECTOR)
         target_compile_options(PicoRender PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 
+    add_library(PicoEditorCore STATIC
+        Source/Editor/PicoEditor/Private/EditorTransactionManager.cpp
+    )
+
+    target_include_directories(PicoEditorCore
+        PUBLIC
+            Source/Editor/PicoEditor/Public
+    )
+
+    target_link_libraries(PicoEditorCore
+        PUBLIC
+            PicoEngine
+    )
+
+    set_target_properties(PicoEditorCore PROPERTIES FOLDER "Pico")
+
+    if(MSVC)
+        target_compile_options(PicoEditorCore PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(PicoEditorCore PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
     add_executable(PicoInspector
         Source/Editor/PicoInspector/Private/InspectorApp.cpp
         Source/Editor/PicoInspector/Private/InspectorApp.h
@@ -258,6 +280,7 @@ if(PICO_BUILD_INSPECTOR)
     target_link_libraries(PicoEditor
         PRIVATE
             PicoImGui
+            PicoEditorCore
             PicoEngine
             PicoRender
             PicoReflectionTools
@@ -277,6 +300,25 @@ if(PICO_BUILD_INSPECTOR)
         target_compile_options(PicoEditor PRIVATE /W4 /permissive-)
     else()
         target_compile_options(PicoEditor PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_executable(PicoEditorTests
+        Tests/Editor/Private/Main.cpp
+    )
+
+    target_include_directories(PicoEditorTests PRIVATE Tests/Common)
+
+    target_link_libraries(PicoEditorTests
+        PRIVATE
+            PicoEditorCore
+    )
+
+    set_target_properties(PicoEditorTests PROPERTIES FOLDER "Tests/Editor")
+
+    if(MSVC)
+        target_compile_options(PicoEditorTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(PicoEditorTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 endif()
 
@@ -346,6 +388,9 @@ if(BUILD_TESTING)
     add_test(NAME PicoCoreTests COMMAND PicoCoreTests)
     add_test(NAME PicoObjectTests COMMAND PicoObjectTests)
     add_test(NAME PicoEngineTests COMMAND PicoEngineTests)
+    if(PICO_BUILD_INSPECTOR)
+        add_test(NAME PicoEditorTests COMMAND PicoEditorTests)
+    endif()
     set_tests_properties(PicoCoreTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
@@ -355,6 +400,11 @@ if(BUILD_TESTING)
     set_tests_properties(PicoEngineTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
+    if(PICO_BUILD_INSPECTOR)
+        set_tests_properties(PicoEditorTests PROPERTIES
+            WORKING_DIRECTORY ${PICO_ROOT_DIR}
+        )
+    endif()
 endif()
 
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT PicoLaunch)

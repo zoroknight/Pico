@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Pico/Core/Math/Vector3.h"
+#include "Pico/Editor/EditorTransactionManager.h"
 #include "Pico/Object/ObjectTypes.h"
 
 #include <array>
@@ -38,6 +39,7 @@ private:
 
     void HandleShortcuts();
     void DrawFileMenu();
+    void DrawEditMenu();
     void DrawToolbar();
     void DrawSceneOutliner();
     void DrawViewport(float Width, float Height);
@@ -78,12 +80,22 @@ private:
     void SaveWorld();
     void OpenWorld();
     bool GetDefaultWorldPath(std::filesystem::path& OutPath) const;
+    bool BeginEditorTransaction(std::string Description);
+    bool CommitEditorTransaction();
+    void CancelEditorTransaction();
+    void Undo();
+    void Redo();
+    bool RestoreEditorSnapshot(
+        const FEditorWorldSnapshot& Snapshot,
+        EWorldSerializationError* OutError);
+    std::string GetSelectedObjectPath() const;
     void Select(PObject* Object);
     void SetStatus(std::string Message, bool bIsError = false);
     void BeginViewportCameraCapture();
     void EndViewportCameraCapture();
 
     FObjectHandle SelectedObjectHandle;
+    FEditorTransactionManager TransactionManager;
     FEngineLoop* EngineLoop = nullptr;
     FSceneViewportRenderer* ViewportRenderer = nullptr;
     GLFWwindow* Window = nullptr;

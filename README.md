@@ -172,6 +172,8 @@ GameWorld
   and delete commands.
 - Left-click rendered geometry to select its owning Actor. Selecting an Actor outlines all of its
   visible CubeComponents; selecting a component in the Outliner outlines only that component.
+- Use `Ctrl+Z` to undo and `Ctrl+Y` or `Ctrl+Shift+Z` to redo discrete create, delete, rename, add
+  component, and root-component operations.
 - Edit Actor transforms in the Details panel to move, rotate, and scale the cube.
 - Edit `CubeComponent` reflected properties to change relative transform, extent, color, or visibility.
 - Hold the right mouse button to capture the cursor and move the mouse to look around.
@@ -295,7 +297,7 @@ The next stage focuses on turning the runtime editor into a persistent content w
 - Transactional World reconstruction and `.pworld` file save/load
 - Asset registry and project content browser
 - Static-mesh assets and model importing
-- Selection, transform gizmos, undo and redo
+- Transform gizmos and transactional Transform/property editing
 - Render-scene caching, materials, textures and PBR
 
 Later stages will explore:
