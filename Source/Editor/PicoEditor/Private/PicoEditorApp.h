@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Pico/Core/Math/Vector3.h"
+#include "Pico/Editor/EditorSceneClipboard.h"
 #include "Pico/Editor/EditorTransactionManager.h"
 #include "Pico/Object/ObjectTypes.h"
 
@@ -77,6 +78,10 @@ private:
     void BeginRename(PObject* Object);
     void RenameSelectedObject();
     bool CommitRename();
+    bool CanCopySelectedObject() const;
+    bool CanPasteClipboard() const;
+    void CopySelectedObject();
+    void PasteClipboard();
     void SaveWorld();
     void OpenWorld();
     bool GetDefaultWorldPath(std::filesystem::path& OutPath) const;
@@ -107,6 +112,7 @@ private:
     void EndViewportCameraCapture();
 
     FObjectHandle SelectedObjectHandle;
+    FEditorSceneClipboard SceneClipboard;
     FEditorTransactionManager TransactionManager;
     FEngineLoop* EngineLoop = nullptr;
     FSceneViewportRenderer* ViewportRenderer = nullptr;
@@ -129,6 +135,7 @@ private:
     bool bStatusIsError = false;
     bool bResetDockLayout = false;
     bool bOpenRenamePopup = false;
+    bool bPasteClipboardRequested = false;
     bool bViewportCameraCaptured = false;
     double LastCameraCursorX = 0.0;
     double LastCameraCursorY = 0.0;

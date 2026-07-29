@@ -52,8 +52,9 @@ not serialized.
 - Redo restores the final Transform rather than an intermediate value;
 - a reflected `RelativeTransform` value survives snapshot reconstruction in both directions.
 
-## Deferred Work
+## Follow-up Work
 
 Viewport Transform gizmos can reuse this interaction boundary when they are introduced. Clipboard
-operations, multi-selection, object-local transaction records, and persisted transaction history
-remain outside this milestone.
+operations are implemented by [`Month04_11_EditorClipboard.md`](Month04_11_EditorClipboard.md).
+Multi-selection, object-local transaction records, and persisted transaction history remain
+outside these milestones.

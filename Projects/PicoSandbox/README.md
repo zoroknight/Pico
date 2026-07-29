@@ -154,6 +154,8 @@ Open the project through the shared Pico editor:
 The editor stores its map at `Content/Maps/EditorWorld.pworld`. Use `Ctrl+S` to save and `Ctrl+O`
 to transactionally replace the active World from that file. Project assets remain under
 `PicoSandbox/Content`; editor implementation remains under `Source/Editor/PicoEditor`.
+Use `Ctrl+C` and `Ctrl+V` to duplicate complete Actors or SceneComponent attachment subtrees;
+paste participates in the same Undo/Redo history as other scene edits.
 
 ## Add Another Project Class
 

@@ -723,6 +723,14 @@ void FPicoEditorApp::HandleShortcuts()
     {
         Redo();
     }
+    else if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false))
+    {
+        CopySelectedObject();
+    }
+    else if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false))
+    {
+        PasteClipboard();
+    }
     else if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
     {
         SaveWorld();
@@ -793,6 +801,24 @@ void FPicoEditorApp::DrawEditMenu()
     {
         Redo();
     }
+
+    ImGui::Separator();
+    if (ImGui::MenuItem(
+            "Copy",
+            "Ctrl+C",
+            false,
+            CanCopySelectedObject()))
+    {
+        CopySelectedObject();
+    }
+    if (ImGui::MenuItem(
+            "Paste",
+            "Ctrl+V",
+            false,
+            CanPasteClipboard()))
+    {
+        PasteClipboard();
+    }
     ImGui::EndMenu();
 }
 
@@ -835,6 +861,12 @@ void FPicoEditorApp::DrawSceneOutliner()
             }
             ImGui::EndMenu();
         }
+        ImGui::BeginDisabled(!CanPasteClipboard());
+        if (ImGui::MenuItem("Paste", "Ctrl+V"))
+        {
+            bPasteClipboardRequested = true;
+        }
+        ImGui::EndDisabled();
         ImGui::EndPopup();
     }
     if (bOpen)
@@ -885,6 +917,12 @@ void FPicoEditorApp::DrawLevelNode(PLevel* Level)
             }
             ImGui::EndMenu();
         }
+        ImGui::BeginDisabled(!CanPasteClipboard());
+        if (ImGui::MenuItem("Paste", "Ctrl+V"))
+        {
+            bPasteClipboardRequested = true;
+        }
+        ImGui::EndDisabled();
         ImGui::EndPopup();
     }
     if (bOpen)
@@ -1038,6 +1076,17 @@ void FPicoEditorApp::DrawActorContextMenu(PActor* Actor)
         ImGui::EndMenu();
     }
     ImGui::Separator();
+    if (ImGui::MenuItem("Copy", "Ctrl+C"))
+    {
+        CopySelectedObject();
+    }
+    ImGui::BeginDisabled(!CanPasteClipboard());
+    if (ImGui::MenuItem("Paste", "Ctrl+V"))
+    {
+        bPasteClipboardRequested = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::Separator();
     if (ImGui::MenuItem("Rename", "F2"))
     {
         BeginRename(Actor);
@@ -1088,6 +1137,17 @@ void FPicoEditorApp::DrawComponentContextMenu(PActorComponent* Component)
     }
     ImGui::EndDisabled();
 
+    ImGui::Separator();
+    if (ImGui::MenuItem("Copy", "Ctrl+C"))
+    {
+        CopySelectedObject();
+    }
+    ImGui::BeginDisabled(!CanPasteClipboard());
+    if (ImGui::MenuItem("Paste", "Ctrl+V"))
+    {
+        bPasteClipboardRequested = true;
+    }
+    ImGui::EndDisabled();
     ImGui::Separator();
     if (ImGui::MenuItem("Rename", "F2"))
     {
@@ -1463,20 +1523,22 @@ void FPicoEditorApp::DrawRenamePopup()
 
 void FPicoEditorApp::ProcessDeferredActions()
 {
-    if (!PendingDestroyHandle.IsValid())
+    if (PendingDestroyHandle.IsValid())
     {
-        return;
+        PObject* Object = ResolveObject(PendingDestroyHandle);
+        PendingDestroyHandle = {};
+        if (Object != nullptr)
+        {
+            Select(Object);
+            DestroySelectedObject();
+        }
     }
 
-    PObject* Object = ResolveObject(PendingDestroyHandle);
-    PendingDestroyHandle = {};
-    if (Object == nullptr)
+    if (bPasteClipboardRequested)
     {
-        return;
+        bPasteClipboardRequested = false;
+        PasteClipboard();
     }
-
-    Select(Object);
-    DestroySelectedObject();
 }
 
 PActor* FPicoEditorApp::CreateActor(std::string Name)
@@ -1888,6 +1950,123 @@ bool FPicoEditorApp::CommitRename()
     }
     SetStatus("Renamed " + OldPath + " to " + Object->GetPathName());
     return true;
+}
+
+bool FPicoEditorApp::CanCopySelectedObject() const
+{
+    PObject* Object = GetSelectedObject();
+    return Object != nullptr
+        && (Object->IsA(PActor::StaticClass())
+            || Object->IsA(PSceneComponent::StaticClass()));
+}
+
+bool FPicoEditorApp::CanPasteClipboard() const
+{
+    if (!SceneClipboard.HasContent() || GetWorld() == nullptr)
+    {
+        return false;
+    }
+    if (SceneClipboard.GetContentType()
+        == EEditorClipboardContentType::Actor)
+    {
+        return true;
+    }
+
+    PObject* Object = GetSelectedObject();
+    return Object != nullptr
+        && (Object->IsA(PActor::StaticClass())
+            || Object->IsA(PSceneComponent::StaticClass()));
+}
+
+void FPicoEditorApp::CopySelectedObject()
+{
+    FinishInteractiveEdit();
+
+    PWorld* World = GetWorld();
+    PObject* Object = GetSelectedObject();
+    if (World == nullptr || Object == nullptr || !CanCopySelectedObject())
+    {
+        SetStatus("Select an Actor or SceneComponent to copy", true);
+        return;
+    }
+
+    const std::string ObjectPath = Object->GetPathName();
+    EEditorClipboardError Error = EEditorClipboardError::None;
+    if (!SceneClipboard.Copy(*World, ObjectPath, &Error))
+    {
+        SetStatus(
+            "Could not copy object: " + std::string(ToString(Error)),
+            true);
+        return;
+    }
+    SetStatus("Copied " + ObjectPath);
+}
+
+void FPicoEditorApp::PasteClipboard()
+{
+    FinishInteractiveEdit();
+
+    PWorld* World = GetWorld();
+    if (EngineLoop == nullptr || World == nullptr || !CanPasteClipboard())
+    {
+        SetStatus("Clipboard cannot be pasted at the current selection", true);
+        return;
+    }
+
+    FWorldAssetData PastedWorldData;
+    std::string PastedObjectPath;
+    EEditorClipboardError ClipboardError = EEditorClipboardError::None;
+    if (!SceneClipboard.BuildPaste(
+            *World,
+            GetSelectedObjectPath(),
+            PastedWorldData,
+            PastedObjectPath,
+            &ClipboardError))
+    {
+        SetStatus(
+            "Could not build pasted object: "
+                + std::string(ToString(ClipboardError)),
+            true);
+        return;
+    }
+
+    const std::string TransactionDescription =
+        SceneClipboard.GetContentType()
+            == EEditorClipboardContentType::Actor
+        ? "Paste Actor"
+        : "Paste Component";
+    if (!BeginEditorTransaction(TransactionDescription))
+    {
+        return;
+    }
+
+    EWorldSerializationError WorldError =
+        EWorldSerializationError::None;
+    if (!EngineLoop->ReplaceWorld(PastedWorldData, &WorldError))
+    {
+        CancelEditorTransaction();
+        SetStatus(
+            "Could not paste object: " + std::string(ToString(WorldError)),
+            true);
+        return;
+    }
+
+    PObject* PastedObject =
+        FindWorldObjectByPath(GetWorld(), PastedObjectPath);
+    if (PastedObject == nullptr)
+    {
+        CancelEditorTransaction();
+        Select(GetWorld());
+        SetStatus("Pasted object could not be selected", true);
+        return;
+    }
+
+    Select(PastedObject);
+    if (!CommitEditorTransaction())
+    {
+        return;
+    }
+    SetStatus("Pasted " + PastedObjectPath);
 }
 
 void FPicoEditorApp::SaveWorld()

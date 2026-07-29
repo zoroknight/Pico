@@ -235,6 +235,7 @@ if(PICO_BUILD_INSPECTOR)
     endif()
 
     add_library(PicoEditorCore STATIC
+        Source/Editor/PicoEditor/Private/EditorSceneClipboard.cpp
         Source/Editor/PicoEditor/Private/EditorTransactionManager.cpp
     )
 

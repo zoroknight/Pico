@@ -1,6 +1,8 @@
+#include "Pico/Editor/EditorSceneClipboard.h"
 #include "Pico/Editor/EditorTransactionManager.h"
 
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/SceneComponent.h"
@@ -58,6 +60,260 @@ Pico::PObject* FindWorldObjectByPath(
         }
     }
     return nullptr;
+}
+
+Pico::PActorComponent* FindComponentByName(
+    Pico::PActor* Actor,
+    std::string_view Name)
+{
+    if (Actor == nullptr)
+    {
+        return nullptr;
+    }
+    for (Pico::PActorComponent* Component : Actor->GetComponents())
+    {
+        if (Component != nullptr
+            && Component->GetName().ToString() == Name)
+        {
+            return Component;
+        }
+    }
+    return nullptr;
+}
+
+void TestEditorSceneClipboard(
+    FTestRunner& Runner,
+    Pico::FEngineLoop& EngineLoop)
+{
+    Pico::PWorld* World = EngineLoop.GetWorld();
+    Pico::PActor* SourceActor =
+        World != nullptr
+        ? World->SpawnActor<Pico::PActor>("ClipboardActor")
+        : nullptr;
+    Pico::PCubeComponent* SourceRoot =
+        SourceActor != nullptr
+        ? SourceActor->CreateComponent<Pico::PCubeComponent>("RootCube")
+        : nullptr;
+    Pico::PCubeComponent* SourceChild =
+        SourceActor != nullptr
+        ? SourceActor->CreateComponent<Pico::PCubeComponent>("ChildCube")
+        : nullptr;
+    Pico::PCubeComponent* SourceGrandchild =
+        SourceActor != nullptr
+        ? SourceActor->CreateComponent<Pico::PCubeComponent>("GrandchildCube")
+        : nullptr;
+    const bool bSourceCreated =
+        SourceActor != nullptr
+        && SourceRoot != nullptr
+        && SourceChild != nullptr
+        && SourceGrandchild != nullptr
+        && SourceActor->SetRootComponent(SourceRoot)
+        && SourceChild->AttachToComponent(
+            SourceRoot,
+            Pico::EAttachmentTransformRule::KeepRelative)
+        && SourceGrandchild->AttachToComponent(
+            SourceChild,
+            Pico::EAttachmentTransformRule::KeepRelative);
+    if (SourceRoot != nullptr)
+    {
+        SourceRoot->SetExtent(Pico::FVector3(80.0f, 60.0f, 40.0f));
+    }
+    if (SourceChild != nullptr)
+    {
+        SourceChild->SetRelativeLocation(Pico::FVector3(25.0f, 50.0f, 75.0f));
+        SourceChild->SetExtent(Pico::FVector3(12.0f, 24.0f, 36.0f));
+    }
+    if (SourceGrandchild != nullptr)
+    {
+        SourceGrandchild->SetRelativeLocation(Pico::FVector3(5.0f, 10.0f, 15.0f));
+    }
+    Runner.Expect(
+        bSourceCreated,
+        "Clipboard test creates an Actor with a two-level component subtree");
+
+    const std::string SourceActorPath =
+        SourceActor != nullptr ? SourceActor->GetPathName() : std::string {};
+    Pico::FEditorSceneClipboard Clipboard;
+    Pico::EEditorClipboardError ClipboardError =
+        Pico::EEditorClipboardError::None;
+    Runner.Expect(
+        Clipboard.Copy(*World, SourceActorPath, &ClipboardError)
+            && Clipboard.GetContentType()
+                == Pico::EEditorClipboardContentType::Actor,
+        "Copy captures an Actor and its complete component records");
+
+    Pico::FWorldAssetData ActorPasteData;
+    std::string PastedActorPath;
+    Runner.Expect(
+        Clipboard.BuildPaste(
+            *World,
+            SourceActorPath,
+            ActorPasteData,
+            PastedActorPath,
+            &ClipboardError)
+            && PastedActorPath
+                == "GameWorld.PersistentLevel.ClipboardActor_Copy",
+        "Actor paste allocates new IDs and a unique Actor name");
+
+    Pico::FEditorTransactionManager Transactions;
+    Pico::EWorldSerializationError WorldError =
+        Pico::EWorldSerializationError::None;
+    std::string RestoredSelectionPath;
+    const auto Restore =
+        [&EngineLoop, &RestoredSelectionPath](
+            const Pico::FEditorWorldSnapshot& Snapshot,
+            Pico::EWorldSerializationError* RestoreError)
+        {
+            if (!EngineLoop.ReplaceWorld(Snapshot.WorldData, RestoreError))
+            {
+                return false;
+            }
+            RestoredSelectionPath = Snapshot.SelectedObjectPath;
+            return true;
+        };
+    Runner.Expect(
+        Transactions.Begin(
+            "Paste Actor",
+            *World,
+            SourceActorPath,
+            &WorldError)
+            && EngineLoop.ReplaceWorld(ActorPasteData, &WorldError),
+        "Actor paste replaces the live World inside one transaction");
+    World = EngineLoop.GetWorld();
+    Pico::PActor* PastedActor = static_cast<Pico::PActor*>(
+        FindWorldObjectByPath(World, PastedActorPath));
+    Runner.Expect(
+        PastedActor != nullptr
+            && PastedActor->GetComponents().size() == 3
+            && PastedActor->GetRootComponent() != nullptr
+            && PastedActor->GetRootComponent()->GetName().ToString()
+                == "RootCube"
+            && Transactions.Commit(*World, PastedActorPath, &WorldError),
+        "Actor paste preserves components and root relation");
+
+    Pico::PCubeComponent* PastedChild = static_cast<Pico::PCubeComponent*>(
+        FindComponentByName(PastedActor, "ChildCube"));
+    Pico::PCubeComponent* PastedGrandchild =
+        static_cast<Pico::PCubeComponent*>(
+            FindComponentByName(PastedActor, "GrandchildCube"));
+    Runner.Expect(
+        PastedChild != nullptr
+            && PastedGrandchild != nullptr
+            && PastedChild->GetAttachParent()
+                == PastedActor->GetRootComponent()
+            && PastedGrandchild->GetAttachParent() == PastedChild
+            && PastedChild->GetRelativeLocation().Equals(
+                Pico::FVector3(25.0f, 50.0f, 75.0f))
+            && PastedChild->GetExtent().Equals(
+                Pico::FVector3(12.0f, 24.0f, 36.0f)),
+        "Actor paste preserves attachment hierarchy and reflected properties");
+
+    std::string Description;
+    Runner.Expect(
+        Transactions.Undo(Restore, &Description, &WorldError)
+            && FindWorldObjectByPath(
+                EngineLoop.GetWorld(),
+                PastedActorPath) == nullptr,
+        "Undo removes the complete pasted Actor");
+    Runner.Expect(
+        Transactions.Redo(Restore, &Description, &WorldError)
+            && FindWorldObjectByPath(
+                EngineLoop.GetWorld(),
+                PastedActorPath) != nullptr,
+        "Redo reconstructs the complete pasted Actor");
+
+    World = EngineLoop.GetWorld();
+    Pico::FWorldAssetData RepeatedPasteData;
+    std::string RepeatedPastePath;
+    Runner.Expect(
+        Clipboard.BuildPaste(
+            *World,
+            PastedActorPath,
+            RepeatedPasteData,
+            RepeatedPastePath,
+            &ClipboardError)
+            && RepeatedPastePath
+                == "GameWorld.PersistentLevel.ClipboardActor_Copy_2",
+        "Repeated Actor paste advances the unique copy suffix");
+
+    SourceActor = static_cast<Pico::PActor*>(
+        FindWorldObjectByPath(World, SourceActorPath));
+    SourceRoot = static_cast<Pico::PCubeComponent*>(
+        FindComponentByName(SourceActor, "RootCube"));
+    SourceChild = static_cast<Pico::PCubeComponent*>(
+        FindComponentByName(SourceActor, "ChildCube"));
+    const std::string SourceChildPath =
+        SourceChild != nullptr ? SourceChild->GetPathName() : std::string {};
+    const std::string SourceRootPath =
+        SourceRoot != nullptr ? SourceRoot->GetPathName() : std::string {};
+    Runner.Expect(
+        Clipboard.Copy(*World, SourceChildPath, &ClipboardError)
+            && Clipboard.GetContentType()
+                == Pico::EEditorClipboardContentType::SceneComponent,
+        "Copy captures a SceneComponent attachment subtree");
+
+    Pico::FWorldAssetData ComponentPasteData;
+    std::string PastedComponentPath;
+    Runner.Expect(
+        Clipboard.BuildPaste(
+            *World,
+            SourceRootPath,
+            ComponentPasteData,
+            PastedComponentPath,
+            &ClipboardError)
+            && PastedComponentPath
+                == SourceActorPath + ".ChildCube_Copy"
+            && EngineLoop.ReplaceWorld(ComponentPasteData, &WorldError),
+        "Component paste targets the selected parent and remaps subtree IDs");
+
+    World = EngineLoop.GetWorld();
+    SourceActor = static_cast<Pico::PActor*>(
+        FindWorldObjectByPath(World, SourceActorPath));
+    SourceRoot = static_cast<Pico::PCubeComponent*>(
+        FindComponentByName(SourceActor, "RootCube"));
+    Pico::PCubeComponent* PastedComponent =
+        static_cast<Pico::PCubeComponent*>(
+            FindWorldObjectByPath(World, PastedComponentPath));
+    Pico::PCubeComponent* PastedComponentChild =
+        static_cast<Pico::PCubeComponent*>(
+            FindComponentByName(SourceActor, "GrandchildCube_Copy"));
+    Runner.Expect(
+        PastedComponent != nullptr
+            && PastedComponentChild != nullptr
+            && PastedComponent->GetAttachParent() == SourceRoot
+            && PastedComponentChild->GetAttachParent() == PastedComponent
+            && PastedComponent->GetExtent().Equals(
+                Pico::FVector3(12.0f, 24.0f, 36.0f)),
+        "Component paste preserves its subtree, destination attachment, and properties");
+
+    Pico::PActor* EmptyActor =
+        World->SpawnActor<Pico::PActor>("EmptyClipboardTarget");
+    const std::string EmptyActorPath =
+        EmptyActor != nullptr ? EmptyActor->GetPathName() : std::string {};
+    Pico::FWorldAssetData RootPasteData;
+    std::string PastedRootPath;
+    Runner.Expect(
+        EmptyActor != nullptr
+            && Clipboard.BuildPaste(
+                *World,
+                EmptyActorPath,
+                RootPasteData,
+                PastedRootPath,
+                &ClipboardError)
+            && PastedRootPath == EmptyActorPath + ".ChildCube"
+            && EngineLoop.ReplaceWorld(RootPasteData, &WorldError),
+        "Pasting a component subtree into an empty Actor builds valid World data");
+    EmptyActor = static_cast<Pico::PActor*>(
+        FindWorldObjectByPath(EngineLoop.GetWorld(), EmptyActorPath));
+    Runner.Expect(
+        EmptyActor != nullptr
+            && EmptyActor->GetRootComponent() != nullptr
+            && EmptyActor->GetRootComponent()->GetPathName()
+                == PastedRootPath
+            && EmptyActor->GetRootComponent()->GetAttachChildren().size() == 1,
+        "A pasted component becomes the root when the destination Actor has no root");
+
+    Transactions.Clear();
 }
 
 void TestEditorTransactions(FTestRunner& Runner)
@@ -314,6 +570,8 @@ void TestEditorTransactions(FTestRunner& Runner)
             && !Transactions.CanRedo()
             && !Transactions.HasPendingTransaction(),
         "Clearing transactions removes all editor history");
+
+    TestEditorSceneClipboard(Runner, EngineLoop);
 
     EngineLoop.Exit();
     Runner.Expect(

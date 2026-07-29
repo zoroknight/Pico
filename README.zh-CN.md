@@ -28,6 +28,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 在 Outliner 和 Details 中查看、创建、修改和销毁运行时对象。
 - 在 OpenGL 3.3 编辑器视口中渲染 `PCubeComponent`。
 - 通过编辑器事务撤销和重做场景层级、Actor Transform 与反射属性修改。
+- 使用重新映射的场景 ID 复制和粘贴完整 Actor 或 SceneComponent 挂接子树。
 - 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
@@ -166,6 +167,8 @@ GameWorld
   CubeComponent 绘制白框，在 Outliner 中选择组件时只给该组件绘制白框。
 - 使用 `Ctrl+Z` 撤销，使用 `Ctrl+Y` 或 `Ctrl+Shift+Z` 重做场景层级、Actor Transform 和
   反射属性修改；一次连续拖动只会生成一条事务记录。
+- 使用 `Ctrl+C` 和 `Ctrl+V` 复制粘贴 Actor 及其全部组件，或选中的 SceneComponent
+  及其完整挂接子树；一次粘贴对应一条可撤销事务。
 - 在 Details 中修改 Actor Transform，可以移动、旋转和缩放 Cube。
 - 修改 `CubeComponent` 的反射属性，可以调整相对 Transform、Extent、Color 和可见性。
 - 在 Viewport 中按住鼠标右键会捕获光标，移动鼠标可以稳定地转动视角。
@@ -281,6 +284,7 @@ Pico 目前还没有类似 UHT 的头文件工具。未来的 PicoHeaderTool 可
 - [第三个月GLAD集成](Docs/Month03_12_GLADIntegration.md)
 - [第四个月编辑器事务](Docs/Month04_9_EditorTransactions.md)
 - [第四个月属性事务](Docs/Month04_10_EditorPropertyTransactions.md)
+- [第四个月编辑器剪贴板](Docs/Month04_11_EditorClipboard.md)
 
 ## 路线图
 
