@@ -78,9 +78,11 @@ only while reconstructing references and never replace runtime handles.
 
 The following remain separate milestones:
 
-- atomic `.pworld` file save and load entry points
 - replacement of the EngineLoop and editor active World
 - temporary root naming and final rename during active-World replacement
 - editor Save/Open commands
 - persistent editor GUIDs
 - Undo/Redo and clipboard operations
+
+Atomic `.pworld` file persistence is implemented by
+`Month04_3_WorldFilePersistence.md`.

@@ -59,6 +59,7 @@ add_library(PicoObject STATIC
     Source/Runtime/Object/Private/ObjectSerialization.cpp
     Source/Runtime/Object/Private/ObjectSystem.cpp
     Source/Runtime/Object/Private/Property.cpp
+    Source/Runtime/Object/Private/SerializationFile.cpp
     Source/Runtime/Object/Private/SerializedProperty.cpp
 )
 

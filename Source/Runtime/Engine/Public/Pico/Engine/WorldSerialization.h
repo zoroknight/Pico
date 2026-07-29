@@ -5,6 +5,7 @@
 #include "Pico/Object/ObjectTypes.h"
 #include "Pico/Object/SerializedProperty.h"
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -66,7 +67,12 @@ enum class EWorldSerializationError
     InvalidObjectGraph,
     ObjectCreationFailed,
     RelationRestoreFailed,
-    PostLoadFailed
+    PostLoadFailed,
+    FileOpenFailed,
+    FileReadFailed,
+    FileWriteFailed,
+    FileTooLarge,
+    TrailingData
 };
 
 std::string_view ToString(EWorldSerializationError Error);
@@ -88,5 +94,12 @@ bool DeserializeWorldAsset(
     EWorldSerializationError* OutError = nullptr);
 PWorld* CreateWorldFromAssetData(
     const FWorldAssetData& Data,
+    EWorldSerializationError* OutError = nullptr);
+bool SaveWorldToFile(
+    const std::filesystem::path& FilePath,
+    const PWorld& World,
+    EWorldSerializationError* OutError = nullptr);
+PWorld* LoadWorldFromFile(
+    const std::filesystem::path& FilePath,
     EWorldSerializationError* OutError = nullptr);
 }

@@ -18,7 +18,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 使用薄反射宏注册类和属性。
 - 通过通用的元数据驱动界面查看和修改属性。
 - 将反射对象序列化为 `.pobj`，并通过 `PostLoad` 完成加载后的处理。
-- 采集经过校验的 World 场景图，生成确定性的 `.pworld` 兼容数据，并在不持久化运行时 Handle 的前提下事务式重建运行时 World。
+- 将经过校验的 World 场景图原子保存为确定性的 `.pworld` 文件，并在不持久化运行时 Handle 的前提下事务式重建运行时 World。
 - 使用 `FObjectRegistry`、Outer 和带代数的 Handle 集中管理对象。
 - 创建具有明确生命周期的 `PWorld`、`PLevel`、`PActor` 和 Component。
 - 使用 RootComponent 为 Actor 提供 Transform。

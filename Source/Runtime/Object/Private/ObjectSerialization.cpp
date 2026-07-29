@@ -5,6 +5,7 @@
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectRegistry.h"
+#include "Pico/Object/SerializationFile.h"
 #include "Pico/Object/SerializedProperty.h"
 
 #include <fstream>
@@ -30,44 +31,6 @@ void ReportError(EObjectSerializationError* OutError, EObjectSerializationError 
     }
 }
 
-bool ReplaceFile(const std::filesystem::path& TemporaryPath, const std::filesystem::path& FilePath)
-{
-    std::error_code ErrorCode;
-    std::filesystem::rename(TemporaryPath, FilePath, ErrorCode);
-    if (!ErrorCode)
-    {
-        return true;
-    }
-
-    ErrorCode.clear();
-    if (!std::filesystem::is_regular_file(FilePath, ErrorCode))
-    {
-        return false;
-    }
-
-    std::filesystem::path BackupPath = FilePath;
-    BackupPath += ".bak";
-    std::filesystem::remove(BackupPath, ErrorCode);
-
-    ErrorCode.clear();
-    std::filesystem::rename(FilePath, BackupPath, ErrorCode);
-    if (ErrorCode)
-    {
-        return false;
-    }
-
-    ErrorCode.clear();
-    std::filesystem::rename(TemporaryPath, FilePath, ErrorCode);
-    if (ErrorCode)
-    {
-        std::error_code RestoreError;
-        std::filesystem::rename(BackupPath, FilePath, RestoreError);
-        return false;
-    }
-
-    std::filesystem::remove(BackupPath, ErrorCode);
-    return true;
-}
 }
 
 std::string_view ToString(EObjectSerializationError Error)
@@ -312,7 +275,7 @@ bool SaveObjectToFile(
         return false;
     }
 
-    if (!ReplaceFile(TemporaryPath, FilePath))
+    if (!Detail::ReplaceSerializedFile(TemporaryPath, FilePath))
     {
         std::error_code ErrorCode;
         std::filesystem::remove(TemporaryPath, ErrorCode);

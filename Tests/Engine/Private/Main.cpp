@@ -15,7 +15,10 @@
 #include "Pico/Object/ObjectSystem.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <stdexcept>
 
@@ -1274,6 +1277,199 @@ void TestWorldAssetDataSerialization(FTestRunner& Runner)
     Pico::PObjectSystem::Shutdown();
 }
 
+void TestWorldFilePersistence(FTestRunner& Runner)
+{
+    if (!InitializeWorldTypes(Runner))
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    const auto UniqueSuffix =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::filesystem::path FilePath =
+        std::filesystem::temp_directory_path()
+        / ("PicoWorldPersistence_" + std::to_string(UniqueSuffix) + ".pworld");
+    std::filesystem::path TemporaryPath = FilePath;
+    TemporaryPath += ".tmp";
+    std::filesystem::path BackupPath = FilePath;
+    BackupPath += ".bak";
+
+    const auto RemoveTestFiles = [&]()
+    {
+        std::error_code ErrorCode;
+        std::filesystem::remove(FilePath, ErrorCode);
+        std::filesystem::remove(TemporaryPath, ErrorCode);
+        std::filesystem::remove(BackupPath, ErrorCode);
+    };
+    const auto ReadFileBytes = [&]() -> std::vector<Pico::uint8>
+    {
+        std::ifstream File(FilePath, std::ios::binary | std::ios::ate);
+        if (!File)
+        {
+            return {};
+        }
+        const std::streampos EndPosition = File.tellg();
+        if (EndPosition < 0)
+        {
+            return {};
+        }
+        std::vector<Pico::uint8> Bytes(static_cast<std::size_t>(EndPosition));
+        File.seekg(0, std::ios::beg);
+        if (!Bytes.empty())
+        {
+            File.read(
+                reinterpret_cast<char*>(Bytes.data()),
+                static_cast<std::streamsize>(Bytes.size()));
+        }
+        return File ? Bytes : std::vector<Pico::uint8> {};
+    };
+    const auto WriteFileBytes = [&](const std::vector<Pico::uint8>& Bytes)
+    {
+        std::ofstream File(FilePath, std::ios::binary | std::ios::trunc);
+        if (!Bytes.empty())
+        {
+            File.write(
+                reinterpret_cast<const char*>(Bytes.data()),
+                static_cast<std::streamsize>(Bytes.size()));
+        }
+        return File.good();
+    };
+
+    RemoveTestFiles();
+    Pico::PWorld* World = Pico::NewObject<Pico::PWorld>(nullptr, "FileWorld");
+    const bool bWorldReady = World != nullptr && World->Initialize();
+    Pico::PActor* Actor =
+        bWorldReady ? World->SpawnActor<Pico::PActor>("FileActor") : nullptr;
+    Pico::PSceneComponent* Root =
+        Actor != nullptr
+        ? Actor->CreateComponent<Pico::PSceneComponent>("Root")
+        : nullptr;
+    Pico::PCubeComponent* Cube =
+        Actor != nullptr
+        ? Actor->CreateComponent<Pico::PCubeComponent>("Cube")
+        : nullptr;
+    const bool bSceneReady =
+        Actor != nullptr
+        && Root != nullptr
+        && Cube != nullptr
+        && Actor->SetRootComponent(Root)
+        && Cube->AttachToComponent(
+            Root,
+            Pico::EAttachmentTransformRule::KeepRelative);
+    Runner.Expect(
+        bWorldReady && bSceneReady,
+        "World file test creates a serializable runtime scene");
+    if (!bWorldReady || !bSceneReady)
+    {
+        Pico::DestroyObjectTree(World);
+        RemoveTestFiles();
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Pico::EWorldSerializationError Error =
+        Pico::EWorldSerializationError::None;
+    Runner.Expect(
+        !Pico::SaveWorldToFile({}, *World, &Error)
+            && Error == Pico::EWorldSerializationError::InvalidArgument,
+        "World file saving rejects an empty path");
+
+    Cube->SetExtent(Pico::FVector3(10.0f, 20.0f, 30.0f));
+    Runner.Expect(
+        Pico::SaveWorldToFile(FilePath, *World, &Error)
+            && Error == Pico::EWorldSerializationError::None
+            && std::filesystem::is_regular_file(FilePath),
+        "World saves to a persistent .pworld file");
+
+    Cube->SetExtent(Pico::FVector3(40.0f, 50.0f, 60.0f));
+    Runner.Expect(
+        Pico::SaveWorldToFile(FilePath, *World, &Error),
+        "Saving again atomically replaces an existing .pworld file");
+    const std::vector<Pico::uint8> ReplacedBytes = ReadFileBytes();
+    Runner.Expect(
+        !ReplacedBytes.empty()
+            && Pico::SaveWorldToFile(FilePath, *World, &Error)
+            && ReadFileBytes() == ReplacedBytes,
+        "Repeated World saves produce deterministic file bytes");
+    Runner.Expect(
+        !std::filesystem::exists(TemporaryPath)
+            && !std::filesystem::exists(BackupPath),
+        "Successful World replacement leaves no temporary files");
+
+    const std::size_t ExistingObjectCount =
+        Pico::FObjectRegistry::GetObjectCount();
+    Runner.Expect(
+        Pico::LoadWorldFromFile(FilePath, &Error) == nullptr
+            && Error == Pico::EWorldSerializationError::ObjectCreationFailed
+            && Pico::FObjectRegistry::GetObjectCount() == ExistingObjectCount
+            && Pico::ResolveObject(World->GetHandle()) == World,
+        "Loading a conflicting World name leaves the live World untouched");
+
+    Pico::DestroyObjectTree(World);
+    Runner.Expect(
+        Pico::FObjectRegistry::GetObjectCount() == 0,
+        "World file test releases the source World before loading");
+
+    Pico::PWorld* LoadedWorld = Pico::LoadWorldFromFile(FilePath, &Error);
+    Pico::PLevel* LoadedLevel =
+        LoadedWorld != nullptr ? LoadedWorld->GetPersistentLevel() : nullptr;
+    Pico::PObject* LoadedActorObject = LoadedLevel != nullptr
+        ? Pico::FindObject(LoadedLevel, Pico::FName("FileActor"))
+        : nullptr;
+    Pico::PObject* LoadedCubeObject = LoadedActorObject != nullptr
+        ? Pico::FindObject(LoadedActorObject, Pico::FName("Cube"))
+        : nullptr;
+    Pico::PCubeComponent* LoadedCube =
+        LoadedCubeObject != nullptr
+            && LoadedCubeObject->IsA(Pico::PCubeComponent::StaticClass())
+        ? static_cast<Pico::PCubeComponent*>(LoadedCubeObject)
+        : nullptr;
+    Runner.Expect(
+        LoadedWorld != nullptr
+            && Error == Pico::EWorldSerializationError::None
+            && LoadedCube != nullptr
+            && LoadedCube->GetExtent().Equals(
+                Pico::FVector3(40.0f, 50.0f, 60.0f))
+            && LoadedCube->GetAttachParent() != nullptr,
+        "A .pworld file reconstructs properties and component relationships");
+    Pico::DestroyObjectTree(LoadedWorld);
+    Runner.Expect(
+        Pico::FObjectRegistry::GetObjectCount() == 0,
+        "Destroying a file-loaded World clears every reconstructed object");
+
+    {
+        std::ofstream TrailingFile(FilePath, std::ios::binary | std::ios::app);
+        TrailingFile.put(static_cast<char>(0x7f));
+    }
+    Runner.Expect(
+        Pico::LoadWorldFromFile(FilePath, &Error) == nullptr
+            && Error == Pico::EWorldSerializationError::TrailingData
+            && Pico::FObjectRegistry::GetObjectCount() == 0,
+        "World file loading rejects trailing bytes before creating objects");
+
+    std::vector<Pico::uint8> TruncatedBytes = ReplacedBytes;
+    if (!TruncatedBytes.empty())
+    {
+        TruncatedBytes.pop_back();
+    }
+    Runner.Expect(
+        WriteFileBytes(TruncatedBytes)
+            && Pico::LoadWorldFromFile(FilePath, &Error) == nullptr
+            && Error == Pico::EWorldSerializationError::InvalidArchive
+            && Pico::FObjectRegistry::GetObjectCount() == 0,
+        "World file loading rejects a truncated archive without object leaks");
+
+    RemoveTestFiles();
+    Runner.Expect(
+        Pico::LoadWorldFromFile(FilePath, &Error) == nullptr
+            && Error == Pico::EWorldSerializationError::FileOpenFailed,
+        "World file loading reports a missing file");
+
+    RemoveTestFiles();
+    Pico::PObjectSystem::Shutdown();
+}
+
 void TestEngineLoopWorldLifecycle(FTestRunner& Runner)
 {
     char Program[] = "PicoEngineTests";
@@ -1362,6 +1558,7 @@ int main()
     TestSceneComponentAttachmentHierarchy(Runner);
     TestPrimitiveComponentSceneData(Runner);
     TestWorldAssetDataSerialization(Runner);
+    TestWorldFilePersistence(Runner);
     TestEngineLoopWorldLifecycle(Runner);
     TestTwoFrameLifecycle(Runner);
     TestZeroFrameLifecycle(Runner);
