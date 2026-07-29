@@ -7,6 +7,7 @@
 #include "Pico/Object/ObjectGlobals.h"
 
 #include <algorithm>
+#include <functional>
 
 namespace Pico
 {
@@ -77,6 +78,47 @@ PActorComponent* PActor::CreateComponent(const PClass* ComponentClass, FName Nam
 PActorComponent* PActor::CreateComponent(const PClass* ComponentClass, std::string_view Name)
 {
     return CreateComponent(ComponentClass, FName(Name));
+}
+
+bool PActor::DestroyComponent(PActorComponent* Component)
+{
+    if (!OwnsComponent(Component))
+    {
+        return false;
+    }
+
+    std::vector<PActorComponent*> ComponentsToDestroy;
+    const std::function<void(PActorComponent*)> CollectPostOrder =
+        [&ComponentsToDestroy, &CollectPostOrder](PActorComponent* Current)
+        {
+            if (Current->IsA(PSceneComponent::StaticClass()))
+            {
+                PSceneComponent* SceneComponent =
+                    static_cast<PSceneComponent*>(Current);
+                for (PSceneComponent* Child : SceneComponent->GetAttachChildren())
+                {
+                    CollectPostOrder(Child);
+                }
+            }
+            ComponentsToDestroy.push_back(Current);
+        };
+    CollectPostOrder(Component);
+
+    for (PActorComponent* ComponentToDestroy : ComponentsToDestroy)
+    {
+        const FObjectHandle Handle = ComponentToDestroy->GetHandle();
+        if (!DestroyObject(ComponentToDestroy))
+        {
+            return false;
+        }
+
+        std::erase(ComponentHandles, Handle);
+        if (RootComponentHandle == Handle)
+        {
+            RootComponentHandle = {};
+        }
+    }
+    return true;
 }
 
 std::vector<PActorComponent*> PActor::GetComponents() const

@@ -35,4 +35,5 @@ bool DestroyObject(PObject* Object);
 void DestroyObjectTree(PObject* Root);
 PObject* ResolveObject(FObjectHandle Handle);
 PObject* FindObject(PObject* Outer, FName Name);
+bool RenameObject(PObject* Object, FName NewName);
 }

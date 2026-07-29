@@ -14,12 +14,15 @@
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/World.h"
+#include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectSystem.h"
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <filesystem>
+#include <string>
 
 #ifndef PICO_PROJECT_NAME
 #define PICO_PROJECT_NAME "Pico"
@@ -233,7 +236,9 @@ void FEngineLoop::Tick()
         return;
     }
 
+    bTickingWorld = true;
     World->Tick(static_cast<float>(FrameTimer.GetDeltaSeconds()));
+    bTickingWorld = false;
 
     PICO_LOG(
         LogEngine,
@@ -266,6 +271,7 @@ void FEngineLoop::Exit()
     const bool bHadInitializedState = bPreInitialized || bObjectSystemInitialized || bInitialized;
 
     bInitialized = false;
+    bTickingWorld = false;
     if (PWorld* World = GetWorld())
     {
         World->TearDown();
@@ -286,6 +292,103 @@ void FEngineLoop::Exit()
 
     bPreInitialized = false;
     bExited = true;
+}
+
+bool FEngineLoop::LoadWorld(
+    const std::filesystem::path& FilePath,
+    EWorldSerializationError* OutError)
+{
+    if (OutError != nullptr)
+    {
+        *OutError = EWorldSerializationError::None;
+    }
+    PWorld* OldWorld = GetWorld();
+    if (!bInitialized || bTickingWorld || OldWorld == nullptr)
+    {
+        if (OutError != nullptr)
+        {
+            *OutError = EWorldSerializationError::InvalidArgument;
+        }
+        return false;
+    }
+
+    FWorldAssetData Data;
+    if (!LoadWorldAssetDataFromFile(FilePath, Data, OutError))
+    {
+        return false;
+    }
+
+    const auto WorldRecord = std::find_if(
+        Data.Objects.begin(),
+        Data.Objects.end(),
+        [&Data](const FSceneObjectRecord& Record)
+        {
+            return Record.Id == Data.WorldId;
+        });
+    if (WorldRecord == Data.Objects.end())
+    {
+        if (OutError != nullptr)
+        {
+            *OutError = EWorldSerializationError::InvalidObjectGraph;
+        }
+        return false;
+    }
+
+    const FName TargetName(WorldRecord->ObjectName);
+    PObject* ExistingTarget = FindObject(nullptr, TargetName);
+    if (ExistingTarget != nullptr && ExistingTarget != OldWorld)
+    {
+        if (OutError != nullptr)
+        {
+            *OutError = EWorldSerializationError::WorldReplacementFailed;
+        }
+        return false;
+    }
+
+    const FName OldName = OldWorld->GetName();
+    bool bRenamedOldWorld = false;
+    if (ExistingTarget == OldWorld)
+    {
+        FName TemporaryName;
+        for (uint64 Attempt = 1; Attempt != 0; ++Attempt)
+        {
+            TemporaryName = FName(
+                "__PicoPreviousWorld_" + std::to_string(Attempt));
+            if (FindObject(nullptr, TemporaryName) == nullptr)
+            {
+                break;
+            }
+        }
+
+        if (TemporaryName.IsNone()
+            || !RenameObject(OldWorld, TemporaryName))
+        {
+            if (OutError != nullptr)
+            {
+                *OutError = EWorldSerializationError::WorldReplacementFailed;
+            }
+            return false;
+        }
+        bRenamedOldWorld = true;
+    }
+
+    PWorld* NewWorld = CreateWorldFromAssetData(Data, OutError);
+    if (NewWorld == nullptr)
+    {
+        if (bRenamedOldWorld && !RenameObject(OldWorld, OldName))
+        {
+            if (OutError != nullptr)
+            {
+                *OutError = EWorldSerializationError::WorldReplacementFailed;
+            }
+        }
+        return false;
+    }
+
+    WorldHandle = NewWorld->GetHandle();
+    OldWorld->TearDown();
+    DestroyObjectTree(OldWorld);
+    return true;
 }
 
 bool FEngineLoop::ShouldExit() const

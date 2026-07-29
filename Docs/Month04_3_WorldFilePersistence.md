@@ -52,6 +52,8 @@ errors continue to retain their more specific existing values.
 
 ## Deferred Work
 
-File loading returns an independent `PWorld`; it does not change the World held
-by `FEngineLoop` or the editor. Active-World replacement, editor Save/Open
-commands, selection reset, and renderer refresh remain the next milestone.
+EngineLoop active-World replacement is implemented by
+`Month04_4_EngineWorldReplacement.md`.
+
+The editor still holds its own World handle. Editor Save/Open commands,
+selection reset, and renderer refresh remain the next milestone.

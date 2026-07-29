@@ -2,6 +2,7 @@
 
 #include "Pico/Core/Math/Vector3.h"
 #include "Pico/Core/Types.h"
+#include "Pico/Object/ObjectTypes.h"
 
 #include <memory>
 
@@ -34,7 +35,11 @@ public:
     bool Initialize(FOpenGLProcLoader Loader);
     void Shutdown();
     bool Resize(uint32 Width, uint32 Height);
-    bool Render(PWorld* World, const FSceneView& View);
+    bool Render(
+        PWorld* World,
+        const FSceneView& View,
+        FObjectHandle SelectedObject = {});
+    FObjectHandle Pick(uint32 X, uint32 Y) const;
 
     uint32 GetColorTexture() const;
     uint32 GetWidth() const;

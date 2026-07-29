@@ -262,6 +262,28 @@ PObject* FObjectRegistry::FindObject(PObject* Outer, FName Name)
     return nullptr;
 }
 
+bool FObjectRegistry::RenameObject(PObject* Object, FName NewName)
+{
+    if (Object == nullptr
+        || NewName.IsNone()
+        || ResolveObject(Object->GetHandle()) != Object
+        || Object->IsBeginningDestroy())
+    {
+        return false;
+    }
+    if (Object->GetName() == NewName)
+    {
+        return true;
+    }
+    if (FindObject(Object->GetOuter(), NewName) != nullptr)
+    {
+        return false;
+    }
+
+    Object->NamePrivate = NewName;
+    return true;
+}
+
 std::vector<PObject*> FObjectRegistry::GetObjects()
 {
     std::vector<PObject*> Result;

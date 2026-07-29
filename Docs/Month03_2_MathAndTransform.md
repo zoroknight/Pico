@@ -101,7 +101,7 @@ The serializer never writes raw structure memory, avoiding padding and compiler-
 
 ## Editor
 
-Both `PicoInspector` and `PicoSandboxEditor` provide:
+Both `PicoInspector` and the reflected Details implementation now used by `PicoEditor` provide:
 
 - three-axis controls for `FVector3`
 - Pitch/Yaw/Roll controls for `FRotator`

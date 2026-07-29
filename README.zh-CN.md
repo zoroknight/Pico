@@ -7,7 +7,7 @@ Pico 是一个以学习为目的、参考 Unreal Engine 架构设计的小型 C+
 
 Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小而清晰，同时保留可以完整运行和继续扩展的架构边界。
 
-![带有实时 OpenGL 场景视口的 Pico 编辑器](Docs/Images/PicoEditorMonth03.png)
+![支持场景层级编辑和视口选择的 Pico 编辑器](Docs/Images/PicoEditorMonth04.png)
 
 ## 当前状态
 
@@ -19,6 +19,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 通过通用的元数据驱动界面查看和修改属性。
 - 将反射对象序列化为 `.pobj`，并通过 `PostLoad` 完成加载后的处理。
 - 将经过校验的 World 场景图原子保存为确定性的 `.pworld` 文件，并在不持久化运行时 Handle 的前提下事务式重建运行时 World。
+- 事务式替换 `FEngineLoop` 的当前 World，并在文件加载或 `PostLoad` 失败时完整保留旧 World。
 - 使用 `FObjectRegistry`、Outer 和带代数的 Handle 集中管理对象。
 - 创建具有明确生命周期的 `PWorld`、`PLevel`、`PActor` 和 Component。
 - 使用 RootComponent 为 Actor 提供 Transform。
@@ -59,7 +60,7 @@ PicoInspector       -> PicoReflectionTools
 | `PicoRender` | 基于GLAD的OpenGL、Shader、几何体、Framebuffer、场景遍历和绘制提交 |
 | `PicoEditor` | Outliner、Details、运行时场景操作、编辑器相机和3D视口 |
 | `PicoReflectionTools` | 通用元数据检查和反射属性工具 |
-| `PicoSandbox` | 项目侧反射、序列化、编辑器和自动化测试示例 |
+| `PicoSandbox` | 项目侧反射、序列化、资产和自动化测试示例 |
 
 运行时模块不依赖 ImGui。`PicoCore`、`PicoObject` 和 `PicoEngine` 也不依赖 GLFW 或 OpenGL。
 
@@ -148,25 +149,30 @@ powershell -ExecutionPolicy Bypass -File .\Scripts\SetupWindows.ps1
 
 ## 编辑器操作
 
-编辑器启动后会创建：
+编辑器启动后只有空场景：
 
 ```text
 GameWorld
   -> PersistentLevel
-    -> CubeActor
-      -> RootComponent [Root]
-        -> CubeComponent
 ```
 
+- 使用 `Add > Empty Actor` 创建带有 `DefaultSceneRoot` 的编辑器 Actor。
+- 使用 `Add > Cube` 创建以可渲染 `PCubeComponent` 直接作为根组件的 Actor。
+- 可以向选中的 Actor 添加 Scene 或 Cube Component，也可以向选中的 SceneComponent 添加子组件。
+- 按 `F2` 重命名 Actor 或 Component，按 `Delete` 删除；删除 SceneComponent 会删除完整的附着子树。
+- 右键 World、Level、Actor 或 Component 节点可执行对应的创建、重命名、设置根组件和删除操作。
+- 左键点击 Viewport 中的可见几何体会选中它所属的 Actor；选中 Actor 时会给它的全部可见
+  CubeComponent 绘制白框，在 Outliner 中选择组件时只给该组件绘制白框。
 - 在 Details 中修改 Actor Transform，可以移动、旋转和缩放 Cube。
 - 修改 `CubeComponent` 的反射属性，可以调整相对 Transform、Extent、Color 和可见性。
-- 在 Viewport 中按住鼠标右键拖动，可以环绕观察。
-- 按住鼠标中键拖动，可以平移相机。
-- 使用鼠标滚轮，可以拉近或拉远。
+- 在 Viewport 中按住鼠标右键会捕获光标，移动鼠标可以稳定地转动视角。
+- 按住鼠标右键时使用 `W/A/S/D` 飞行，使用 `Q/E` 下降或上升。
+- 按住 `Shift` 可获得四倍速度，飞行时滚动鼠标滚轮可调整相机速度。
 - 使用工具栏，可以创建 Actor、增加场景子组件、设置 Root 或销毁运行时对象。
 - 拖动面板标签可以重新停靠或合并面板，使用 `Reset Layout` 恢复默认布局。
 
-当前编辑器场景修改只存在于运行时内存中。关闭编辑器后修改会被丢弃，也不会重写 C++ 源码。
+使用 `Ctrl+S` 可以将场景保存到当前项目的 `Content/Maps/EditorWorld.pworld`，使用 `Ctrl+O`
+可以重新加载。保存场景数据不会重写 C++ 源码。
 
 编辑器面板布局与场景数据相互独立，布局保存在
 `Projects/<ProjectName>/Saved/Editor/PicoEditorLayout.ini`。
@@ -180,7 +186,6 @@ GameWorld
 | `PicoInspector` | 通用反射对象检查器 |
 | `PicoReflectionDemo` | 控制台反射流程演示 |
 | `PicoSandboxDemo` | 项目侧创建、修改、保存、销毁和加载完整流程 |
-| `PicoSandboxEditor` | 可视化项目反射与 `.pobj` 持久化示例 |
 
 运行示例：
 
@@ -189,7 +194,7 @@ GameWorld
 .\Build\Debug\PicoReflectionDemo.exe
 .\Build\Debug\PicoInspector.exe
 .\Build\Projects\PicoSandbox\Debug\PicoSandboxDemo.exe
-.\Build\Projects\PicoSandbox\Debug\PicoSandboxEditor.exe
+.\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
 
 ## 构建与测试

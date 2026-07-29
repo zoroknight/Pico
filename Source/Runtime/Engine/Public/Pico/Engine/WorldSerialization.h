@@ -72,7 +72,8 @@ enum class EWorldSerializationError
     FileReadFailed,
     FileWriteFailed,
     FileTooLarge,
-    TrailingData
+    TrailingData,
+    WorldReplacementFailed
 };
 
 std::string_view ToString(EWorldSerializationError Error);
@@ -98,6 +99,10 @@ PWorld* CreateWorldFromAssetData(
 bool SaveWorldToFile(
     const std::filesystem::path& FilePath,
     const PWorld& World,
+    EWorldSerializationError* OutError = nullptr);
+bool LoadWorldAssetDataFromFile(
+    const std::filesystem::path& FilePath,
+    FWorldAssetData& OutData,
     EWorldSerializationError* OutError = nullptr);
 PWorld* LoadWorldFromFile(
     const std::filesystem::path& FilePath,

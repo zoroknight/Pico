@@ -442,6 +442,8 @@ std::string_view ToString(EWorldSerializationError Error)
         return "FileTooLarge";
     case EWorldSerializationError::TrailingData:
         return "TrailingData";
+    case EWorldSerializationError::WorldReplacementFailed:
+        return "WorldReplacementFailed";
     }
     return "Unknown";
 }
@@ -958,34 +960,35 @@ bool SaveWorldToFile(
     return true;
 }
 
-PWorld* LoadWorldFromFile(
+bool LoadWorldAssetDataFromFile(
     const std::filesystem::path& FilePath,
+    FWorldAssetData& OutData,
     EWorldSerializationError* OutError)
 {
     ReportError(OutError, EWorldSerializationError::None);
     if (FilePath.empty())
     {
         ReportError(OutError, EWorldSerializationError::InvalidArgument);
-        return nullptr;
+        return false;
     }
 
     std::ifstream File(FilePath, std::ios::binary | std::ios::ate);
     if (!File)
     {
         ReportError(OutError, EWorldSerializationError::FileOpenFailed);
-        return nullptr;
+        return false;
     }
 
     const std::streampos EndPosition = File.tellg();
     if (EndPosition < 0)
     {
         ReportError(OutError, EWorldSerializationError::FileReadFailed);
-        return nullptr;
+        return false;
     }
     if (static_cast<std::size_t>(EndPosition) > MaxWorldFileSize)
     {
         ReportError(OutError, EWorldSerializationError::FileTooLarge);
-        return nullptr;
+        return false;
     }
 
     std::vector<uint8> Bytes(static_cast<std::size_t>(EndPosition));
@@ -999,21 +1002,34 @@ PWorld* LoadWorldFromFile(
     if (!File)
     {
         ReportError(OutError, EWorldSerializationError::FileReadFailed);
-        return nullptr;
+        return false;
     }
 
     FMemoryReader Reader(Bytes);
     FWorldAssetData Data;
     if (!DeserializeWorldAsset(Reader, Data, OutError))
     {
-        return nullptr;
+        return false;
     }
     if (Reader.GetRemainingSize() != 0)
     {
         ReportError(OutError, EWorldSerializationError::TrailingData);
-        return nullptr;
+        return false;
     }
 
+    OutData = std::move(Data);
+    return true;
+}
+
+PWorld* LoadWorldFromFile(
+    const std::filesystem::path& FilePath,
+    EWorldSerializationError* OutError)
+{
+    FWorldAssetData Data;
+    if (!LoadWorldAssetDataFromFile(FilePath, Data, OutError))
+    {
+        return nullptr;
+    }
     return CreateWorldFromAssetData(Data, OutError);
 }
 }

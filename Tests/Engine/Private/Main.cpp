@@ -543,6 +543,47 @@ void TestActorComponentsAndSceneTransform(FTestRunner& Runner)
             !StaleRootActor->SetActorLocation(Pico::FVector3(1.0f, 2.0f, 3.0f)),
         "An actor with a stale root handle rejects transform changes");
 
+    Pico::PSceneComponent* TreeRoot = StaleRootActor != nullptr
+        ? StaleRootActor->CreateComponent<Pico::PSceneComponent>("TreeRoot")
+        : nullptr;
+    Pico::PSceneComponent* TreeMiddle = StaleRootActor != nullptr
+        ? StaleRootActor->CreateComponent<Pico::PSceneComponent>("TreeMiddle")
+        : nullptr;
+    Pico::PCubeComponent* TreeLeaf = StaleRootActor != nullptr
+        ? StaleRootActor->CreateComponent<Pico::PCubeComponent>("TreeLeaf")
+        : nullptr;
+    const bool bDestroyTreeReady =
+        StaleRootActor != nullptr
+        && TreeRoot != nullptr
+        && TreeMiddle != nullptr
+        && TreeLeaf != nullptr
+        && StaleRootActor->SetRootComponent(TreeRoot)
+        && TreeMiddle->AttachToComponent(
+            TreeRoot,
+            Pico::EAttachmentTransformRule::KeepRelative)
+        && TreeLeaf->AttachToComponent(
+            TreeMiddle,
+            Pico::EAttachmentTransformRule::KeepRelative);
+    Runner.Expect(bDestroyTreeReady, "An Actor creates a component subtree for deletion");
+    if (bDestroyTreeReady)
+    {
+        const Pico::FObjectHandle TreeRootHandle = TreeRoot->GetHandle();
+        const Pico::FObjectHandle TreeMiddleHandle = TreeMiddle->GetHandle();
+        const Pico::FObjectHandle TreeLeafHandle = TreeLeaf->GetHandle();
+        Runner.Expect(
+            StaleRootActor->DestroyComponent(TreeRoot),
+            "Actor component deletion destroys the selected scene subtree");
+        Runner.Expect(
+            StaleRootActor->GetRootComponent() == nullptr
+                && StaleRootActor->GetComponents().empty(),
+            "Deleting a root subtree clears Actor component and root handles");
+        Runner.Expect(
+            Pico::ResolveObject(TreeRootHandle) == nullptr
+                && Pico::ResolveObject(TreeMiddleHandle) == nullptr
+                && Pico::ResolveObject(TreeLeafHandle) == nullptr,
+            "Deleting a component subtree invalidates every descendant handle");
+    }
+
     World->Tick(0.1f);
     Runner.Expect(Root->IsRegistered(), "Actor BeginPlay registers owned components");
     Runner.Expect(PCountingSceneComponent::TotalRegisterCount == 1, "Component OnRegister runs once");
@@ -1442,11 +1483,18 @@ void TestWorldFilePersistence(FTestRunner& Runner)
         std::ofstream TrailingFile(FilePath, std::ios::binary | std::ios::app);
         TrailingFile.put(static_cast<char>(0x7f));
     }
+    Pico::FWorldAssetData UnchangedFileData;
+    UnchangedFileData.WorldId = Pico::FSceneObjectId { 777 };
     Runner.Expect(
-        Pico::LoadWorldFromFile(FilePath, &Error) == nullptr
+        !Pico::LoadWorldAssetDataFromFile(
+            FilePath,
+            UnchangedFileData,
+            &Error)
             && Error == Pico::EWorldSerializationError::TrailingData
+            && UnchangedFileData.WorldId.Value == 777
+            && Pico::LoadWorldFromFile(FilePath, &Error) == nullptr
             && Pico::FObjectRegistry::GetObjectCount() == 0,
-        "World file loading rejects trailing bytes before creating objects");
+        "World file loading rejects trailing bytes without changing output data");
 
     std::vector<Pico::uint8> TruncatedBytes = ReplacedBytes;
     if (!TruncatedBytes.empty())
@@ -1468,6 +1516,141 @@ void TestWorldFilePersistence(FTestRunner& Runner)
 
     RemoveTestFiles();
     Pico::PObjectSystem::Shutdown();
+}
+
+void TestEngineLoopWorldReplacement(FTestRunner& Runner)
+{
+    char Program[] = "PicoEngineTests";
+    char Frames[] = "-frames=5";
+    char MaxFPS[] = "-maxfps=0";
+    char* Arguments[] = { Program, Frames, MaxFPS };
+
+    const auto UniqueSuffix =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::filesystem::path FilePath =
+        std::filesystem::temp_directory_path()
+        / ("PicoWorldReplacement_" + std::to_string(UniqueSuffix) + ".pworld");
+    std::error_code ErrorCode;
+    std::filesystem::remove(FilePath, ErrorCode);
+
+    Pico::FEngineLoop EngineLoop;
+    Runner.Expect(
+        EngineLoop.PreInit(3, Arguments) == 0 && EngineLoop.Init() == 0,
+        "World replacement test initializes the engine loop");
+    Runner.Expect(
+        PLoadTrackingActor::RegisterClass(),
+        "World replacement test registers its PostLoad actor");
+
+    Pico::PWorld* OldWorld = EngineLoop.GetWorld();
+    PLoadTrackingActor* Actor = OldWorld != nullptr
+        ? OldWorld->SpawnActor<PLoadTrackingActor>("ReplacementActor")
+        : nullptr;
+    Pico::PSceneComponent* Root = Actor != nullptr
+        ? Actor->CreateComponent<Pico::PSceneComponent>("Root")
+        : nullptr;
+    Pico::PCubeComponent* Cube = Actor != nullptr
+        ? Actor->CreateComponent<Pico::PCubeComponent>("Cube")
+        : nullptr;
+    const bool bSceneReady =
+        Actor != nullptr
+        && Root != nullptr
+        && Cube != nullptr
+        && Actor->SetRootComponent(Root)
+        && Cube->AttachToComponent(
+            Root,
+            Pico::EAttachmentTransformRule::KeepRelative);
+    Runner.Expect(
+        bSceneReady,
+        "World replacement test creates a persistent scene");
+    if (!bSceneReady)
+    {
+        EngineLoop.Exit();
+        std::filesystem::remove(FilePath, ErrorCode);
+        return;
+    }
+
+    Cube->SetExtent(Pico::FVector3(15.0f, 25.0f, 35.0f));
+    Pico::EWorldSerializationError Error =
+        Pico::EWorldSerializationError::None;
+    Runner.Expect(
+        Pico::SaveWorldToFile(FilePath, *OldWorld, &Error),
+        "World replacement test saves the active World");
+
+    const Pico::FObjectHandle OldWorldHandle = OldWorld->GetHandle();
+    const std::size_t OldObjectCount =
+        Pico::FObjectRegistry::GetObjectCount();
+    PLoadTrackingActor::bThrowPostLoad = true;
+    Runner.Expect(
+        !EngineLoop.LoadWorld(FilePath, &Error)
+            && Error == Pico::EWorldSerializationError::PostLoadFailed
+            && EngineLoop.GetWorld() == OldWorld
+            && OldWorld->GetHandle() == OldWorldHandle
+            && OldWorld->GetName() == Pico::FName("GameWorld")
+            && Pico::FObjectRegistry::GetObjectCount() == OldObjectCount
+            && Pico::FindObject(
+                nullptr,
+                Pico::FName("__PicoPreviousWorld_1")) == nullptr,
+        "A failed replacement restores the original World name and handle");
+
+    PLoadTrackingActor::bThrowPostLoad = false;
+    PLoadTrackingActor::bObservedRootComponent = false;
+    Cube->SetExtent(Pico::FVector3(90.0f, 90.0f, 90.0f));
+    Runner.Expect(
+        EngineLoop.LoadWorld(FilePath, &Error)
+            && Error == Pico::EWorldSerializationError::None,
+        "EngineLoop transactionally replaces the active World");
+
+    Pico::PWorld* NewWorld = EngineLoop.GetWorld();
+    Pico::PLevel* NewLevel =
+        NewWorld != nullptr ? NewWorld->GetPersistentLevel() : nullptr;
+    Pico::PObject* NewActorObject = NewLevel != nullptr
+        ? Pico::FindObject(NewLevel, Pico::FName("ReplacementActor"))
+        : nullptr;
+    Pico::PObject* NewCubeObject = NewActorObject != nullptr
+        ? Pico::FindObject(NewActorObject, Pico::FName("Cube"))
+        : nullptr;
+    Pico::PCubeComponent* NewCube =
+        NewCubeObject != nullptr
+            && NewCubeObject->IsA(Pico::PCubeComponent::StaticClass())
+        ? static_cast<Pico::PCubeComponent*>(NewCubeObject)
+        : nullptr;
+    Runner.Expect(
+        NewWorld != nullptr
+            && NewWorld != OldWorld
+            && NewWorld->GetName() == Pico::FName("GameWorld")
+            && Pico::ResolveObject(OldWorldHandle) == nullptr
+            && NewCube != nullptr
+            && NewCube->GetExtent().Equals(
+                Pico::FVector3(15.0f, 25.0f, 35.0f))
+            && PLoadTrackingActor::bObservedRootComponent
+            && Pico::FObjectRegistry::GetObjectCount() == OldObjectCount,
+        "Successful replacement commits loaded data and destroys the old World");
+
+    const Pico::FObjectHandle NewWorldHandle =
+        NewWorld != nullptr ? NewWorld->GetHandle() : Pico::FObjectHandle {};
+    {
+        std::ofstream TrailingFile(FilePath, std::ios::binary | std::ios::app);
+        TrailingFile.put(static_cast<char>(0x7f));
+    }
+    Runner.Expect(
+        !EngineLoop.LoadWorld(FilePath, &Error)
+            && Error == Pico::EWorldSerializationError::TrailingData
+            && EngineLoop.GetWorld() == NewWorld
+            && NewWorld != nullptr
+            && NewWorld->GetHandle() == NewWorldHandle,
+        "A malformed replacement file leaves the current World untouched");
+
+    EngineLoop.Tick();
+    Runner.Expect(
+        NewWorld != nullptr && NewWorld->GetTickCount() == 1,
+        "EngineLoop ticks the newly committed World");
+
+    EngineLoop.Exit();
+    std::filesystem::remove(FilePath, ErrorCode);
+    PLoadTrackingActor::bThrowPostLoad = false;
+    Runner.Expect(
+        Pico::FObjectRegistry::GetObjectCount() == 0,
+        "World replacement test leaves no registered objects");
 }
 
 void TestEngineLoopWorldLifecycle(FTestRunner& Runner)
@@ -1559,6 +1742,7 @@ int main()
     TestPrimitiveComponentSceneData(Runner);
     TestWorldAssetDataSerialization(Runner);
     TestWorldFilePersistence(Runner);
+    TestEngineLoopWorldReplacement(Runner);
     TestEngineLoopWorldLifecycle(Runner);
     TestTwoFrameLifecycle(Runner);
     TestZeroFrameLifecycle(Runner);

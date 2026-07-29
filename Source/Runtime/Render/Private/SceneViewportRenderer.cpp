@@ -83,6 +83,12 @@ constexpr std::array<unsigned int, 36> CubeIndices {
      8,  9, 10, 10, 11,  8,  12, 13, 14, 14, 15, 12,
     16, 17, 18, 18, 19, 16,  20, 21, 22, 22, 23, 20
 };
+
+constexpr std::array<unsigned int, 24> CubeOutlineIndices {
+     0,  1,  1,  2,  2,  3,  3,  0,
+     5,  4,  4,  7,  7,  6,  6,  5,
+     0,  5,  1,  4,  2,  7,  3,  6
+};
 }
 
 struct FSceneViewportRenderer::FImpl
@@ -91,12 +97,16 @@ struct FSceneViewportRenderer::FImpl
     GLuint CubeVertexArray = 0;
     GLuint CubeVertexBuffer = 0;
     GLuint CubeIndexBuffer = 0;
+    GLuint CubeOutlineVertexArray = 0;
+    GLuint CubeOutlineIndexBuffer = 0;
     GLuint GridVertexArray = 0;
     GLuint GridVertexBuffer = 0;
     GLsizei GridVertexCount = 0;
     GLuint Framebuffer = 0;
     GLuint ColorTexture = 0;
+    GLuint PickingTexture = 0;
     GLuint DepthRenderbuffer = 0;
+    std::vector<FObjectHandle> PickHandles;
     uint32 Width = 0;
     uint32 Height = 0;
     bool bInitialized = false;
@@ -144,7 +154,9 @@ void main()
 in vec3 WorldNormal;
 uniform vec3 BaseColor;
 uniform int UseLighting;
-out vec4 FragColor;
+uniform uint PickingId;
+layout(location = 0) out vec4 FragColor;
+layout(location = 1) out uint FragPickingId;
 void main()
 {
     float Lighting = 1.0;
@@ -155,6 +167,7 @@ void main()
         Lighting = 0.32 + 0.68 * max(dot(Normal, LightDirection), 0.0);
     }
     FragColor = vec4(BaseColor * Lighting, 1.0);
+    FragPickingId = PickingId;
 }
 )";
 
@@ -207,6 +220,28 @@ void main()
             GL_ELEMENT_ARRAY_BUFFER,
             static_cast<std::ptrdiff_t>(CubeIndices.size() * sizeof(unsigned int)),
             CubeIndices.data(),
+            GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1,
+            3,
+            GL_FLOAT,
+            GL_FALSE,
+            6 * sizeof(float),
+            reinterpret_cast<const void*>(3 * sizeof(float)));
+
+        glGenVertexArrays(1, &CubeOutlineVertexArray);
+        glBindVertexArray(CubeOutlineVertexArray);
+        glBindBuffer(GL_ARRAY_BUFFER, CubeVertexBuffer);
+        glGenBuffers(1, &CubeOutlineIndexBuffer);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, CubeOutlineIndexBuffer);
+        glBufferData(
+            GL_ELEMENT_ARRAY_BUFFER,
+            static_cast<std::ptrdiff_t>(
+                CubeOutlineIndices.size() * sizeof(unsigned int)),
+            CubeOutlineIndices.data(),
             GL_STATIC_DRAW);
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
@@ -277,6 +312,11 @@ void main()
             glDeleteTextures(1, &ColorTexture);
             ColorTexture = 0;
         }
+        if (PickingTexture != 0)
+        {
+            glDeleteTextures(1, &PickingTexture);
+            PickingTexture = 0;
+        }
         if (Framebuffer != 0)
         {
             glDeleteFramebuffers(1, &Framebuffer);
@@ -284,6 +324,7 @@ void main()
         }
         Width = 0;
         Height = 0;
+        PickHandles.clear();
     }
 };
 
@@ -345,6 +386,11 @@ void FSceneViewportRenderer::Shutdown()
         glDeleteBuffers(1, &Impl->CubeIndexBuffer);
         Impl->CubeIndexBuffer = 0;
     }
+    if (Impl->CubeOutlineIndexBuffer != 0)
+    {
+        glDeleteBuffers(1, &Impl->CubeOutlineIndexBuffer);
+        Impl->CubeOutlineIndexBuffer = 0;
+    }
     if (Impl->CubeVertexBuffer != 0)
     {
         glDeleteBuffers(1, &Impl->CubeVertexBuffer);
@@ -354,6 +400,11 @@ void FSceneViewportRenderer::Shutdown()
     {
         glDeleteVertexArrays(1, &Impl->CubeVertexArray);
         Impl->CubeVertexArray = 0;
+    }
+    if (Impl->CubeOutlineVertexArray != 0)
+    {
+        glDeleteVertexArrays(1, &Impl->CubeOutlineVertexArray);
+        Impl->CubeOutlineVertexArray = 0;
     }
     if (Impl->Program != 0)
     {
@@ -403,6 +454,36 @@ bool FSceneViewportRenderer::Resize(uint32 Width, uint32 Height)
         Impl->ColorTexture,
         0);
 
+    glGenTextures(1, &Impl->PickingTexture);
+    glBindTexture(GL_TEXTURE_2D, Impl->PickingTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_R32UI,
+        static_cast<GLsizei>(Width),
+        static_cast<GLsizei>(Height),
+        0,
+        GL_RED_INTEGER,
+        GL_UNSIGNED_INT,
+        nullptr);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT1,
+        GL_TEXTURE_2D,
+        Impl->PickingTexture,
+        0);
+    constexpr std::array<GLenum, 2> DrawBuffers {
+        GL_COLOR_ATTACHMENT0,
+        GL_COLOR_ATTACHMENT1
+    };
+    glDrawBuffers(
+        static_cast<GLsizei>(DrawBuffers.size()),
+        DrawBuffers.data());
+
     glGenRenderbuffers(1, &Impl->DepthRenderbuffer);
     glBindRenderbuffer(GL_RENDERBUFFER, Impl->DepthRenderbuffer);
     glRenderbufferStorage(
@@ -427,7 +508,10 @@ bool FSceneViewportRenderer::Resize(uint32 Width, uint32 Height)
     return bComplete;
 }
 
-bool FSceneViewportRenderer::Render(PWorld* World, const FSceneView& View)
+bool FSceneViewportRenderer::Render(
+    PWorld* World,
+    const FSceneView& View,
+    FObjectHandle SelectedObject)
 {
     if (!Impl->bInitialized || Impl->Framebuffer == 0 || World == nullptr)
     {
@@ -447,15 +531,25 @@ bool FSceneViewportRenderer::Render(PWorld* World, const FSceneView& View)
     glViewport(0, 0, static_cast<GLsizei>(Impl->Width), static_cast<GLsizei>(Impl->Height));
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
-    glClearColor(0.075f, 0.085f, 0.095f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    constexpr std::array<GLfloat, 4> ClearColor {
+        0.075f,
+        0.085f,
+        0.095f,
+        1.0f
+    };
+    glClearBufferfv(GL_COLOR, 0, ClearColor.data());
+    constexpr GLuint EmptyPickingId = 0;
+    glClearBufferuiv(GL_COLOR, 1, &EmptyPickingId);
+    glClear(GL_DEPTH_BUFFER_BIT);
     glUseProgram(Impl->Program);
+    Impl->PickHandles.clear();
 
     const GLint ViewProjectionLocation =
         glGetUniformLocation(Impl->Program, "ViewProjection");
     const GLint ModelLocation = glGetUniformLocation(Impl->Program, "Model");
     const GLint ColorLocation = glGetUniformLocation(Impl->Program, "BaseColor");
     const GLint LightingLocation = glGetUniformLocation(Impl->Program, "UseLighting");
+    const GLint PickingIdLocation = glGetUniformLocation(Impl->Program, "PickingId");
     glUniformMatrix4fv(
         ViewProjectionLocation,
         1,
@@ -466,6 +560,7 @@ bool FSceneViewportRenderer::Render(PWorld* World, const FSceneView& View)
     glUniformMatrix4fv(ModelLocation, 1, GL_TRUE, Identity.GetData());
     glUniform3f(ColorLocation, 0.25f, 0.29f, 0.31f);
     glUniform1i(LightingLocation, 0);
+    glUniform1ui(PickingIdLocation, 0);
     glBindVertexArray(Impl->GridVertexArray);
     glLineWidth(1.0f);
     glDrawArrays(GL_LINES, 0, Impl->GridVertexCount);
@@ -501,13 +596,44 @@ bool FSceneViewportRenderer::Render(PWorld* World, const FSceneView& View)
                 ModelTransform.Scale = ModelTransform.Scale * Cube->GetExtent();
                 const FMatrix4 Model = ModelTransform.ToMatrix();
                 const FVector3 Color = Cube->GetColor();
+                Impl->PickHandles.push_back(Cube->GetHandle());
+                const GLuint PickingId =
+                    static_cast<GLuint>(Impl->PickHandles.size());
                 glUniformMatrix4fv(ModelLocation, 1, GL_TRUE, Model.GetData());
                 glUniform3f(ColorLocation, Color.X, Color.Y, Color.Z);
+                glUniform1ui(PickingIdLocation, PickingId);
                 glDrawElements(
                     GL_TRIANGLES,
                     static_cast<GLsizei>(CubeIndices.size()),
                     GL_UNSIGNED_INT,
                     nullptr);
+
+                const bool bSelected =
+                    Cube->GetHandle() == SelectedObject
+                    || Actor->GetHandle() == SelectedObject;
+                if (bSelected)
+                {
+                    FTransform OutlineTransform = Cube->GetWorldTransform();
+                    OutlineTransform.Scale =
+                        OutlineTransform.Scale * Cube->GetExtent() * 1.02f;
+                    const FMatrix4 OutlineModel = OutlineTransform.ToMatrix();
+                    glUniformMatrix4fv(
+                        ModelLocation,
+                        1,
+                        GL_TRUE,
+                        OutlineModel.GetData());
+                    glUniform3f(ColorLocation, 1.0f, 1.0f, 1.0f);
+                    glUniform1i(LightingLocation, 0);
+                    glBindVertexArray(Impl->CubeOutlineVertexArray);
+                    glLineWidth(2.0f);
+                    glDrawElements(
+                        GL_LINES,
+                        static_cast<GLsizei>(CubeOutlineIndices.size()),
+                        GL_UNSIGNED_INT,
+                        nullptr);
+                    glBindVertexArray(Impl->CubeVertexArray);
+                    glUniform1i(LightingLocation, 1);
+                }
             }
         }
     }
@@ -518,6 +644,36 @@ bool FSceneViewportRenderer::Render(PWorld* World, const FSceneView& View)
     glDisable(GL_DEPTH_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return true;
+}
+
+FObjectHandle FSceneViewportRenderer::Pick(uint32 X, uint32 Y) const
+{
+    if (!Impl->bInitialized
+        || Impl->Framebuffer == 0
+        || X >= Impl->Width
+        || Y >= Impl->Height)
+    {
+        return {};
+    }
+
+    GLuint PickingId = 0;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, Impl->Framebuffer);
+    glReadBuffer(GL_COLOR_ATTACHMENT1);
+    glReadPixels(
+        static_cast<GLint>(X),
+        static_cast<GLint>(Y),
+        1,
+        1,
+        GL_RED_INTEGER,
+        GL_UNSIGNED_INT,
+        &PickingId);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+
+    if (PickingId == 0 || PickingId > Impl->PickHandles.size())
+    {
+        return {};
+    }
+    return Impl->PickHandles[PickingId - 1];
 }
 
 uint32 FSceneViewportRenderer::GetColorTexture() const

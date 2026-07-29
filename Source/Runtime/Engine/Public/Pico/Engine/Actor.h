@@ -28,6 +28,7 @@ public:
 
     PActorComponent* CreateComponent(const PClass* ComponentClass, FName Name);
     PActorComponent* CreateComponent(const PClass* ComponentClass, std::string_view Name);
+    bool DestroyComponent(PActorComponent* Component);
 
     template <typename TComponent>
     TComponent* CreateComponent(FName Name)

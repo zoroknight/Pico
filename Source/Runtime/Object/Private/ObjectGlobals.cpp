@@ -77,4 +77,9 @@ PObject* FindObject(PObject* Outer, FName Name)
 {
     return FObjectRegistry::FindObject(Outer, Name);
 }
+
+bool RenameObject(PObject* Object, FName NewName)
+{
+    return FObjectRegistry::RenameObject(Object, NewName);
+}
 }

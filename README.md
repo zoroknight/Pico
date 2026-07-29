@@ -9,7 +9,7 @@ serialization, worlds, actors, components, transforms, editor tooling, and rende
 Pico is not intended to compete with production engines. It deliberately keeps each system small
 enough to study while preserving clear ownership boundaries and an end-to-end runtime.
 
-![Pico Editor with a live OpenGL scene viewport](Docs/Images/PicoEditorMonth03.png)
+![Pico Editor with scene hierarchy editing and viewport selection](Docs/Images/PicoEditorMonth04.png)
 
 ## Current State
 
@@ -21,6 +21,7 @@ The first three development months are complete. Pico can currently:
 - Inspect and edit supported properties through generic metadata-driven UI.
 - Serialize reflected objects to `.pobj` files and reconstruct them with `PostLoad`.
 - Save validated World scene graphs to deterministic `.pworld` files and transactionally reconstruct runtime Worlds without persisting runtime handles.
+- Transactionally replace the `FEngineLoop` active World while preserving the old World on load or `PostLoad` failure.
 - Manage object memory centrally through `FObjectRegistry`, `Outer`, and generation-safe handles.
 - Create `PWorld`, `PLevel`, `PActor`, and component instances with explicit lifecycles.
 - Use a root scene component as the Actor transform provider.
@@ -154,26 +155,34 @@ The editor starts maximized. Its default UI scale is `1.4`; override it when nee
 
 ## Editor Controls
 
-The editor starts with:
+The editor starts with an empty scene:
 
 ```text
 GameWorld
   -> PersistentLevel
-    -> CubeActor
-      -> RootComponent [Root]
-        -> CubeComponent
 ```
 
+- Use `Add > Empty Actor` to create an editor-authored Actor with `DefaultSceneRoot`.
+- Use `Add > Cube` to create an Actor whose renderable `PCubeComponent` is also its root.
+- Add Scene or Cube components to a selected Actor, or add them as children of a selected scene
+  component.
+- Press `F2` to rename a selected Actor or Component and `Delete` to remove it. Deleting a scene
+  component removes its complete attachment subtree.
+- Right-click World, Level, Actor, or Component nodes for context-sensitive creation, rename, root,
+  and delete commands.
+- Left-click rendered geometry to select its owning Actor. Selecting an Actor outlines all of its
+  visible CubeComponents; selecting a component in the Outliner outlines only that component.
 - Edit Actor transforms in the Details panel to move, rotate, and scale the cube.
 - Edit `CubeComponent` reflected properties to change relative transform, extent, color, or visibility.
-- Right-drag in the viewport to orbit.
-- Middle-drag to pan.
-- Use the mouse wheel to zoom.
-- Use the toolbar to spawn Actors, add scene children, choose a root, or destroy runtime objects.
+- Hold the right mouse button to capture the cursor and move the mouse to look around.
+- While holding the right mouse button, use `W/A/S/D` to fly and `Q/E` to descend or ascend.
+- Hold `Shift` to move four times faster; use the mouse wheel while flying to adjust camera speed.
+- Use the toolbar to add scene children, choose a root, or destroy runtime objects.
 - Drag panel tabs to rearrange or tab the workspace; use `Reset Layout` to restore the default.
 
-Editor scene changes currently live only in memory. Closing the editor discards them and does not
-rewrite C++ source.
+Editor scene changes can be saved to and loaded from the active project's
+`Content/Maps/EditorWorld.pworld` with `Ctrl+S` and `Ctrl+O`. Saving scene data never rewrites C++
+source.
 
 Editor panel layout is separate from scene data and persists in
 `Projects/<ProjectName>/Saved/Editor/PicoEditorLayout.ini`.
@@ -187,7 +196,6 @@ Editor panel layout is separate from scene data and persists in
 | `PicoInspector` | Generic reflected-object inspector |
 | `PicoReflectionDemo` | Console reflection walkthrough |
 | `PicoSandboxDemo` | Complete project-side create, edit, save, destroy and load workflow |
-| `PicoSandboxEditor` | Visual project reflection and `.pobj` persistence example |
 
 Example commands:
 
@@ -196,7 +204,7 @@ Example commands:
 .\Build\Debug\PicoReflectionDemo.exe
 .\Build\Debug\PicoInspector.exe
 .\Build\Projects\PicoSandbox\Debug\PicoSandboxDemo.exe
-.\Build\Projects\PicoSandbox\Debug\PicoSandboxEditor.exe
+.\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
 
 ## Build and Test

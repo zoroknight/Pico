@@ -36,7 +36,6 @@ to either Engine `Source` or project `Source`.
 | --- | --- |
 | `PicoSandboxGame` | Project classes, registration entry point, and reusable workflow |
 | `PicoSandboxDemo` | Readable console walkthrough of the full workflow |
-| `PicoSandboxEditor` | Visual reflected-property and persistence workflow |
 | `PicoSandboxTests` | Automated end-to-end acceptance test |
 
 Build and run from the Pico repository root:
@@ -44,7 +43,6 @@ Build and run from the Pico repository root:
 ```powershell
 cmake --build Build --config Debug --parallel
 .\Build\Projects\PicoSandbox\Debug\PicoSandboxDemo.exe
-.\Build\Projects\PicoSandbox\Debug\PicoSandboxEditor.exe
 .\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ctest --test-dir Build -C Debug --output-on-failure
 ```
@@ -147,17 +145,15 @@ Automated tests use `Saved/Tests/SandboxWorkflow.pobj` so they do not modify the
 
 ## Editor Workflow
 
-The editor exposes the same operations separately:
+Open the project through the shared Pico editor:
 
-1. `New Session` initializes Pico, registers project classes, and creates a default object.
-2. `Apply Changes` writes the demonstration values through `PProperty`.
-3. `Save` writes the object to the project `.pobj`.
-4. `Destroy` removes the in-memory object.
-5. `Load` reconstructs it from disk.
-6. `Verify` compares the loaded values and `PostLoad` observation.
-7. `Run Full Flow` executes all operations in order.
+```powershell
+.\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico
+```
 
-The Reflected Details panel is generic. Adding a supported reflected `int32`, `float`, `bool`, `FVector3`, `FRotator`, or `FTransform` property makes it appear automatically without editing the UI. Transform values expand into Location, Rotation, and Scale controls.
+The editor stores its map at `Content/Maps/EditorWorld.pworld`. Use `Ctrl+S` to save and `Ctrl+O`
+to transactionally replace the active World from that file. Project assets remain under
+`PicoSandbox/Content`; editor implementation remains under `Source/Editor/PicoEditor`.
 
 ## Add Another Project Class
 
@@ -170,7 +166,7 @@ Use this checklist:
 5. Add members with `PICO_ADD_PROPERTY` in `RegisterProperties`.
 6. Register the superclass before the new class in `SandboxModule.cpp`.
 7. Add the `.cpp` to `PicoSandboxGame` in `CMakeLists.txt`.
-8. Rebuild and inspect the class in `PicoSandboxEditor`.
+8. Rebuild and inspect the class through `PicoEditor`.
 
 For a class without local reflected properties, use:
 

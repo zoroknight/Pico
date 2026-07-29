@@ -36,26 +36,6 @@ target_link_libraries(PicoSandboxDemo
 
 set_target_properties(PicoSandboxDemo PROPERTIES FOLDER "Projects/PicoSandbox")
 
-if(TARGET PicoImGui)
-    add_executable(PicoSandboxEditor
-        Source/Editor/Main.cpp
-        Source/Editor/SandboxEditorApp.cpp
-        Source/Editor/SandboxEditorApp.h
-    )
-
-    target_link_libraries(PicoSandboxEditor
-        PRIVATE
-            PicoImGui
-            PicoReflectionTools
-            PicoSandboxGame
-    )
-
-    set_target_properties(PicoSandboxEditor PROPERTIES
-        FOLDER "Projects/PicoSandbox"
-        VS_DPI_AWARE "PerMonitor"
-    )
-endif()
-
 if(BUILD_TESTING)
     add_executable(PicoSandboxTests
         Tests/SandboxWorkflowTests.cpp
@@ -71,7 +51,7 @@ if(BUILD_TESTING)
     )
 endif()
 
-foreach(SandboxTarget PicoSandboxGame PicoSandboxDemo PicoSandboxEditor PicoSandboxTests)
+foreach(SandboxTarget PicoSandboxGame PicoSandboxDemo PicoSandboxTests)
     if(TARGET ${SandboxTarget})
         if(MSVC)
             target_compile_options(${SandboxTarget} PRIVATE /W4 /permissive-)

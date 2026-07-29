@@ -20,6 +20,7 @@ public:
 
     static PObject* ResolveObject(FObjectHandle Handle);
     static PObject* FindObject(PObject* Outer, FName Name);
+    static bool RenameObject(PObject* Object, FName NewName);
     static std::vector<PObject*> GetObjects();
     static std::size_t GetObjectCount();
 

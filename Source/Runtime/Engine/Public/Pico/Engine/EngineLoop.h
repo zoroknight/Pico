@@ -8,6 +8,7 @@
 namespace Pico
 {
 class PWorld;
+enum class EWorldSerializationError;
 
 class FEngineLoop
 {
@@ -19,6 +20,9 @@ public:
     int Init();
     void Tick();
     void Exit();
+    bool LoadWorld(
+        const std::filesystem::path& FilePath,
+        EWorldSerializationError* OutError = nullptr);
 
     bool ShouldExit() const;
     PWorld* GetWorld() const;
@@ -31,6 +35,7 @@ private:
     bool bPreInitialized = false;
     bool bObjectSystemInitialized = false;
     bool bInitialized = false;
+    bool bTickingWorld = false;
     bool bExited = false;
 };
 

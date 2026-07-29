@@ -178,7 +178,7 @@ int main(int Argc, char** Argv)
 
     if (ExitCode == 0)
     {
-        Pico::FPicoEditorApp App(EngineLoop.GetWorld(), &ViewportRenderer);
+        Pico::FPicoEditorApp App(&EngineLoop, &ViewportRenderer, Window);
         while (!glfwWindowShouldClose(Window) && !EngineLoop.ShouldExit())
         {
             glfwPollEvents();

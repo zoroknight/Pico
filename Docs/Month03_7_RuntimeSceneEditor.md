@@ -16,8 +16,8 @@ PicoEngine
 ```
 
 `PicoEditor` also uses `PicoImGui` for its native desktop interface. The existing `PicoInspector`
-remains a generic reflection/object tool, and `PicoSandboxEditor` remains the standalone
-reflection-authoring sample.
+remains a generic reflection/object tool. The earlier standalone `PicoSandboxEditor` teaching
+sample was later retired in favor of opening `PicoSandbox.pico` through this shared editor.
 
 ## Runtime Session
 
