@@ -10,6 +10,7 @@ namespace Pico
 {
 class FArchive;
 class FObjectRegistry;
+class FWorldAssetLoader;
 class PClass;
 class PObject;
 enum class EObjectSerializationError;
@@ -52,6 +53,7 @@ private:
     static FObjectPtr ConstructInstance(const FObjectConstructionParams& Params);
 
     friend class FObjectRegistry;
+    friend class FWorldAssetLoader;
     friend struct FObjectDeleter;
     friend PObject* LoadObject(FArchive& Archive, PObject* Outer, EObjectSerializationError* OutError);
 

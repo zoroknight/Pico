@@ -5,7 +5,7 @@
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectRegistry.h"
-#include "Pico/Object/Property.h"
+#include "Pico/Object/SerializedProperty.h"
 
 #include <fstream>
 #include <limits>
@@ -22,207 +22,12 @@ constexpr uint32 MinimumObjectFormatVersion = 1;
 constexpr uint32 MaxSerializedPropertyCount = 64 * 1024;
 constexpr std::size_t MaxObjectFileSize = 16 * 1024 * 1024;
 
-struct FSerializedProperty
-{
-    std::string Name;
-    EPropertyType Type = EPropertyType::Int32;
-    int32 Int32Value = 0;
-    float FloatValue = 0.0f;
-    bool BoolValue = false;
-    FVector3 Vector3Value;
-    FRotator RotatorValue;
-    FTransform TransformValue;
-};
-
 void ReportError(EObjectSerializationError* OutError, EObjectSerializationError Error)
 {
     if (OutError != nullptr)
     {
         *OutError = Error;
     }
-}
-
-void GatherProperties(const PClass* Class, std::vector<const PProperty*>& OutProperties)
-{
-    if (Class == nullptr)
-    {
-        return;
-    }
-
-    GatherProperties(Class->GetSuperClass(), OutProperties);
-    for (const PProperty& Property : Class->GetProperties())
-    {
-        OutProperties.push_back(&Property);
-    }
-}
-
-void SerializeVector3(FArchive& Archive, FVector3& Value)
-{
-    Archive.SerializeFloat(Value.X);
-    Archive.SerializeFloat(Value.Y);
-    Archive.SerializeFloat(Value.Z);
-}
-
-void SerializeRotator(FArchive& Archive, FRotator& Value)
-{
-    Archive.SerializeFloat(Value.Pitch);
-    Archive.SerializeFloat(Value.Yaw);
-    Archive.SerializeFloat(Value.Roll);
-}
-
-void SerializeTransform(FArchive& Archive, FTransform& Value)
-{
-    SerializeVector3(Archive, Value.Translation);
-    Archive.SerializeFloat(Value.Rotation.X);
-    Archive.SerializeFloat(Value.Rotation.Y);
-    Archive.SerializeFloat(Value.Rotation.Z);
-    Archive.SerializeFloat(Value.Rotation.W);
-    SerializeVector3(Archive, Value.Scale);
-    if (Archive.IsLoading() && !Archive.HasError())
-    {
-        Value.Rotation.Normalize();
-    }
-}
-
-bool ReadPropertyValue(FArchive& Archive, EPropertyType Type, FSerializedProperty& Property)
-{
-    switch (Type)
-    {
-    case EPropertyType::Int32:
-        Archive.SerializeInt32(Property.Int32Value);
-        break;
-    case EPropertyType::Float:
-        Archive.SerializeFloat(Property.FloatValue);
-        break;
-    case EPropertyType::Bool:
-        Archive.SerializeBool(Property.BoolValue);
-        break;
-    case EPropertyType::Vector3:
-        SerializeVector3(Archive, Property.Vector3Value);
-        break;
-    case EPropertyType::Rotator:
-        SerializeRotator(Archive, Property.RotatorValue);
-        break;
-    case EPropertyType::Transform:
-        SerializeTransform(Archive, Property.TransformValue);
-        break;
-    default:
-        return false;
-    }
-
-    return !Archive.HasError();
-}
-
-bool WritePropertyValue(FArchive& Archive, const PProperty& Property, const PObject* Object)
-{
-    switch (Property.GetType())
-    {
-    case EPropertyType::Int32:
-    {
-        int32 Value = 0;
-        if (!Property.GetValue(Object, Value))
-        {
-            return false;
-        }
-        Archive.SerializeInt32(Value);
-        break;
-    }
-    case EPropertyType::Float:
-    {
-        float Value = 0.0f;
-        if (!Property.GetValue(Object, Value))
-        {
-            return false;
-        }
-        Archive.SerializeFloat(Value);
-        break;
-    }
-    case EPropertyType::Bool:
-    {
-        bool Value = false;
-        if (!Property.GetValue(Object, Value))
-        {
-            return false;
-        }
-        Archive.SerializeBool(Value);
-        break;
-    }
-    case EPropertyType::Vector3:
-    {
-        FVector3 Value;
-        if (!Property.GetValue(Object, Value))
-        {
-            return false;
-        }
-        SerializeVector3(Archive, Value);
-        break;
-    }
-    case EPropertyType::Rotator:
-    {
-        FRotator Value;
-        if (!Property.GetValue(Object, Value))
-        {
-            return false;
-        }
-        SerializeRotator(Archive, Value);
-        break;
-    }
-    case EPropertyType::Transform:
-    {
-        FTransform Value;
-        if (!Property.GetValue(Object, Value))
-        {
-            return false;
-        }
-        SerializeTransform(Archive, Value);
-        break;
-    }
-    default:
-        return false;
-    }
-
-    return !Archive.HasError();
-}
-
-EObjectSerializationError ApplyPropertyValue(PObject* Object, const FSerializedProperty& SerializedProperty)
-{
-    const PProperty* Property = Object->GetClass()->FindProperty(FName(SerializedProperty.Name));
-    if (Property == nullptr)
-    {
-        return EObjectSerializationError::None;
-    }
-
-    if (Property->GetType() != SerializedProperty.Type)
-    {
-        return EObjectSerializationError::PropertyTypeMismatch;
-    }
-
-    bool bApplied = false;
-    switch (SerializedProperty.Type)
-    {
-    case EPropertyType::Int32:
-        bApplied = Property->SetValue(Object, SerializedProperty.Int32Value);
-        break;
-    case EPropertyType::Float:
-        bApplied = Property->SetValue(Object, SerializedProperty.FloatValue);
-        break;
-    case EPropertyType::Bool:
-        bApplied = Property->SetValue(Object, SerializedProperty.BoolValue);
-        break;
-    case EPropertyType::Vector3:
-        bApplied = Property->SetValue(Object, SerializedProperty.Vector3Value);
-        break;
-    case EPropertyType::Rotator:
-        bApplied = Property->SetValue(Object, SerializedProperty.RotatorValue);
-        break;
-    case EPropertyType::Transform:
-        bApplied = Property->SetValue(Object, SerializedProperty.TransformValue);
-        break;
-    default:
-        return EObjectSerializationError::InvalidArchive;
-    }
-
-    return bApplied ? EObjectSerializationError::None : EObjectSerializationError::PropertyAccessFailed;
 }
 
 bool ReplaceFile(const std::filesystem::path& TemporaryPath, const std::filesystem::path& FilePath)
@@ -316,8 +121,12 @@ bool SaveObject(FArchive& Archive, const PObject* Object, EObjectSerializationEr
     std::string ClassName = Object->GetClass()->GetName().ToString();
     std::string ObjectName = Object->GetName().ToString();
     uint32 Flags = static_cast<uint32>(Object->GetFlags());
-    std::vector<const PProperty*> Properties;
-    GatherProperties(Object->GetClass(), Properties);
+    std::vector<FSerializedPropertyRecord> Properties;
+    if (!CaptureSerializedProperties(Object, Properties))
+    {
+        ReportError(OutError, EObjectSerializationError::PropertyAccessFailed);
+        return false;
+    }
     if (Properties.size() > std::numeric_limits<uint32>::max())
     {
         ReportError(OutError, EObjectSerializationError::InvalidArchive);
@@ -332,13 +141,9 @@ bool SaveObject(FArchive& Archive, const PObject* Object, EObjectSerializationEr
     Archive.SerializeUInt32(Flags);
     Archive.SerializeUInt32(PropertyCount);
 
-    for (const PProperty* Property : Properties)
+    for (FSerializedPropertyRecord& Property : Properties)
     {
-        std::string PropertyName = Property->GetName().ToString();
-        uint8 PropertyType = static_cast<uint8>(Property->GetType());
-        Archive.SerializeString(PropertyName);
-        Archive.SerializeUInt8(PropertyType);
-        if (!WritePropertyValue(Archive, *Property, Object))
+        if (!SerializePropertyRecord(Archive, Property))
         {
             ReportError(
                 OutError,
@@ -395,19 +200,13 @@ PObject* LoadObject(FArchive& Archive, PObject* Outer, EObjectSerializationError
         return nullptr;
     }
 
-    std::vector<FSerializedProperty> Properties;
+    std::vector<FSerializedPropertyRecord> Properties;
     Properties.reserve(PropertyCount);
     for (uint32 Index = 0; Index < PropertyCount; ++Index)
     {
-        FSerializedProperty Property;
-        uint8 PropertyType = 0;
-        Archive.SerializeString(Property.Name);
-        Archive.SerializeUInt8(PropertyType);
-        Property.Type = static_cast<EPropertyType>(PropertyType);
-        if (Archive.HasError()
-            || Property.Name.empty()
-            || (Version == 1 && Property.Type > EPropertyType::Bool)
-            || !ReadPropertyValue(Archive, Property.Type, Property))
+        FSerializedPropertyRecord Property;
+        if (!SerializePropertyRecord(Archive, Property)
+            || (Version == 1 && Property.Type > EPropertyType::Bool))
         {
             ReportError(OutError, EObjectSerializationError::InvalidArchive);
             return nullptr;
@@ -438,11 +237,21 @@ PObject* LoadObject(FArchive& Archive, PObject* Outer, EObjectSerializationError
         return nullptr;
     }
 
-    for (const FSerializedProperty& Property : Properties)
+    for (const FSerializedPropertyRecord& Property : Properties)
     {
-        const EObjectSerializationError Error = ApplyPropertyValue(Object, Property);
-        if (Error != EObjectSerializationError::None)
+        const ESerializedPropertyApplyResult ApplyResult =
+            ApplySerializedProperty(Object, Property);
+        if (ApplyResult != ESerializedPropertyApplyResult::None)
         {
+            EObjectSerializationError Error = EObjectSerializationError::PropertyAccessFailed;
+            if (ApplyResult == ESerializedPropertyApplyResult::TypeMismatch)
+            {
+                Error = EObjectSerializationError::PropertyTypeMismatch;
+            }
+            else if (ApplyResult == ESerializedPropertyApplyResult::InvalidArgument)
+            {
+                Error = EObjectSerializationError::InvalidArgument;
+            }
             ReportError(OutError, Error);
             FObjectRegistry::DestroyObjectTree(Object);
             return nullptr;

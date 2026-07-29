@@ -59,6 +59,28 @@ void FArchive::SerializeUInt32(uint32& Value)
     }
 }
 
+void FArchive::SerializeUInt64(uint64& Value)
+{
+    uint8 Bytes[sizeof(uint64)] {};
+    if (IsSaving())
+    {
+        for (std::size_t Index = 0; Index < sizeof(uint64); ++Index)
+        {
+            Bytes[Index] = static_cast<uint8>((Value >> (Index * 8)) & 0xffu);
+        }
+    }
+
+    SerializeBytes(Bytes, sizeof(Bytes));
+    if (IsLoading() && !HasError())
+    {
+        Value = 0;
+        for (std::size_t Index = 0; Index < sizeof(uint64); ++Index)
+        {
+            Value |= static_cast<uint64>(Bytes[Index]) << (Index * 8);
+        }
+    }
+}
+
 void FArchive::SerializeInt32(int32& Value)
 {
     uint32 Bits = IsSaving() ? std::bit_cast<uint32>(Value) : 0;

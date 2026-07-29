@@ -13,6 +13,7 @@ namespace Pico
 class PLevel;
 class PSceneComponent;
 class PWorld;
+class FWorldAssetLoader;
 
 class PActor : public PObject
 {
@@ -75,6 +76,7 @@ private:
     void UnregisterAllComponents();
 
     friend class PWorld;
+    friend class FWorldAssetLoader;
 
     std::vector<FObjectHandle> ComponentHandles;
     FObjectHandle RootComponentHandle;

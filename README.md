@@ -20,6 +20,7 @@ The first three development months are complete. Pico can currently:
 - Register classes and properties with thin C++ reflection macros.
 - Inspect and edit supported properties through generic metadata-driven UI.
 - Serialize reflected objects to `.pobj` files and reconstruct them with `PostLoad`.
+- Capture validated World scene graphs, serialize deterministic `.pworld`-compatible data, and transactionally reconstruct runtime Worlds without persisting runtime handles.
 - Manage object memory centrally through `FObjectRegistry`, `Outer`, and generation-safe handles.
 - Create `PWorld`, `PLevel`, `PActor`, and component instances with explicit lifecycles.
 - Use a root scene component as the Actor transform provider.
@@ -283,7 +284,7 @@ See:
 
 The next stage focuses on turning the runtime editor into a persistent content workflow:
 
-- Scene graph serialization and `.pworld` assets
+- Transactional World reconstruction and `.pworld` file save/load
 - Asset registry and project content browser
 - Static-mesh assets and model importing
 - Selection, transform gizmos, undo and redo

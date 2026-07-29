@@ -27,6 +27,7 @@ public:
 
     void SerializeUInt8(uint8& Value);
     void SerializeUInt32(uint32& Value);
+    void SerializeUInt64(uint64& Value);
     void SerializeInt32(int32& Value);
     void SerializeFloat(float& Value);
     void SerializeBool(bool& Value);

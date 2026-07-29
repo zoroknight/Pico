@@ -9,12 +9,15 @@
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/World.h"
+#include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectRegistry.h"
 #include "Pico/Object/ObjectSystem.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 
 namespace
 {
@@ -54,6 +57,34 @@ protected:
 };
 
 PICO_DEFINE_CLASS_NO_PROPERTIES(PCountingActor)
+
+class PLoadTrackingActor : public Pico::PActor
+{
+    PICO_DECLARE_CLASS(PLoadTrackingActor, Pico::PActor)
+
+public:
+    inline static int TotalPostLoadCount = 0;
+    inline static bool bThrowPostLoad = false;
+    inline static bool bObservedRootComponent = false;
+
+protected:
+    explicit PLoadTrackingActor(const Pico::FObjectConstructionParams& Params)
+        : PActor(Params)
+    {
+    }
+
+    void PostLoad() override
+    {
+        ++TotalPostLoadCount;
+        bObservedRootComponent = GetRootComponent() != nullptr;
+        if (bThrowPostLoad)
+        {
+            throw std::runtime_error("PostLoad failure requested by test");
+        }
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PLoadTrackingActor)
 
 class PSelfDestroyActor : public Pico::PActor
 {
@@ -131,6 +162,7 @@ bool InitializeWorldTypes(FTestRunner& Runner)
     const bool bCountingSceneComponentRegistered = PCountingSceneComponent::RegisterClass();
     const bool bActorRegistered = Pico::PActor::RegisterClass();
     const bool bCountingActorRegistered = PCountingActor::RegisterClass();
+    const bool bLoadTrackingActorRegistered = PLoadTrackingActor::RegisterClass();
     const bool bSelfDestroyActorRegistered = PSelfDestroyActor::RegisterClass();
     const bool bLevelRegistered = Pico::PLevel::RegisterClass();
     const bool bWorldRegistered = Pico::PWorld::RegisterClass();
@@ -141,6 +173,7 @@ bool InitializeWorldTypes(FTestRunner& Runner)
     Runner.Expect(bCountingSceneComponentRegistered, "A test scene component registers with the class registry");
     Runner.Expect(bActorRegistered, "PActor registers with the class registry");
     Runner.Expect(bCountingActorRegistered, "A test actor registers with the class registry");
+    Runner.Expect(bLoadTrackingActorRegistered, "A PostLoad test actor registers with the class registry");
     Runner.Expect(bSelfDestroyActorRegistered, "A self-destroying test actor registers with the class registry");
     Runner.Expect(bLevelRegistered, "PLevel registers with the class registry");
     Runner.Expect(bWorldRegistered, "PWorld registers with the class registry");
@@ -151,6 +184,7 @@ bool InitializeWorldTypes(FTestRunner& Runner)
         && bCountingSceneComponentRegistered
         && bActorRegistered
         && bCountingActorRegistered
+        && bLoadTrackingActorRegistered
         && bSelfDestroyActorRegistered
         && bLevelRegistered
         && bWorldRegistered;
@@ -755,6 +789,491 @@ void TestPrimitiveComponentSceneData(FTestRunner& Runner)
     Pico::PObjectSystem::Shutdown();
 }
 
+const Pico::FSceneObjectRecord* FindSceneRecord(
+    const Pico::FWorldAssetData& Data,
+    std::string_view ObjectName)
+{
+    const auto Found = std::find_if(
+        Data.Objects.begin(),
+        Data.Objects.end(),
+        [ObjectName](const Pico::FSceneObjectRecord& Record)
+        {
+            return Record.ObjectName == ObjectName;
+        });
+    return Found != Data.Objects.end() ? &*Found : nullptr;
+}
+
+const Pico::FSerializedPropertyRecord* FindSceneProperty(
+    const Pico::FSceneObjectRecord* Record,
+    std::string_view PropertyName)
+{
+    if (Record == nullptr)
+    {
+        return nullptr;
+    }
+
+    const auto Found = std::find_if(
+        Record->Properties.begin(),
+        Record->Properties.end(),
+        [PropertyName](const Pico::FSerializedPropertyRecord& Property)
+        {
+            return Property.Name == PropertyName;
+        });
+    return Found != Record->Properties.end() ? &*Found : nullptr;
+}
+
+void TestWorldAssetDataSerialization(FTestRunner& Runner)
+{
+    if (!InitializeWorldTypes(Runner))
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Pico::PWorld* World = Pico::NewObject<Pico::PWorld>(nullptr, "AssetWorld");
+    Pico::FWorldAssetData RejectedData;
+    Pico::EWorldSerializationError Error =
+        Pico::EWorldSerializationError::None;
+    Runner.Expect(
+        World != nullptr
+            && !Pico::CaptureWorld(*World, RejectedData, &Error)
+            && Error == Pico::EWorldSerializationError::InvalidArgument,
+        "CaptureWorld rejects an uninitialized world");
+
+    const bool bWorldInitialized = World != nullptr && World->Initialize();
+    Pico::FWorldAssetData EmptyWorldData;
+    Runner.Expect(
+        bWorldInitialized
+            && Pico::CaptureWorld(*World, EmptyWorldData, &Error)
+            && EmptyWorldData.Objects.size() == 2
+            && EmptyWorldData.Relations.empty(),
+        "CaptureWorld records an empty initialized world and persistent level");
+
+    Pico::PLevel* GameplayLevel =
+        bWorldInitialized ? World->CreateLevel("Gameplay") : nullptr;
+    Runner.Expect(
+        bWorldInitialized
+            && GameplayLevel != nullptr
+            && World->SetCurrentLevel(GameplayLevel),
+        "World asset test creates persistent and current levels");
+    if (!bWorldInitialized || GameplayLevel == nullptr)
+    {
+        Pico::DestroyObjectTree(World);
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Pico::PActor* Actor = World->SpawnActor<PLoadTrackingActor>(
+        "SerializedActor",
+        GameplayLevel);
+    Pico::PSceneComponent* Root =
+        Actor != nullptr
+        ? Actor->CreateComponent<Pico::PSceneComponent>("Root")
+        : nullptr;
+    Pico::PCubeComponent* Cube =
+        Actor != nullptr
+        ? Actor->CreateComponent<Pico::PCubeComponent>("Cube")
+        : nullptr;
+    const bool bSceneReady =
+        Actor != nullptr
+        && Root != nullptr
+        && Cube != nullptr
+        && Actor->SetRootComponent(Root)
+        && Cube->AttachToComponent(
+            Root,
+            Pico::EAttachmentTransformRule::KeepRelative);
+    Runner.Expect(
+        bSceneReady,
+        "World asset test creates a root and attached cube component");
+    if (!bSceneReady)
+    {
+        Pico::DestroyObjectTree(World);
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Root->SetRelativeLocation(Pico::FVector3(100.0f, 20.0f, 5.0f));
+    Cube->SetRelativeLocation(Pico::FVector3(10.0f, 0.0f, 50.0f));
+    Cube->SetVisible(false);
+    Cube->SetColor(Pico::FVector3(0.8f, 0.2f, 0.1f));
+    Cube->SetExtent(Pico::FVector3(20.0f, 30.0f, 40.0f));
+
+    Pico::FWorldAssetData CapturedData;
+    Runner.Expect(
+        Pico::CaptureWorld(*World, CapturedData, &Error)
+            && Error == Pico::EWorldSerializationError::None,
+        "CaptureWorld produces validated scene asset data");
+    Runner.Expect(
+        CapturedData.Objects.size() == 6,
+        "World capture records the world, two levels, actor, and components");
+    Runner.Expect(
+        CapturedData.Relations.size() == 2,
+        "World capture records root and attachment relationships");
+
+    const Pico::FSceneObjectRecord* CubeRecord =
+        FindSceneRecord(CapturedData, "Cube");
+    const Pico::FSerializedPropertyRecord* VisibleProperty =
+        FindSceneProperty(CubeRecord, "bVisible");
+    const Pico::FSerializedPropertyRecord* ColorProperty =
+        FindSceneProperty(CubeRecord, "Color");
+    const Pico::FSerializedPropertyRecord* ExtentProperty =
+        FindSceneProperty(CubeRecord, "Extent");
+    const Pico::FSerializedPropertyRecord* TransformProperty =
+        FindSceneProperty(CubeRecord, "RelativeTransform");
+    Runner.Expect(
+        CubeRecord != nullptr
+            && CubeRecord->ClassName == "PCubeComponent"
+            && CubeRecord->OuterId.IsValid(),
+        "Captured cube record stores class, name, and outer identity");
+    Runner.Expect(
+        VisibleProperty != nullptr
+            && VisibleProperty->Type == Pico::EPropertyType::Bool
+            && !VisibleProperty->BoolValue,
+        "Captured scene data stores inherited visibility");
+    Runner.Expect(
+        ColorProperty != nullptr
+            && ColorProperty->Vector3Value.Equals(
+                Pico::FVector3(0.8f, 0.2f, 0.1f)),
+        "Captured scene data stores inherited color");
+    Runner.Expect(
+        ExtentProperty != nullptr
+            && ExtentProperty->Vector3Value.Equals(
+                Pico::FVector3(20.0f, 30.0f, 40.0f)),
+        "Captured scene data stores cube extent");
+    Runner.Expect(
+        TransformProperty != nullptr
+            && TransformProperty->TransformValue.Translation.Equals(
+                Pico::FVector3(10.0f, 0.0f, 50.0f)),
+        "Captured scene data stores component relative transform");
+
+    Pico::FMemoryWriter Writer;
+    Runner.Expect(
+        Pico::SerializeWorldAsset(Writer, CapturedData, &Error)
+            && Error == Pico::EWorldSerializationError::None,
+        "Validated world asset data serializes to a memory archive");
+    Pico::FMemoryWriter SecondWriter;
+    Runner.Expect(
+        Pico::SerializeWorldAsset(SecondWriter, CapturedData, &Error)
+            && Writer.GetData() == SecondWriter.GetData(),
+        "Serializing unchanged world data produces deterministic bytes");
+
+    Pico::FMemoryReader Reader(Writer.GetData());
+    Pico::FWorldAssetData LoadedData;
+    Runner.Expect(
+        Pico::DeserializeWorldAsset(Reader, LoadedData, &Error)
+            && Error == Pico::EWorldSerializationError::None
+            && Reader.GetRemainingSize() == 0,
+        "World asset bytes deserialize completely into pure data");
+    Runner.Expect(
+        LoadedData.Objects.size() == CapturedData.Objects.size()
+            && LoadedData.Relations.size() == CapturedData.Relations.size()
+            && LoadedData.WorldId == CapturedData.WorldId
+            && LoadedData.PersistentLevelId == CapturedData.PersistentLevelId
+            && LoadedData.CurrentLevelId == CapturedData.CurrentLevelId,
+        "World asset round trip preserves graph identity and counts");
+
+    const Pico::FSerializedPropertyRecord* LoadedExtent = FindSceneProperty(
+        FindSceneRecord(LoadedData, "Cube"),
+        "Extent");
+    Runner.Expect(
+        LoadedExtent != nullptr
+            && LoadedExtent->Vector3Value.Equals(
+                Pico::FVector3(20.0f, 30.0f, 40.0f)),
+        "World asset round trip preserves reflected property values");
+
+    Pico::FWorldAssetData InvalidData = CapturedData;
+    InvalidData.Objects[1].Id = InvalidData.Objects[0].Id;
+    Runner.Expect(
+        !Pico::ValidateWorldAssetData(InvalidData, &Error)
+            && Error == Pico::EWorldSerializationError::InvalidObjectGraph,
+        "World validation rejects duplicate scene object IDs");
+
+    InvalidData = CapturedData;
+    InvalidData.Objects.back().OuterId = Pico::FSceneObjectId { 999999 };
+    Runner.Expect(
+        !Pico::ValidateWorldAssetData(InvalidData, &Error)
+            && Error == Pico::EWorldSerializationError::InvalidObjectGraph,
+        "World validation rejects a missing outer");
+
+    InvalidData = CapturedData;
+    InvalidData.Objects[0].OuterId = InvalidData.Objects[1].Id;
+    InvalidData.Objects[1].OuterId = InvalidData.Objects[0].Id;
+    Runner.Expect(
+        !Pico::ValidateWorldAssetData(InvalidData, &Error)
+            && Error == Pico::EWorldSerializationError::InvalidObjectGraph,
+        "World validation rejects an outer cycle");
+
+    const Pico::FSceneObjectRecord* RootRecord =
+        FindSceneRecord(CapturedData, "Root");
+    Runner.Expect(
+        RootRecord != nullptr && CubeRecord != nullptr,
+        "World asset test finds scene components for malformed graph checks");
+    if (RootRecord != nullptr && CubeRecord != nullptr)
+    {
+        InvalidData = CapturedData;
+        InvalidData.Relations.push_back(
+            Pico::FSceneRelationRecord {
+                RootRecord->Id,
+                {},
+                CubeRecord->Id });
+        Runner.Expect(
+            !Pico::ValidateWorldAssetData(InvalidData, &Error)
+                && Error == Pico::EWorldSerializationError::InvalidObjectGraph,
+            "World validation rejects an attachment cycle");
+    }
+
+    InvalidData = CapturedData;
+    InvalidData.Objects.back().ClassName = "PMissingSceneClass";
+    Runner.Expect(
+        !Pico::ValidateWorldAssetData(InvalidData, &Error)
+            && Error == Pico::EWorldSerializationError::ClassNotFound,
+        "World validation rejects missing reflected classes");
+
+    InvalidData = CapturedData;
+    InvalidData.Objects.back().Properties.push_back(
+        InvalidData.Objects.back().Properties.front());
+    Runner.Expect(
+        !Pico::ValidateWorldAssetData(InvalidData, &Error)
+            && Error == Pico::EWorldSerializationError::InvalidObjectGraph,
+        "World validation rejects duplicate property records");
+
+    InvalidData = CapturedData;
+    InvalidData.Objects.back().Properties.resize(4097);
+    Runner.Expect(
+        !Pico::ValidateWorldAssetData(InvalidData, &Error)
+            && Error == Pico::EWorldSerializationError::PropertyLimitExceeded,
+        "World validation enforces the per-object property limit");
+
+    InvalidData = CapturedData;
+    InvalidData.Objects.back().ObjectName.assign(1025, 'A');
+    Runner.Expect(
+        !Pico::ValidateWorldAssetData(InvalidData, &Error)
+            && Error == Pico::EWorldSerializationError::InvalidObjectGraph,
+        "World validation enforces the scene name limit");
+
+    std::vector<Pico::uint8> InvalidMagic = Writer.GetData();
+    InvalidMagic[0] ^= 0xffu;
+    Pico::FMemoryReader InvalidMagicReader(InvalidMagic);
+    Pico::FWorldAssetData UnchangedData;
+    UnchangedData.WorldId = Pico::FSceneObjectId { 777 };
+    Runner.Expect(
+        !Pico::DeserializeWorldAsset(
+            InvalidMagicReader,
+            UnchangedData,
+            &Error)
+            && Error == Pico::EWorldSerializationError::InvalidArchive
+            && UnchangedData.WorldId.Value == 777,
+        "Invalid world magic fails without changing the output data");
+
+    std::vector<Pico::uint8> UnsupportedVersion = Writer.GetData();
+    UnsupportedVersion[4] = 2;
+    UnsupportedVersion[5] = 0;
+    UnsupportedVersion[6] = 0;
+    UnsupportedVersion[7] = 0;
+    Pico::FMemoryReader UnsupportedVersionReader(UnsupportedVersion);
+    Runner.Expect(
+        !Pico::DeserializeWorldAsset(
+            UnsupportedVersionReader,
+            UnchangedData,
+            &Error)
+            && Error == Pico::EWorldSerializationError::UnsupportedVersion,
+        "World deserialization rejects unsupported format versions");
+
+    std::vector<Pico::uint8> Truncated = Writer.GetData();
+    Truncated.resize(Truncated.size() - 3);
+    Pico::FMemoryReader TruncatedReader(Truncated);
+    Runner.Expect(
+        !Pico::DeserializeWorldAsset(
+            TruncatedReader,
+            UnchangedData,
+            &Error)
+            && Error == Pico::EWorldSerializationError::InvalidArchive,
+        "World deserialization rejects truncated archives");
+
+    std::vector<Pico::uint8> TooManyObjects = Writer.GetData();
+    TooManyObjects[8] = 0xffu;
+    TooManyObjects[9] = 0xffu;
+    TooManyObjects[10] = 0xffu;
+    TooManyObjects[11] = 0xffu;
+    Pico::FMemoryReader ObjectLimitReader(TooManyObjects);
+    Runner.Expect(
+        !Pico::DeserializeWorldAsset(
+            ObjectLimitReader,
+            UnchangedData,
+            &Error)
+            && Error == Pico::EWorldSerializationError::ObjectLimitExceeded,
+        "World deserialization enforces the scene object limit");
+
+    std::vector<Pico::uint8> TooManyRelations = Writer.GetData();
+    TooManyRelations[12] = 0xffu;
+    TooManyRelations[13] = 0xffu;
+    TooManyRelations[14] = 0xffu;
+    TooManyRelations[15] = 0xffu;
+    Pico::FMemoryReader RelationLimitReader(TooManyRelations);
+    Runner.Expect(
+        !Pico::DeserializeWorldAsset(
+            RelationLimitReader,
+            UnchangedData,
+            &Error)
+            && Error == Pico::EWorldSerializationError::RelationLimitExceeded,
+        "World deserialization enforces the scene relation limit");
+
+    Pico::FMemoryWriter UInt64Writer;
+    Pico::uint64 SavedUInt64 = 0x0123456789abcdefull;
+    UInt64Writer.SerializeUInt64(SavedUInt64);
+    Pico::FMemoryReader UInt64Reader(UInt64Writer.GetData());
+    Pico::uint64 LoadedUInt64 = 0;
+    UInt64Reader.SerializeUInt64(LoadedUInt64);
+    Runner.Expect(
+        LoadedUInt64 == SavedUInt64
+            && UInt64Reader.GetRemainingSize() == 0,
+        "Archive serializes 64-bit scene IDs in a stable byte order");
+
+    const Pico::FObjectHandle OriginalWorldHandle = World->GetHandle();
+    const Pico::FObjectHandle OriginalActorHandle = Actor->GetHandle();
+    const Pico::FObjectHandle OriginalCubeHandle = Cube->GetHandle();
+    Pico::DestroyObjectTree(World);
+    Runner.Expect(
+        Pico::FObjectRegistry::GetObjectCount() == 0,
+        "World asset capture leaves no registered objects");
+
+    PLoadTrackingActor::TotalPostLoadCount = 0;
+    PLoadTrackingActor::bThrowPostLoad = false;
+    PLoadTrackingActor::bObservedRootComponent = false;
+    Pico::PWorld* ReconstructedWorld =
+        Pico::CreateWorldFromAssetData(LoadedData, &Error);
+    Runner.Expect(
+        ReconstructedWorld != nullptr
+            && Error == Pico::EWorldSerializationError::None
+            && ReconstructedWorld->GetState() == Pico::EWorldState::Initialized,
+        "Validated world asset data reconstructs an initialized runtime world");
+    if (ReconstructedWorld != nullptr)
+    {
+        Pico::PLevel* ReconstructedGameplay = ReconstructedWorld->GetCurrentLevel();
+        Pico::PObject* ReconstructedActorObject = ReconstructedGameplay != nullptr
+            ? Pico::FindObject(ReconstructedGameplay, Pico::FName("SerializedActor"))
+            : nullptr;
+        Pico::PActor* ReconstructedActor =
+            ReconstructedActorObject != nullptr
+                && ReconstructedActorObject->IsA(Pico::PActor::StaticClass())
+            ? static_cast<Pico::PActor*>(ReconstructedActorObject)
+            : nullptr;
+        Pico::PObject* ReconstructedRootObject = ReconstructedActor != nullptr
+            ? Pico::FindObject(ReconstructedActor, Pico::FName("Root"))
+            : nullptr;
+        Pico::PObject* ReconstructedCubeObject = ReconstructedActor != nullptr
+            ? Pico::FindObject(ReconstructedActor, Pico::FName("Cube"))
+            : nullptr;
+        Pico::PSceneComponent* ReconstructedRoot =
+            ReconstructedRootObject != nullptr
+                && ReconstructedRootObject->IsA(Pico::PSceneComponent::StaticClass())
+            ? static_cast<Pico::PSceneComponent*>(ReconstructedRootObject)
+            : nullptr;
+        Pico::PCubeComponent* ReconstructedCube =
+            ReconstructedCubeObject != nullptr
+                && ReconstructedCubeObject->IsA(Pico::PCubeComponent::StaticClass())
+            ? static_cast<Pico::PCubeComponent*>(ReconstructedCubeObject)
+            : nullptr;
+
+        Runner.Expect(
+            ReconstructedWorld->GetPersistentLevel() != nullptr
+                && ReconstructedGameplay != nullptr
+                && ReconstructedGameplay->GetName() == Pico::FName("Gameplay"),
+            "World reconstruction restores persistent and current level selection");
+        Runner.Expect(
+            ReconstructedActor != nullptr
+                && ReconstructedRoot != nullptr
+                && ReconstructedCube != nullptr
+                && ReconstructedActor->GetRootComponent() == ReconstructedRoot
+                && ReconstructedCube->GetAttachParent() == ReconstructedRoot,
+            "World reconstruction restores actor roots and component attachments");
+        Runner.Expect(
+            ReconstructedCube != nullptr
+                && !ReconstructedCube->IsVisible()
+                && ReconstructedCube->GetColor().Equals(
+                    Pico::FVector3(0.8f, 0.2f, 0.1f))
+                && ReconstructedCube->GetExtent().Equals(
+                    Pico::FVector3(20.0f, 30.0f, 40.0f))
+                && ReconstructedCube->GetWorldTransform().Translation.Equals(
+                    Pico::FVector3(110.0f, 20.0f, 55.0f)),
+            "World reconstruction reapplies reflected scene properties");
+        Runner.Expect(
+            ReconstructedWorld->GetHandle() != OriginalWorldHandle
+                && ReconstructedActor != nullptr
+                && ReconstructedActor->GetHandle() != OriginalActorHandle
+                && ReconstructedCube != nullptr
+                && ReconstructedCube->GetHandle() != OriginalCubeHandle,
+            "Reconstructed objects receive fresh runtime handles");
+        Runner.Expect(
+            PLoadTrackingActor::TotalPostLoadCount == 1
+                && PLoadTrackingActor::bObservedRootComponent,
+            "World reconstruction calls PostLoad once after relationships are restored");
+
+        Pico::FWorldAssetData RecapturedData;
+        Pico::FMemoryWriter RecapturedWriter;
+        Runner.Expect(
+            Pico::CaptureWorld(*ReconstructedWorld, RecapturedData, &Error)
+                && Pico::SerializeWorldAsset(
+                    RecapturedWriter,
+                    RecapturedData,
+                    &Error)
+                && RecapturedWriter.GetData() == Writer.GetData(),
+            "Reconstructed world captures back to identical deterministic bytes");
+
+        const std::size_t LoadedObjectCount =
+            Pico::FObjectRegistry::GetObjectCount();
+        Runner.Expect(
+            Pico::CreateWorldFromAssetData(LoadedData, &Error) == nullptr
+                && Error == Pico::EWorldSerializationError::ObjectCreationFailed
+                && Pico::FObjectRegistry::GetObjectCount() == LoadedObjectCount
+                && Pico::ResolveObject(ReconstructedWorld->GetHandle())
+                    == ReconstructedWorld,
+            "A conflicting top-level World name leaves the live World untouched");
+    }
+
+    Pico::DestroyObjectTree(ReconstructedWorld);
+    Runner.Expect(
+        Pico::FObjectRegistry::GetObjectCount() == 0,
+        "Destroying a reconstructed world clears every loaded object");
+
+    Pico::FWorldAssetData TypeMismatchData = LoadedData;
+    Pico::FSceneObjectRecord* TypeMismatchCube = nullptr;
+    for (Pico::FSceneObjectRecord& Record : TypeMismatchData.Objects)
+    {
+        if (Record.ObjectName == "Cube")
+        {
+            TypeMismatchCube = &Record;
+            break;
+        }
+    }
+    if (TypeMismatchCube != nullptr)
+    {
+        for (Pico::FSerializedPropertyRecord& Property : TypeMismatchCube->Properties)
+        {
+            if (Property.Name == "Extent")
+            {
+                Property.Type = Pico::EPropertyType::Int32;
+                break;
+            }
+        }
+    }
+    Runner.Expect(
+        Pico::CreateWorldFromAssetData(TypeMismatchData, &Error) == nullptr
+            && Error == Pico::EWorldSerializationError::PropertyTypeMismatch
+            && Pico::FObjectRegistry::GetObjectCount() == 0,
+        "A property type mismatch rolls back every partially loaded object");
+
+    PLoadTrackingActor::bThrowPostLoad = true;
+    Runner.Expect(
+        Pico::CreateWorldFromAssetData(LoadedData, &Error) == nullptr
+            && Error == Pico::EWorldSerializationError::PostLoadFailed
+            && Pico::FObjectRegistry::GetObjectCount() == 0,
+        "A PostLoad exception rolls back every partially loaded object");
+    PLoadTrackingActor::bThrowPostLoad = false;
+
+    Pico::PObjectSystem::Shutdown();
+}
+
 void TestEngineLoopWorldLifecycle(FTestRunner& Runner)
 {
     char Program[] = "PicoEngineTests";
@@ -842,6 +1361,7 @@ int main()
     TestActorComponentsAndSceneTransform(Runner);
     TestSceneComponentAttachmentHierarchy(Runner);
     TestPrimitiveComponentSceneData(Runner);
+    TestWorldAssetDataSerialization(Runner);
     TestEngineLoopWorldLifecycle(Runner);
     TestTwoFrameLifecycle(Runner);
     TestZeroFrameLifecycle(Runner);

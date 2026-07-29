@@ -59,6 +59,7 @@ add_library(PicoObject STATIC
     Source/Runtime/Object/Private/ObjectSerialization.cpp
     Source/Runtime/Object/Private/ObjectSystem.cpp
     Source/Runtime/Object/Private/Property.cpp
+    Source/Runtime/Object/Private/SerializedProperty.cpp
 )
 
 target_include_directories(PicoObject
@@ -120,6 +121,7 @@ add_library(PicoEngine STATIC
     Source/Runtime/Engine/Private/PrimitiveComponent.cpp
     Source/Runtime/Engine/Private/SceneComponent.cpp
     Source/Runtime/Engine/Private/World.cpp
+    Source/Runtime/Engine/Private/WorldSerialization.cpp
 )
 
 target_include_directories(PicoEngine

@@ -10,6 +10,7 @@
 namespace Pico
 {
 class PActor;
+class FWorldAssetLoader;
 class PLevel;
 
 enum class EWorldState
@@ -78,5 +79,7 @@ private:
     double TimeSeconds = 0.0;
     bool bHasBegunPlay = false;
     bool bTickingActors = false;
+
+    friend class FWorldAssetLoader;
 };
 }

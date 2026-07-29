@@ -18,6 +18,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 使用薄反射宏注册类和属性。
 - 通过通用的元数据驱动界面查看和修改属性。
 - 将反射对象序列化为 `.pobj`，并通过 `PostLoad` 完成加载后的处理。
+- 采集经过校验的 World 场景图，生成确定性的 `.pworld` 兼容数据，并在不持久化运行时 Handle 的前提下事务式重建运行时 World。
 - 使用 `FObjectRegistry`、Outer 和带代数的 Handle 集中管理对象。
 - 创建具有明确生命周期的 `PWorld`、`PLevel`、`PActor` 和 Component。
 - 使用 RootComponent 为 Actor 提供 Transform。
@@ -275,7 +276,7 @@ Pico 目前还没有类似 UHT 的头文件工具。未来的 PicoHeaderTool 可
 
 下一阶段的重点是将运行时编辑器发展为可以持久化的内容工作流：
 
-- 场景图序列化和 `.pworld` 资产
+- 事务式 World 重建与 `.pworld` 文件保存和加载
 - AssetRegistry和项目Content Browser
 - StaticMesh资产和模型导入
 - 选择、Transform Gizmo、撤销和重做

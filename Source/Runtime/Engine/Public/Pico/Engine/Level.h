@@ -7,6 +7,7 @@
 namespace Pico
 {
 class PActor;
+class FWorldAssetLoader;
 class PWorld;
 
 class PLevel final : public PObject
@@ -27,6 +28,7 @@ private:
     bool OwnsActor(const PActor* Actor) const;
 
     friend class PWorld;
+    friend class FWorldAssetLoader;
 
     std::vector<FObjectHandle> ActorHandles;
 };
