@@ -5,8 +5,10 @@
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/World.h"
+#include "Pico/Object/Class.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectRegistry.h"
+#include "Pico/Object/Property.h"
 #include "TestRunner.h"
 
 #include <string>
@@ -207,6 +209,104 @@ void TestEditorTransactions(FTestRunner& Runner)
             && !Transactions.CanRedo()
             && Transactions.GetUndoCount() <= 2,
         "A new commit clears redo and respects the history capacity");
+
+    Transactions.Clear();
+    World = EngineLoop.GetWorld();
+    Actor = static_cast<Pico::PActor*>(
+        FindWorldObjectByPath(World, RenamedPath));
+    const Pico::FTransform OriginalActorTransform =
+        Actor != nullptr
+        ? Actor->GetActorTransform()
+        : Pico::FTransform::Identity;
+    const Pico::FTransform IntermediateActorTransform(
+        Pico::FVector3(25.0f, 50.0f, 75.0f));
+    const Pico::FTransform FinalActorTransform(
+        Pico::FRotator(10.0f, 20.0f, 30.0f),
+        Pico::FVector3(100.0f, 200.0f, 300.0f),
+        Pico::FVector3(1.5f, 2.0f, 2.5f));
+    Runner.Expect(
+        Actor != nullptr
+            && Transactions.Begin(
+                "Edit Actor transform",
+                *World,
+                RenamedPath,
+                &Error)
+            && Actor->SetActorTransform(IntermediateActorTransform)
+            && Actor->SetActorTransform(FinalActorTransform)
+            && Transactions.Commit(*World, RenamedPath, &Error)
+            && Transactions.GetUndoCount() == 1,
+        "A continuous Transform edit commits one transaction");
+    Runner.Expect(
+        Transactions.Undo(Restore, &Description, &Error),
+        "Transform Undo restores the before snapshot");
+    Actor = static_cast<Pico::PActor*>(
+        FindWorldObjectByPath(EngineLoop.GetWorld(), RenamedPath));
+    Runner.Expect(
+        Actor != nullptr
+            && Actor->GetActorTransform().Equals(OriginalActorTransform),
+        "Transform Undo restores the original Actor transform");
+    Runner.Expect(
+        Transactions.Redo(Restore, &Description, &Error),
+        "Transform Redo restores the after snapshot");
+    Actor = static_cast<Pico::PActor*>(
+        FindWorldObjectByPath(EngineLoop.GetWorld(), RenamedPath));
+    Runner.Expect(
+        Actor != nullptr
+            && Actor->GetActorTransform().Equals(FinalActorTransform),
+        "Transform Redo restores the final value, not an intermediate drag value");
+
+    World = EngineLoop.GetWorld();
+    Pico::PSceneComponent* ReflectedRoot =
+        Actor != nullptr ? Actor->GetRootComponent() : nullptr;
+    const Pico::PProperty* RelativeTransformProperty =
+        ReflectedRoot != nullptr
+        ? ReflectedRoot->GetClass()->FindProperty(Pico::FName("RelativeTransform"))
+        : nullptr;
+    Pico::FTransform OriginalRelativeTransform;
+    const Pico::FTransform EditedRelativeTransform(
+        Pico::FRotator(5.0f, 15.0f, 25.0f),
+        Pico::FVector3(-10.0f, 20.0f, 40.0f),
+        Pico::FVector3(0.75f, 1.25f, 1.5f));
+    Runner.Expect(
+        RelativeTransformProperty != nullptr
+            && RelativeTransformProperty->GetValue(
+                ReflectedRoot,
+                OriginalRelativeTransform)
+            && Transactions.Begin(
+                "Edit RelativeTransform",
+                *World,
+                ReflectedRoot->GetPathName(),
+                &Error)
+            && RelativeTransformProperty->SetValue(
+                ReflectedRoot,
+                EditedRelativeTransform)
+            && Transactions.Commit(
+                *World,
+                ReflectedRoot->GetPathName(),
+                &Error),
+        "A reflected Transform property commits through the shared transaction backend");
+    Runner.Expect(
+        Transactions.Undo(Restore, &Description, &Error),
+        "Reflected property Undo restores the before snapshot");
+    Actor = static_cast<Pico::PActor*>(
+        FindWorldObjectByPath(EngineLoop.GetWorld(), RenamedPath));
+    ReflectedRoot = Actor != nullptr ? Actor->GetRootComponent() : nullptr;
+    Runner.Expect(
+        ReflectedRoot != nullptr
+            && ReflectedRoot->GetRelativeTransform().Equals(
+                OriginalRelativeTransform),
+        "Reflected property Undo restores the serialized property value");
+    Runner.Expect(
+        Transactions.Redo(Restore, &Description, &Error),
+        "Reflected property Redo restores the after snapshot");
+    Actor = static_cast<Pico::PActor*>(
+        FindWorldObjectByPath(EngineLoop.GetWorld(), RenamedPath));
+    ReflectedRoot = Actor != nullptr ? Actor->GetRootComponent() : nullptr;
+    Runner.Expect(
+        ReflectedRoot != nullptr
+            && ReflectedRoot->GetRelativeTransform().Equals(
+                EditedRelativeTransform),
+        "Reflected property Redo restores the edited property value");
 
     Transactions.Clear();
     Runner.Expect(

@@ -72,10 +72,10 @@ The public transaction boundary is deliberately separate from the snapshot backe
 replace full snapshots with object-local records without changing editor actions, shortcuts, or
 future AI command entry points.
 
-## Deferred Work
+## Follow-up Work
 
-Transform and reflected-property widgets are not transactional yet. They require an interaction
-boundary so a continuous drag becomes one history entry:
+Transform and reflected-property widgets require an interaction boundary so a continuous drag
+becomes one history entry:
 
 ```text
 item activated              -> Begin
@@ -83,5 +83,7 @@ continuous value changes    -> mutate current object
 item deactivated after edit -> Commit
 ```
 
-Clipboard operations, multi-selection, and persisted transaction history also remain outside this
-milestone.
+That boundary is implemented by
+[`Month04_10_EditorPropertyTransactions.md`](Month04_10_EditorPropertyTransactions.md).
+Clipboard operations, multi-selection, and persisted transaction history remain outside these
+milestones.

@@ -80,6 +80,18 @@ private:
     void SaveWorld();
     void OpenWorld();
     bool GetDefaultWorldPath(std::filesystem::path& OutPath) const;
+    bool PrepareInteractiveEdit(
+        const std::string& EditKey,
+        std::string Description,
+        bool bActivated,
+        bool bChanged);
+    void CompleteInteractiveEdit(
+        const std::string& EditKey,
+        bool bChanged,
+        bool bActive,
+        bool bChangeApplied);
+    void FinishInteractiveEdit();
+    void CancelInteractiveEdit();
     bool BeginEditorTransaction(std::string Description);
     bool CommitEditorTransaction();
     void CancelEditorTransaction();
@@ -110,7 +122,10 @@ private:
     FObjectHandle PendingDestroyHandle;
     FObjectHandle RenameObjectHandle;
     std::array<char, 128> RenameBuffer {};
+    std::string InteractiveEditKey;
     std::string Status;
+    bool bInteractiveEditChanged = false;
+    bool bInteractiveEditVisited = false;
     bool bStatusIsError = false;
     bool bResetDockLayout = false;
     bool bOpenRenamePopup = false;

@@ -29,6 +29,8 @@ The first three development months are complete. Pico can currently:
 - Open a `.pico` project with separate engine and project roots.
 - Display runtime objects in an Outliner and Details panel.
 - Render `PCubeComponent` instances in an interactive OpenGL 3.3 editor viewport.
+- Undo and redo scene hierarchy, Actor Transform, and reflected-property edits through editor
+  transactions.
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
@@ -172,8 +174,8 @@ GameWorld
   and delete commands.
 - Left-click rendered geometry to select its owning Actor. Selecting an Actor outlines all of its
   visible CubeComponents; selecting a component in the Outliner outlines only that component.
-- Use `Ctrl+Z` to undo and `Ctrl+Y` or `Ctrl+Shift+Z` to redo discrete create, delete, rename, add
-  component, and root-component operations.
+- Use `Ctrl+Z` to undo and `Ctrl+Y` or `Ctrl+Shift+Z` to redo scene hierarchy, Actor Transform, and
+  reflected-property edits. One continuous value drag creates one transaction.
 - Edit Actor transforms in the Details panel to move, rotate, and scale the cube.
 - Edit `CubeComponent` reflected properties to change relative transform, extent, color, or visibility.
 - Hold the right mouse button to capture the cursor and move the mouse to look around.
@@ -289,6 +291,8 @@ See:
 - [Month 3 Editor Viewport](Docs/Month03_10_Editor3DViewport.md)
 - [Month 3 Editor Docking](Docs/Month03_11_EditorDocking.md)
 - [Month 3 GLAD Integration](Docs/Month03_12_GLADIntegration.md)
+- [Month 4 Editor Transactions](Docs/Month04_9_EditorTransactions.md)
+- [Month 4 Property Transactions](Docs/Month04_10_EditorPropertyTransactions.md)
 
 ## Roadmap
 
@@ -297,7 +301,7 @@ The next stage focuses on turning the runtime editor into a persistent content w
 - Transactional World reconstruction and `.pworld` file save/load
 - Asset registry and project content browser
 - Static-mesh assets and model importing
-- Transform gizmos and transactional Transform/property editing
+- Transform gizmos
 - Render-scene caching, materials, textures and PBR
 
 Later stages will explore:

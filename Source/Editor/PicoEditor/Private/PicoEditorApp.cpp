@@ -34,34 +34,86 @@ namespace Pico
 {
 namespace
 {
-bool DrawVector3Control(const char* Label, FVector3& Value, float Speed = 0.1f)
+struct FEditorControlState
+{
+    bool bChanged = false;
+    bool bActivated = false;
+    bool bActive = false;
+
+    void IncludeLastItem(bool bItemChanged)
+    {
+        bChanged |= bItemChanged;
+        bActivated |= ImGui::IsItemActivated();
+        bActive |= ImGui::IsItemActive();
+    }
+
+    void Include(const FEditorControlState& Other)
+    {
+        bChanged |= Other.bChanged;
+        bActivated |= Other.bActivated;
+        bActive |= Other.bActive;
+    }
+};
+
+FEditorControlState DrawFloat3Control(
+    const char* Label,
+    float* Components,
+    float Speed)
+{
+    FEditorControlState State;
+    const float Spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+    const float ComponentWidth =
+        std::max((ImGui::GetContentRegionAvail().x - Spacing * 2.0f) / 3.0f, 1.0f);
+
+    ImGui::PushID(Label);
+    for (int ComponentIndex = 0; ComponentIndex < 3; ++ComponentIndex)
+    {
+        if (ComponentIndex > 0)
+        {
+            ImGui::SameLine(0.0f, Spacing);
+        }
+        ImGui::PushID(ComponentIndex);
+        ImGui::SetNextItemWidth(ComponentWidth);
+        const bool bChanged =
+            ImGui::DragFloat("##Value", &Components[ComponentIndex], Speed);
+        State.IncludeLastItem(bChanged);
+        ImGui::PopID();
+    }
+    ImGui::PopID();
+    return State;
+}
+
+FEditorControlState DrawVector3Control(
+    const char* Label,
+    FVector3& Value,
+    float Speed = 0.1f)
 {
     float Components[] = { Value.X, Value.Y, Value.Z };
-    if (!ImGui::DragFloat3(Label, Components, Speed))
+    const FEditorControlState State =
+        DrawFloat3Control(Label, Components, Speed);
+    if (State.bChanged)
     {
-        return false;
+        Value = FVector3(Components[0], Components[1], Components[2]);
     }
-
-    Value = FVector3(Components[0], Components[1], Components[2]);
-    return true;
+    return State;
 }
 
-bool DrawRotatorControl(const char* Label, FRotator& Value)
+FEditorControlState DrawRotatorControl(const char* Label, FRotator& Value)
 {
     float Components[] = { Value.Pitch, Value.Yaw, Value.Roll };
-    if (!ImGui::DragFloat3(Label, Components, 0.25f))
+    const FEditorControlState State =
+        DrawFloat3Control(Label, Components, 0.25f);
+    if (State.bChanged)
     {
-        return false;
+        Value = FRotator(Components[0], Components[1], Components[2]).GetNormalized();
     }
-
-    Value = FRotator(Components[0], Components[1], Components[2]).GetNormalized();
-    return true;
+    return State;
 }
 
-bool DrawTransformControl(const char* Id, FTransform& Value)
+FEditorControlState DrawTransformControl(const char* Id, FTransform& Value)
 {
     FRotator Rotation = Value.Rotation.Rotator();
-    bool bChanged = false;
+    FEditorControlState State;
 
     ImGui::PushID(Id);
     if (ImGui::BeginTable(
@@ -78,7 +130,7 @@ bool DrawTransformControl(const char* Id, FTransform& Value)
         ImGui::TextUnformatted("Location");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-1.0f);
-        bChanged |= DrawVector3Control("##Location", Value.Translation);
+        State.Include(DrawVector3Control("##Location", Value.Translation));
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
@@ -86,7 +138,7 @@ bool DrawTransformControl(const char* Id, FTransform& Value)
         ImGui::TextUnformatted("Rotation");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-1.0f);
-        bChanged |= DrawRotatorControl("##Rotation", Rotation);
+        State.Include(DrawRotatorControl("##Rotation", Rotation));
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
@@ -94,16 +146,16 @@ bool DrawTransformControl(const char* Id, FTransform& Value)
         ImGui::TextUnformatted("Scale");
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-1.0f);
-        bChanged |= DrawVector3Control("##Scale", Value.Scale, 0.01f);
+        State.Include(DrawVector3Control("##Scale", Value.Scale, 0.01f));
         ImGui::EndTable();
     }
     ImGui::PopID();
 
-    if (bChanged)
+    if (State.bChanged)
     {
         Value.Rotation = Rotation.Quaternion();
     }
-    return bChanged;
+    return State;
 }
 
 void PushObjectId(const PObject* Object)
@@ -253,10 +305,12 @@ FPicoEditorApp::~FPicoEditorApp()
 
 void FPicoEditorApp::Draw()
 {
+    bInteractiveEditVisited = false;
     HandleShortcuts();
 
     if (SelectedObjectHandle.IsValid() && GetSelectedObject() == nullptr)
     {
+        CancelInteractiveEdit();
         SelectedObjectHandle = {};
     }
 
@@ -333,6 +387,11 @@ void FPicoEditorApp::Draw()
         DrawDetails();
     }
     ImGui::End();
+
+    if (!InteractiveEditKey.empty() && !bInteractiveEditVisited)
+    {
+        FinishInteractiveEdit();
+    }
 
     ProcessDeferredActions();
 }
@@ -1105,13 +1164,28 @@ void FPicoEditorApp::DrawActorDetails(PActor* Actor)
     else
     {
         FTransform Transform = Actor->GetActorTransform();
-        if (DrawTransformControl("ActorTransform", Transform))
+        const FEditorControlState State =
+            DrawTransformControl("ActorTransform", Transform);
+        const std::string EditKey = Actor->GetPathName() + ".ActorTransform";
+        const bool bCanApply = PrepareInteractiveEdit(
+            EditKey,
+            "Edit " + Actor->GetPathName() + " transform",
+            State.bActivated,
+            State.bChanged);
+        bool bChangeApplied = !State.bChanged;
+        if (State.bChanged && bCanApply)
         {
-            if (Actor->SetActorTransform(Transform))
+            bChangeApplied = Actor->SetActorTransform(Transform);
+            if (bChangeApplied)
             {
                 SetStatus("Changed " + Actor->GetPathName() + " transform");
             }
         }
+        CompleteInteractiveEdit(
+            EditKey,
+            State.bChanged,
+            State.bActive,
+            bChangeApplied);
         ImGui::TextDisabled("Provided by %s", RootComponent->GetName().ToString().c_str());
     }
 
@@ -1186,65 +1260,134 @@ void FPicoEditorApp::DrawPropertyEditor(PObject* Object, const PProperty* Proper
     ImGui::PushID(Property);
 
     bool bChanged = false;
+    bool bChangeApplied = true;
+    const std::string EditKey =
+        Object->GetPathName() + "." + PropertyName;
+    const std::string Description =
+        "Edit " + Object->GetPathName() + "." + PropertyName;
+    const auto ApplyValue =
+        [this, &EditKey, &Description, &bChanged, &bChangeApplied](
+            const FEditorControlState& State,
+            auto&& Setter)
+        {
+            bChanged = State.bChanged;
+            const bool bCanApply = PrepareInteractiveEdit(
+                EditKey,
+                Description,
+                State.bActivated,
+                State.bChanged);
+            if (State.bChanged)
+            {
+                bChangeApplied = bCanApply && Setter();
+            }
+            CompleteInteractiveEdit(
+                EditKey,
+                State.bChanged,
+                State.bActive,
+                bChangeApplied);
+        };
+
     switch (Property->GetType())
     {
     case EPropertyType::Int32:
     {
         int32 Value = 0;
-        bChanged =
-            Property->GetValue(Object, Value)
-            && ImGui::InputInt("##Value", &Value)
-            && Property->SetValue(Object, Value);
+        if (Property->GetValue(Object, Value))
+        {
+            FEditorControlState State;
+            State.IncludeLastItem(ImGui::InputInt("##Value", &Value));
+            ApplyValue(
+                State,
+                [Object, Property, Value]()
+                {
+                    return Property->SetValue(Object, Value);
+                });
+        }
         break;
     }
     case EPropertyType::Float:
     {
         float Value = 0.0f;
-        bChanged =
-            Property->GetValue(Object, Value)
-            && ImGui::DragFloat("##Value", &Value, 0.1f)
-            && Property->SetValue(Object, Value);
+        if (Property->GetValue(Object, Value))
+        {
+            FEditorControlState State;
+            State.IncludeLastItem(ImGui::DragFloat("##Value", &Value, 0.1f));
+            ApplyValue(
+                State,
+                [Object, Property, Value]()
+                {
+                    return Property->SetValue(Object, Value);
+                });
+        }
         break;
     }
     case EPropertyType::Bool:
     {
         bool Value = false;
-        bChanged =
-            Property->GetValue(Object, Value)
-            && ImGui::Checkbox("##Value", &Value)
-            && Property->SetValue(Object, Value);
+        if (Property->GetValue(Object, Value))
+        {
+            FEditorControlState State;
+            State.IncludeLastItem(ImGui::Checkbox("##Value", &Value));
+            ApplyValue(
+                State,
+                [Object, Property, Value]()
+                {
+                    return Property->SetValue(Object, Value);
+                });
+        }
         break;
     }
     case EPropertyType::Vector3:
     {
         FVector3 Value;
-        bChanged =
-            Property->GetValue(Object, Value)
-            && DrawVector3Control("##Value", Value)
-            && Property->SetValue(Object, Value);
+        if (Property->GetValue(Object, Value))
+        {
+            const FEditorControlState State =
+                DrawVector3Control("##Value", Value);
+            ApplyValue(
+                State,
+                [Object, Property, Value]()
+                {
+                    return Property->SetValue(Object, Value);
+                });
+        }
         break;
     }
     case EPropertyType::Rotator:
     {
         FRotator Value;
-        bChanged =
-            Property->GetValue(Object, Value)
-            && DrawRotatorControl("##Value", Value)
-            && Property->SetValue(Object, Value);
+        if (Property->GetValue(Object, Value))
+        {
+            const FEditorControlState State =
+                DrawRotatorControl("##Value", Value);
+            ApplyValue(
+                State,
+                [Object, Property, Value]()
+                {
+                    return Property->SetValue(Object, Value);
+                });
+        }
         break;
     }
     case EPropertyType::Transform:
     {
         FTransform Value;
-        bChanged =
-            Property->GetValue(Object, Value)
-            && DrawTransformControl("PropertyTransform", Value)
-            && Property->SetValue(Object, Value);
+        if (Property->GetValue(Object, Value))
+        {
+            const FEditorControlState State =
+                DrawTransformControl("PropertyTransform", Value);
+            ApplyValue(
+                State,
+                [Object, Property, Value]()
+                {
+                    return Property->SetValue(Object, Value);
+                });
+        }
         break;
     }
     }
 
-    if (bChanged)
+    if (bChanged && bChangeApplied)
     {
         SetStatus("Changed " + Object->GetPathName() + "." + PropertyName);
     }
@@ -1749,6 +1892,8 @@ bool FPicoEditorApp::CommitRename()
 
 void FPicoEditorApp::SaveWorld()
 {
+    FinishInteractiveEdit();
+
     PWorld* World = GetWorld();
     std::filesystem::path WorldPath;
     if (World == nullptr || !GetDefaultWorldPath(WorldPath))
@@ -1779,6 +1924,8 @@ void FPicoEditorApp::SaveWorld()
 
 void FPicoEditorApp::OpenWorld()
 {
+    FinishInteractiveEdit();
+
     std::filesystem::path WorldPath;
     if (EngineLoop == nullptr || !GetDefaultWorldPath(WorldPath))
     {
@@ -1808,8 +1955,106 @@ bool FPicoEditorApp::GetDefaultWorldPath(std::filesystem::path& OutPath) const
         OutPath);
 }
 
+bool FPicoEditorApp::PrepareInteractiveEdit(
+    const std::string& EditKey,
+    std::string Description,
+    bool bActivated,
+    bool bChanged)
+{
+    if (InteractiveEditKey == EditKey)
+    {
+        bInteractiveEditVisited = true;
+        return true;
+    }
+    if (!bActivated && !bChanged)
+    {
+        return false;
+    }
+    if (!InteractiveEditKey.empty())
+    {
+        FinishInteractiveEdit();
+    }
+    if (!BeginEditorTransaction(std::move(Description)))
+    {
+        return false;
+    }
+
+    InteractiveEditKey = EditKey;
+    bInteractiveEditChanged = false;
+    bInteractiveEditVisited = true;
+    return true;
+}
+
+void FPicoEditorApp::CompleteInteractiveEdit(
+    const std::string& EditKey,
+    bool bChanged,
+    bool bActive,
+    bool bChangeApplied)
+{
+    if (InteractiveEditKey != EditKey)
+    {
+        return;
+    }
+
+    bInteractiveEditVisited = true;
+    if (bChanged)
+    {
+        if (!bChangeApplied)
+        {
+            CancelInteractiveEdit();
+            SetStatus("Could not apply editor property change", true);
+            return;
+        }
+        bInteractiveEditChanged = true;
+    }
+
+    if (!bActive)
+    {
+        FinishInteractiveEdit();
+    }
+}
+
+void FPicoEditorApp::FinishInteractiveEdit()
+{
+    if (InteractiveEditKey.empty())
+    {
+        return;
+    }
+
+    if (bInteractiveEditChanged)
+    {
+        CommitEditorTransaction();
+    }
+    else
+    {
+        CancelEditorTransaction();
+    }
+
+    InteractiveEditKey.clear();
+    bInteractiveEditChanged = false;
+    bInteractiveEditVisited = false;
+}
+
+void FPicoEditorApp::CancelInteractiveEdit()
+{
+    if (InteractiveEditKey.empty())
+    {
+        return;
+    }
+
+    CancelEditorTransaction();
+    InteractiveEditKey.clear();
+    bInteractiveEditChanged = false;
+    bInteractiveEditVisited = false;
+}
+
 bool FPicoEditorApp::BeginEditorTransaction(std::string Description)
 {
+    if (!InteractiveEditKey.empty())
+    {
+        FinishInteractiveEdit();
+    }
+
     PWorld* World = GetWorld();
     if (World == nullptr)
     {
@@ -1860,6 +2105,8 @@ void FPicoEditorApp::CancelEditorTransaction()
 
 void FPicoEditorApp::Undo()
 {
+    FinishInteractiveEdit();
+
     if (!TransactionManager.CanUndo())
     {
         SetStatus("Nothing to undo");
@@ -1887,6 +2134,8 @@ void FPicoEditorApp::Undo()
 
 void FPicoEditorApp::Redo()
 {
+    FinishInteractiveEdit();
+
     if (!TransactionManager.CanRedo())
     {
         SetStatus("Nothing to redo");
@@ -1944,7 +2193,13 @@ std::string FPicoEditorApp::GetSelectedObjectPath() const
 
 void FPicoEditorApp::Select(PObject* Object)
 {
-    SelectedObjectHandle = Object != nullptr ? Object->GetHandle() : FObjectHandle {};
+    const FObjectHandle NewHandle =
+        Object != nullptr ? Object->GetHandle() : FObjectHandle {};
+    if (NewHandle != SelectedObjectHandle)
+    {
+        FinishInteractiveEdit();
+        SelectedObjectHandle = NewHandle;
+    }
 }
 
 void FPicoEditorApp::SetStatus(std::string Message, bool bIsError)
