@@ -38,6 +38,9 @@ public:
         std::string SelectedObjectPath,
         EWorldSerializationError* OutError = nullptr);
     void Cancel();
+    bool Rollback(
+        const FRestoreSnapshot& RestoreSnapshot,
+        EWorldSerializationError* OutError = nullptr);
     void Clear();
 
     bool Undo(

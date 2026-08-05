@@ -85,6 +85,26 @@ void FEditorTransactionManager::Cancel()
     PendingTransaction.reset();
 }
 
+bool FEditorTransactionManager::Rollback(
+    const FRestoreSnapshot& RestoreSnapshot,
+    EWorldSerializationError* OutError)
+{
+    ReportError(OutError, EWorldSerializationError::None);
+    if (!PendingTransaction.has_value() || !RestoreSnapshot)
+    {
+        ReportError(OutError, EWorldSerializationError::InvalidArgument);
+        return false;
+    }
+
+    if (!RestoreSnapshot(PendingTransaction->Before, OutError))
+    {
+        return false;
+    }
+
+    PendingTransaction.reset();
+    return true;
+}
+
 void FEditorTransactionManager::Clear()
 {
     PendingTransaction.reset();

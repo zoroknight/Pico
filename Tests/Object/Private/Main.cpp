@@ -388,6 +388,12 @@ private:
 std::vector<std::string> GBeginDestroyOrder;
 bool GHandlesResolvedDuringBeginDestroy = true;
 bool GChildCreationRejectedDuringBeginDestroy = false;
+bool GSelfDestroyRejected = false;
+bool GSiblingDestroySucceeded = false;
+bool GRootCreationSucceeded = false;
+bool GShutdownCreationRejected = false;
+Pico::FObjectHandle GSiblingHandle;
+Pico::FObjectHandle GCreatedRootHandle;
 
 class PBeginDestroyObject final : public Pico::PObject
 {
@@ -418,6 +424,28 @@ protected:
         {
             GChildCreationRejectedDuringBeginDestroy =
                 Pico::NewObject<PTestObject>(this, "CreatedDuringBeginDestroy") == nullptr;
+        }
+        else if (GetName() == Pico::FName("SelfDestroy"))
+        {
+            GSelfDestroyRejected = !Pico::DestroyObject(this);
+        }
+        else if (GetName() == Pico::FName("SiblingDestroyer"))
+        {
+            GSiblingDestroySucceeded =
+                Pico::DestroyObject(Pico::ResolveObject(GSiblingHandle));
+        }
+        else if (GetName() == Pico::FName("RootCreator"))
+        {
+            PTestObject* Created =
+                Pico::NewObject<PTestObject>(nullptr, "CreatedDuringDestroy");
+            GRootCreationSucceeded = Created != nullptr;
+            GCreatedRootHandle =
+                Created != nullptr ? Created->GetHandle() : Pico::FObjectHandle {};
+        }
+        else if (GetName() == Pico::FName("ShutdownCreator"))
+        {
+            GShutdownCreationRejected =
+                Pico::NewObject<PTestObject>(nullptr, "CreatedDuringShutdown") == nullptr;
         }
     }
 
@@ -718,6 +746,54 @@ void TestBeginDestroy(FTestRunner& Runner)
         "An object being destroyed cannot receive new child objects");
     Runner.Expect(Pico::ResolveObject(RootHandle) == nullptr && Pico::ResolveObject(ChildHandle) == nullptr,
         "Object tree handles are invalid after destruction");
+
+    GSelfDestroyRejected = false;
+    PBeginDestroyObject* SelfDestroy =
+        Pico::NewObject<PBeginDestroyObject>(nullptr, "SelfDestroy");
+    Runner.Expect(
+        SelfDestroy != nullptr
+            && Pico::DestroyObject(SelfDestroy)
+            && GSelfDestroyRejected,
+        "DestroyObject rejects recursive self-destruction from BeginDestroy");
+
+    GSiblingDestroySucceeded = false;
+    PBeginDestroyObject* SiblingRoot =
+        Pico::NewObject<PBeginDestroyObject>(nullptr, "SiblingRoot");
+    PBeginDestroyObject* SiblingDestroyer = SiblingRoot != nullptr
+        ? Pico::NewObject<PBeginDestroyObject>(SiblingRoot, "SiblingDestroyer")
+        : nullptr;
+    PBeginDestroyObject* SiblingVictim = SiblingRoot != nullptr
+        ? Pico::NewObject<PBeginDestroyObject>(SiblingRoot, "SiblingVictim")
+        : nullptr;
+    GSiblingHandle = SiblingVictim != nullptr
+        ? SiblingVictim->GetHandle()
+        : Pico::FObjectHandle {};
+    Runner.Expect(
+        SiblingDestroyer != nullptr && SiblingVictim != nullptr,
+        "Sibling-destruction test tree is created");
+    Pico::DestroyObjectTree(SiblingRoot);
+    Runner.Expect(
+        GSiblingDestroySucceeded
+            && Pico::ResolveObject(GSiblingHandle) == nullptr,
+        "Handle-based tree traversal tolerates a sibling destroyed from BeginDestroy");
+
+    GRootCreationSucceeded = false;
+    PBeginDestroyObject* RootCreator =
+        Pico::NewObject<PBeginDestroyObject>(nullptr, "RootCreator");
+    Runner.Expect(
+        RootCreator != nullptr
+            && Pico::DestroyObject(RootCreator)
+            && GRootCreationSucceeded
+            && Pico::ResolveObject(GCreatedRootHandle) != nullptr,
+        "DestroyObject reacquires its slot after BeginDestroy grows the registry");
+    Pico::DestroyObject(Pico::ResolveObject(GCreatedRootHandle));
+
+    GShutdownCreationRejected = false;
+    Pico::NewObject<PBeginDestroyObject>(nullptr, "ShutdownCreator");
+    Pico::FObjectRegistry::DestroyAllObjects();
+    Runner.Expect(
+        GShutdownCreationRejected && Pico::FObjectRegistry::GetObjectCount() == 0,
+        "Registry shutdown rejects objects created from BeginDestroy callbacks");
 }
 
 void TestReflectionObservation(FTestRunner& Runner)

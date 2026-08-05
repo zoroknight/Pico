@@ -1,5 +1,7 @@
 #include "Pico/Object/SerializationFile.h"
 
+#include "Pico/Core/Log.h"
+
 namespace Pico::Detail
 {
 bool ReplaceSerializedFile(
@@ -22,6 +24,16 @@ bool ReplaceSerializedFile(
     std::filesystem::path BackupPath = FilePath;
     BackupPath += ".bak";
     std::filesystem::remove(BackupPath, ErrorCode);
+    if (ErrorCode)
+    {
+        PICO_LOG(
+            LogObject,
+            Error,
+            "Could not remove stale serialization backup '{}': {}",
+            BackupPath.string(),
+            ErrorCode.message());
+        return false;
+    }
 
     ErrorCode.clear();
     std::filesystem::rename(FilePath, BackupPath, ErrorCode);
@@ -36,6 +48,17 @@ bool ReplaceSerializedFile(
     {
         std::error_code RestoreError;
         std::filesystem::rename(BackupPath, FilePath, RestoreError);
+        if (RestoreError)
+        {
+            PICO_LOG(
+                LogObject,
+                Error,
+                "Could not restore '{}' from backup '{}': {}. Temporary file remains at '{}'",
+                FilePath.string(),
+                BackupPath.string(),
+                RestoreError.message(),
+                TemporaryPath.string());
+        }
         return false;
     }
 

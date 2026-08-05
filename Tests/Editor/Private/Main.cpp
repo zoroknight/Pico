@@ -1,4 +1,6 @@
+#include "Pico/Editor/EditorCommandService.h"
 #include "Pico/Editor/EditorSceneClipboard.h"
+#include "Pico/Editor/EditorSelection.h"
 #include "Pico/Editor/EditorTransactionManager.h"
 
 #include "Pico/Engine/Actor.h"
@@ -316,6 +318,77 @@ void TestEditorSceneClipboard(
     Transactions.Clear();
 }
 
+void TestEditorCommandService(FTestRunner& Runner)
+{
+    char Program[] = "PicoEditorCommandTests";
+    char MaxFPS[] = "-maxfps=0";
+    char* Arguments[] = { Program, MaxFPS };
+
+    Pico::FEngineLoop EngineLoop;
+    Runner.Expect(
+        EngineLoop.PreInit(2, Arguments) == 0 && EngineLoop.Init() == 0,
+        "Editor command service initializes without an ImGui context");
+
+    Pico::FEditorSelection Selection;
+    Selection.Set(EngineLoop.GetWorld());
+    Pico::FEditorTransactionManager Transactions;
+    Pico::FEditorSceneClipboard Clipboard;
+    Pico::FEditorCommandService Commands(
+        &EngineLoop,
+        &Selection,
+        &Transactions,
+        &Clipboard);
+
+    const Pico::FEditorCommandResult SpawnResult = Commands.SpawnActor(true);
+    Pico::PObject* SpawnedObject = Selection.Resolve();
+    const std::string SpawnedPath =
+        SpawnedObject != nullptr ? SpawnedObject->GetPathName() : std::string {};
+    Runner.Expect(
+        SpawnResult.bSucceeded
+            && SpawnedObject != nullptr
+            && SpawnedObject->IsA(Pico::PActor::StaticClass())
+            && Transactions.CanUndo(),
+        "Command service spawns a transactional Cube Actor and selects it");
+
+    Runner.Expect(
+        Commands.AddComponent(false).bSucceeded
+            && Selection.Resolve() != nullptr
+            && Selection.Resolve()->IsA(Pico::PSceneComponent::StaticClass()),
+        "Command service adds and selects a SceneComponent");
+
+    Selection.Restore(EngineLoop.GetWorld(), SpawnedPath);
+    const Pico::FObjectHandle ActorHandle = Selection.GetHandle();
+    Runner.Expect(
+        Commands.RenameObject(ActorHandle, "CommandActor").bSucceeded
+            && Selection.GetObjectPath().ends_with(".CommandActor"),
+        "Command service validates and transactionally renames an Actor");
+    Runner.Expect(
+        !Commands.RenameObject(Selection.GetHandle(), "Invalid.Name").bSucceeded,
+        "Command service rejects names that would make object paths ambiguous");
+
+    Runner.Expect(
+        Commands.CopySelectedObject().bSucceeded
+            && Commands.PasteClipboard().bSucceeded
+            && Selection.GetObjectPath().find("CommandActor_Copy") != std::string::npos,
+        "Command service copies and pastes through the shared editor clipboard");
+    const std::string PastedPath = Selection.GetObjectPath();
+    Runner.Expect(
+        Commands.DeleteSelectedObject().bSucceeded
+            && Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), PastedPath) == nullptr,
+        "Command service deletes the selected pasted Actor");
+    Runner.Expect(
+        Commands.Undo().bSucceeded
+            && Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), PastedPath) != nullptr
+            && Commands.Redo().bSucceeded
+            && Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), PastedPath) == nullptr,
+        "Command service Undo and Redo restore complete World snapshots");
+
+    EngineLoop.Exit();
+    Runner.Expect(
+        Pico::FObjectRegistry::GetObjectCount() == 0,
+        "Editor command service releases all reconstructed objects");
+}
+
 void TestEditorTransactions(FTestRunner& Runner)
 {
     char Program[] = "PicoEditorTests";
@@ -583,6 +656,7 @@ void TestEditorTransactions(FTestRunner& Runner)
 int main()
 {
     FTestRunner Runner;
+    TestEditorCommandService(Runner);
     TestEditorTransactions(Runner);
     return Runner.Finish();
 }

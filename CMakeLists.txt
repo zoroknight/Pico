@@ -235,7 +235,9 @@ if(PICO_BUILD_INSPECTOR)
     endif()
 
     add_library(PicoEditorCore STATIC
+        Source/Editor/PicoEditor/Private/EditorCommandService.cpp
         Source/Editor/PicoEditor/Private/EditorSceneClipboard.cpp
+        Source/Editor/PicoEditor/Private/EditorSelection.cpp
         Source/Editor/PicoEditor/Private/EditorTransactionManager.cpp
     )
 
@@ -273,6 +275,12 @@ if(PICO_BUILD_INSPECTOR)
     set_target_properties(PicoInspector PROPERTIES FOLDER "Programs")
 
     add_executable(PicoEditor
+        Source/Editor/PicoEditor/Private/EditorViewportPanel.cpp
+        Source/Editor/PicoEditor/Private/EditorViewportPanel.h
+        Source/Editor/PicoEditor/Private/DetailsPanel.cpp
+        Source/Editor/PicoEditor/Private/DetailsPanel.h
+        Source/Editor/PicoEditor/Private/SceneOutlinerPanel.cpp
+        Source/Editor/PicoEditor/Private/SceneOutlinerPanel.h
         Source/Editor/PicoEditor/Private/Main.cpp
         Source/Editor/PicoEditor/Private/PicoEditorApp.cpp
         Source/Editor/PicoEditor/Private/PicoEditorApp.h

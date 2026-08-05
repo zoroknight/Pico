@@ -86,7 +86,7 @@ bool PObject::IsA(const PClass* Class) const
 
 bool PObject::IsBeginningDestroy() const
 {
-    return bBeginningDestroy;
+    return LifecycleState != ELifecycleState::Alive;
 }
 
 void PObject::PostInitProperties()

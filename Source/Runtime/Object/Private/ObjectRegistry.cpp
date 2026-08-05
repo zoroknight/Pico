@@ -1,7 +1,9 @@
 #include "Pico/Object/ObjectRegistry.h"
 
 #include "Pico/Core/Log.h"
+#include "Pico/Core/ScopeExit.h"
 #include "Pico/Object/Object.h"
+#include "Pico/Object/ObjectName.h"
 
 #include <exception>
 #include <vector>
@@ -28,6 +30,12 @@ std::vector<uint32>& GetFreeObjectIndices()
     return FreeIndices;
 }
 
+bool& IsDestroyingAllObjects()
+{
+    static bool bDestroyingAllObjects = false;
+    return bDestroyingAllObjects;
+}
+
 uint32 AllocateObjectSerial()
 {
     static uint32 NextSerial = 1;
@@ -51,34 +59,41 @@ bool HasChildObjects(const PObject* Parent)
     return false;
 }
 
-void DestroyObjectTreeInternal(PObject* Root)
+void DestroyObjectTreeInternal(FObjectHandle RootHandle)
 {
-    std::vector<PObject*> Children;
+    PObject* Root = FObjectRegistry::ResolveObject(RootHandle);
+    if (Root == nullptr)
+    {
+        return;
+    }
+
+    std::vector<FObjectHandle> Children;
     for (const FObjectSlot& Slot : GetObjectSlots())
     {
         if (Slot.Object != nullptr && Slot.Object->GetOuter() == Root)
         {
-            Children.push_back(Slot.Object.get());
+            Children.push_back(Slot.Object->GetHandle());
         }
     }
 
-    for (PObject* Child : Children)
+    for (FObjectHandle ChildHandle : Children)
     {
-        DestroyObjectTreeInternal(Child);
+        DestroyObjectTreeInternal(ChildHandle);
     }
 
-    FObjectRegistry::DestroyObject(Root);
+    FObjectRegistry::DestroyObject(FObjectRegistry::ResolveObject(RootHandle));
 }
 }
 
 void FObjectRegistry::CallBeginDestroy(PObject* Object)
 {
-    if (Object == nullptr || Object->bBeginningDestroy)
+    if (Object == nullptr
+        || Object->LifecycleState != PObject::ELifecycleState::Alive)
     {
         return;
     }
 
-    Object->bBeginningDestroy = true;
+    Object->LifecycleState = PObject::ELifecycleState::BeginningDestroy;
     try
     {
         Object->BeginDestroy();
@@ -100,7 +115,15 @@ void FObjectRegistry::CallBeginDestroy(PObject* Object)
 
 PObject* FObjectRegistry::AddObject(FObjectPtr Object)
 {
-    if (Object == nullptr || Object->GetClass() == nullptr || Object->GetName().IsNone())
+    if (IsDestroyingAllObjects())
+    {
+        PICO_LOG(LogObject, Error, "Cannot register objects while the registry is shutting down");
+        return nullptr;
+    }
+
+    if (Object == nullptr
+        || Object->GetClass() == nullptr
+        || !IsValidObjectName(Object->GetName()))
     {
         PICO_LOG(LogObject, Error, "Cannot register a null, untyped, or unnamed object");
         return nullptr;
@@ -158,7 +181,7 @@ PObject* FObjectRegistry::AddObject(FObjectPtr Object)
     }
     catch (...)
     {
-        DestroyObjectTreeInternal(RawObject);
+        DestroyObjectTreeInternal(RawObject->GetHandle());
         throw;
     }
 
@@ -167,7 +190,8 @@ PObject* FObjectRegistry::AddObject(FObjectPtr Object)
 
 bool FObjectRegistry::DestroyObject(PObject* Object)
 {
-    if (Object == nullptr)
+    if (Object == nullptr
+        || Object->LifecycleState != PObject::ELifecycleState::Alive)
     {
         return false;
     }
@@ -184,9 +208,18 @@ bool FObjectRegistry::DestroyObject(PObject* Object)
         return false;
     }
 
+    CallBeginDestroy(Object);
+
+    Object = ResolveObject(Handle);
+    if (Object == nullptr
+        || Object->LifecycleState != PObject::ELifecycleState::BeginningDestroy)
+    {
+        return false;
+    }
+
     std::vector<FObjectSlot>& Slots = GetObjectSlots();
     FObjectSlot& Slot = Slots[Handle.Index];
-    CallBeginDestroy(Object);
+    Object->LifecycleState = PObject::ELifecycleState::Destroying;
     FObjectPtr OwnedObject = std::move(Slot.Object);
     OwnedObject->HandlePrivate = {};
     Slot.Serial = 0;
@@ -199,22 +232,41 @@ void FObjectRegistry::DestroyObjectTree(PObject* Root)
 {
     if (Root != nullptr && ResolveObject(Root->GetHandle()) == Root)
     {
-        DestroyObjectTreeInternal(Root);
+        DestroyObjectTreeInternal(Root->GetHandle());
     }
 }
 
 void FObjectRegistry::DestroyAllObjects()
 {
+    if (IsDestroyingAllObjects())
+    {
+        return;
+    }
+
+    IsDestroyingAllObjects() = true;
+    const auto ResetDestroyingAll = MakeScopeExit(
+        []()
+        {
+            IsDestroyingAllObjects() = false;
+        });
+
     while (GetObjectCount() > 0)
     {
         bool bDestroyedObject = false;
-        for (FObjectSlot& Slot : GetObjectSlots())
+        std::vector<FObjectHandle> LeafHandles;
+        for (const FObjectSlot& Slot : GetObjectSlots())
         {
             PObject* Object = Slot.Object.get();
             if (Object != nullptr && !HasChildObjects(Object))
             {
-                DestroyObject(Object);
-                bDestroyedObject = true;
+                LeafHandles.push_back(Object->GetHandle());
+            }
+        }
+        for (FObjectHandle Handle : LeafHandles)
+        {
+            if (PObject* Object = ResolveObject(Handle))
+            {
+                bDestroyedObject = DestroyObject(Object) || bDestroyedObject;
             }
         }
 
@@ -226,9 +278,13 @@ void FObjectRegistry::DestroyAllObjects()
                 if (Slot.Object != nullptr)
                 {
                     CallBeginDestroy(Slot.Object.get());
-                    Slot.Object->HandlePrivate = {};
-                    Slot.Object.reset();
-                    Slot.Serial = 0;
+                    if (Slot.Object != nullptr)
+                    {
+                        Slot.Object->LifecycleState = PObject::ELifecycleState::Destroying;
+                        Slot.Object->HandlePrivate = {};
+                        Slot.Object.reset();
+                        Slot.Serial = 0;
+                    }
                 }
             }
         }
@@ -265,7 +321,7 @@ PObject* FObjectRegistry::FindObject(PObject* Outer, FName Name)
 bool FObjectRegistry::RenameObject(PObject* Object, FName NewName)
 {
     if (Object == nullptr
-        || NewName.IsNone()
+        || !IsValidObjectName(NewName)
         || ResolveObject(Object->GetHandle()) != Object
         || Object->IsBeginningDestroy())
     {

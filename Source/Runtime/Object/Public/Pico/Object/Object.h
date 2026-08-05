@@ -50,6 +50,13 @@ protected:
     virtual void BeginDestroy();
 
 private:
+    enum class ELifecycleState
+    {
+        Alive,
+        BeginningDestroy,
+        Destroying
+    };
+
     static FObjectPtr ConstructInstance(const FObjectConstructionParams& Params);
 
     friend class FObjectRegistry;
@@ -62,6 +69,6 @@ private:
     FName NamePrivate;
     EObjectFlags FlagsPrivate = EObjectFlags::None;
     FObjectHandle HandlePrivate;
-    bool bBeginningDestroy = false;
+    ELifecycleState LifecycleState = ELifecycleState::Alive;
 };
 }

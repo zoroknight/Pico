@@ -12,7 +12,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -119,98 +121,138 @@ int main(int Argc, char** Argv)
     glfwMakeContextCurrent(Window);
     glfwSwapInterval(1);
 
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& IO = ImGui::GetIO();
-    IO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
-    IO.IniFilename = nullptr;
-    const float UiScale = FindUiScale(Argc, Argv);
-    const std::filesystem::path InterfaceFont = "C:/Windows/Fonts/segoeui.ttf";
-    if (std::filesystem::is_regular_file(InterfaceFont))
-    {
-        IO.FontDefault = IO.Fonts->AddFontFromFileTTF(
-            InterfaceFont.string().c_str(),
-            16.0f * UiScale);
-    }
-    if (IO.FontDefault == nullptr)
-    {
-        ImFontConfig FontConfig;
-        FontConfig.SizePixels = 16.0f * UiScale;
-        IO.FontDefault = IO.Fonts->AddFontDefault(&FontConfig);
-    }
-    ApplyEditorStyle(UiScale);
-
-    ImGui_ImplGlfw_InitForOpenGL(Window, true);
-    ImGui_ImplOpenGL3_Init("#version 130");
-
     Pico::FSceneViewportRenderer ViewportRenderer;
-    const bool bRendererInitialized = ViewportRenderer.Initialize(&LoadOpenGLProcedure);
     Pico::FEngineLoop EngineLoop;
-    const std::filesystem::path ProjectFile = FindProjectFile(Argc, Argv);
-    int ExitCode = EngineLoop.PreInit(Argc, Argv, ProjectFile);
+    bool bImGuiContextCreated = false;
+    bool bImGuiGlfwInitialized = false;
+    bool bImGuiOpenGLInitialized = false;
+    bool bRendererInitialized = false;
     std::string LayoutIniPath;
-    if (ExitCode == 0)
+    int ExitCode = 1;
+
+    try
     {
-        std::filesystem::path LayoutPath;
-        if (Pico::FPaths::TryGetProjectWritePath(
-                Pico::EProjectWriteRoot::Saved,
-                "Editor/PicoEditorLayout.ini",
-                LayoutPath))
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        bImGuiContextCreated = true;
+        ImGuiIO& IO = ImGui::GetIO();
+        IO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+        IO.IniFilename = nullptr;
+        const float UiScale = FindUiScale(Argc, Argv);
+        const std::filesystem::path InterfaceFont = "C:/Windows/Fonts/segoeui.ttf";
+        if (std::filesystem::is_regular_file(InterfaceFont))
         {
-            std::error_code Error;
-            std::filesystem::create_directories(LayoutPath.parent_path(), Error);
-            if (!Error)
+            IO.FontDefault = IO.Fonts->AddFontFromFileTTF(
+                InterfaceFont.string().c_str(),
+                16.0f * UiScale);
+        }
+        if (IO.FontDefault == nullptr)
+        {
+            ImFontConfig FontConfig;
+            FontConfig.SizePixels = 16.0f * UiScale;
+            IO.FontDefault = IO.Fonts->AddFontDefault(&FontConfig);
+        }
+        ApplyEditorStyle(UiScale);
+
+        bImGuiGlfwInitialized = ImGui_ImplGlfw_InitForOpenGL(Window, true);
+        if (!bImGuiGlfwInitialized)
+        {
+            throw std::runtime_error("ImGui GLFW backend initialization failed");
+        }
+        bImGuiOpenGLInitialized = ImGui_ImplOpenGL3_Init("#version 130");
+        if (!bImGuiOpenGLInitialized)
+        {
+            throw std::runtime_error("ImGui OpenGL backend initialization failed");
+        }
+
+        bRendererInitialized = ViewportRenderer.Initialize(&LoadOpenGLProcedure);
+        if (!bRendererInitialized)
+        {
+            throw std::runtime_error("Scene viewport renderer initialization failed");
+        }
+
+        const std::filesystem::path ProjectFile = FindProjectFile(Argc, Argv);
+        ExitCode = EngineLoop.PreInit(Argc, Argv, ProjectFile);
+        if (ExitCode == 0)
+        {
+            std::filesystem::path LayoutPath;
+            if (Pico::FPaths::TryGetProjectWritePath(
+                    Pico::EProjectWriteRoot::Saved,
+                    "Editor/PicoEditorLayout.ini",
+                    LayoutPath))
             {
-                LayoutIniPath = LayoutPath.string();
-                IO.IniFilename = LayoutIniPath.c_str();
+                std::error_code Error;
+                std::filesystem::create_directories(LayoutPath.parent_path(), Error);
+                if (!Error)
+                {
+                    LayoutIniPath = LayoutPath.string();
+                    IO.IniFilename = LayoutIniPath.c_str();
+                }
+            }
+        }
+        if (ExitCode == 0)
+        {
+            ExitCode = EngineLoop.Init();
+        }
+
+        if (ExitCode == 0)
+        {
+            Pico::FPicoEditorApp App(&EngineLoop, &ViewportRenderer, Window);
+            while (!glfwWindowShouldClose(Window) && !EngineLoop.ShouldExit())
+            {
+                glfwPollEvents();
+                EngineLoop.Tick();
+
+                ImGui_ImplOpenGL3_NewFrame();
+                ImGui_ImplGlfw_NewFrame();
+                ImGui::NewFrame();
+
+                App.Draw();
+
+                ImGui::Render();
+                int FramebufferWidth = 0;
+                int FramebufferHeight = 0;
+                glfwGetFramebufferSize(Window, &FramebufferWidth, &FramebufferHeight);
+                glViewport(0, 0, FramebufferWidth, FramebufferHeight);
+                glClearColor(0.045f, 0.05f, 0.055f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+                ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                glfwSwapBuffers(Window);
             }
         }
     }
-    if (ExitCode == 0)
+    catch (const std::exception& Exception)
     {
-        ExitCode = EngineLoop.Init();
+        std::fprintf(stderr, "Pico Editor fatal error: %s\n", Exception.what());
+        ExitCode = 1;
     }
-
-    if (ExitCode == 0 && !bRendererInitialized)
+    catch (...)
     {
+        std::fprintf(stderr, "Pico Editor fatal error: unknown exception\n");
         ExitCode = 1;
     }
 
-    if (ExitCode == 0)
-    {
-        Pico::FPicoEditorApp App(&EngineLoop, &ViewportRenderer, Window);
-        while (!glfwWindowShouldClose(Window) && !EngineLoop.ShouldExit())
-        {
-            glfwPollEvents();
-            EngineLoop.Tick();
-
-            ImGui_ImplOpenGL3_NewFrame();
-            ImGui_ImplGlfw_NewFrame();
-            ImGui::NewFrame();
-
-            App.Draw();
-
-            ImGui::Render();
-            int FramebufferWidth = 0;
-            int FramebufferHeight = 0;
-            glfwGetFramebufferSize(Window, &FramebufferWidth, &FramebufferHeight);
-            glViewport(0, 0, FramebufferWidth, FramebufferHeight);
-            glClearColor(0.045f, 0.05f, 0.055f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
-            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-            glfwSwapBuffers(Window);
-        }
-    }
-
     EngineLoop.Exit();
-    ViewportRenderer.Shutdown();
-    if (!LayoutIniPath.empty())
+    if (bRendererInitialized)
+    {
+        ViewportRenderer.Shutdown();
+    }
+    if (bImGuiContextCreated && !LayoutIniPath.empty())
     {
         ImGui::SaveIniSettingsToDisk(LayoutIniPath.c_str());
     }
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
+    if (bImGuiOpenGLInitialized)
+    {
+        ImGui_ImplOpenGL3_Shutdown();
+    }
+    if (bImGuiGlfwInitialized)
+    {
+        ImGui_ImplGlfw_Shutdown();
+    }
+    if (bImGuiContextCreated)
+    {
+        ImGui::DestroyContext();
+    }
     glfwDestroyWindow(Window);
     glfwTerminate();
     return ExitCode;

@@ -1,5 +1,7 @@
 #include "Pico/Engine/World.h"
 
+#include "Pico/Core/ScopeExit.h"
+
 #include "Pico/Core/Log.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/Level.h"
@@ -66,6 +68,11 @@ void PWorld::Tick(float DeltaSeconds)
     }
 
     bTickingActors = true;
+    auto ResetTickingActors = MakeScopeExit(
+        [this]()
+        {
+            bTickingActors = false;
+        });
     const std::vector<PLevel*> Levels = GetLevels();
     for (PLevel* Level : Levels)
     {
@@ -83,6 +90,7 @@ void PWorld::Tick(float DeltaSeconds)
             }
         }
     }
+    ResetTickingActors.Release();
     bTickingActors = false;
     ProcessPendingDestroyActors();
 }

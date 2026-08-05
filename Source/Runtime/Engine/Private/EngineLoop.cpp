@@ -1,5 +1,7 @@
 #include "Pico/Engine/EngineLoop.h"
 
+#include "Pico/Core/ScopeExit.h"
+
 #include "Pico/Core/App.h"
 #include "Pico/Core/CommandLine.h"
 #include "Pico/Core/Config.h"
@@ -237,7 +239,13 @@ void FEngineLoop::Tick()
     }
 
     bTickingWorld = true;
+    auto ResetTickingWorld = MakeScopeExit(
+        [this]()
+        {
+            bTickingWorld = false;
+        });
     World->Tick(static_cast<float>(FrameTimer.GetDeltaSeconds()));
+    ResetTickingWorld.Release();
     bTickingWorld = false;
 
     PICO_LOG(

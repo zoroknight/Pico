@@ -121,6 +121,25 @@ protected:
 
 PICO_DEFINE_CLASS_NO_PROPERTIES(PSelfDestroyActor)
 
+class PThrowingTickActor : public Pico::PActor
+{
+    PICO_DECLARE_CLASS(PThrowingTickActor, Pico::PActor)
+
+public:
+    void Tick(float) override
+    {
+        throw std::runtime_error("Tick failure requested by test");
+    }
+
+protected:
+    explicit PThrowingTickActor(const Pico::FObjectConstructionParams& Params)
+        : PActor(Params)
+    {
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PThrowingTickActor)
+
 class PCountingSceneComponent : public Pico::PSceneComponent
 {
     PICO_DECLARE_CLASS(PCountingSceneComponent, Pico::PSceneComponent)
@@ -167,6 +186,7 @@ bool InitializeWorldTypes(FTestRunner& Runner)
     const bool bCountingActorRegistered = PCountingActor::RegisterClass();
     const bool bLoadTrackingActorRegistered = PLoadTrackingActor::RegisterClass();
     const bool bSelfDestroyActorRegistered = PSelfDestroyActor::RegisterClass();
+    const bool bThrowingTickActorRegistered = PThrowingTickActor::RegisterClass();
     const bool bLevelRegistered = Pico::PLevel::RegisterClass();
     const bool bWorldRegistered = Pico::PWorld::RegisterClass();
     Runner.Expect(bActorComponentRegistered, "PActorComponent registers with the class registry");
@@ -189,6 +209,7 @@ bool InitializeWorldTypes(FTestRunner& Runner)
         && bCountingActorRegistered
         && bLoadTrackingActorRegistered
         && bSelfDestroyActorRegistered
+        && bThrowingTickActorRegistered
         && bLevelRegistered
         && bWorldRegistered;
 }
@@ -405,6 +426,62 @@ void TestActorDestroyDuringTick(FTestRunner& Runner)
     Pico::DestroyObjectTree(World);
     Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Destroy-during-tick leaves no registered objects");
     Pico::PObjectSystem::Shutdown();
+}
+
+void TestTickExceptionSafety(FTestRunner& Runner)
+{
+    char Program[] = "PicoTickExceptionTests";
+    char MaxFPS[] = "-maxfps=0";
+    char* Arguments[] = { Program, MaxFPS };
+    Pico::FEngineLoop EngineLoop;
+    Runner.Expect(
+        EngineLoop.PreInit(2, Arguments) == 0
+            && EngineLoop.Init() == 0
+            && PCountingActor::RegisterClass()
+            && PThrowingTickActor::RegisterClass(),
+        "Tick exception test initializes the engine loop");
+
+    Pico::PWorld* World = EngineLoop.GetWorld();
+    PThrowingTickActor* ThrowingActor = World != nullptr
+        ? World->SpawnActor<PThrowingTickActor>("ThrowingTickActor")
+        : nullptr;
+    PCountingActor* Survivor = World != nullptr
+        ? World->SpawnActor<PCountingActor>("TickSurvivor")
+        : nullptr;
+    const Pico::FObjectHandle SurvivorHandle = Survivor != nullptr
+        ? Survivor->GetHandle()
+        : Pico::FObjectHandle {};
+    Pico::FWorldAssetData Snapshot;
+    Pico::EWorldSerializationError Error = Pico::EWorldSerializationError::None;
+    Runner.Expect(
+        ThrowingActor != nullptr
+            && Survivor != nullptr
+            && Pico::CaptureWorld(*World, Snapshot, &Error),
+        "Tick exception test captures a replacement snapshot");
+
+    bool bCaughtException = false;
+    try
+    {
+        EngineLoop.Tick();
+    }
+    catch (const std::runtime_error&)
+    {
+        bCaughtException = true;
+    }
+
+    Runner.Expect(
+        bCaughtException
+            && World->DestroyActor(Survivor)
+            && Pico::ResolveObject(SurvivorHandle) == nullptr,
+        "World Tick restores its ticking flag before propagating an exception");
+    Runner.Expect(
+        EngineLoop.ReplaceWorld(Snapshot, &Error),
+        "EngineLoop restores its world-ticking flag before propagating an exception");
+
+    EngineLoop.Exit();
+    Runner.Expect(
+        Pico::FObjectRegistry::GetObjectCount() == 0,
+        "Tick exception test exits without leaking objects");
 }
 
 void TestActorComponentsAndSceneTransform(FTestRunner& Runner)
@@ -1737,6 +1814,7 @@ int main()
     TestWorldOwnershipAndStaleHandles(Runner);
     TestActorSpawnLifecycleAndOwnership(Runner);
     TestActorDestroyDuringTick(Runner);
+    TestTickExceptionSafety(Runner);
     TestActorComponentsAndSceneTransform(Runner);
     TestSceneComponentAttachmentHierarchy(Runner);
     TestPrimitiveComponentSceneData(Runner);

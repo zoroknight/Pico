@@ -15,6 +15,7 @@
 #include "Pico/Object/Class.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectGlobals.h"
+#include "Pico/Object/ObjectName.h"
 #include "Pico/Object/Property.h"
 
 #include <GLFW/glfw3.h>
@@ -34,143 +35,6 @@ namespace Pico
 {
 namespace
 {
-struct FEditorControlState
-{
-    bool bChanged = false;
-    bool bActivated = false;
-    bool bActive = false;
-
-    void IncludeLastItem(bool bItemChanged)
-    {
-        bChanged |= bItemChanged;
-        bActivated |= ImGui::IsItemActivated();
-        bActive |= ImGui::IsItemActive();
-    }
-
-    void Include(const FEditorControlState& Other)
-    {
-        bChanged |= Other.bChanged;
-        bActivated |= Other.bActivated;
-        bActive |= Other.bActive;
-    }
-};
-
-FEditorControlState DrawFloat3Control(
-    const char* Label,
-    float* Components,
-    float Speed)
-{
-    FEditorControlState State;
-    const float Spacing = ImGui::GetStyle().ItemInnerSpacing.x;
-    const float ComponentWidth =
-        std::max((ImGui::GetContentRegionAvail().x - Spacing * 2.0f) / 3.0f, 1.0f);
-
-    ImGui::PushID(Label);
-    for (int ComponentIndex = 0; ComponentIndex < 3; ++ComponentIndex)
-    {
-        if (ComponentIndex > 0)
-        {
-            ImGui::SameLine(0.0f, Spacing);
-        }
-        ImGui::PushID(ComponentIndex);
-        ImGui::SetNextItemWidth(ComponentWidth);
-        const bool bChanged =
-            ImGui::DragFloat("##Value", &Components[ComponentIndex], Speed);
-        State.IncludeLastItem(bChanged);
-        ImGui::PopID();
-    }
-    ImGui::PopID();
-    return State;
-}
-
-FEditorControlState DrawVector3Control(
-    const char* Label,
-    FVector3& Value,
-    float Speed = 0.1f)
-{
-    float Components[] = { Value.X, Value.Y, Value.Z };
-    const FEditorControlState State =
-        DrawFloat3Control(Label, Components, Speed);
-    if (State.bChanged)
-    {
-        Value = FVector3(Components[0], Components[1], Components[2]);
-    }
-    return State;
-}
-
-FEditorControlState DrawRotatorControl(const char* Label, FRotator& Value)
-{
-    float Components[] = { Value.Pitch, Value.Yaw, Value.Roll };
-    const FEditorControlState State =
-        DrawFloat3Control(Label, Components, 0.25f);
-    if (State.bChanged)
-    {
-        Value = FRotator(Components[0], Components[1], Components[2]).GetNormalized();
-    }
-    return State;
-}
-
-FEditorControlState DrawTransformControl(const char* Id, FTransform& Value)
-{
-    FRotator Rotation = Value.Rotation.Rotator();
-    FEditorControlState State;
-
-    ImGui::PushID(Id);
-    if (ImGui::BeginTable(
-            "TransformComponents",
-            2,
-            ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings))
-    {
-        ImGui::TableSetupColumn("Component", ImGuiTableColumnFlags_WidthFixed, 72.0f);
-        ImGui::TableSetupColumn("Values", ImGuiTableColumnFlags_WidthStretch);
-
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Location");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-1.0f);
-        State.Include(DrawVector3Control("##Location", Value.Translation));
-
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Rotation");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-1.0f);
-        State.Include(DrawRotatorControl("##Rotation", Rotation));
-
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Scale");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-1.0f);
-        State.Include(DrawVector3Control("##Scale", Value.Scale, 0.01f));
-        ImGui::EndTable();
-    }
-    ImGui::PopID();
-
-    if (State.bChanged)
-    {
-        Value.Rotation = Rotation.Quaternion();
-    }
-    return State;
-}
-
-void PushObjectId(const PObject* Object)
-{
-    const FObjectHandle Handle = Object->GetHandle();
-    ImGui::PushID(static_cast<int>(Handle.Index));
-    ImGui::PushID(static_cast<int>(Handle.Serial));
-}
-
-void PopObjectId()
-{
-    ImGui::PopID();
-    ImGui::PopID();
-}
-
 void BuildDefaultDockLayout(ImGuiID DockspaceId, const ImVec2& DockspaceSize)
 {
     ImGui::DockBuilderRemoveNode(DockspaceId);
@@ -199,88 +63,6 @@ void BuildDefaultDockLayout(ImGuiID DockspaceId, const ImVec2& DockspaceSize)
     ImGui::DockBuilderFinish(DockspaceId);
 }
 
-bool IsValidObjectName(std::string_view Name)
-{
-    if (Name.empty()
-        || !(std::isalpha(static_cast<unsigned char>(Name.front()))
-            || Name.front() == '_'))
-    {
-        return false;
-    }
-
-    return std::all_of(
-        Name.begin() + 1,
-        Name.end(),
-        [](char Character)
-        {
-            const unsigned char Value = static_cast<unsigned char>(Character);
-            return std::isalnum(Value) || Character == '_';
-        });
-}
-
-bool ContainsComponent(
-    PSceneComponent* Component,
-    FObjectHandle Handle)
-{
-    if (Component == nullptr || !Handle.IsValid())
-    {
-        return false;
-    }
-    if (Component->GetHandle() == Handle)
-    {
-        return true;
-    }
-    for (PSceneComponent* Child : Component->GetAttachChildren())
-    {
-        if (ContainsComponent(Child, Handle))
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-PObject* FindWorldObjectByPath(PWorld* World, std::string_view Path)
-{
-    if (World == nullptr || Path.empty())
-    {
-        return nullptr;
-    }
-    if (World->GetPathName() == Path)
-    {
-        return World;
-    }
-    for (PLevel* Level : World->GetLevels())
-    {
-        if (Level == nullptr)
-        {
-            continue;
-        }
-        if (Level->GetPathName() == Path)
-        {
-            return Level;
-        }
-        for (PActor* Actor : Level->GetActors())
-        {
-            if (Actor == nullptr)
-            {
-                continue;
-            }
-            if (Actor->GetPathName() == Path)
-            {
-                return Actor;
-            }
-            for (PActorComponent* Component : Actor->GetComponents())
-            {
-                if (Component != nullptr && Component->GetPathName() == Path)
-                {
-                    return Component;
-                }
-            }
-        }
-    }
-    return nullptr;
-}
 }
 
 FPicoEditorApp::FPicoEditorApp(
@@ -288,8 +70,8 @@ FPicoEditorApp::FPicoEditorApp(
     FSceneViewportRenderer* InViewportRenderer,
     GLFWwindow* InWindow)
     : EngineLoop(InEngineLoop)
-    , ViewportRenderer(InViewportRenderer)
-    , Window(InWindow)
+    , CommandService(InEngineLoop, &Selection, &TransactionManager, &SceneClipboard)
+    , ViewportPanel(InViewportRenderer, InWindow)
 {
     PWorld* World = GetWorld();
     Select(World);
@@ -300,7 +82,6 @@ FPicoEditorApp::FPicoEditorApp(
 
 FPicoEditorApp::~FPicoEditorApp()
 {
-    EndViewportCameraCapture();
 }
 
 void FPicoEditorApp::Draw()
@@ -308,10 +89,10 @@ void FPicoEditorApp::Draw()
     bInteractiveEditVisited = false;
     HandleShortcuts();
 
-    if (SelectedObjectHandle.IsValid() && GetSelectedObject() == nullptr)
+    if (Selection.IsValid() && GetSelectedObject() == nullptr)
     {
         CancelInteractiveEdit();
-        SelectedObjectHandle = {};
+        Selection.Clear();
     }
 
     const ImGuiViewport* MainViewport = ImGui::GetMainViewport();
@@ -368,7 +149,14 @@ void FPicoEditorApp::Draw()
 
     if (ImGui::Begin("Scene Outliner"))
     {
-        DrawSceneOutliner();
+        OutlinerPanel.Draw(
+            GetWorld(),
+            Selection,
+            CommandService,
+            CommandQueue,
+            [this](PObject* Object) { Select(Object); },
+            [this](PObject* Object) { BeginRename(Object); },
+            [this](FEditorCommandResult Result) { ApplyCommandResult(std::move(Result)); });
     }
     ImGui::End();
 
@@ -384,7 +172,36 @@ void FPicoEditorApp::Draw()
 
     if (ImGui::Begin("Details"))
     {
-        DrawDetails();
+        DetailsPanel.Draw(
+            Selection,
+            [this](
+                const std::string& Key,
+                std::string Description,
+                bool bActivated,
+                bool bChanged)
+            {
+                return PrepareInteractiveEdit(
+                    Key,
+                    std::move(Description),
+                    bActivated,
+                    bChanged);
+            },
+            [this](
+                const std::string& Key,
+                bool bChanged,
+                bool bActive,
+                bool bApplied)
+            {
+                CompleteInteractiveEdit(Key, bChanged, bActive, bApplied);
+            },
+            [this](std::string Message, bool bError)
+            {
+                SetStatus(std::move(Message), bError);
+            },
+            [this]()
+            {
+                AddRootToSelectedActor();
+            });
     }
     ImGui::End();
 
@@ -398,217 +215,14 @@ void FPicoEditorApp::Draw()
 
 void FPicoEditorApp::DrawViewport(float Width, float Height)
 {
-    if (ViewportRenderer == nullptr || !ViewportRenderer->IsInitialized())
-    {
-        ImGui::TextDisabled("Viewport unavailable");
-        return;
-    }
-
-    ImVec2 Available = ImGui::GetContentRegionAvail();
-    Available.x = std::max(Width, 64.0f);
-    Available.y = std::max(Height, 64.0f);
-    const ImGuiIO& IO = ImGui::GetIO();
-    const uint32 RenderWidth = static_cast<uint32>(std::clamp(
-        Available.x * IO.DisplayFramebufferScale.x,
-        64.0f,
-        4096.0f));
-    const uint32 RenderHeight = static_cast<uint32>(std::clamp(
-        Available.y * IO.DisplayFramebufferScale.y,
-        64.0f,
-        4096.0f));
-
-    const float YawRadians = DegreesToRadians(CameraYawDegrees);
-    const float PitchRadians = DegreesToRadians(CameraPitchDegrees);
-    const float CosPitch = std::cos(PitchRadians);
-    const FVector3 Forward(
-        CosPitch * std::cos(YawRadians),
-        CosPitch * std::sin(YawRadians),
-        std::sin(PitchRadians));
-
-    FSceneView View;
-    View.Position = CameraPosition;
-    View.Target = CameraPosition + Forward;
-    if (!ViewportRenderer->Resize(RenderWidth, RenderHeight)
-        || !ViewportRenderer->Render(
-            GetWorld(),
-            View,
-            SelectedObjectHandle))
-    {
-        ImGui::TextDisabled("Viewport render failed");
-        return;
-    }
-
-    ImGui::Image(
-        reinterpret_cast<ImTextureID>(
-            static_cast<std::uintptr_t>(ViewportRenderer->GetColorTexture())),
-        Available,
-        ImVec2(0.0f, 1.0f),
-        ImVec2(1.0f, 0.0f));
-
-    const bool bViewportHovered = ImGui::IsItemHovered();
-    if (bViewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-    {
-        const ImVec2 ItemMin = ImGui::GetItemRectMin();
-        const ImVec2 ItemMax = ImGui::GetItemRectMax();
-        const ImVec2 MousePosition = ImGui::GetMousePos();
-        const float ItemWidth = std::max(ItemMax.x - ItemMin.x, 1.0f);
-        const float ItemHeight = std::max(ItemMax.y - ItemMin.y, 1.0f);
-        const float LocalX = std::clamp(
-            (MousePosition.x - ItemMin.x) / ItemWidth,
-            0.0f,
-            1.0f);
-        const float LocalY = std::clamp(
-            (MousePosition.y - ItemMin.y) / ItemHeight,
-            0.0f,
-            1.0f);
-        const uint32 PixelX = std::min(
-            static_cast<uint32>(LocalX * static_cast<float>(RenderWidth)),
-            RenderWidth - 1);
-        const uint32 PixelY = std::min(
-            static_cast<uint32>((1.0f - LocalY) * static_cast<float>(RenderHeight)),
-            RenderHeight - 1);
-        PObject* PickedObject =
-            ResolveObject(ViewportRenderer->Pick(PixelX, PixelY));
-        if (PickedObject != nullptr
-            && PickedObject->IsA(PActorComponent::StaticClass()))
-        {
-            PActor* Owner = static_cast<PActorComponent*>(PickedObject)->GetOwner();
-            PickedObject = Owner != nullptr ? Owner : PickedObject;
-        }
-        Select(PickedObject);
-        SetStatus(
-            PickedObject != nullptr
-                ? "Selected " + PickedObject->GetPathName()
-                : "Cleared viewport selection");
-    }
-
-    if (bViewportHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
-    {
-        BeginViewportCameraCapture();
-    }
-    if (bViewportCameraCaptured
-        && (Window == nullptr
-            || glfwGetWindowAttrib(Window, GLFW_FOCUSED) == GLFW_FALSE
-            || glfwGetMouseButton(Window, GLFW_MOUSE_BUTTON_RIGHT) != GLFW_PRESS))
-    {
-        EndViewportCameraCapture();
-    }
-    if (!bViewportCameraCaptured)
-    {
-        return;
-    }
-
-    ImGui::SetMouseCursor(ImGuiMouseCursor_None);
-    double CursorX = LastCameraCursorX;
-    double CursorY = LastCameraCursorY;
-    glfwGetCursorPos(Window, &CursorX, &CursorY);
-    const float MouseDeltaX = std::clamp(
-        static_cast<float>(CursorX - LastCameraCursorX),
-        -100.0f,
-        100.0f);
-    const float MouseDeltaY = std::clamp(
-        static_cast<float>(CursorY - LastCameraCursorY),
-        -100.0f,
-        100.0f);
-    LastCameraCursorX = CursorX;
-    LastCameraCursorY = CursorY;
-    CameraYawDegrees -= MouseDeltaX * 0.08f;
-    CameraPitchDegrees = std::clamp(
-        CameraPitchDegrees - MouseDeltaY * 0.08f,
-        -89.0f,
-        89.0f);
-    if (IO.MouseWheel != 0.0f)
-    {
-        CameraMoveSpeed = std::clamp(
-            CameraMoveSpeed * std::pow(1.25f, IO.MouseWheel),
-            25.0f,
-            10000.0f);
-        SetStatus(
-            "Camera speed " + std::to_string(
-                static_cast<int>(CameraMoveSpeed)));
-    }
-
-    if (!IO.WantTextInput && Window != nullptr)
-    {
-        const float UpdatedYaw = DegreesToRadians(CameraYawDegrees);
-        const float UpdatedPitch = DegreesToRadians(CameraPitchDegrees);
-        const float UpdatedCosPitch = std::cos(UpdatedPitch);
-        const FVector3 UpdatedForward(
-            UpdatedCosPitch * std::cos(UpdatedYaw),
-            UpdatedCosPitch * std::sin(UpdatedYaw),
-            std::sin(UpdatedPitch));
-        FVector3 Right =
-            FVector3::Cross(UpdatedForward, FVector3::UpVector).GetSafeNormal();
-        FVector3 Movement = FVector3::ZeroVector;
-        if (glfwGetKey(Window, GLFW_KEY_W) == GLFW_PRESS)
-        {
-            Movement += UpdatedForward;
-        }
-        if (glfwGetKey(Window, GLFW_KEY_S) == GLFW_PRESS)
-        {
-            Movement -= UpdatedForward;
-        }
-        if (glfwGetKey(Window, GLFW_KEY_D) == GLFW_PRESS)
-        {
-            Movement += Right;
-        }
-        if (glfwGetKey(Window, GLFW_KEY_A) == GLFW_PRESS)
-        {
-            Movement -= Right;
-        }
-        if (glfwGetKey(Window, GLFW_KEY_E) == GLFW_PRESS)
-        {
-            Movement += FVector3::UpVector;
-        }
-        if (glfwGetKey(Window, GLFW_KEY_Q) == GLFW_PRESS)
-        {
-            Movement -= FVector3::UpVector;
-        }
-
-        if (Movement.Normalize())
-        {
-            const bool bShiftDown =
-                glfwGetKey(Window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS
-                || glfwGetKey(Window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
-            const float SpeedMultiplier = bShiftDown ? 4.0f : 1.0f;
-            const float DeltaTime = std::clamp(IO.DeltaTime, 0.0f, 0.1f);
-            CameraPosition +=
-                Movement * CameraMoveSpeed * SpeedMultiplier * DeltaTime;
-        }
-    }
+    ViewportPanel.Draw(
+        GetWorld(),
+        Selection,
+        Width,
+        Height,
+        [this](PObject* Object) { Select(Object); },
+        [this](std::string Message) { SetStatus(std::move(Message)); });
 }
-
-void FPicoEditorApp::BeginViewportCameraCapture()
-{
-    if (Window == nullptr || bViewportCameraCaptured)
-    {
-        return;
-    }
-
-    bViewportCameraCaptured = true;
-    glfwSetInputMode(Window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-    if (glfwRawMouseMotionSupported() == GLFW_TRUE)
-    {
-        glfwSetInputMode(Window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
-    }
-    glfwGetCursorPos(Window, &LastCameraCursorX, &LastCameraCursorY);
-}
-
-void FPicoEditorApp::EndViewportCameraCapture()
-{
-    if (Window == nullptr || !bViewportCameraCaptured)
-    {
-        return;
-    }
-
-    if (glfwRawMouseMotionSupported() == GLFW_TRUE)
-    {
-        glfwSetInputMode(Window, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
-    }
-    glfwSetInputMode(Window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-    bViewportCameraCaptured = false;
-}
-
 PWorld* FPicoEditorApp::GetWorld() const
 {
     return EngineLoop != nullptr ? EngineLoop->GetWorld() : nullptr;
@@ -616,7 +230,7 @@ PWorld* FPicoEditorApp::GetWorld() const
 
 PObject* FPicoEditorApp::GetSelectedObject() const
 {
-    return ResolveObject(SelectedObjectHandle);
+    return Selection.Resolve();
 }
 
 void FPicoEditorApp::DrawToolbar()
@@ -822,638 +436,6 @@ void FPicoEditorApp::DrawEditMenu()
     ImGui::EndMenu();
 }
 
-void FPicoEditorApp::DrawSceneOutliner()
-{
-    PWorld* World = GetWorld();
-    if (World == nullptr)
-    {
-        ImGui::TextDisabled("No active world");
-        return;
-    }
-
-    PushObjectId(World);
-    ImGuiTreeNodeFlags Flags =
-        ImGuiTreeNodeFlags_DefaultOpen
-        | ImGuiTreeNodeFlags_OpenOnArrow
-        | ImGuiTreeNodeFlags_SpanAvailWidth;
-    if (SelectedObjectHandle == World->GetHandle())
-    {
-        Flags |= ImGuiTreeNodeFlags_Selected;
-    }
-
-    const bool bOpen = ImGui::TreeNodeEx(World->GetName().ToString().c_str(), Flags);
-    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
-    {
-        Select(World);
-    }
-    if (ImGui::BeginPopupContextItem("WorldContext"))
-    {
-        Select(World);
-        if (ImGui::BeginMenu("Add Actor"))
-        {
-            if (ImGui::MenuItem("Empty Actor"))
-            {
-                SpawnEmptyActor();
-            }
-            if (ImGui::MenuItem("Cube"))
-            {
-                SpawnCubeActor();
-            }
-            ImGui::EndMenu();
-        }
-        ImGui::BeginDisabled(!CanPasteClipboard());
-        if (ImGui::MenuItem("Paste", "Ctrl+V"))
-        {
-            bPasteClipboardRequested = true;
-        }
-        ImGui::EndDisabled();
-        ImGui::EndPopup();
-    }
-    if (bOpen)
-    {
-        for (PLevel* Level : World->GetLevels())
-        {
-            DrawLevelNode(Level);
-        }
-        ImGui::TreePop();
-    }
-    PopObjectId();
-}
-
-void FPicoEditorApp::DrawLevelNode(PLevel* Level)
-{
-    if (Level == nullptr)
-    {
-        return;
-    }
-
-    PushObjectId(Level);
-    ImGuiTreeNodeFlags Flags =
-        ImGuiTreeNodeFlags_DefaultOpen
-        | ImGuiTreeNodeFlags_OpenOnArrow
-        | ImGuiTreeNodeFlags_SpanAvailWidth;
-    if (SelectedObjectHandle == Level->GetHandle())
-    {
-        Flags |= ImGuiTreeNodeFlags_Selected;
-    }
-
-    const bool bOpen = ImGui::TreeNodeEx(Level->GetName().ToString().c_str(), Flags);
-    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
-    {
-        Select(Level);
-    }
-    if (ImGui::BeginPopupContextItem("LevelContext"))
-    {
-        Select(Level);
-        if (ImGui::BeginMenu("Add Actor"))
-        {
-            if (ImGui::MenuItem("Empty Actor"))
-            {
-                SpawnEmptyActor();
-            }
-            if (ImGui::MenuItem("Cube"))
-            {
-                SpawnCubeActor();
-            }
-            ImGui::EndMenu();
-        }
-        ImGui::BeginDisabled(!CanPasteClipboard());
-        if (ImGui::MenuItem("Paste", "Ctrl+V"))
-        {
-            bPasteClipboardRequested = true;
-        }
-        ImGui::EndDisabled();
-        ImGui::EndPopup();
-    }
-    if (bOpen)
-    {
-        for (PActor* Actor : Level->GetActors())
-        {
-            DrawActorNode(Actor);
-        }
-        ImGui::TreePop();
-    }
-    PopObjectId();
-}
-
-void FPicoEditorApp::DrawActorNode(PActor* Actor)
-{
-    if (Actor == nullptr)
-    {
-        return;
-    }
-
-    const std::vector<PActorComponent*> Components = Actor->GetComponents();
-    PushObjectId(Actor);
-    ImGuiTreeNodeFlags Flags =
-        ImGuiTreeNodeFlags_OpenOnArrow
-        | ImGuiTreeNodeFlags_SpanAvailWidth;
-    if (Components.empty())
-    {
-        Flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-    }
-    if (SelectedObjectHandle == Actor->GetHandle())
-    {
-        Flags |= ImGuiTreeNodeFlags_Selected;
-    }
-
-    PObject* SelectedObject = GetSelectedObject();
-    if (SelectedObject != nullptr
-        && SelectedObject->IsA(PActorComponent::StaticClass())
-        && static_cast<PActorComponent*>(SelectedObject)->GetOwner() == Actor)
-    {
-        ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-    }
-    const bool bOpen = ImGui::TreeNodeEx(Actor->GetName().ToString().c_str(), Flags);
-    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
-    {
-        Select(Actor);
-    }
-    DrawActorContextMenu(Actor);
-    if (bOpen && !Components.empty())
-    {
-        PSceneComponent* RootComponent = Actor->GetRootComponent();
-        if (RootComponent != nullptr)
-        {
-            DrawComponentNode(RootComponent, Actor);
-        }
-
-        for (PActorComponent* Component : Components)
-        {
-            if (Component == RootComponent)
-            {
-                continue;
-            }
-
-            if (Component->IsA(PSceneComponent::StaticClass())
-                && static_cast<PSceneComponent*>(Component)->GetAttachParent() != nullptr)
-            {
-                continue;
-            }
-            DrawComponentNode(Component, Actor);
-        }
-        ImGui::TreePop();
-    }
-    PopObjectId();
-}
-
-void FPicoEditorApp::DrawComponentNode(PActorComponent* Component, PActor* Owner)
-{
-    if (Component == nullptr)
-    {
-        return;
-    }
-
-    PSceneComponent* SceneComponent =
-        Component->IsA(PSceneComponent::StaticClass())
-        ? static_cast<PSceneComponent*>(Component)
-        : nullptr;
-    const std::vector<PSceneComponent*> Children =
-        SceneComponent != nullptr
-        ? SceneComponent->GetAttachChildren()
-        : std::vector<PSceneComponent*> {};
-
-    PushObjectId(Component);
-    ImGuiTreeNodeFlags Flags =
-        ImGuiTreeNodeFlags_OpenOnArrow
-        | ImGuiTreeNodeFlags_SpanAvailWidth;
-    if (Children.empty())
-    {
-        Flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-    }
-    if (SelectedObjectHandle == Component->GetHandle())
-    {
-        Flags |= ImGuiTreeNodeFlags_Selected;
-    }
-
-    std::string Label = Component->GetName().ToString();
-    if (Owner != nullptr && Owner->GetRootComponent() == Component)
-    {
-        Label += " [Root]";
-    }
-
-    if (SceneComponent != nullptr
-        && SceneComponent->GetHandle() != SelectedObjectHandle
-        && ContainsComponent(SceneComponent, SelectedObjectHandle))
-    {
-        ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-    }
-    const bool bOpen = ImGui::TreeNodeEx(Label.c_str(), Flags);
-    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
-    {
-        Select(Component);
-    }
-    DrawComponentContextMenu(Component);
-    if (bOpen && !Children.empty())
-    {
-        for (PSceneComponent* Child : Children)
-        {
-            DrawComponentNode(Child, Owner);
-        }
-        ImGui::TreePop();
-    }
-    PopObjectId();
-}
-
-void FPicoEditorApp::DrawActorContextMenu(PActor* Actor)
-{
-    if (!ImGui::BeginPopupContextItem("ActorContext"))
-    {
-        return;
-    }
-
-    Select(Actor);
-    if (ImGui::BeginMenu("Add Component"))
-    {
-        if (ImGui::MenuItem("Scene Component"))
-        {
-            AddSceneComponentToSelection();
-        }
-        if (ImGui::MenuItem("Cube Component"))
-        {
-            AddCubeComponentToSelection();
-        }
-        ImGui::EndMenu();
-    }
-    ImGui::Separator();
-    if (ImGui::MenuItem("Copy", "Ctrl+C"))
-    {
-        CopySelectedObject();
-    }
-    ImGui::BeginDisabled(!CanPasteClipboard());
-    if (ImGui::MenuItem("Paste", "Ctrl+V"))
-    {
-        bPasteClipboardRequested = true;
-    }
-    ImGui::EndDisabled();
-    ImGui::Separator();
-    if (ImGui::MenuItem("Rename", "F2"))
-    {
-        BeginRename(Actor);
-    }
-    if (ImGui::MenuItem("Delete", "Delete"))
-    {
-        QueueDestroy(Actor);
-    }
-    ImGui::EndPopup();
-}
-
-void FPicoEditorApp::DrawComponentContextMenu(PActorComponent* Component)
-{
-    if (!ImGui::BeginPopupContextItem("ComponentContext"))
-    {
-        return;
-    }
-
-    Select(Component);
-    PSceneComponent* SceneComponent =
-        Component != nullptr && Component->IsA(PSceneComponent::StaticClass())
-        ? static_cast<PSceneComponent*>(Component)
-        : nullptr;
-    ImGui::BeginDisabled(SceneComponent == nullptr);
-    if (ImGui::BeginMenu("Add Child Component"))
-    {
-        if (ImGui::MenuItem("Scene Component"))
-        {
-            AddSceneComponentToSelection();
-        }
-        if (ImGui::MenuItem("Cube Component"))
-        {
-            AddCubeComponentToSelection();
-        }
-        ImGui::EndMenu();
-    }
-    ImGui::EndDisabled();
-
-    PActor* Owner = Component != nullptr ? Component->GetOwner() : nullptr;
-    const bool bCanSetRoot =
-        SceneComponent != nullptr
-        && Owner != nullptr
-        && Owner->GetRootComponent() != SceneComponent;
-    ImGui::BeginDisabled(!bCanSetRoot);
-    if (ImGui::MenuItem("Set As Root"))
-    {
-        SetSelectedComponentAsRoot();
-    }
-    ImGui::EndDisabled();
-
-    ImGui::Separator();
-    if (ImGui::MenuItem("Copy", "Ctrl+C"))
-    {
-        CopySelectedObject();
-    }
-    ImGui::BeginDisabled(!CanPasteClipboard());
-    if (ImGui::MenuItem("Paste", "Ctrl+V"))
-    {
-        bPasteClipboardRequested = true;
-    }
-    ImGui::EndDisabled();
-    ImGui::Separator();
-    if (ImGui::MenuItem("Rename", "F2"))
-    {
-        BeginRename(Component);
-    }
-    if (ImGui::MenuItem("Delete", "Delete"))
-    {
-        QueueDestroy(Component);
-    }
-    ImGui::EndPopup();
-}
-
-void FPicoEditorApp::DrawDetails()
-{
-    PObject* Object = GetSelectedObject();
-    if (Object == nullptr)
-    {
-        ImGui::TextDisabled("No object selected");
-        return;
-    }
-
-    DrawObjectIdentity(Object);
-
-    if (Object->IsA(PActor::StaticClass()))
-    {
-        DrawActorDetails(static_cast<PActor*>(Object));
-    }
-    else if (Object->IsA(PSceneComponent::StaticClass()))
-    {
-        DrawSceneComponentDetails(static_cast<PSceneComponent*>(Object));
-    }
-    else if (Object->IsA(PLevel::StaticClass()))
-    {
-        PLevel* Level = static_cast<PLevel*>(Object);
-        ImGui::Separator();
-        ImGui::Text("Actors: %zu", Level->GetActors().size());
-    }
-    else if (Object->IsA(PWorld::StaticClass()))
-    {
-        PWorld* World = static_cast<PWorld*>(Object);
-        ImGui::Separator();
-        ImGui::Text("Levels: %zu", World->GetLevels().size());
-        ImGui::Text("Tick: %llu", static_cast<unsigned long long>(World->GetTickCount()));
-        ImGui::Text("Time: %.3f s", World->GetTimeSeconds());
-    }
-}
-
-void FPicoEditorApp::DrawObjectIdentity(PObject* Object)
-{
-    const FObjectHandle Handle = Object->GetHandle();
-    ImGui::Text("Name: %s", Object->GetName().ToString().c_str());
-    ImGui::Text("Class: %s", Object->GetClass()->GetName().ToString().c_str());
-    ImGui::Text("Path: %s", Object->GetPathName().c_str());
-    ImGui::Text(
-        "Outer: %s",
-        Object->GetOuter() != nullptr ? Object->GetOuter()->GetPathName().c_str() : "None");
-    ImGui::Text("Handle: {%u, %u}", Handle.Index, Handle.Serial);
-}
-
-void FPicoEditorApp::DrawActorDetails(PActor* Actor)
-{
-    ImGui::Separator();
-    ImGui::TextUnformatted("Transform");
-
-    PSceneComponent* RootComponent = Actor->GetRootComponent();
-    if (RootComponent == nullptr)
-    {
-        ImGui::TextDisabled("No RootComponent");
-        if (ImGui::Button("Add Scene Root"))
-        {
-            AddRootToSelectedActor();
-        }
-    }
-    else
-    {
-        FTransform Transform = Actor->GetActorTransform();
-        const FEditorControlState State =
-            DrawTransformControl("ActorTransform", Transform);
-        const std::string EditKey = Actor->GetPathName() + ".ActorTransform";
-        const bool bCanApply = PrepareInteractiveEdit(
-            EditKey,
-            "Edit " + Actor->GetPathName() + " transform",
-            State.bActivated,
-            State.bChanged);
-        bool bChangeApplied = !State.bChanged;
-        if (State.bChanged && bCanApply)
-        {
-            bChangeApplied = Actor->SetActorTransform(Transform);
-            if (bChangeApplied)
-            {
-                SetStatus("Changed " + Actor->GetPathName() + " transform");
-            }
-        }
-        CompleteInteractiveEdit(
-            EditKey,
-            State.bChanged,
-            State.bActive,
-            bChangeApplied);
-        ImGui::TextDisabled("Provided by %s", RootComponent->GetName().ToString().c_str());
-    }
-
-    ImGui::Separator();
-    ImGui::Text("Components: %zu", Actor->GetComponents().size());
-    ImGui::Text("Begun Play: %s", Actor->HasBegunPlay() ? "true" : "false");
-}
-
-void FPicoEditorApp::DrawSceneComponentDetails(PSceneComponent* Component)
-{
-    PActor* Owner = Component->GetOwner();
-    ImGui::Separator();
-    ImGui::Text(
-        "Owner: %s",
-        Owner != nullptr ? Owner->GetPathName().c_str() : "None");
-    ImGui::Text(
-        "Role: %s",
-        Owner != nullptr && Owner->GetRootComponent() == Component ? "RootComponent" : "SceneComponent");
-    PSceneComponent* Parent = Component->GetAttachParent();
-    ImGui::Text(
-        "Attach Parent: %s",
-        Parent != nullptr ? Parent->GetPathName().c_str() : "None");
-    ImGui::Text("Attach Children: %zu", Component->GetAttachChildren().size());
-    ImGui::Text("Registered: %s", Component->IsRegistered() ? "true" : "false");
-
-    ImGui::Separator();
-    ImGui::TextUnformatted("World Transform");
-    FTransform WorldTransform = Component->GetWorldTransform();
-    ImGui::BeginDisabled();
-    DrawTransformControl("WorldTransform", WorldTransform);
-    ImGui::EndDisabled();
-
-    DrawReflectedProperties(Component);
-}
-
-void FPicoEditorApp::DrawReflectedProperties(PObject* Object)
-{
-    const std::vector<const PProperty*> Properties = GetAllProperties(Object->GetClass());
-    if (Properties.empty())
-    {
-        return;
-    }
-
-    ImGui::Separator();
-    ImGui::TextUnformatted("Reflected Properties");
-    if (ImGui::BeginTable(
-            "ReflectedProperties",
-            2,
-            ImGuiTableFlags_SizingStretchProp
-                | ImGuiTableFlags_BordersInnerH
-                | ImGuiTableFlags_NoSavedSettings))
-    {
-        ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 140.0f);
-        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-        for (const PProperty* Property : Properties)
-        {
-            DrawPropertyEditor(Object, Property);
-        }
-        ImGui::EndTable();
-    }
-}
-
-void FPicoEditorApp::DrawPropertyEditor(PObject* Object, const PProperty* Property)
-{
-    const std::string PropertyName = Property->GetName().ToString();
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(PropertyName.c_str());
-    ImGui::TableSetColumnIndex(1);
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::PushID(Property);
-
-    bool bChanged = false;
-    bool bChangeApplied = true;
-    const std::string EditKey =
-        Object->GetPathName() + "." + PropertyName;
-    const std::string Description =
-        "Edit " + Object->GetPathName() + "." + PropertyName;
-    const auto ApplyValue =
-        [this, &EditKey, &Description, &bChanged, &bChangeApplied](
-            const FEditorControlState& State,
-            auto&& Setter)
-        {
-            bChanged = State.bChanged;
-            const bool bCanApply = PrepareInteractiveEdit(
-                EditKey,
-                Description,
-                State.bActivated,
-                State.bChanged);
-            if (State.bChanged)
-            {
-                bChangeApplied = bCanApply && Setter();
-            }
-            CompleteInteractiveEdit(
-                EditKey,
-                State.bChanged,
-                State.bActive,
-                bChangeApplied);
-        };
-
-    switch (Property->GetType())
-    {
-    case EPropertyType::Int32:
-    {
-        int32 Value = 0;
-        if (Property->GetValue(Object, Value))
-        {
-            FEditorControlState State;
-            State.IncludeLastItem(ImGui::InputInt("##Value", &Value));
-            ApplyValue(
-                State,
-                [Object, Property, Value]()
-                {
-                    return Property->SetValue(Object, Value);
-                });
-        }
-        break;
-    }
-    case EPropertyType::Float:
-    {
-        float Value = 0.0f;
-        if (Property->GetValue(Object, Value))
-        {
-            FEditorControlState State;
-            State.IncludeLastItem(ImGui::DragFloat("##Value", &Value, 0.1f));
-            ApplyValue(
-                State,
-                [Object, Property, Value]()
-                {
-                    return Property->SetValue(Object, Value);
-                });
-        }
-        break;
-    }
-    case EPropertyType::Bool:
-    {
-        bool Value = false;
-        if (Property->GetValue(Object, Value))
-        {
-            FEditorControlState State;
-            State.IncludeLastItem(ImGui::Checkbox("##Value", &Value));
-            ApplyValue(
-                State,
-                [Object, Property, Value]()
-                {
-                    return Property->SetValue(Object, Value);
-                });
-        }
-        break;
-    }
-    case EPropertyType::Vector3:
-    {
-        FVector3 Value;
-        if (Property->GetValue(Object, Value))
-        {
-            const FEditorControlState State =
-                DrawVector3Control("##Value", Value);
-            ApplyValue(
-                State,
-                [Object, Property, Value]()
-                {
-                    return Property->SetValue(Object, Value);
-                });
-        }
-        break;
-    }
-    case EPropertyType::Rotator:
-    {
-        FRotator Value;
-        if (Property->GetValue(Object, Value))
-        {
-            const FEditorControlState State =
-                DrawRotatorControl("##Value", Value);
-            ApplyValue(
-                State,
-                [Object, Property, Value]()
-                {
-                    return Property->SetValue(Object, Value);
-                });
-        }
-        break;
-    }
-    case EPropertyType::Transform:
-    {
-        FTransform Value;
-        if (Property->GetValue(Object, Value))
-        {
-            const FEditorControlState State =
-                DrawTransformControl("PropertyTransform", Value);
-            ApplyValue(
-                State,
-                [Object, Property, Value]()
-                {
-                    return Property->SetValue(Object, Value);
-                });
-        }
-        break;
-    }
-    }
-
-    if (bChanged && bChangeApplied)
-    {
-        SetStatus("Changed " + Object->GetPathName() + "." + PropertyName);
-    }
-    ImGui::PopID();
-}
-
 void FPicoEditorApp::DrawStatusBar()
 {
     if (Status.empty())
@@ -1523,263 +505,31 @@ void FPicoEditorApp::DrawRenamePopup()
 
 void FPicoEditorApp::ProcessDeferredActions()
 {
-    if (PendingDestroyHandle.IsValid())
-    {
-        PObject* Object = ResolveObject(PendingDestroyHandle);
-        PendingDestroyHandle = {};
-        if (Object != nullptr)
-        {
-            Select(Object);
-            DestroySelectedObject();
-        }
-    }
-
-    if (bPasteClipboardRequested)
-    {
-        bPasteClipboardRequested = false;
-        PasteClipboard();
-    }
-}
-
-PActor* FPicoEditorApp::CreateActor(std::string Name)
-{
-    PWorld* World = GetWorld();
-    if (World == nullptr)
-    {
-        return nullptr;
-    }
-
-    return World->SpawnActor<PActor>(Name);
-}
-
-PActor* FPicoEditorApp::CreateCubeActor(std::string Name)
-{
-    PActor* Actor = CreateActor(std::move(Name));
-    PWorld* World = GetWorld();
-    if (Actor == nullptr || World == nullptr)
-    {
-        return nullptr;
-    }
-
-    PCubeComponent* Cube = Actor->CreateComponent<PCubeComponent>("CubeComponent");
-    if (Cube == nullptr || !Actor->SetRootComponent(Cube))
-    {
-        World->DestroyActor(Actor);
-        return nullptr;
-    }
-    return Actor;
-}
-
-PSceneComponent* FPicoEditorApp::AddSceneRoot(PActor* Actor)
-{
-    if (Actor == nullptr || Actor->GetRootComponent() != nullptr)
-    {
-        return nullptr;
-    }
-
-    PSceneComponent* Root =
-        Actor->CreateComponent<PSceneComponent>("DefaultSceneRoot");
-    if (Root == nullptr || !Actor->SetRootComponent(Root))
-    {
-        if (Root != nullptr)
-        {
-            Actor->DestroyComponent(Root);
-        }
-        return nullptr;
-    }
-    return Root;
-}
-
-PSceneComponent* FPicoEditorApp::AddComponent(
-    PActor* Actor,
-    PSceneComponent* AttachParent,
-    bool bCubeComponent)
-{
-    if (Actor == nullptr
-        || (AttachParent != nullptr && AttachParent->GetOwner() != Actor))
-    {
-        return nullptr;
-    }
-
-    unsigned int& NextNumber =
-        bCubeComponent ? NextCubeComponentNumber : NextComponentNumber;
-    const char* NamePrefix =
-        bCubeComponent ? "CubeComponent_" : "SceneComponent_";
-    PSceneComponent* Component = nullptr;
-    do
-    {
-        const std::string Name = NamePrefix + std::to_string(NextNumber++);
-        Component = bCubeComponent
-            ? static_cast<PSceneComponent*>(
-                Actor->CreateComponent<PCubeComponent>(Name))
-            : Actor->CreateComponent<PSceneComponent>(Name);
-    }
-    while (Component == nullptr && NextNumber < 10000);
-
-    if (Component == nullptr)
-    {
-        return nullptr;
-    }
-
-    PSceneComponent* Root = Actor->GetRootComponent();
-    const bool bConnected =
-        Root == nullptr
-        ? Actor->SetRootComponent(Component)
-        : Component->AttachToComponent(
-            AttachParent != nullptr ? AttachParent : Root,
-            EAttachmentTransformRule::KeepRelative);
-    if (!bConnected)
-    {
-        Actor->DestroyComponent(Component);
-        return nullptr;
-    }
-    return Component;
+    CommandQueue.Flush();
 }
 
 void FPicoEditorApp::SpawnEmptyActor()
 {
-    if (!BeginEditorTransaction("Create Empty Actor"))
-    {
-        return;
-    }
-
-    std::string Name;
-    PActor* Actor = nullptr;
-    do
-    {
-        Name = "Actor_" + std::to_string(NextActorNumber++);
-        Actor = CreateActor(Name);
-        if (Actor != nullptr && AddSceneRoot(Actor) == nullptr)
-        {
-            if (PWorld* World = Actor->GetWorld())
-            {
-                World->DestroyActor(Actor);
-            }
-            Actor = nullptr;
-        }
-    }
-    while (Actor == nullptr && NextActorNumber < 10000);
-
-    if (Actor == nullptr)
-    {
-        CancelEditorTransaction();
-        SetStatus("Failed to spawn an Actor", true);
-        return;
-    }
-
-    Select(Actor);
-    if (!CommitEditorTransaction())
-    {
-        return;
-    }
-    SetStatus("Spawned " + Actor->GetPathName());
+    FinishInteractiveEdit();
+    ApplyCommandResult(CommandService.SpawnActor(false));
 }
 
 void FPicoEditorApp::SpawnCubeActor()
 {
-    if (!BeginEditorTransaction("Create Cube Actor"))
-    {
-        return;
-    }
-
-    std::string Name;
-    PActor* Actor = nullptr;
-    do
-    {
-        Name = "Cube_" + std::to_string(NextCubeNumber++);
-        Actor = CreateCubeActor(Name);
-    }
-    while (Actor == nullptr && NextCubeNumber < 10000);
-
-    if (Actor == nullptr)
-    {
-        CancelEditorTransaction();
-        SetStatus("Failed to spawn a Cube", true);
-        return;
-    }
-
-    Select(Actor);
-    if (!CommitEditorTransaction())
-    {
-        return;
-    }
-    SetStatus("Spawned " + Actor->GetPathName());
+    FinishInteractiveEdit();
+    ApplyCommandResult(CommandService.SpawnActor(true));
 }
 
 void FPicoEditorApp::AddRootToSelectedActor()
 {
-    PObject* Object = GetSelectedObject();
-    PActor* Actor =
-        Object != nullptr && Object->IsA(PActor::StaticClass())
-        ? static_cast<PActor*>(Object)
-        : nullptr;
-    if (Actor == nullptr || !BeginEditorTransaction("Add Scene Root"))
-    {
-        if (Actor == nullptr)
-        {
-            SetStatus("Select an Actor without a root component", true);
-        }
-        return;
-    }
-
-    PSceneComponent* Root = AddSceneRoot(Actor);
-    if (Root == nullptr)
-    {
-        CancelEditorTransaction();
-        SetStatus("Selected Actor could not create a scene root", true);
-        return;
-    }
-
-    Select(Root);
-    if (!CommitEditorTransaction())
-    {
-        return;
-    }
-    SetStatus("Added " + Root->GetPathName());
+    FinishInteractiveEdit();
+    ApplyCommandResult(CommandService.AddSceneRoot());
 }
 
 void FPicoEditorApp::AddComponentToSelection(bool bCubeComponent)
 {
-    PObject* Object = GetSelectedObject();
-    PActor* Actor =
-        Object != nullptr && Object->IsA(PActor::StaticClass())
-        ? static_cast<PActor*>(Object)
-        : nullptr;
-    PSceneComponent* Parent =
-        Object != nullptr && Object->IsA(PSceneComponent::StaticClass())
-        ? static_cast<PSceneComponent*>(Object)
-        : nullptr;
-    if (Actor == nullptr && Parent != nullptr)
-    {
-        Actor = Parent->GetOwner();
-    }
-    if (Actor == nullptr)
-    {
-        SetStatus("Select an Actor or SceneComponent before adding a component", true);
-        return;
-    }
-
-    const std::string TransactionDescription =
-        bCubeComponent ? "Add Cube Component" : "Add Scene Component";
-    if (!BeginEditorTransaction(TransactionDescription))
-    {
-        return;
-    }
-
-    PSceneComponent* Component = AddComponent(Actor, Parent, bCubeComponent);
-    if (Component == nullptr)
-    {
-        CancelEditorTransaction();
-        SetStatus("Could not add the selected component type", true);
-        return;
-    }
-
-    Select(Component);
-    if (!CommitEditorTransaction())
-    {
-        return;
-    }
-    SetStatus("Added " + Component->GetPathName());
+    FinishInteractiveEdit();
+    ApplyCommandResult(CommandService.AddComponent(bCubeComponent));
 }
 
 void FPicoEditorApp::AddSceneComponentToSelection()
@@ -1794,93 +544,29 @@ void FPicoEditorApp::AddCubeComponentToSelection()
 
 void FPicoEditorApp::SetSelectedComponentAsRoot()
 {
-    PObject* Object = GetSelectedObject();
-    PSceneComponent* Component =
-        Object != nullptr && Object->IsA(PSceneComponent::StaticClass())
-        ? static_cast<PSceneComponent*>(Object)
-        : nullptr;
-    PActor* Owner = Component != nullptr ? Component->GetOwner() : nullptr;
-    if (Owner == nullptr || !BeginEditorTransaction("Set Root Component"))
-    {
-        if (Owner == nullptr)
-        {
-            SetStatus("Selected component could not become the root", true);
-        }
-        return;
-    }
-    if (!Owner->SetRootComponent(Component))
-    {
-        CancelEditorTransaction();
-        SetStatus("Selected component could not become the root", true);
-        return;
-    }
-
-    if (!CommitEditorTransaction())
-    {
-        return;
-    }
-    SetStatus("Set " + Component->GetPathName() + " as RootComponent");
+    FinishInteractiveEdit();
+    ApplyCommandResult(CommandService.SetSelectedComponentAsRoot());
 }
 
 void FPicoEditorApp::DestroySelectedObject()
 {
-    PObject* Object = GetSelectedObject();
-    if (Object == nullptr)
-    {
-        SetStatus("No object selected", true);
-        return;
-    }
-
-    const std::string Path = Object->GetPathName();
-    if (!Object->IsA(PActor::StaticClass())
-        && !Object->IsA(PActorComponent::StaticClass()))
-    {
-        SetStatus("Only Actors and Components can be destroyed", true);
-        return;
-    }
-    if (!BeginEditorTransaction("Delete " + Object->GetName().ToString()))
-    {
-        return;
-    }
-
-    FObjectHandle SelectionAfterDestroy;
-    bool bDestroyed = false;
-    if (Object->IsA(PActor::StaticClass()))
-    {
-        PActor* Actor = static_cast<PActor*>(Object);
-        PWorld* World = Actor->GetWorld();
-        SelectionAfterDestroy =
-            World != nullptr ? World->GetHandle() : FObjectHandle {};
-        bDestroyed = World != nullptr && World->DestroyActor(Actor);
-    }
-    else if (Object->IsA(PActorComponent::StaticClass()))
-    {
-        PActorComponent* Component = static_cast<PActorComponent*>(Object);
-        PActor* Owner = Component->GetOwner();
-        SelectionAfterDestroy =
-            Owner != nullptr ? Owner->GetHandle() : FObjectHandle {};
-        bDestroyed = Owner != nullptr && Owner->DestroyComponent(Component);
-    }
-
-    if (!bDestroyed)
-    {
-        CancelEditorTransaction();
-        SetStatus("Could not destroy " + Path, true);
-        return;
-    }
-
-    Select(ResolveObject(SelectionAfterDestroy));
-    if (!CommitEditorTransaction())
-    {
-        return;
-    }
-    SetStatus("Destroyed " + Path);
+    FinishInteractiveEdit();
+    ApplyCommandResult(CommandService.DeleteSelectedObject());
 }
 
 void FPicoEditorApp::QueueDestroy(PObject* Object)
 {
-    PendingDestroyHandle =
+    const FObjectHandle Handle =
         Object != nullptr ? Object->GetHandle() : FObjectHandle {};
+    CommandQueue.Enqueue(
+        [this, Handle]()
+        {
+            if (PObject* LiveObject = ResolveObject(Handle))
+            {
+                Select(LiveObject);
+                DestroySelectedObject();
+            }
+        });
 }
 
 void FPicoEditorApp::BeginRename(PObject* Object)
@@ -1909,229 +595,51 @@ void FPicoEditorApp::RenameSelectedObject()
 
 bool FPicoEditorApp::CommitRename()
 {
-    PObject* Object = ResolveObject(RenameObjectHandle);
-    const std::string NewName(RenameBuffer.data());
-    if (Object == nullptr)
-    {
-        SetStatus("The object being renamed no longer exists", true);
-        RenameObjectHandle = {};
-        return false;
-    }
-    if (!IsValidObjectName(NewName))
-    {
-        SetStatus(
-            "Names must start with a letter or underscore and contain only letters, numbers, or underscores",
-            true);
-        return false;
-    }
-    if (Object->GetName() == FName(NewName))
-    {
-        RenameObjectHandle = {};
-        SetStatus("Name unchanged");
-        return true;
-    }
-
-    const std::string OldPath = Object->GetPathName();
-    if (!BeginEditorTransaction("Rename " + Object->GetName().ToString()))
+    FinishInteractiveEdit();
+    FEditorCommandResult Result = CommandService.RenameObject(
+        RenameObjectHandle,
+        std::string(RenameBuffer.data()));
+    ApplyCommandResult(Result);
+    if (!Result.bSucceeded)
     {
         return false;
     }
-    if (!RenameObject(Object, FName(NewName)))
-    {
-        CancelEditorTransaction();
-        SetStatus("The name is already used in this object scope", true);
-        return false;
-    }
-
     RenameObjectHandle = {};
-    if (!CommitEditorTransaction())
-    {
-        return false;
-    }
-    SetStatus("Renamed " + OldPath + " to " + Object->GetPathName());
     return true;
 }
 
 bool FPicoEditorApp::CanCopySelectedObject() const
 {
-    PObject* Object = GetSelectedObject();
-    return Object != nullptr
-        && (Object->IsA(PActor::StaticClass())
-            || Object->IsA(PSceneComponent::StaticClass()));
+    return CommandService.CanCopySelectedObject();
 }
 
 bool FPicoEditorApp::CanPasteClipboard() const
 {
-    if (!SceneClipboard.HasContent() || GetWorld() == nullptr)
-    {
-        return false;
-    }
-    if (SceneClipboard.GetContentType()
-        == EEditorClipboardContentType::Actor)
-    {
-        return true;
-    }
-
-    PObject* Object = GetSelectedObject();
-    return Object != nullptr
-        && (Object->IsA(PActor::StaticClass())
-            || Object->IsA(PSceneComponent::StaticClass()));
+    return CommandService.CanPasteClipboard();
 }
 
 void FPicoEditorApp::CopySelectedObject()
 {
     FinishInteractiveEdit();
-
-    PWorld* World = GetWorld();
-    PObject* Object = GetSelectedObject();
-    if (World == nullptr || Object == nullptr || !CanCopySelectedObject())
-    {
-        SetStatus("Select an Actor or SceneComponent to copy", true);
-        return;
-    }
-
-    const std::string ObjectPath = Object->GetPathName();
-    EEditorClipboardError Error = EEditorClipboardError::None;
-    if (!SceneClipboard.Copy(*World, ObjectPath, &Error))
-    {
-        SetStatus(
-            "Could not copy object: " + std::string(ToString(Error)),
-            true);
-        return;
-    }
-    SetStatus("Copied " + ObjectPath);
+    ApplyCommandResult(CommandService.CopySelectedObject());
 }
 
 void FPicoEditorApp::PasteClipboard()
 {
     FinishInteractiveEdit();
-
-    PWorld* World = GetWorld();
-    if (EngineLoop == nullptr || World == nullptr || !CanPasteClipboard())
-    {
-        SetStatus("Clipboard cannot be pasted at the current selection", true);
-        return;
-    }
-
-    FWorldAssetData PastedWorldData;
-    std::string PastedObjectPath;
-    EEditorClipboardError ClipboardError = EEditorClipboardError::None;
-    if (!SceneClipboard.BuildPaste(
-            *World,
-            GetSelectedObjectPath(),
-            PastedWorldData,
-            PastedObjectPath,
-            &ClipboardError))
-    {
-        SetStatus(
-            "Could not build pasted object: "
-                + std::string(ToString(ClipboardError)),
-            true);
-        return;
-    }
-
-    const std::string TransactionDescription =
-        SceneClipboard.GetContentType()
-            == EEditorClipboardContentType::Actor
-        ? "Paste Actor"
-        : "Paste Component";
-    if (!BeginEditorTransaction(TransactionDescription))
-    {
-        return;
-    }
-
-    EWorldSerializationError WorldError =
-        EWorldSerializationError::None;
-    if (!EngineLoop->ReplaceWorld(PastedWorldData, &WorldError))
-    {
-        CancelEditorTransaction();
-        SetStatus(
-            "Could not paste object: " + std::string(ToString(WorldError)),
-            true);
-        return;
-    }
-
-    PObject* PastedObject =
-        FindWorldObjectByPath(GetWorld(), PastedObjectPath);
-    if (PastedObject == nullptr)
-    {
-        CancelEditorTransaction();
-        Select(GetWorld());
-        SetStatus("Pasted object could not be selected", true);
-        return;
-    }
-
-    Select(PastedObject);
-    if (!CommitEditorTransaction())
-    {
-        return;
-    }
-    SetStatus("Pasted " + PastedObjectPath);
+    ApplyCommandResult(CommandService.PasteClipboard());
 }
 
 void FPicoEditorApp::SaveWorld()
 {
     FinishInteractiveEdit();
-
-    PWorld* World = GetWorld();
-    std::filesystem::path WorldPath;
-    if (World == nullptr || !GetDefaultWorldPath(WorldPath))
-    {
-        SetStatus("Cannot save without an active project World", true);
-        return;
-    }
-
-    std::error_code FileError;
-    std::filesystem::create_directories(WorldPath.parent_path(), FileError);
-    if (FileError)
-    {
-        SetStatus("Could not create the project Maps directory", true);
-        return;
-    }
-
-    EWorldSerializationError Error = EWorldSerializationError::None;
-    if (!SaveWorldToFile(WorldPath, *World, &Error))
-    {
-        SetStatus(
-            "Could not save World: " + std::string(ToString(Error)),
-            true);
-        return;
-    }
-
-    SetStatus("Saved " + WorldPath.string());
+    ApplyCommandResult(CommandService.SaveWorld());
 }
 
 void FPicoEditorApp::OpenWorld()
 {
     FinishInteractiveEdit();
-
-    std::filesystem::path WorldPath;
-    if (EngineLoop == nullptr || !GetDefaultWorldPath(WorldPath))
-    {
-        SetStatus("Cannot open a World without an active project", true);
-        return;
-    }
-
-    EWorldSerializationError Error = EWorldSerializationError::None;
-    if (!EngineLoop->LoadWorld(WorldPath, &Error))
-    {
-        SetStatus(
-            "Could not open World: " + std::string(ToString(Error)),
-            true);
-        return;
-    }
-
-    TransactionManager.Clear();
-    Select(GetWorld());
-    SetStatus("Opened " + WorldPath.string());
-}
-
-bool FPicoEditorApp::GetDefaultWorldPath(std::filesystem::path& OutPath) const
-{
-    return FPaths::TryGetProjectWritePath(
-        EProjectWriteRoot::Content,
-        std::filesystem::path("Maps") / "EditorWorld.pworld",
-        OutPath);
+    ApplyCommandResult(CommandService.OpenWorld());
 }
 
 bool FPicoEditorApp::PrepareInteractiveEdit(
@@ -2200,7 +708,12 @@ void FPicoEditorApp::FinishInteractiveEdit()
         return;
     }
 
-    if (bInteractiveEditChanged)
+    const bool bShouldCommit = bInteractiveEditChanged;
+    InteractiveEditKey.clear();
+    bInteractiveEditChanged = false;
+    bInteractiveEditVisited = false;
+
+    if (bShouldCommit)
     {
         CommitEditorTransaction();
     }
@@ -2209,9 +722,6 @@ void FPicoEditorApp::FinishInteractiveEdit()
         CancelEditorTransaction();
     }
 
-    InteractiveEditKey.clear();
-    bInteractiveEditChanged = false;
-    bInteractiveEditVisited = false;
 }
 
 void FPicoEditorApp::CancelInteractiveEdit()
@@ -2221,10 +731,10 @@ void FPicoEditorApp::CancelInteractiveEdit()
         return;
     }
 
-    CancelEditorTransaction();
     InteractiveEditKey.clear();
     bInteractiveEditChanged = false;
     bInteractiveEditVisited = false;
+    CancelEditorTransaction();
 }
 
 bool FPicoEditorApp::BeginEditorTransaction(std::string Description)
@@ -2267,10 +777,21 @@ bool FPicoEditorApp::CommitEditorTransaction()
             GetSelectedObjectPath(),
             &Error))
     {
-        TransactionManager.Cancel();
+        EWorldSerializationError RollbackError = EWorldSerializationError::None;
+        const bool bRolledBack = TransactionManager.Rollback(
+            [this](
+                const FEditorWorldSnapshot& Snapshot,
+                EWorldSerializationError* RestoreError)
+            {
+                return RestoreEditorSnapshot(Snapshot, RestoreError);
+            },
+            &RollbackError);
         SetStatus(
             "Could not commit editor transaction: "
-                + std::string(ToString(Error)),
+                + std::string(ToString(Error))
+                + (bRolledBack
+                    ? "; changes were rolled back"
+                    : "; rollback failed: " + std::string(ToString(RollbackError))),
             true);
         return false;
     }
@@ -2279,65 +800,43 @@ bool FPicoEditorApp::CommitEditorTransaction()
 
 void FPicoEditorApp::CancelEditorTransaction()
 {
-    TransactionManager.Cancel();
+    if (!TransactionManager.HasPendingTransaction())
+    {
+        return;
+    }
+
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    if (!TransactionManager.Rollback(
+            [this](
+                const FEditorWorldSnapshot& Snapshot,
+                EWorldSerializationError* RestoreError)
+            {
+                return RestoreEditorSnapshot(Snapshot, RestoreError);
+            },
+            &Error))
+    {
+        TransactionManager.Cancel();
+        SetStatus(
+            "Could not roll back editor transaction: "
+                + std::string(ToString(Error)),
+            true);
+    }
 }
 
 void FPicoEditorApp::Undo()
 {
     FinishInteractiveEdit();
-
-    if (!TransactionManager.CanUndo())
-    {
-        SetStatus("Nothing to undo");
-        return;
-    }
-
-    std::string Description;
-    EWorldSerializationError Error = EWorldSerializationError::None;
-    const bool bSucceeded = TransactionManager.Undo(
-        [this](
-            const FEditorWorldSnapshot& Snapshot,
-            EWorldSerializationError* RestoreError)
-        {
-            return RestoreEditorSnapshot(Snapshot, RestoreError);
-        },
-        &Description,
-        &Error);
-    if (!bSucceeded)
-    {
-        SetStatus("Undo failed: " + std::string(ToString(Error)), true);
-        return;
-    }
-    SetStatus("Undid " + Description);
+    RenameObjectHandle = {};
+    bOpenRenamePopup = false;
+    ApplyCommandResult(CommandService.Undo());
 }
 
 void FPicoEditorApp::Redo()
 {
     FinishInteractiveEdit();
-
-    if (!TransactionManager.CanRedo())
-    {
-        SetStatus("Nothing to redo");
-        return;
-    }
-
-    std::string Description;
-    EWorldSerializationError Error = EWorldSerializationError::None;
-    const bool bSucceeded = TransactionManager.Redo(
-        [this](
-            const FEditorWorldSnapshot& Snapshot,
-            EWorldSerializationError* RestoreError)
-        {
-            return RestoreEditorSnapshot(Snapshot, RestoreError);
-        },
-        &Description,
-        &Error);
-    if (!bSucceeded)
-    {
-        SetStatus("Redo failed: " + std::string(ToString(Error)), true);
-        return;
-    }
-    SetStatus("Redid " + Description);
+    RenameObjectHandle = {};
+    bOpenRenamePopup = false;
+    ApplyCommandResult(CommandService.Redo());
 }
 
 bool FPicoEditorApp::RestoreEditorSnapshot(
@@ -2350,34 +849,31 @@ bool FPicoEditorApp::RestoreEditorSnapshot(
         return false;
     }
 
-    PendingDestroyHandle = {};
+    CommandQueue.Clear();
     RenameObjectHandle = {};
     bOpenRenamePopup = false;
     PWorld* World = GetWorld();
-    PObject* Selection = FindWorldObjectByPath(
+    PObject* RestoredSelection = FindEditorWorldObjectByPath(
         World,
         Snapshot.SelectedObjectPath);
     Select(
-        Selection != nullptr || Snapshot.SelectedObjectPath.empty()
-            ? Selection
+        RestoredSelection != nullptr || Snapshot.SelectedObjectPath.empty()
+            ? RestoredSelection
             : static_cast<PObject*>(World));
     return true;
 }
 
 std::string FPicoEditorApp::GetSelectedObjectPath() const
 {
-    PObject* Object = GetSelectedObject();
-    return Object != nullptr ? Object->GetPathName() : std::string {};
+    return Selection.GetObjectPath();
 }
 
 void FPicoEditorApp::Select(PObject* Object)
 {
-    const FObjectHandle NewHandle =
-        Object != nullptr ? Object->GetHandle() : FObjectHandle {};
-    if (NewHandle != SelectedObjectHandle)
+    if (Object != GetSelectedObject())
     {
         FinishInteractiveEdit();
-        SelectedObjectHandle = NewHandle;
+        Selection.Set(Object);
     }
 }
 
@@ -2385,5 +881,10 @@ void FPicoEditorApp::SetStatus(std::string Message, bool bIsError)
 {
     Status = std::move(Message);
     bStatusIsError = bIsError;
+}
+
+void FPicoEditorApp::ApplyCommandResult(FEditorCommandResult Result)
+{
+    SetStatus(std::move(Result.Message), !Result.bSucceeded);
 }
 }
