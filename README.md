@@ -13,7 +13,7 @@ enough to study while preserving clear ownership boundaries and an end-to-end ru
 
 ## Current State
 
-The first three development months are complete. Pico can currently:
+The first four development months are complete. Pico can currently:
 
 - Run a UE-style `PreInit -> Init -> Tick -> Exit` engine loop.
 - Create reflected native objects through `PClass` and `NewObject`.
@@ -29,13 +29,19 @@ The first three development months are complete. Pico can currently:
 - Open a `.pico` project with separate engine and project roots.
 - Display runtime objects in an Outliner and Details panel.
 - Render `PCubeComponent` instances in an interactive OpenGL 3.3 editor viewport.
+- Select Actors and components individually, additively, by range, or with `Ctrl+A`; the viewport
+  renders the complete selection set with scene highlights.
 - Undo and redo scene hierarchy, Actor Transform, and reflected-property edits through editor
-  transactions.
-- Copy and paste complete Actors or SceneComponent attachment subtrees with remapped scene IDs.
+  transactions while restoring the complete multi-selection.
+- Copy, paste, and delete multiple Actors in one command, or copy a SceneComponent attachment
+  subtree, with remapped scene IDs and one transaction per command.
+- Move, rotate, and scale single or multiple scene objects through an ImGuizmo-backed viewport
+  gizmo with World/Local coordinates, snapping, primary-object pivots, cancellation, and Undo/Redo.
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-Debug and Release configurations build successfully, and all four automated test executables pass.
+Debug and Release configurations build successfully, all four automated test executables pass,
+and `PicoEditorTests` currently reports 67 passing checks.
 
 ## Architecture
 
@@ -43,6 +49,8 @@ The primary dependency direction is:
 
 ```text
 PicoEditor
+  -> PicoEditorCore
+  -> PicoImGuizmo / PicoImGui
   -> PicoRender
   -> PicoEngine
   -> PicoObject
@@ -63,7 +71,8 @@ PicoInspector       -> PicoReflectionTools
 | `PicoObject` | `PObject`, `PClass`, `PProperty`, reflection, registry, handles, Outer graph, serialization |
 | `PicoEngine` | Engine loop, World, Level, Actor, components, attachment, primitive scene data |
 | `PicoRender` | GLAD-backed OpenGL, shaders, geometry, framebuffer, scene traversal and draw submission |
-| `PicoEditor` | Runtime Outliner, Details, scene editing, editor camera and 3D viewport |
+| `PicoEditorCore` | UI-independent selection, commands, clipboard, transactions, and transform operations |
+| `PicoEditor` | Outliner, Details, editor camera, viewport picking, tool state, and transform gizmo UI |
 | `PicoReflectionTools` | Generic metadata inspection and reflected-property helpers |
 | `PicoSandbox` | Project-side reflection, serialization, editor and testing example |
 
@@ -131,7 +140,7 @@ can live outside the Pico repository.
 - Git for Windows
 - A GPU and driver supporting OpenGL 3.3
 
-GLFW and Dear ImGui are included under `ThirdParty`.
+GLFW, Dear ImGui, and ImGuizmo are included under `ThirdParty`.
 
 ## Quick Start
 
@@ -175,6 +184,18 @@ GameWorld
   and delete commands.
 - Left-click rendered geometry to select its owning Actor. Selecting an Actor outlines all of its
   visible CubeComponents; selecting a component in the Outliner outlines only that component.
+- Hold `Ctrl` while clicking to toggle objects in the selection. Hold `Shift` in the Outliner to
+  select a range, or use `Ctrl+A` to select all scene Actors.
+- Press `Q` for selection, `W` for translation, `E` for rotation, and `R` for scale. The toolbar
+  exposes the same transform modes.
+- Use `World` coordinates to align the gizmo with the scene axes, or `Local` coordinates to align
+  it with the primary selected object's rotation. Multi-object rotation and scaling use the primary
+  object as their pivot.
+- Enable `Snap` to quantize translation, rotation, and scale. Press `Esc` during a drag to restore
+  every target to its pre-drag transform.
+- An Actor gizmo uses its root component as the Actor pivot. If visible geometry is offset beneath
+  a `DefaultSceneRoot`, select the child component in the Outliner to transform it around the
+  geometry's own origin.
 - Use `Ctrl+Z` to undo and `Ctrl+Y` or `Ctrl+Shift+Z` to redo scene hierarchy, Actor Transform, and
   reflected-property edits. One continuous value drag creates one transaction.
 - Use `Ctrl+C` and `Ctrl+V` to copy and paste an Actor with all of its components, or a selected
@@ -254,7 +275,7 @@ Pico/
     Runtime/               Core, Object, Engine, Render and Launch
     Samples/               Reusable engine-side samples
   Tests/                   Core, Object, Engine and Sandbox tests
-  ThirdParty/              GLAD, GLFW and Dear ImGui
+  ThirdParty/              GLAD, GLFW, Dear ImGui and ImGuizmo
 ```
 
 ## Reflection Authoring
@@ -300,13 +321,13 @@ See:
 
 ## Roadmap
 
-The next stage focuses on turning the runtime editor into a persistent content workflow:
+Month 5 focuses on turning the persistent scene editor into an asset-driven 3D workflow:
 
-- Transactional World reconstruction and `.pworld` file save/load
-- Asset registry and project content browser
-- Static-mesh assets and model importing
-- Transform gizmos
-- Render-scene caching, materials, textures and PBR
+- Project-scoped asset registry and Content Browser
+- Static-mesh asset format, model importing, and stable scene asset references
+- Editor asset creation, inspection, assignment, save/load, and reimport workflows
+- Render-scene caching plus a small material, texture, and PBR path
+- An end-to-end scene that survives editor restart and is ready for packaging work
 
 Later stages will explore:
 

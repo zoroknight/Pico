@@ -166,6 +166,15 @@ void FDetailsPanel::Draw(
         return;
     }
 
+    if (Selection->Num() > 1)
+    {
+        ImGui::Text("%zu objects selected", Selection->Num());
+        ImGui::Separator();
+        ImGui::TextDisabled("Primary selection");
+        DrawObjectIdentity(Object);
+        return;
+    }
+
     DrawObjectIdentity(Object);
 
     if (Object->IsA(PActor::StaticClass()))

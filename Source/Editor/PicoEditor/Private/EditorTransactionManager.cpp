@@ -29,7 +29,8 @@ FEditorTransactionManager::FEditorTransactionManager(
 bool FEditorTransactionManager::Begin(
     std::string Description,
     const PWorld& World,
-    std::string SelectedObjectPath,
+    std::vector<std::string> SelectedObjectPaths,
+    std::string PrimaryObjectPath,
     EWorldSerializationError* OutError)
 {
     ReportError(OutError, EWorldSerializationError::None);
@@ -43,7 +44,8 @@ bool FEditorTransactionManager::Begin(
     Transaction.Description = std::move(Description);
     if (!CaptureSnapshot(
             World,
-            std::move(SelectedObjectPath),
+            std::move(SelectedObjectPaths),
+            std::move(PrimaryObjectPath),
             Transaction.Before,
             OutError))
     {
@@ -54,9 +56,29 @@ bool FEditorTransactionManager::Begin(
     return true;
 }
 
-bool FEditorTransactionManager::Commit(
+bool FEditorTransactionManager::Begin(
+    std::string Description,
     const PWorld& World,
     std::string SelectedObjectPath,
+    EWorldSerializationError* OutError)
+{
+    std::vector<std::string> Paths;
+    if (!SelectedObjectPath.empty())
+    {
+        Paths.push_back(SelectedObjectPath);
+    }
+    return Begin(
+        std::move(Description),
+        World,
+        std::move(Paths),
+        std::move(SelectedObjectPath),
+        OutError);
+}
+
+bool FEditorTransactionManager::Commit(
+    const PWorld& World,
+    std::vector<std::string> SelectedObjectPaths,
+    std::string PrimaryObjectPath,
     EWorldSerializationError* OutError)
 {
     ReportError(OutError, EWorldSerializationError::None);
@@ -67,7 +89,8 @@ bool FEditorTransactionManager::Commit(
     }
     if (!CaptureSnapshot(
             World,
-            std::move(SelectedObjectPath),
+            std::move(SelectedObjectPaths),
+            std::move(PrimaryObjectPath),
             PendingTransaction->After,
             OutError))
     {
@@ -78,6 +101,23 @@ bool FEditorTransactionManager::Commit(
     PendingTransaction.reset();
     RedoStack.clear();
     return true;
+}
+
+bool FEditorTransactionManager::Commit(
+    const PWorld& World,
+    std::string SelectedObjectPath,
+    EWorldSerializationError* OutError)
+{
+    std::vector<std::string> Paths;
+    if (!SelectedObjectPath.empty())
+    {
+        Paths.push_back(SelectedObjectPath);
+    }
+    return Commit(
+        World,
+        std::move(Paths),
+        std::move(SelectedObjectPath),
+        OutError);
 }
 
 void FEditorTransactionManager::Cancel()
@@ -215,7 +255,8 @@ std::size_t FEditorTransactionManager::GetRedoCount() const
 
 bool FEditorTransactionManager::CaptureSnapshot(
     const PWorld& World,
-    std::string SelectedObjectPath,
+    std::vector<std::string> SelectedObjectPaths,
+    std::string PrimaryObjectPath,
     FEditorWorldSnapshot& OutSnapshot,
     EWorldSerializationError* OutError) const
 {
@@ -224,7 +265,8 @@ bool FEditorTransactionManager::CaptureSnapshot(
     {
         return false;
     }
-    Snapshot.SelectedObjectPath = std::move(SelectedObjectPath);
+    Snapshot.SelectedObjectPaths = std::move(SelectedObjectPaths);
+    Snapshot.PrimaryObjectPath = std::move(PrimaryObjectPath);
     OutSnapshot = std::move(Snapshot);
     return true;
 }

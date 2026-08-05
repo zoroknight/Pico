@@ -21,26 +21,29 @@
 
 namespace Pico
 {
-namespace
+FMatrix4 BuildSceneProjectionMatrix(
+    const FSceneView& View,
+    float AspectRatio)
 {
-FMatrix4 MakePerspective(float FieldOfViewDegrees, float Aspect, float NearPlane, float FarPlane)
-{
-    const float HalfFovRadians = DegreesToRadians(FieldOfViewDegrees) * 0.5f;
+    const float HalfFovRadians =
+        DegreesToRadians(View.VerticalFieldOfViewDegrees) * 0.5f;
     const float FocalLength = 1.0f / std::tan(HalfFovRadians);
 
     FMatrix4 Result;
-    Result[0][0] = FocalLength / Aspect;
+    Result[0][0] = FocalLength / AspectRatio;
     Result[1][1] = FocalLength;
-    Result[2][2] = (FarPlane + NearPlane) / (NearPlane - FarPlane);
-    Result[2][3] = (2.0f * FarPlane * NearPlane) / (NearPlane - FarPlane);
+    Result[2][2] = (View.FarPlane + View.NearPlane)
+        / (View.NearPlane - View.FarPlane);
+    Result[2][3] = (2.0f * View.FarPlane * View.NearPlane)
+        / (View.NearPlane - View.FarPlane);
     Result[3][2] = -1.0f;
     return Result;
 }
 
-FMatrix4 MakeLookAt(const FVector3& Eye, const FVector3& Target, const FVector3& Up)
+FMatrix4 BuildSceneViewMatrix(const FSceneView& View)
 {
-    const FVector3 Forward = (Target - Eye).GetSafeNormal();
-    FVector3 Right = FVector3::Cross(Forward, Up).GetSafeNormal();
+    const FVector3 Forward = (View.Target - View.Position).GetSafeNormal();
+    FVector3 Right = FVector3::Cross(Forward, View.Up).GetSafeNormal();
     if (Right.IsNearlyZero())
     {
         Right = FVector3::RightVector;
@@ -51,17 +54,20 @@ FMatrix4 MakeLookAt(const FVector3& Eye, const FVector3& Target, const FVector3&
     Result[0][0] = Right.X;
     Result[0][1] = Right.Y;
     Result[0][2] = Right.Z;
-    Result[0][3] = -FVector3::Dot(Right, Eye);
+    Result[0][3] = -FVector3::Dot(Right, View.Position);
     Result[1][0] = CameraUp.X;
     Result[1][1] = CameraUp.Y;
     Result[1][2] = CameraUp.Z;
-    Result[1][3] = -FVector3::Dot(CameraUp, Eye);
+    Result[1][3] = -FVector3::Dot(CameraUp, View.Position);
     Result[2][0] = -Forward.X;
     Result[2][1] = -Forward.Y;
     Result[2][2] = -Forward.Z;
-    Result[2][3] = FVector3::Dot(Forward, Eye);
+    Result[2][3] = FVector3::Dot(Forward, View.Position);
     return Result;
 }
+
+namespace
+{
 
 constexpr std::array<float, 144> CubeVertices {
     -1, -1,  1,  0,  0,  1,   1, -1,  1,  0,  0,  1,
@@ -511,7 +517,7 @@ bool FSceneViewportRenderer::Resize(uint32 Width, uint32 Height)
 bool FSceneViewportRenderer::Render(
     PWorld* World,
     const FSceneView& View,
-    FObjectHandle SelectedObject)
+    std::span<const FObjectHandle> SelectedObjects)
 {
     if (!Impl->bInitialized || Impl->Framebuffer == 0 || World == nullptr)
     {
@@ -519,12 +525,8 @@ bool FSceneViewportRenderer::Render(
     }
 
     const float Aspect = static_cast<float>(Impl->Width) / static_cast<float>(Impl->Height);
-    const FMatrix4 Projection = MakePerspective(
-        View.VerticalFieldOfViewDegrees,
-        Aspect,
-        View.NearPlane,
-        View.FarPlane);
-    const FMatrix4 ViewMatrix = MakeLookAt(View.Position, View.Target, View.Up);
+    const FMatrix4 Projection = BuildSceneProjectionMatrix(View, Aspect);
+    const FMatrix4 ViewMatrix = BuildSceneViewMatrix(View);
     const FMatrix4 ViewProjection = Projection * ViewMatrix;
 
     glBindFramebuffer(GL_FRAMEBUFFER, Impl->Framebuffer);
@@ -608,9 +610,14 @@ bool FSceneViewportRenderer::Render(
                     GL_UNSIGNED_INT,
                     nullptr);
 
-                const bool bSelected =
-                    Cube->GetHandle() == SelectedObject
-                    || Actor->GetHandle() == SelectedObject;
+                const bool bSelected = std::find(
+                        SelectedObjects.begin(),
+                        SelectedObjects.end(),
+                        Cube->GetHandle()) != SelectedObjects.end()
+                    || std::find(
+                        SelectedObjects.begin(),
+                        SelectedObjects.end(),
+                        Actor->GetHandle()) != SelectedObjects.end();
                 if (bSelected)
                 {
                     FTransform OutlineTransform = Cube->GetWorldTransform();

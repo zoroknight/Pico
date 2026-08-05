@@ -1,6 +1,7 @@
 #include "Pico/Editor/EditorCommandService.h"
 #include "Pico/Editor/EditorSceneClipboard.h"
 #include "Pico/Editor/EditorSelection.h"
+#include "Pico/Editor/EditorTransformService.h"
 #include "Pico/Editor/EditorTransactionManager.h"
 
 #include "Pico/Engine/Actor.h"
@@ -17,6 +18,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -170,7 +172,7 @@ void TestEditorSceneClipboard(
             {
                 return false;
             }
-            RestoredSelectionPath = Snapshot.SelectedObjectPath;
+            RestoredSelectionPath = Snapshot.PrimaryObjectPath;
             return true;
         };
     Runner.Expect(
@@ -383,10 +385,182 @@ void TestEditorCommandService(FTestRunner& Runner)
             && Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), PastedPath) == nullptr,
         "Command service Undo and Redo restore complete World snapshots");
 
+    Runner.Expect(
+        Commands.SpawnActor(true).bSucceeded,
+        "Command service creates the first Actor for multi-selection");
+    Pico::PObject* FirstSelectedActor = Selection.Resolve();
+    const std::string FirstSelectedPath = Selection.GetObjectPath();
+    Runner.Expect(
+        Commands.SpawnActor(true).bSucceeded,
+        "Command service creates the second Actor for multi-selection");
+    Pico::PObject* SecondSelectedActor = Selection.Resolve();
+    const std::string SecondSelectedPath = Selection.GetObjectPath();
+    const std::vector<Pico::PObject*> OrderedActors {
+        FirstSelectedActor,
+        SecondSelectedActor
+    };
+    Selection.Set(FirstSelectedActor);
+    Runner.Expect(
+        Selection.SetRange(OrderedActors, SecondSelectedActor, false)
+            && Selection.Num() == 2
+            && Selection.Contains(FirstSelectedActor)
+            && Selection.Contains(SecondSelectedActor)
+            && Selection.Resolve() == SecondSelectedActor,
+        "Editor selection supports anchored range selection with a primary object");
+    Runner.Expect(
+        Selection.Toggle(FirstSelectedActor)
+            && Selection.Num() == 1
+            && !Selection.Contains(FirstSelectedActor)
+            && Selection.Contains(SecondSelectedActor)
+            && Selection.Add(FirstSelectedActor)
+            && Selection.Num() == 2,
+        "Editor selection supports Ctrl-style toggle and additive selection");
+    Runner.Expect(
+        Commands.CopySelectedObject().bSucceeded
+            && Commands.PasteClipboard().bSucceeded
+            && Selection.Num() == 2
+            && Selection.GetObjectPaths()[0] != FirstSelectedPath
+            && Selection.GetObjectPaths()[1] != SecondSelectedPath
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), FirstSelectedPath) != nullptr
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), SecondSelectedPath) != nullptr,
+        "Command service copies and pastes multiple selected Actors");
+    Pico::PObject* RestoredFirstActor = Pico::FindEditorWorldObjectByPath(
+        EngineLoop.GetWorld(), FirstSelectedPath);
+    Pico::PObject* RestoredSecondActor = Pico::FindEditorWorldObjectByPath(
+        EngineLoop.GetWorld(), SecondSelectedPath);
+    Selection.Set(RestoredFirstActor);
+    Selection.Add(RestoredSecondActor);
+    Runner.Expect(
+        Commands.DeleteSelectedObject().bSucceeded
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), FirstSelectedPath) == nullptr
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), SecondSelectedPath) == nullptr,
+        "Command service deletes multiple selected scene Actors in one command");
+    Runner.Expect(
+        Commands.Undo().bSucceeded
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), FirstSelectedPath) != nullptr
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), SecondSelectedPath) != nullptr
+            && Selection.Num() == 2
+            && Selection.GetObjectPaths().size() == 2,
+        "Batch delete Undo restores all Actors and the complete selection set");
+    Runner.Expect(
+        Commands.Redo().bSucceeded
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), FirstSelectedPath) == nullptr
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), SecondSelectedPath) == nullptr,
+        "Batch delete Redo removes the complete multi-selection again");
+
     EngineLoop.Exit();
     Runner.Expect(
         Pico::FObjectRegistry::GetObjectCount() == 0,
         "Editor command service releases all reconstructed objects");
+}
+
+void TestEditorTransformService(
+    FTestRunner& Runner,
+    Pico::FEngineLoop& EngineLoop)
+{
+    Pico::PWorld* World = EngineLoop.GetWorld();
+    Pico::PActor* FirstActor = World != nullptr
+        ? World->SpawnActor<Pico::PActor>("TransformFirst") : nullptr;
+    Pico::PActor* PrimaryActor = World != nullptr
+        ? World->SpawnActor<Pico::PActor>("TransformPrimary") : nullptr;
+    Pico::PCubeComponent* FirstRoot = FirstActor != nullptr
+        ? FirstActor->CreateComponent<Pico::PCubeComponent>("Root") : nullptr;
+    Pico::PCubeComponent* PrimaryRoot = PrimaryActor != nullptr
+        ? PrimaryActor->CreateComponent<Pico::PCubeComponent>("Root") : nullptr;
+    const bool bCreated = FirstActor != nullptr
+        && PrimaryActor != nullptr
+        && FirstRoot != nullptr
+        && PrimaryRoot != nullptr
+        && FirstActor->SetRootComponent(FirstRoot)
+        && PrimaryActor->SetRootComponent(PrimaryRoot)
+        && FirstActor->SetActorTransform(Pico::FTransform(Pico::FVector3::ZeroVector))
+        && PrimaryActor->SetActorTransform(
+            Pico::FTransform(Pico::FVector3(10.0f, 0.0f, 0.0f)));
+    Runner.Expect(bCreated, "Transform service test actors are created");
+    if (!bCreated)
+    {
+        return;
+    }
+
+    Pico::FEditorSelection Selection;
+    Selection.Set(FirstActor);
+    Selection.Add(PrimaryActor);
+    Pico::FEditorTransformService Service;
+    Pico::FTransform GizmoTransform;
+    Runner.Expect(
+        Service.GetGizmoTransform(Selection, GizmoTransform)
+            && GizmoTransform.Translation.Equals(Pico::FVector3(10.0f, 0.0f, 0.0f)),
+        "The primary selection supplies the multi-select pivot");
+
+    Runner.Expect(
+        Service.BeginManipulation(
+            Selection,
+            Pico::EEditorTransformMode::Translate,
+            Pico::EEditorCoordinateSpace::World)
+            && Service.GetTargetCount() == 2,
+        "Multi-select translation begins with two independent targets");
+    GizmoTransform.Translation += Pico::FVector3(5.0f, 6.0f, 7.0f);
+    Runner.Expect(
+        Service.ApplyGizmoTransform(GizmoTransform)
+            && FirstActor->GetActorLocation().Equals(Pico::FVector3(5.0f, 6.0f, 7.0f))
+            && PrimaryActor->GetActorLocation().Equals(Pico::FVector3(15.0f, 6.0f, 7.0f)),
+        "Multi-select translation preserves offsets");
+    Runner.Expect(
+        Service.CancelManipulation()
+            && FirstActor->GetActorLocation().Equals(Pico::FVector3::ZeroVector)
+            && PrimaryActor->GetActorLocation().Equals(Pico::FVector3(10.0f, 0.0f, 0.0f)),
+        "Cancelling a transform restores every initial transform");
+
+    Service.GetGizmoTransform(Selection, GizmoTransform);
+    const Pico::FQuat QuarterTurn = Pico::FQuat::FromAxisAngle(
+        Pico::FVector3::UpVector,
+        Pico::DegreesToRadians(90.0f));
+    GizmoTransform.Rotation = QuarterTurn * GizmoTransform.Rotation;
+    Runner.Expect(
+        Service.BeginManipulation(
+            Selection,
+            Pico::EEditorTransformMode::Rotate,
+            Pico::EEditorCoordinateSpace::World)
+            && Service.ApplyGizmoTransform(GizmoTransform)
+            && FirstActor->GetActorLocation().Equals(
+                Pico::FVector3(10.0f, 0.0f, 0.0f)
+                    + QuarterTurn.RotateVector(Pico::FVector3(-10.0f, 0.0f, 0.0f)))
+            && PrimaryActor->GetActorLocation().Equals(Pico::FVector3(10.0f, 0.0f, 0.0f)),
+        "Multi-select rotation orbits objects around the primary pivot");
+    Service.CancelManipulation();
+
+    Service.GetGizmoTransform(Selection, GizmoTransform);
+    GizmoTransform.Scale = Pico::FVector3(2.0f, 2.0f, 2.0f);
+    Runner.Expect(
+        Service.BeginManipulation(
+            Selection,
+            Pico::EEditorTransformMode::Scale,
+            Pico::EEditorCoordinateSpace::World)
+            && Service.ApplyGizmoTransform(GizmoTransform)
+            && FirstActor->GetActorLocation().Equals(Pico::FVector3(-10.0f, 0.0f, 0.0f))
+            && FirstActor->GetActorTransform().Scale.Equals(Pico::FVector3(2.0f))
+            && PrimaryActor->GetActorTransform().Scale.Equals(Pico::FVector3(2.0f)),
+        "Multi-select scaling changes object spacing and individual scale");
+    Service.CancelManipulation();
+
+    Selection.Set(PrimaryActor);
+    Selection.Add(PrimaryRoot);
+    Runner.Expect(
+        Service.BeginManipulation(
+            Selection,
+            Pico::EEditorTransformMode::Translate,
+            Pico::EEditorCoordinateSpace::World)
+            && Service.GetTargetCount() == 1,
+        "Selecting an Actor and its root component does not transform it twice");
+    Service.EndManipulation();
 }
 
 void TestEditorTransactions(FTestRunner& Runner)
@@ -416,7 +590,7 @@ void TestEditorTransactions(FTestRunner& Runner)
             {
                 return false;
             }
-            RestoredSelectionPath = Snapshot.SelectedObjectPath;
+            RestoredSelectionPath = Snapshot.PrimaryObjectPath;
             return true;
         };
 
@@ -644,6 +818,7 @@ void TestEditorTransactions(FTestRunner& Runner)
             && !Transactions.HasPendingTransaction(),
         "Clearing transactions removes all editor history");
 
+    TestEditorTransformService(Runner, EngineLoop);
     TestEditorSceneClipboard(Runner, EngineLoop);
 
     EngineLoop.Exit();

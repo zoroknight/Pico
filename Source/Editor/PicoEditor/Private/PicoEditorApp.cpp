@@ -21,6 +21,7 @@
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <ImGuizmo.h>
 
 #include <algorithm>
 #include <cctype>
@@ -87,12 +88,12 @@ FPicoEditorApp::~FPicoEditorApp()
 void FPicoEditorApp::Draw()
 {
     bInteractiveEditVisited = false;
+    ImGuizmo::BeginFrame();
     HandleShortcuts();
 
-    if (Selection.IsValid() && GetSelectedObject() == nullptr)
+    if (!Selection.Validate())
     {
         CancelInteractiveEdit();
-        Selection.Clear();
     }
 
     const ImGuiViewport* MainViewport = ImGui::GetMainViewport();
@@ -154,7 +155,13 @@ void FPicoEditorApp::Draw()
             Selection,
             CommandService,
             CommandQueue,
-            [this](PObject* Object) { Select(Object); },
+            [this](
+                PObject* Object,
+                EEditorSelectionOperation Operation,
+                const std::vector<PObject*>& OrderedObjects)
+            {
+                Select(Object, Operation, OrderedObjects);
+            },
             [this](PObject* Object) { BeginRename(Object); },
             [this](FEditorCommandResult Result) { ApplyCommandResult(std::move(Result)); });
     }
@@ -218,10 +225,34 @@ void FPicoEditorApp::DrawViewport(float Width, float Height)
     ViewportPanel.Draw(
         GetWorld(),
         Selection,
+        ToolState,
+        TransformService,
         Width,
         Height,
-        [this](PObject* Object) { Select(Object); },
-        [this](std::string Message) { SetStatus(std::move(Message)); });
+        [this](
+            PObject* Object,
+            EEditorSelectionOperation Operation,
+            const std::vector<PObject*>& OrderedObjects)
+        {
+            Select(Object, Operation, OrderedObjects);
+        },
+        [this](std::string Message) { SetStatus(std::move(Message)); },
+        [this](std::string Description)
+        {
+            FinishInteractiveEdit();
+            return BeginEditorTransaction(std::move(Description));
+        },
+        [this](bool bCommit)
+        {
+            if (bCommit)
+            {
+                CommitEditorTransaction();
+            }
+            else
+            {
+                CancelEditorTransaction();
+            }
+        });
 }
 PWorld* FPicoEditorApp::GetWorld() const
 {
@@ -244,6 +275,62 @@ void FPicoEditorApp::DrawToolbar()
         SelectedObject != nullptr && SelectedObject->IsA(PSceneComponent::StaticClass())
         ? static_cast<PSceneComponent*>(SelectedObject)
         : nullptr;
+
+    const auto DrawToolButton = [this](
+        const char* Label,
+        const char* Tooltip,
+        EEditorTransformMode Mode)
+    {
+        const bool bSelected = ToolState.TransformMode == Mode;
+        if (bSelected)
+        {
+            ImGui::PushStyleColor(
+                ImGuiCol_Button,
+                ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        }
+        if (ImGui::Button(Label, ImVec2(28.0f, 0.0f)))
+        {
+            ToolState.TransformMode = Mode;
+        }
+        if (bSelected)
+        {
+            ImGui::PopStyleColor();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("%s", Tooltip);
+        }
+    };
+
+    ImGui::BeginDisabled(ViewportPanel.IsTransformActive());
+    DrawToolButton("Q", "Select (Q)", EEditorTransformMode::Select);
+    ImGui::SameLine(0.0f, 2.0f);
+    DrawToolButton("W", "Translate (W)", EEditorTransformMode::Translate);
+    ImGui::SameLine(0.0f, 2.0f);
+    DrawToolButton("E", "Rotate (E)", EEditorTransformMode::Rotate);
+    ImGui::SameLine(0.0f, 2.0f);
+    DrawToolButton("R", "Scale (R)", EEditorTransformMode::Scale);
+    ImGui::SameLine();
+    if (ImGui::Button(
+            ToolState.CoordinateSpace == EEditorCoordinateSpace::World
+                ? "World" : "Local"))
+    {
+        ToolState.CoordinateSpace =
+            ToolState.CoordinateSpace == EEditorCoordinateSpace::World
+            ? EEditorCoordinateSpace::Local
+            : EEditorCoordinateSpace::World;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Toggle world/local coordinates");
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("Snap", &ToolState.bSnapEnabled);
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
 
     if (ImGui::BeginMenu("Add"))
     {
@@ -323,6 +410,17 @@ void FPicoEditorApp::HandleShortcuts()
         return;
     }
 
+    if (ViewportPanel.IsTransformActive())
+    {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        {
+            ViewportPanel.CancelActiveTransform();
+            CancelEditorTransaction();
+            SetStatus("Transform cancelled");
+        }
+        return;
+    }
+
     if (IO.KeyCtrl
         && IO.KeyShift
         && ImGui::IsKeyPressed(ImGuiKey_Z, false))
@@ -353,6 +451,10 @@ void FPicoEditorApp::HandleShortcuts()
     {
         OpenWorld();
     }
+    else if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false))
+    {
+        SelectAllActors();
+    }
     else if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
     {
         DestroySelectedObject();
@@ -360,6 +462,30 @@ void FPicoEditorApp::HandleShortcuts()
     else if (ImGui::IsKeyPressed(ImGuiKey_F2, false))
     {
         RenameSelectedObject();
+    }
+    else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+    {
+        Select(nullptr);
+        SetStatus("Cleared selection");
+    }
+    else if (!IO.KeyCtrl && !IO.KeyAlt && !ViewportPanel.IsCameraCaptured())
+    {
+        if (ImGui::IsKeyPressed(ImGuiKey_Q, false))
+        {
+            ToolState.TransformMode = EEditorTransformMode::Select;
+        }
+        else if (ImGui::IsKeyPressed(ImGuiKey_W, false))
+        {
+            ToolState.TransformMode = EEditorTransformMode::Translate;
+        }
+        else if (ImGui::IsKeyPressed(ImGuiKey_E, false))
+        {
+            ToolState.TransformMode = EEditorTransformMode::Rotate;
+        }
+        else if (ImGui::IsKeyPressed(ImGuiKey_R, false))
+        {
+            ToolState.TransformMode = EEditorTransformMode::Scale;
+        }
     }
 }
 
@@ -414,6 +540,16 @@ void FPicoEditorApp::DrawEditMenu()
             TransactionManager.CanRedo()))
     {
         Redo();
+    }
+
+    ImGui::Separator();
+    if (ImGui::MenuItem("Select All Actors", "Ctrl+A", false, GetWorld() != nullptr))
+    {
+        SelectAllActors();
+    }
+    if (ImGui::MenuItem("Clear Selection", "Esc", false, Selection.IsValid()))
+    {
+        Select(nullptr);
     }
 
     ImGui::Separator();
@@ -755,6 +891,7 @@ bool FPicoEditorApp::BeginEditorTransaction(std::string Description)
     if (!TransactionManager.Begin(
             std::move(Description),
             *World,
+            GetSelectedObjectPaths(),
             GetSelectedObjectPath(),
             &Error))
     {
@@ -774,6 +911,7 @@ bool FPicoEditorApp::CommitEditorTransaction()
     if (World == nullptr
         || !TransactionManager.Commit(
             *World,
+            GetSelectedObjectPaths(),
             GetSelectedObjectPath(),
             &Error))
     {
@@ -852,14 +990,10 @@ bool FPicoEditorApp::RestoreEditorSnapshot(
     CommandQueue.Clear();
     RenameObjectHandle = {};
     bOpenRenamePopup = false;
-    PWorld* World = GetWorld();
-    PObject* RestoredSelection = FindEditorWorldObjectByPath(
-        World,
-        Snapshot.SelectedObjectPath);
-    Select(
-        RestoredSelection != nullptr || Snapshot.SelectedObjectPath.empty()
-            ? RestoredSelection
-            : static_cast<PObject*>(World));
+    Selection.Restore(
+        GetWorld(),
+        Snapshot.SelectedObjectPaths,
+        Snapshot.PrimaryObjectPath);
     return true;
 }
 
@@ -868,13 +1002,59 @@ std::string FPicoEditorApp::GetSelectedObjectPath() const
     return Selection.GetObjectPath();
 }
 
-void FPicoEditorApp::Select(PObject* Object)
+std::vector<std::string> FPicoEditorApp::GetSelectedObjectPaths() const
 {
-    if (Object != GetSelectedObject())
+    return Selection.GetObjectPaths();
+}
+
+void FPicoEditorApp::Select(
+    PObject* Object,
+    EEditorSelectionOperation Operation,
+    const std::vector<PObject*>& OrderedObjects)
+{
+    FinishInteractiveEdit();
+    switch (Operation)
     {
-        FinishInteractiveEdit();
+    case EEditorSelectionOperation::Replace:
         Selection.Set(Object);
+        break;
+    case EEditorSelectionOperation::Add:
+        Selection.Add(Object);
+        break;
+    case EEditorSelectionOperation::Toggle:
+        Selection.Toggle(Object);
+        break;
+    case EEditorSelectionOperation::RangeReplace:
+        Selection.SetRange(OrderedObjects, Object, false);
+        break;
+    case EEditorSelectionOperation::RangeAdd:
+        Selection.SetRange(OrderedObjects, Object, true);
+        break;
     }
+}
+
+void FPicoEditorApp::SelectAllActors()
+{
+    PWorld* World = GetWorld();
+    if (World == nullptr)
+    {
+        return;
+    }
+
+    FinishInteractiveEdit();
+    Selection.Clear();
+    for (PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr)
+        {
+            continue;
+        }
+        for (PActor* Actor : Level->GetActors())
+        {
+            Selection.Add(Actor);
+        }
+    }
+    SetStatus("Selected " + std::to_string(Selection.Num()) + " Actor(s)");
 }
 
 void FPicoEditorApp::SetStatus(std::string Message, bool bIsError)

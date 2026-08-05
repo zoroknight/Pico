@@ -204,8 +204,20 @@ bool FEditorSceneClipboard::Copy(
     std::string_view ObjectPath,
     EEditorClipboardError* OutError)
 {
+    return Copy(World, std::vector<std::string> { std::string(ObjectPath) }, OutError);
+}
+
+bool FEditorSceneClipboard::Copy(
+    const PWorld& World,
+    const std::vector<std::string>& ObjectPaths,
+    EEditorClipboardError* OutError)
+{
     ReportError(OutError, EEditorClipboardError::None);
-    if (ObjectPath.empty())
+    if (ObjectPaths.empty()
+        || std::any_of(
+            ObjectPaths.begin(),
+            ObjectPaths.end(),
+            [](const std::string& Path) { return Path.empty(); }))
     {
         ReportError(OutError, EEditorClipboardError::InvalidArgument);
         return false;
@@ -219,32 +231,56 @@ bool FEditorSceneClipboard::Copy(
     }
 
     const FRecordMap Records = BuildRecordMap(Data);
-    const FSceneObjectRecord* Selected =
-        FindRecordByPath(Data, Records, ObjectPath);
-    if (Selected == nullptr)
+    std::vector<const FSceneObjectRecord*> SelectedRecords;
+    SelectedRecords.reserve(ObjectPaths.size());
+    for (const std::string& ObjectPath : ObjectPaths)
     {
-        ReportError(OutError, EEditorClipboardError::ObjectNotFound);
+        const FSceneObjectRecord* Selected =
+            FindRecordByPath(Data, Records, ObjectPath);
+        if (Selected == nullptr)
+        {
+            ReportError(OutError, EEditorClipboardError::ObjectNotFound);
+            return false;
+        }
+        SelectedRecords.push_back(Selected);
+    }
+
+    const bool bAllActors = std::all_of(
+        SelectedRecords.begin(),
+        SelectedRecords.end(),
+        [](const FSceneObjectRecord* Record)
+        {
+            return IsChildOf(*Record, PActor::StaticClass());
+        });
+    const bool bSingleSceneComponent = SelectedRecords.size() == 1
+        && IsChildOf(*SelectedRecords.front(), PSceneComponent::StaticClass());
+    if (!bAllActors && !bSingleSceneComponent)
+    {
+        ReportError(OutError, EEditorClipboardError::UnsupportedObject);
         return false;
     }
 
-    EEditorClipboardContentType NewContentType =
-        EEditorClipboardContentType::None;
+    const EEditorClipboardContentType NewContentType = bAllActors
+        ? EEditorClipboardContentType::Actor
+        : EEditorClipboardContentType::SceneComponent;
     std::unordered_set<uint64> IncludedIds;
-    if (IsChildOf(*Selected, PActor::StaticClass()))
+    if (bAllActors)
     {
-        NewContentType = EEditorClipboardContentType::Actor;
-        IncludedIds.insert(Selected->Id.Value);
-        for (const FSceneObjectRecord& Record : Data.Objects)
+        for (const FSceneObjectRecord* Selected : SelectedRecords)
         {
-            if (Record.OuterId == Selected->Id)
+            IncludedIds.insert(Selected->Id.Value);
+            for (const FSceneObjectRecord& Record : Data.Objects)
             {
-                IncludedIds.insert(Record.Id.Value);
+                if (Record.OuterId == Selected->Id)
+                {
+                    IncludedIds.insert(Record.Id.Value);
+                }
             }
         }
     }
-    else if (IsChildOf(*Selected, PSceneComponent::StaticClass()))
+    else
     {
-        NewContentType = EEditorClipboardContentType::SceneComponent;
+        const FSceneObjectRecord* Selected = SelectedRecords.front();
         IncludedIds.insert(Selected->Id.Value);
 
         bool bAddedChild = true;
@@ -262,12 +298,6 @@ bool FEditorSceneClipboard::Copy(
             }
         }
     }
-    else
-    {
-        ReportError(OutError, EEditorClipboardError::UnsupportedObject);
-        return false;
-    }
-
     std::vector<FSceneObjectRecord> CopiedObjects;
     for (const FSceneObjectRecord& Record : Data.Objects)
     {
@@ -298,8 +328,13 @@ bool FEditorSceneClipboard::Copy(
     }
 
     ContentType = NewContentType;
-    RootObjectId = Selected->Id;
-    SourceObjectPath = ObjectPath;
+    RootObjectIds.clear();
+    RootObjectIds.reserve(SelectedRecords.size());
+    for (const FSceneObjectRecord* Selected : SelectedRecords)
+    {
+        RootObjectIds.push_back(Selected->Id);
+    }
+    SourceObjectPaths = ObjectPaths;
     Objects = std::move(CopiedObjects);
     Relations = std::move(CopiedRelations);
     return true;
@@ -312,8 +347,26 @@ bool FEditorSceneClipboard::BuildPaste(
     std::string& OutPastedObjectPath,
     EEditorClipboardError* OutError) const
 {
+    std::vector<std::string> PastedPaths;
+    const bool bBuilt = BuildPaste(
+        World,
+        DestinationPath,
+        OutWorldData,
+        PastedPaths,
+        OutError);
+    OutPastedObjectPath = PastedPaths.empty() ? std::string {} : PastedPaths.front();
+    return bBuilt;
+}
+
+bool FEditorSceneClipboard::BuildPaste(
+    const PWorld& World,
+    std::string_view DestinationPath,
+    FWorldAssetData& OutWorldData,
+    std::vector<std::string>& OutPastedObjectPaths,
+    EEditorClipboardError* OutError) const
+{
     ReportError(OutError, EEditorClipboardError::None);
-    OutPastedObjectPath.clear();
+    OutPastedObjectPaths.clear();
     if (!HasContent())
     {
         ReportError(OutError, EEditorClipboardError::EmptyClipboard);
@@ -406,8 +459,12 @@ bool FEditorSceneClipboard::BuildPaste(
 
         if (ContentType == EEditorClipboardContentType::Actor)
         {
+            const bool bRootObject = std::find(
+                RootObjectIds.begin(),
+                RootObjectIds.end(),
+                SourceRecord.Id) != RootObjectIds.end();
             Record.OuterId =
-                SourceRecord.Id == RootObjectId
+                bRootObject
                 ? TargetLevelId
                 : RemapId(SourceRecord.OuterId, IdMap);
         }
@@ -451,9 +508,21 @@ bool FEditorSceneClipboard::BuildPaste(
         Data.Relations.push_back(Relation);
     }
 
-    const FSceneObjectId NewRootId = RemapId(RootObjectId, IdMap);
+    std::vector<FSceneObjectId> NewRootIds;
+    NewRootIds.reserve(RootObjectIds.size());
+    for (FSceneObjectId RootObjectId : RootObjectIds)
+    {
+        const FSceneObjectId NewRootId = RemapId(RootObjectId, IdMap);
+        if (!NewRootId.IsValid())
+        {
+            ReportError(OutError, EEditorClipboardError::InvalidSceneData);
+            return false;
+        }
+        NewRootIds.push_back(NewRootId);
+    }
     if (ContentType == EEditorClipboardContentType::SceneComponent)
     {
+        const FSceneObjectId NewRootId = NewRootIds.front();
         if (AttachParentId.IsValid())
         {
             Data.Relations.push_back(
@@ -473,13 +542,15 @@ bool FEditorSceneClipboard::BuildPaste(
     }
 
     const FRecordMap PastedRecords = BuildRecordMap(Data);
-    if (!TryBuildObjectPath(
-            PastedRecords,
-            NewRootId,
-            OutPastedObjectPath))
+    for (FSceneObjectId NewRootId : NewRootIds)
     {
-        ReportError(OutError, EEditorClipboardError::InvalidSceneData);
-        return false;
+        std::string PastedPath;
+        if (!TryBuildObjectPath(PastedRecords, NewRootId, PastedPath))
+        {
+            ReportError(OutError, EEditorClipboardError::InvalidSceneData);
+            return false;
+        }
+        OutPastedObjectPaths.push_back(std::move(PastedPath));
     }
 
     OutWorldData = std::move(Data);
@@ -489,8 +560,8 @@ bool FEditorSceneClipboard::BuildPaste(
 void FEditorSceneClipboard::Clear()
 {
     ContentType = EEditorClipboardContentType::None;
-    RootObjectId = {};
-    SourceObjectPath.clear();
+    RootObjectIds.clear();
+    SourceObjectPaths.clear();
     Objects.clear();
     Relations.clear();
 }
@@ -498,7 +569,11 @@ void FEditorSceneClipboard::Clear()
 bool FEditorSceneClipboard::HasContent() const
 {
     return ContentType != EEditorClipboardContentType::None
-        && RootObjectId.IsValid()
+        && !RootObjectIds.empty()
+        && std::all_of(
+            RootObjectIds.begin(),
+            RootObjectIds.end(),
+            [](FSceneObjectId Id) { return Id.IsValid(); })
         && !Objects.empty();
 }
 
@@ -509,6 +584,8 @@ EEditorClipboardContentType FEditorSceneClipboard::GetContentType() const
 
 std::string_view FEditorSceneClipboard::GetSourceObjectPath() const
 {
-    return SourceObjectPath;
+    return SourceObjectPaths.empty()
+        ? std::string_view {}
+        : std::string_view(SourceObjectPaths.front());
 }
 }

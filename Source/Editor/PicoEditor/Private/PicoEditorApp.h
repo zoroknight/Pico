@@ -9,12 +9,15 @@
 #include "Pico/Editor/EditorCommandQueue.h"
 #include "Pico/Editor/EditorSceneClipboard.h"
 #include "Pico/Editor/EditorSelection.h"
+#include "Pico/Editor/EditorToolState.h"
+#include "Pico/Editor/EditorTransformService.h"
 #include "Pico/Editor/EditorTransactionManager.h"
 #include "Pico/Object/ObjectTypes.h"
 
 #include <array>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 struct GLFWwindow;
 
@@ -93,11 +96,18 @@ private:
         const FEditorWorldSnapshot& Snapshot,
         EWorldSerializationError* OutError);
     std::string GetSelectedObjectPath() const;
-    void Select(PObject* Object);
+    std::vector<std::string> GetSelectedObjectPaths() const;
+    void Select(
+        PObject* Object,
+        EEditorSelectionOperation Operation = EEditorSelectionOperation::Replace,
+        const std::vector<PObject*>& OrderedObjects = {});
+    void SelectAllActors();
     void ApplyCommandResult(FEditorCommandResult Result);
     void SetStatus(std::string Message, bool bIsError = false);
 
     FEditorSelection Selection;
+    FEditorToolState ToolState;
+    FEditorTransformService TransformService;
     FEditorSceneClipboard SceneClipboard;
     FEditorTransactionManager TransactionManager;
     FEngineLoop* EngineLoop = nullptr;

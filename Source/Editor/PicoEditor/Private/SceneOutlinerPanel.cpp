@@ -13,6 +13,7 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -77,13 +78,14 @@ void FSceneOutlinerPanel::Draw(
         ImGui::TextDisabled("No active world");
         return;
     }
+    BuildObjectOrder(CurrentWorld);
 
     PushObjectId(CurrentWorld);
     ImGuiTreeNodeFlags Flags =
         ImGuiTreeNodeFlags_DefaultOpen
         | ImGuiTreeNodeFlags_OpenOnArrow
         | ImGuiTreeNodeFlags_SpanAvailWidth;
-    if (Selection->GetHandle() == CurrentWorld->GetHandle())
+    if (Selection->Contains(CurrentWorld))
     {
         Flags |= ImGuiTreeNodeFlags_Selected;
     }
@@ -95,7 +97,7 @@ void FSceneOutlinerPanel::Draw(
     }
     if (ImGui::BeginPopupContextItem("WorldContext"))
     {
-        Select(CurrentWorld);
+        EnsureSelected(CurrentWorld);
         if (ImGui::BeginMenu("Add Actor"))
         {
             if (ImGui::MenuItem("Empty Actor"))
@@ -139,7 +141,7 @@ void FSceneOutlinerPanel::DrawLevelNode(PLevel* Level)
         ImGuiTreeNodeFlags_DefaultOpen
         | ImGuiTreeNodeFlags_OpenOnArrow
         | ImGuiTreeNodeFlags_SpanAvailWidth;
-    if (Selection->GetHandle() == Level->GetHandle())
+    if (Selection->Contains(Level))
     {
         Flags |= ImGuiTreeNodeFlags_Selected;
     }
@@ -151,7 +153,7 @@ void FSceneOutlinerPanel::DrawLevelNode(PLevel* Level)
     }
     if (ImGui::BeginPopupContextItem("LevelContext"))
     {
-        Select(Level);
+        EnsureSelected(Level);
         if (ImGui::BeginMenu("Add Actor"))
         {
             if (ImGui::MenuItem("Empty Actor"))
@@ -199,15 +201,21 @@ void FSceneOutlinerPanel::DrawActorNode(PActor* Actor)
     {
         Flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
     }
-    if (Selection->GetHandle() == Actor->GetHandle())
+    if (Selection->Contains(Actor))
     {
         Flags |= ImGuiTreeNodeFlags_Selected;
     }
 
-    PObject* SelectedObject = GetSelectedObject();
-    if (SelectedObject != nullptr
-        && SelectedObject->IsA(PActorComponent::StaticClass())
-        && static_cast<PActorComponent*>(SelectedObject)->GetOwner() == Actor)
+    const std::vector<PObject*> SelectedObjects = Selection->ResolveAll();
+    if (std::any_of(
+            SelectedObjects.begin(),
+            SelectedObjects.end(),
+            [Actor](PObject* SelectedObject)
+            {
+                return SelectedObject != nullptr
+                    && SelectedObject->IsA(PActorComponent::StaticClass())
+                    && static_cast<PActorComponent*>(SelectedObject)->GetOwner() == Actor;
+            }))
     {
         ImGui::SetNextItemOpen(true, ImGuiCond_Always);
     }
@@ -266,7 +274,7 @@ void FSceneOutlinerPanel::DrawComponentNode(PActorComponent* Component, PActor* 
     {
         Flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
     }
-    if (Selection->GetHandle() == Component->GetHandle())
+    if (Selection->Contains(Component))
     {
         Flags |= ImGuiTreeNodeFlags_Selected;
     }
@@ -276,9 +284,16 @@ void FSceneOutlinerPanel::DrawComponentNode(PActorComponent* Component, PActor* 
     {
         Label += " [Root]";
     }
-    if (SceneComponent != nullptr
-        && SceneComponent->GetHandle() != Selection->GetHandle()
-        && ContainsComponent(SceneComponent, Selection->GetHandle()))
+    const bool bContainsSelectedChild = SceneComponent != nullptr
+        && std::any_of(
+            Selection->GetHandles().begin(),
+            Selection->GetHandles().end(),
+            [SceneComponent](FObjectHandle Handle)
+            {
+                return SceneComponent->GetHandle() != Handle
+                    && ContainsComponent(SceneComponent, Handle);
+            });
+    if (bContainsSelectedChild)
     {
         ImGui::SetNextItemOpen(true, ImGuiCond_Always);
     }
@@ -306,7 +321,7 @@ void FSceneOutlinerPanel::DrawActorContextMenu(PActor* Actor)
     {
         return;
     }
-    Select(Actor);
+    EnsureSelected(Actor);
     if (ImGui::BeginMenu("Add Component"))
     {
         if (ImGui::MenuItem("Scene Component")) AddSceneComponentToSelection();
@@ -333,7 +348,7 @@ void FSceneOutlinerPanel::DrawComponentContextMenu(PActorComponent* Component)
     {
         return;
     }
-    Select(Component);
+    EnsureSelected(Component);
     if (ImGui::MenuItem("Copy", "Ctrl+C")) CopySelectedObject();
     ImGui::BeginDisabled(!CanPasteClipboard());
     if (ImGui::MenuItem("Paste", "Ctrl+V"))
@@ -354,7 +369,27 @@ PObject* FSceneOutlinerPanel::GetSelectedObject() const
 
 void FSceneOutlinerPanel::Select(PObject* Object)
 {
-    SelectObject(Object);
+    const ImGuiIO& IO = ImGui::GetIO();
+    EEditorSelectionOperation Operation = EEditorSelectionOperation::Replace;
+    if (IO.KeyShift)
+    {
+        Operation = IO.KeyCtrl
+            ? EEditorSelectionOperation::RangeAdd
+            : EEditorSelectionOperation::RangeReplace;
+    }
+    else if (IO.KeyCtrl)
+    {
+        Operation = EEditorSelectionOperation::Toggle;
+    }
+    SelectObject(Object, Operation, OrderedObjects);
+}
+
+void FSceneOutlinerPanel::EnsureSelected(PObject* Object)
+{
+    if (Selection != nullptr && !Selection->Contains(Object))
+    {
+        SelectObject(Object, EEditorSelectionOperation::Replace, OrderedObjects);
+    }
 }
 
 void FSceneOutlinerPanel::SpawnEmptyActor()
@@ -388,7 +423,7 @@ void FSceneOutlinerPanel::QueueDestroy(PObject* Object)
     Queue->Enqueue(
         [this, Handle]()
         {
-            Select(ResolveObject(Handle));
+            EnsureSelected(ResolveObject(Handle));
             DestroySelectedObject();
         });
 }
@@ -411,5 +446,69 @@ bool FSceneOutlinerPanel::CanPasteClipboard() const
 void FSceneOutlinerPanel::BeginRenameObject(PObject* Object)
 {
     RequestRename(Object);
+}
+
+void FSceneOutlinerPanel::BuildObjectOrder(PWorld* CurrentWorld)
+{
+    OrderedObjects.clear();
+    if (CurrentWorld == nullptr)
+    {
+        return;
+    }
+    OrderedObjects.push_back(CurrentWorld);
+    for (PLevel* Level : CurrentWorld->GetLevels())
+    {
+        if (Level == nullptr)
+        {
+            continue;
+        }
+        OrderedObjects.push_back(Level);
+        for (PActor* Actor : Level->GetActors())
+        {
+            if (Actor == nullptr)
+            {
+                continue;
+            }
+            OrderedObjects.push_back(Actor);
+            const std::vector<PActorComponent*> Components = Actor->GetComponents();
+            PSceneComponent* Root = Actor->GetRootComponent();
+            if (Root != nullptr)
+            {
+                CollectComponentOrder(Root);
+            }
+            for (PActorComponent* Component : Components)
+            {
+                if (Component == Root)
+                {
+                    continue;
+                }
+                if (Component != nullptr
+                    && Component->IsA(PSceneComponent::StaticClass())
+                    && static_cast<PSceneComponent*>(Component)->GetAttachParent() != nullptr)
+                {
+                    continue;
+                }
+                CollectComponentOrder(Component);
+            }
+        }
+    }
+}
+
+void FSceneOutlinerPanel::CollectComponentOrder(PActorComponent* Component)
+{
+    if (Component == nullptr)
+    {
+        return;
+    }
+    OrderedObjects.push_back(Component);
+    if (!Component->IsA(PSceneComponent::StaticClass()))
+    {
+        return;
+    }
+    for (PSceneComponent* Child :
+         static_cast<PSceneComponent*>(Component)->GetAttachChildren())
+    {
+        CollectComponentOrder(Child);
+    }
 }
 }

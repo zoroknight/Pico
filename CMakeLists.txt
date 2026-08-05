@@ -210,6 +210,22 @@ if(PICO_BUILD_INSPECTOR)
     set_target_properties(PicoImGui PROPERTIES FOLDER "ThirdParty")
     set_target_properties(glfw PROPERTIES FOLDER "ThirdParty")
 
+    add_library(PicoImGuizmo STATIC
+        ThirdParty/ImGuizmo/src/ImGuizmo.cpp
+    )
+
+    target_include_directories(PicoImGuizmo
+        PUBLIC
+            ThirdParty/ImGuizmo/src
+    )
+
+    target_link_libraries(PicoImGuizmo
+        PUBLIC
+            PicoImGui
+    )
+
+    set_target_properties(PicoImGuizmo PROPERTIES FOLDER "ThirdParty")
+
     add_library(PicoRender STATIC
         Source/Runtime/Render/Private/SceneViewportRenderer.cpp
     )
@@ -238,6 +254,7 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Private/EditorCommandService.cpp
         Source/Editor/PicoEditor/Private/EditorSceneClipboard.cpp
         Source/Editor/PicoEditor/Private/EditorSelection.cpp
+        Source/Editor/PicoEditor/Private/EditorTransformService.cpp
         Source/Editor/PicoEditor/Private/EditorTransactionManager.cpp
     )
 
@@ -275,6 +292,8 @@ if(PICO_BUILD_INSPECTOR)
     set_target_properties(PicoInspector PROPERTIES FOLDER "Programs")
 
     add_executable(PicoEditor
+        Source/Editor/PicoEditor/Private/EditorTransformGizmo.cpp
+        Source/Editor/PicoEditor/Private/EditorTransformGizmo.h
         Source/Editor/PicoEditor/Private/EditorViewportPanel.cpp
         Source/Editor/PicoEditor/Private/EditorViewportPanel.h
         Source/Editor/PicoEditor/Private/DetailsPanel.cpp
@@ -289,6 +308,7 @@ if(PICO_BUILD_INSPECTOR)
     target_link_libraries(PicoEditor
         PRIVATE
             PicoImGui
+            PicoImGuizmo
             PicoEditorCore
             PicoEngine
             PicoRender

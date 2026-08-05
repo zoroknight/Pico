@@ -12,8 +12,10 @@
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectName.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <utility>
+#include <vector>
 
 namespace Pico
 {
@@ -138,6 +140,7 @@ bool FEditorCommandService::BeginTransaction(
         && Transactions->Begin(
             std::move(Description),
             *World,
+            Selection->GetObjectPaths(),
             Selection->GetObjectPath(),
             &OutError);
 }
@@ -146,7 +149,11 @@ bool FEditorCommandService::CommitTransaction(EWorldSerializationError& OutError
 {
     PWorld* World = GetWorld();
     if (Transactions != nullptr && Selection != nullptr && World != nullptr
-        && Transactions->Commit(*World, Selection->GetObjectPath(), &OutError))
+        && Transactions->Commit(
+            *World,
+            Selection->GetObjectPaths(),
+            Selection->GetObjectPath(),
+            &OutError))
     {
         return true;
     }
@@ -175,7 +182,10 @@ bool FEditorCommandService::RestoreSnapshot(
     {
         return false;
     }
-    Selection->Restore(GetWorld(), Snapshot.SelectedObjectPath);
+    Selection->Restore(
+        GetWorld(),
+        Snapshot.SelectedObjectPaths,
+        Snapshot.PrimaryObjectPath);
     return true;
 }
 
@@ -292,39 +302,94 @@ FEditorCommandResult FEditorCommandService::SetSelectedComponentAsRoot()
 
 FEditorCommandResult FEditorCommandService::DeleteSelectedObject()
 {
-    PObject* Object = Selection != nullptr ? Selection->Resolve() : nullptr;
-    if (Object == nullptr || (!Object->IsA(PActor::StaticClass())
-        && !Object->IsA(PActorComponent::StaticClass())))
+    if (Selection == nullptr)
     {
         return Failure("Only Actors and Components can be destroyed");
     }
-    const std::string Path = Object->GetPathName();
+
+    std::vector<FObjectHandle> ComponentHandles;
+    std::vector<FObjectHandle> ActorHandles;
+    for (PObject* Object : Selection->ResolveAll())
+    {
+        if (Object->IsA(PActor::StaticClass()))
+        {
+            ActorHandles.push_back(Object->GetHandle());
+            continue;
+        }
+        if (!Object->IsA(PActorComponent::StaticClass()))
+        {
+            continue;
+        }
+
+        PActorComponent* Component = static_cast<PActorComponent*>(Object);
+        if (Selection->Contains(Component->GetOwner()))
+        {
+            continue;
+        }
+        bool bAncestorSelected = false;
+        if (Component->IsA(PSceneComponent::StaticClass()))
+        {
+            for (PSceneComponent* Parent =
+                     static_cast<PSceneComponent*>(Component)->GetAttachParent();
+                 Parent != nullptr;
+                 Parent = Parent->GetAttachParent())
+            {
+                if (Selection->Contains(Parent))
+                {
+                    bAncestorSelected = true;
+                    break;
+                }
+            }
+        }
+        if (!bAncestorSelected)
+        {
+            ComponentHandles.push_back(Object->GetHandle());
+        }
+    }
+
+    const std::size_t ObjectCount = ComponentHandles.size() + ActorHandles.size();
+    if (ObjectCount == 0)
+    {
+        return Failure("Only Actors and Components can be destroyed");
+    }
+
     EWorldSerializationError Error = EWorldSerializationError::None;
-    if (!BeginTransaction("Delete " + Object->GetName().ToString(), Error))
+    const std::string Description = ObjectCount == 1
+        ? "Delete Object" : "Delete " + std::to_string(ObjectCount) + " Objects";
+    if (!BeginTransaction(Description, Error))
     {
         return Failure("Could not begin delete transaction");
     }
-    FObjectHandle SelectionAfterDestroy;
-    bool bDestroyed = false;
-    if (Object->IsA(PActor::StaticClass()))
+
+    for (FObjectHandle Handle : ComponentHandles)
     {
-        PWorld* World = static_cast<PActor*>(Object)->GetWorld();
-        SelectionAfterDestroy = World != nullptr ? World->GetHandle() : FObjectHandle {};
-        bDestroyed = World != nullptr && World->DestroyActor(static_cast<PActor*>(Object));
+        PObject* Object = ResolveObject(Handle);
+        PActorComponent* Component = Object != nullptr
+            && Object->IsA(PActorComponent::StaticClass())
+            ? static_cast<PActorComponent*>(Object) : nullptr;
+        PActor* Owner = Component != nullptr ? Component->GetOwner() : nullptr;
+        if (Owner == nullptr || !Owner->DestroyComponent(Component))
+        {
+            RollbackTransaction(Error);
+            return Failure("Could not destroy the selected Components");
+        }
     }
-    else
+    for (FObjectHandle Handle : ActorHandles)
     {
-        PActor* Owner = static_cast<PActorComponent*>(Object)->GetOwner();
-        SelectionAfterDestroy = Owner != nullptr ? Owner->GetHandle() : FObjectHandle {};
-        bDestroyed = Owner != nullptr && Owner->DestroyComponent(static_cast<PActorComponent*>(Object));
+        PObject* Object = ResolveObject(Handle);
+        PActor* Actor = Object != nullptr && Object->IsA(PActor::StaticClass())
+            ? static_cast<PActor*>(Object) : nullptr;
+        PWorld* World = Actor != nullptr ? Actor->GetWorld() : nullptr;
+        if (World == nullptr || !World->DestroyActor(Actor))
+        {
+            RollbackTransaction(Error);
+            return Failure("Could not destroy the selected Actors");
+        }
     }
-    if (!bDestroyed)
-    {
-        RollbackTransaction(Error);
-        return Failure("Could not destroy " + Path);
-    }
-    Selection->Set(ResolveObject(SelectionAfterDestroy));
-    return CommitTransaction(Error) ? Success("Destroyed " + Path)
+
+    Selection->Set(GetWorld());
+    return CommitTransaction(Error)
+        ? Success("Destroyed " + std::to_string(ObjectCount) + " object(s)")
                                     : Failure("Could not commit delete transaction");
 }
 
@@ -357,16 +422,28 @@ FEditorCommandResult FEditorCommandService::RenameObject(
         return Failure("The name is already used in this object scope");
     }
     const std::string NewPath = Object->GetPathName();
-    Selection->Set(Object);
     return CommitTransaction(Error) ? Success("Renamed " + OldPath + " to " + NewPath)
                                     : Failure("Could not commit rename transaction");
 }
 
 bool FEditorCommandService::CanCopySelectedObject() const
 {
-    PObject* Object = Selection != nullptr ? Selection->Resolve() : nullptr;
-    return Object != nullptr && (Object->IsA(PActor::StaticClass())
-        || Object->IsA(PSceneComponent::StaticClass()));
+    if (Clipboard == nullptr || Selection == nullptr || Selection->Num() == 0)
+    {
+        return false;
+    }
+    const std::vector<PObject*> Objects = Selection->ResolveAll();
+    if (Objects.size() != Selection->Num())
+    {
+        return false;
+    }
+    const bool bAllActors = std::all_of(
+        Objects.begin(),
+        Objects.end(),
+        [](PObject* Object) { return Object->IsA(PActor::StaticClass()); });
+    return bAllActors
+        || (Objects.size() == 1
+            && Objects.front()->IsA(PSceneComponent::StaticClass()));
 }
 
 bool FEditorCommandService::CanPasteClipboard() const
@@ -387,15 +464,14 @@ bool FEditorCommandService::CanPasteClipboard() const
 FEditorCommandResult FEditorCommandService::CopySelectedObject()
 {
     PWorld* World = GetWorld();
-    PObject* Object = Selection != nullptr ? Selection->Resolve() : nullptr;
-    if (World == nullptr || Object == nullptr || !CanCopySelectedObject())
+    if (World == nullptr || Selection == nullptr || !CanCopySelectedObject())
     {
-        return Failure("Select an Actor or SceneComponent to copy");
+        return Failure("Select one or more Actors, or one SceneComponent, to copy");
     }
-    const std::string Path = Object->GetPathName();
+    const std::vector<std::string> Paths = Selection->GetObjectPaths();
     EEditorClipboardError Error = EEditorClipboardError::None;
-    return Clipboard->Copy(*World, Path, &Error)
-        ? Success("Copied " + Path)
+    return Clipboard->Copy(*World, Paths, &Error)
+        ? Success("Copied " + std::to_string(Paths.size()) + " object(s)")
         : Failure("Could not copy object: " + std::string(ToString(Error)));
 }
 
@@ -407,9 +483,14 @@ FEditorCommandResult FEditorCommandService::PasteClipboard()
         return Failure("Clipboard cannot be pasted at the current selection");
     }
     FWorldAssetData Data;
-    std::string PastedPath;
+    std::vector<std::string> PastedPaths;
     EEditorClipboardError ClipboardError = EEditorClipboardError::None;
-    if (!Clipboard->BuildPaste(*World, Selection->GetObjectPath(), Data, PastedPath, &ClipboardError))
+    if (!Clipboard->BuildPaste(
+            *World,
+            Selection->GetObjectPath(),
+            Data,
+            PastedPaths,
+            &ClipboardError))
     {
         return Failure("Could not build pasted object: " + std::string(ToString(ClipboardError)));
     }
@@ -424,14 +505,19 @@ FEditorCommandResult FEditorCommandService::PasteClipboard()
         }
         return Failure("Could not paste object: " + std::string(ToString(Error)));
     }
-    PObject* PastedObject = FindEditorWorldObjectByPath(GetWorld(), PastedPath);
-    if (PastedObject == nullptr)
+    Selection->Clear();
+    for (const std::string& PastedPath : PastedPaths)
     {
-        RollbackTransaction(Error);
-        return Failure("Pasted object could not be selected");
+        PObject* PastedObject = FindEditorWorldObjectByPath(GetWorld(), PastedPath);
+        if (PastedObject == nullptr)
+        {
+            RollbackTransaction(Error);
+            return Failure("Pasted object could not be selected");
+        }
+        Selection->Add(PastedObject);
     }
-    Selection->Set(PastedObject);
-    return CommitTransaction(Error) ? Success("Pasted " + PastedPath)
+    return CommitTransaction(Error)
+        ? Success("Pasted " + std::to_string(PastedPaths.size()) + " object(s)")
                                     : Failure("Could not commit paste transaction");
 }
 

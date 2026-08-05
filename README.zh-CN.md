@@ -11,7 +11,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 
 ## 当前状态
 
-前三个月的开发任务已经完成。目前 Pico 可以：
+前四个月的开发任务已经完成。目前 Pico 可以：
 
 - 运行类似 UE 的 `PreInit -> Init -> Tick -> Exit` 引擎循环。
 - 通过 `PClass` 和 `NewObject` 创建具有反射信息的原生 C++ 对象。
@@ -27,12 +27,18 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 通过 `.pico` 打开引擎目录之外的项目边界。
 - 在 Outliner 和 Details 中查看、创建、修改和销毁运行时对象。
 - 在 OpenGL 3.3 编辑器视口中渲染 `PCubeComponent`。
-- 通过编辑器事务撤销和重做场景层级、Actor Transform 与反射属性修改。
-- 使用重新映射的场景 ID 复制和粘贴完整 Actor 或 SceneComponent 挂接子树。
+- 单选、追加选择、范围选择或使用 `Ctrl+A` 选择 Actor 和 Component，并在 Viewport 中
+  高亮完整选择集。
+- 通过编辑器事务撤销和重做场景层级、Actor Transform 与反射属性修改，并恢复完整多选集。
+- 在一条命令中复制、粘贴和删除多个 Actor，或复制 SceneComponent 挂接子树；场景 ID
+  会被重新映射，每条命令只生成一条事务记录。
+- 通过基于 ImGuizmo 的 Viewport Gizmo 移动、旋转和缩放单个或多个场景对象，支持
+  World/Local 坐标、吸附、主选择枢轴、取消操作和 Undo/Redo。
 - 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
-Debug 和 Release 均可完整构建，四个自动化测试程序全部通过。
+Debug 和 Release 均可完整构建，四个自动化测试程序全部通过；`PicoEditorTests`
+目前包含 67 项通过的检查。
 
 ## 架构
 
@@ -40,6 +46,8 @@ Debug 和 Release 均可完整构建，四个自动化测试程序全部通过�
 
 ```text
 PicoEditor
+  -> PicoEditorCore
+  -> PicoImGuizmo / PicoImGui
   -> PicoRender
   -> PicoEngine
   -> PicoObject
@@ -60,7 +68,8 @@ PicoInspector       -> PicoReflectionTools
 | `PicoObject` | `PObject`、`PClass`、`PProperty`、反射、注册表、Handle、Outer和序列化 |
 | `PicoEngine` | EngineLoop、World、Level、Actor、Component、挂接和可渲染场景数据 |
 | `PicoRender` | 基于GLAD的OpenGL、Shader、几何体、Framebuffer、场景遍历和绘制提交 |
-| `PicoEditor` | Outliner、Details、运行时场景操作、编辑器相机和3D视口 |
+| `PicoEditorCore` | 不依赖 UI 的选择、命令、剪贴板、事务和 Transform 操作 |
+| `PicoEditor` | Outliner、Details、编辑器相机、Viewport 拾取、工具状态和 Transform Gizmo UI |
 | `PicoReflectionTools` | 通用元数据检查和反射属性工具 |
 | `PicoSandbox` | 项目侧反射、序列化、资产和自动化测试示例 |
 
@@ -125,7 +134,7 @@ ProjectRoot/
 - Git for Windows
 - 支持 OpenGL 3.3 的显卡和驱动
 
-GLFW 和 Dear ImGui 已包含在 `ThirdParty` 中。
+GLFW、Dear ImGui 和 ImGuizmo 已包含在 `ThirdParty` 中。
 
 ## 快速开始
 
@@ -165,6 +174,14 @@ GameWorld
 - 右键 World、Level、Actor 或 Component 节点可执行对应的创建、重命名、设置根组件和删除操作。
 - 左键点击 Viewport 中的可见几何体会选中它所属的 Actor；选中 Actor 时会给它的全部可见
   CubeComponent 绘制白框，在 Outliner 中选择组件时只给该组件绘制白框。
+- 按住 `Ctrl` 点击可以切换对象的选择状态；在 Outliner 中按住 `Shift` 可以范围选择，
+  `Ctrl+A` 会选择所有场景 Actor。
+- `Q` 为选择模式，`W` 为平移，`E` 为旋转，`R` 为缩放；工具栏提供相同入口。
+- `World` 使 Gizmo 与场景坐标轴对齐，`Local` 使 Gizmo 与主选择对象的旋转对齐；多选
+  旋转和缩放以主选择对象为枢轴。
+- 开启 `Snap` 可以吸附平移、旋转和缩放；拖动过程中按 `Esc` 会将所有目标恢复到拖动前。
+- Actor Gizmo 使用 RootComponent 作为 Actor 枢轴。如果可见几何体相对
+  `DefaultSceneRoot` 存在偏移，应在 Outliner 中选择子组件，以它自身的原点进行变换。
 - 使用 `Ctrl+Z` 撤销，使用 `Ctrl+Y` 或 `Ctrl+Shift+Z` 重做场景层级、Actor Transform 和
   反射属性修改；一次连续拖动只会生成一条事务记录。
 - 使用 `Ctrl+C` 和 `Ctrl+V` 复制粘贴 Actor 及其全部组件，或选中的 SceneComponent
@@ -243,7 +260,7 @@ Pico/
     Runtime/               Core、Object、Engine、Render和Launch
     Samples/               可复用的引擎侧示例
   Tests/                   Core、Object、Engine和Sandbox测试
-  ThirdParty/              GLAD、GLFW和Dear ImGui
+  ThirdParty/              GLAD、GLFW、Dear ImGui和ImGuizmo
 ```
 
 ## 编写反射类
@@ -288,13 +305,13 @@ Pico 目前还没有类似 UHT 的头文件工具。未来的 PicoHeaderTool 可
 
 ## 路线图
 
-下一阶段的重点是将运行时编辑器发展为可以持久化的内容工作流：
+第五个月的重点是将持久化场景编辑器发展为资产驱动的 3D 工作流：
 
-- 事务式 World 重建与 `.pworld` 文件保存和加载
-- AssetRegistry和项目Content Browser
-- StaticMesh资产和模型导入
-- Transform Gizmo
-- RenderScene缓存、材质、贴图和PBR
+- 项目级 Asset Registry 和 Content Browser
+- Static Mesh 资产格式、模型导入和稳定的场景资产引用
+- 编辑器内的资产创建、检查、分配、保存/加载和重新导入流程
+- Render Scene 缓存，以及精简的材质、贴图和 PBR 路径
+- 完成一个重启编辑器后仍可恢复、并可继续进入打包阶段的端到端场景
 
 更后面的阶段计划探索：
 

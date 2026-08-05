@@ -1,7 +1,10 @@
 #include "EditorViewportPanel.h"
+#include "EditorTransformGizmo.h"
 
 #include "Pico/Core/Math/MathUtility.h"
 #include "Pico/Editor/EditorSelection.h"
+#include "Pico/Editor/EditorToolState.h"
+#include "Pico/Editor/EditorTransformService.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Object/Object.h"
@@ -17,6 +20,31 @@
 
 namespace Pico
 {
+namespace
+{
+std::string MakeTransformDescription(
+    EEditorTransformMode Mode,
+    std::size_t TargetCount)
+{
+    const char* Verb = "Transform";
+    switch (Mode)
+    {
+    case EEditorTransformMode::Translate:
+        Verb = "Move";
+        break;
+    case EEditorTransformMode::Rotate:
+        Verb = "Rotate";
+        break;
+    case EEditorTransformMode::Scale:
+        Verb = "Scale";
+        break;
+    case EEditorTransformMode::Select:
+        break;
+    }
+    return std::string(Verb) + " " + std::to_string(TargetCount) + " Object(s)";
+}
+}
+
 FEditorViewportPanel::FEditorViewportPanel(
     FSceneViewportRenderer* InRenderer,
     GLFWwindow* InWindow)
@@ -33,11 +61,16 @@ FEditorViewportPanel::~FEditorViewportPanel()
 void FEditorViewportPanel::Draw(
     PWorld* World,
     const FEditorSelection& Selection,
+    const FEditorToolState& ToolState,
+    FEditorTransformService& TransformService,
     float Width,
     float Height,
     const FSelectObject& SelectObject,
-    const FSetStatus& SetStatus)
+    const FSetStatus& SetStatus,
+    const FBeginTransaction& BeginTransaction,
+    const FFinishTransaction& FinishTransaction)
 {
+    ActiveTransformService = &TransformService;
     if (Renderer == nullptr || !Renderer->IsInitialized())
     {
         ImGui::TextDisabled("Viewport unavailable");
@@ -64,7 +97,7 @@ void FEditorViewportPanel::Draw(
     View.Position = CameraPosition;
     View.Target = CameraPosition + Forward;
     if (!Renderer->Resize(RenderWidth, RenderHeight)
-        || !Renderer->Render(World, View, Selection.GetHandle()))
+        || !Renderer->Render(World, View, Selection.GetHandles()))
     {
         ImGui::TextDisabled("Viewport render failed");
         return;
@@ -77,14 +110,92 @@ void FEditorViewportPanel::Draw(
         ImVec2(0.0f, 1.0f),
         ImVec2(1.0f, 0.0f));
 
+    const ImVec2 ItemMin = ImGui::GetItemRectMin();
+    const ImVec2 ItemMax = ImGui::GetItemRectMax();
+    const float ItemWidth = std::max(ItemMax.x - ItemMin.x, 1.0f);
+    const float ItemHeight = std::max(ItemMax.y - ItemMin.y, 1.0f);
     const bool bHovered = ImGui::IsItemHovered();
-    if (bHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+
+    FEditorTransformGizmoResult GizmoResult;
+    FTransform GizmoTransform;
+    if (TransformService.GetGizmoTransform(Selection, GizmoTransform))
     {
-        const ImVec2 ItemMin = ImGui::GetItemRectMin();
-        const ImVec2 ItemMax = ImGui::GetItemRectMax();
+        FEditorTransformGizmo Gizmo;
+        GizmoResult = Gizmo.Draw(
+            View,
+            static_cast<float>(RenderWidth) / static_cast<float>(RenderHeight),
+            ItemMin.x,
+            ItemMin.y,
+            ItemWidth,
+            ItemHeight,
+            ToolState,
+            GizmoTransform);
+    }
+
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+        bIgnoreGizmoUntilRelease = false;
+    }
+
+    const bool bWasTransforming = TransformService.IsManipulating();
+    if (GizmoResult.bIsUsing && !bWasTransforming && !bIgnoreGizmoUntilRelease)
+    {
+        if (!TransformService.BeginManipulation(
+                Selection,
+                ToolState.TransformMode,
+                ToolState.CoordinateSpace)
+            || !BeginTransaction(MakeTransformDescription(
+                ToolState.TransformMode,
+                TransformService.GetTargetCount())))
+        {
+            TransformService.CancelManipulation();
+            bIgnoreGizmoUntilRelease = true;
+            SetStatus("Could not begin transform transaction");
+        }
+        else
+        {
+            bTransformChanged = false;
+        }
+    }
+
+    if (GizmoResult.bChanged
+        && TransformService.IsManipulating()
+        && !bIgnoreGizmoUntilRelease)
+    {
+        if (TransformService.ApplyGizmoTransform(GizmoResult.Transform))
+        {
+            bTransformChanged = true;
+        }
+        else
+        {
+            TransformService.CancelManipulation();
+            FinishTransaction(false);
+            bIgnoreGizmoUntilRelease = true;
+            bTransformChanged = false;
+            SetStatus("Could not apply transform; changes were rolled back");
+        }
+    }
+
+    if (bWasTransforming
+        && !GizmoResult.bIsUsing
+        && TransformService.IsManipulating())
+    {
+        const bool bCommit = bTransformChanged || TransformService.HasChanged();
+        TransformService.EndManipulation();
+        FinishTransaction(bCommit);
+        SetStatus(bCommit ? "Transform committed" : "Transform unchanged");
+        bTransformChanged = false;
+    }
+
+    const bool bGizmoConsumesMouse = bIgnoreGizmoUntilRelease
+        || GizmoResult.bIsOver
+        || GizmoResult.bIsUsing
+        || TransformService.IsManipulating();
+    if (bHovered
+        && !bGizmoConsumesMouse
+        && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    {
         const ImVec2 Mouse = ImGui::GetMousePos();
-        const float ItemWidth = std::max(ItemMax.x - ItemMin.x, 1.0f);
-        const float ItemHeight = std::max(ItemMax.y - ItemMin.y, 1.0f);
         const float LocalX = std::clamp((Mouse.x - ItemMin.x) / ItemWidth, 0.0f, 1.0f);
         const float LocalY = std::clamp((Mouse.y - ItemMin.y) / ItemHeight, 0.0f, 1.0f);
         const uint32 PixelX = std::min(
@@ -99,13 +210,28 @@ void FEditorViewportPanel::Draw(
             PActor* Owner = static_cast<PActorComponent*>(PickedObject)->GetOwner();
             PickedObject = Owner != nullptr ? Owner : PickedObject;
         }
-        SelectObject(PickedObject);
-        SetStatus(PickedObject != nullptr
-            ? "Selected " + PickedObject->GetPathName()
-            : "Cleared viewport selection");
+        const EEditorSelectionOperation Operation = IO.KeyCtrl
+            ? EEditorSelectionOperation::Toggle
+            : (IO.KeyShift
+                ? EEditorSelectionOperation::Add
+                : EEditorSelectionOperation::Replace);
+        SelectObject(PickedObject, Operation, {});
+        if (PickedObject != nullptr)
+        {
+            SetStatus(
+                (Operation == EEditorSelectionOperation::Replace
+                    ? "Selected " : "Updated selection with ")
+                + PickedObject->GetPathName());
+        }
+        else if (Operation == EEditorSelectionOperation::Replace)
+        {
+            SetStatus("Cleared viewport selection");
+        }
     }
 
-    if (bHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+    if (bHovered
+        && !bGizmoConsumesMouse
+        && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
     {
         BeginCameraCapture();
     }
@@ -164,6 +290,29 @@ void FEditorViewportPanel::Draw(
                 * std::clamp(IO.DeltaTime, 0.0f, 0.1f);
         }
     }
+}
+
+bool FEditorViewportPanel::IsCameraCaptured() const
+{
+    return bCameraCaptured;
+}
+
+bool FEditorViewportPanel::IsTransformActive() const
+{
+    return ActiveTransformService != nullptr
+        && ActiveTransformService->IsManipulating();
+}
+
+bool FEditorViewportPanel::CancelActiveTransform()
+{
+    if (!IsTransformActive())
+    {
+        return false;
+    }
+    ActiveTransformService->CancelManipulation();
+    bIgnoreGizmoUntilRelease = true;
+    bTransformChanged = false;
+    return true;
 }
 
 void FEditorViewportPanel::BeginCameraCapture()

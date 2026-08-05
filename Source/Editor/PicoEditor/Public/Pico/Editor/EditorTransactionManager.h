@@ -16,7 +16,8 @@ class PWorld;
 struct FEditorWorldSnapshot
 {
     FWorldAssetData WorldData;
-    std::string SelectedObjectPath;
+    std::vector<std::string> SelectedObjectPaths;
+    std::string PrimaryObjectPath;
 };
 
 class FEditorTransactionManager
@@ -31,7 +32,18 @@ public:
     bool Begin(
         std::string Description,
         const PWorld& World,
+        std::vector<std::string> SelectedObjectPaths,
+        std::string PrimaryObjectPath,
+        EWorldSerializationError* OutError = nullptr);
+    bool Begin(
+        std::string Description,
+        const PWorld& World,
         std::string SelectedObjectPath,
+        EWorldSerializationError* OutError = nullptr);
+    bool Commit(
+        const PWorld& World,
+        std::vector<std::string> SelectedObjectPaths,
+        std::string PrimaryObjectPath,
         EWorldSerializationError* OutError = nullptr);
     bool Commit(
         const PWorld& World,
@@ -70,7 +82,8 @@ private:
 
     bool CaptureSnapshot(
         const PWorld& World,
-        std::string SelectedObjectPath,
+        std::vector<std::string> SelectedObjectPaths,
+        std::string PrimaryObjectPath,
         FEditorWorldSnapshot& OutSnapshot,
         EWorldSerializationError* OutError) const;
     void PushWithLimit(

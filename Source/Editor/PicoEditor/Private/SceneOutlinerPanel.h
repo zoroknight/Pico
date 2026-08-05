@@ -3,6 +3,7 @@
 #include "Pico/Object/ObjectTypes.h"
 
 #include <functional>
+#include <vector>
 
 namespace Pico
 {
@@ -15,11 +16,15 @@ class PLevel;
 class PObject;
 class PWorld;
 struct FEditorCommandResult;
+enum class EEditorSelectionOperation;
 
 class FSceneOutlinerPanel
 {
 public:
-    using FSelectObject = std::function<void(PObject*)>;
+    using FSelectObject = std::function<void(
+        PObject*,
+        EEditorSelectionOperation,
+        const std::vector<PObject*>&)>;
     using FBeginRename = std::function<void(PObject*)>;
     using FApplyResult = std::function<void(FEditorCommandResult)>;
 
@@ -36,10 +41,13 @@ private:
     void DrawLevelNode(PLevel* Level);
     void DrawActorNode(PActor* Actor);
     void DrawComponentNode(PActorComponent* Component, PActor* Owner);
+    void BuildObjectOrder(PWorld* CurrentWorld);
+    void CollectComponentOrder(PActorComponent* Component);
     void DrawActorContextMenu(PActor* Actor);
     void DrawComponentContextMenu(PActorComponent* Component);
     PObject* GetSelectedObject() const;
     void Select(PObject* Object);
+    void EnsureSelected(PObject* Object);
     void SpawnEmptyActor();
     void SpawnCubeActor();
     void AddSceneComponentToSelection();
@@ -58,5 +66,6 @@ private:
     FSelectObject SelectObject;
     FBeginRename RequestRename;
     FApplyResult ApplyResult;
+    std::vector<PObject*> OrderedObjects;
 };
 }

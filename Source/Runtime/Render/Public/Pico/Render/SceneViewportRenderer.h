@@ -1,10 +1,12 @@
 #pragma once
 
 #include "Pico/Core/Math/Vector3.h"
+#include "Pico/Core/Math/Matrix4.h"
 #include "Pico/Core/Types.h"
 #include "Pico/Object/ObjectTypes.h"
 
 #include <memory>
+#include <span>
 
 namespace Pico
 {
@@ -23,6 +25,11 @@ struct FSceneView
     float FarPlane = 10000.0f;
 };
 
+FMatrix4 BuildSceneViewMatrix(const FSceneView& View);
+FMatrix4 BuildSceneProjectionMatrix(
+    const FSceneView& View,
+    float AspectRatio);
+
 class FSceneViewportRenderer
 {
 public:
@@ -38,7 +45,7 @@ public:
     bool Render(
         PWorld* World,
         const FSceneView& View,
-        FObjectHandle SelectedObject = {});
+        std::span<const FObjectHandle> SelectedObjects = {});
     FObjectHandle Pick(uint32 X, uint32 Y) const;
 
     uint32 GetColorTexture() const;

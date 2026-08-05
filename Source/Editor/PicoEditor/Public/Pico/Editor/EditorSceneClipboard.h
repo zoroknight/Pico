@@ -38,11 +38,21 @@ public:
         const PWorld& World,
         std::string_view ObjectPath,
         EEditorClipboardError* OutError = nullptr);
+    bool Copy(
+        const PWorld& World,
+        const std::vector<std::string>& ObjectPaths,
+        EEditorClipboardError* OutError = nullptr);
     bool BuildPaste(
         const PWorld& World,
         std::string_view DestinationPath,
         FWorldAssetData& OutWorldData,
         std::string& OutPastedObjectPath,
+        EEditorClipboardError* OutError = nullptr) const;
+    bool BuildPaste(
+        const PWorld& World,
+        std::string_view DestinationPath,
+        FWorldAssetData& OutWorldData,
+        std::vector<std::string>& OutPastedObjectPaths,
         EEditorClipboardError* OutError = nullptr) const;
 
     void Clear();
@@ -53,8 +63,8 @@ public:
 private:
     EEditorClipboardContentType ContentType =
         EEditorClipboardContentType::None;
-    FSceneObjectId RootObjectId;
-    std::string SourceObjectPath;
+    std::vector<FSceneObjectId> RootObjectIds;
+    std::vector<std::string> SourceObjectPaths;
     std::vector<FSceneObjectRecord> Objects;
     std::vector<FSceneRelationRecord> Relations;
 };
