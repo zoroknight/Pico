@@ -41,6 +41,7 @@ struct FSceneRelationRecord
     FSceneObjectId ObjectId;
     FSceneObjectId RootComponentId;
     FSceneObjectId AttachParentId;
+    std::string AttachSocketName;
 };
 
 struct FWorldAssetData

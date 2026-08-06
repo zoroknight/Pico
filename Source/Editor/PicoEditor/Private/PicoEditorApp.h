@@ -63,9 +63,11 @@ private:
 
     void SpawnEmptyActor();
     void SpawnCubeActor();
+    void SpawnComponentActor(EEditorSceneComponentType Type);
     void SpawnStaticMeshActor();
     void AddRootToSelectedActor();
     void AddComponentToSelection(bool bCubeComponent);
+    void AddComponentToSelection(EEditorSceneComponentType Type);
     void AddSceneComponentToSelection();
     void AddCubeComponentToSelection();
     void AddStaticMeshComponentToSelection();
@@ -144,5 +146,6 @@ private:
     bool bStatusIsError = false;
     bool bResetDockLayout = false;
     bool bOpenRenamePopup = false;
+    bool bPreviewSceneCamera = false;
 };
 }

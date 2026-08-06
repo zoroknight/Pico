@@ -183,9 +183,14 @@ set_target_properties(PicoReflectionSample PROPERTIES FOLDER "Pico/Samples")
 add_library(PicoEngine STATIC
     Source/Runtime/Engine/Private/Actor.cpp
     Source/Runtime/Engine/Private/ActorComponent.cpp
+    Source/Runtime/Engine/Private/CameraComponent.cpp
     Source/Runtime/Engine/Private/CubeComponent.cpp
+    Source/Runtime/Engine/Private/DirectionalLightComponent.cpp
     Source/Runtime/Engine/Private/EngineLoop.cpp
     Source/Runtime/Engine/Private/Level.cpp
+    Source/Runtime/Engine/Private/LightComponent.cpp
+        Source/Runtime/Engine/Private/PointLightComponent.cpp
+        Source/Runtime/Engine/Private/SpringArmComponent.cpp
     Source/Runtime/Engine/Private/PrimitiveComponent.cpp
     Source/Runtime/Engine/Private/SceneComponent.cpp
     Source/Runtime/Engine/Private/StaticMeshComponent.cpp
@@ -461,6 +466,7 @@ if(PICO_BUILD_INSPECTOR)
     target_link_libraries(PicoEditorTests
         PRIVATE
             PicoEditorCore
+            PicoRender
     )
 
     set_target_properties(PicoEditorTests PROPERTIES FOLDER "Tests/Editor")

@@ -19,9 +19,13 @@ class PSceneComponent : public PActorComponent
 
 public:
     PSceneComponent* GetAttachParent() const;
+    FName GetAttachSocketName() const;
     std::vector<PSceneComponent*> GetAttachChildren() const;
     bool IsAttachedTo(const PSceneComponent* Component) const;
-    bool AttachToComponent(PSceneComponent* Parent, EAttachmentTransformRule Rule);
+    bool AttachToComponent(
+        PSceneComponent* Parent,
+        EAttachmentTransformRule Rule,
+        FName SocketName = {});
     bool DetachFromComponent(EAttachmentTransformRule Rule);
 
     const FTransform& GetRelativeTransform() const;
@@ -37,6 +41,8 @@ public:
     void SetRelativeScale(const FVector3& Scale);
 
     FTransform GetWorldTransform() const;
+    virtual bool DoesSocketExist(FName SocketName) const;
+    virtual FTransform GetSocketTransform(FName SocketName) const;
     void SetWorldTransform(const FTransform& Transform);
 
 protected:
@@ -49,6 +55,7 @@ private:
     void RemoveAttachChild(FObjectHandle Handle);
 
     FObjectHandle AttachParentHandle;
+    FName AttachSocketName;
     std::vector<FObjectHandle> AttachChildrenHandles;
     FTransform RelativeTransform;
 };

@@ -74,6 +74,7 @@ void FEditorViewportPanel::Draw(
     FEditorTransformService& TransformService,
     float Width,
     float Height,
+    bool bUseSceneCamera,
     const FSelectObject& SelectObject,
     const FSetStatus& SetStatus,
     const FBeginTransaction& BeginTransaction,
@@ -107,6 +108,10 @@ void FEditorViewportPanel::Draw(
     View.Target = CameraPosition + Forward;
     View.NearPlane = CameraNearPlane;
     View.FarPlane = CameraFarPlane;
+    if (bUseSceneCamera)
+    {
+        TryBuildActiveCameraView(World, View);
+    }
     if (!Renderer->Resize(RenderWidth, RenderHeight)
         || !Renderer->Render(
             World,
@@ -245,14 +250,16 @@ void FEditorViewportPanel::Draw(
         }
     }
 
-    if (bHovered
+    if (!bUseSceneCamera
+        && bHovered
         && !bGizmoConsumesMouse
         && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
     {
         BeginCameraCapture();
     }
     if (bCameraCaptured
-        && (Window == nullptr
+        && (bUseSceneCamera
+            || Window == nullptr
             || glfwGetWindowAttrib(Window, GLFW_FOCUSED) == GLFW_FALSE
             || glfwGetMouseButton(Window, GLFW_MOUSE_BUTTON_RIGHT) != GLFW_PRESS))
     {

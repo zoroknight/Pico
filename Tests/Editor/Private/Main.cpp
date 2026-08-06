@@ -5,16 +5,19 @@
 #include "Pico/Editor/EditorTransactionManager.h"
 
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/CameraComponent.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
+#include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectRegistry.h"
 #include "Pico/Object/Property.h"
+#include "Pico/Render/SceneViewportRenderer.h"
 #include "TestRunner.h"
 
 #include <string>
@@ -484,6 +487,54 @@ void TestEditorCommandService(FTestRunner& Runner)
             && Selection.Resolve() != nullptr
             && Selection.Resolve()->IsA(Pico::PStaticMeshComponent::StaticClass()),
         "Command service adds and selects an asset-backed Static Mesh Component");
+
+    const Pico::FEditorCommandResult SpawnSpringArm =
+        Commands.SpawnComponentActor(Pico::EEditorSceneComponentType::SpringArm);
+    Pico::PActor* CameraRig = Selection.Resolve() != nullptr
+        && Selection.Resolve()->IsA(Pico::PActor::StaticClass())
+        ? static_cast<Pico::PActor*>(Selection.Resolve()) : nullptr;
+    Pico::PSpringArmComponent* SpringArm = CameraRig != nullptr
+        && CameraRig->GetRootComponent() != nullptr
+        && CameraRig->GetRootComponent()->IsA(
+            Pico::PSpringArmComponent::StaticClass())
+        ? static_cast<Pico::PSpringArmComponent*>(CameraRig->GetRootComponent())
+        : nullptr;
+    Runner.Expect(
+        SpawnSpringArm.bSucceeded && SpringArm != nullptr,
+        "Command service transactionally spawns a SpringArm Actor");
+    Selection.Set(SpringArm);
+    const Pico::FEditorCommandResult AddCamera =
+        Commands.AddComponent(Pico::EEditorSceneComponentType::Camera);
+    Pico::PCameraComponent* Camera = Selection.Resolve() != nullptr
+        && Selection.Resolve()->IsA(Pico::PCameraComponent::StaticClass())
+        ? static_cast<Pico::PCameraComponent*>(Selection.Resolve()) : nullptr;
+    Runner.Expect(
+        AddCamera.bSucceeded
+            && Camera != nullptr
+            && Camera->GetAttachParent() == SpringArm
+            && Camera->GetAttachSocketName()
+                == Pico::PSpringArmComponent::GetEndpointSocketName(),
+        "Adding a Camera to a SpringArm automatically uses its endpoint socket");
+    Pico::FSceneView ActiveCameraView;
+    Runner.Expect(
+        Pico::TryBuildActiveCameraView(EngineLoop.GetWorld(), ActiveCameraView)
+            && Camera != nullptr
+            && ActiveCameraView.Position.Equals(Camera->GetViewPosition()),
+        "The renderer resolves the active Camera from the runtime scene");
+
+    Runner.Expect(
+        Commands.SpawnComponentActor(
+            Pico::EEditorSceneComponentType::DirectionalLight).bSucceeded
+            && Commands.SpawnComponentActor(
+                Pico::EEditorSceneComponentType::PointLight).bSucceeded,
+        "Command service transactionally spawns both supported Light types");
+    const Pico::FSceneLighting Lighting =
+        Pico::GatherSceneLighting(EngineLoop.GetWorld());
+    Runner.Expect(
+        Lighting.bHasAuthoredLights
+            && Lighting.DirectionalLight.bEnabled
+            && Lighting.PointLightCount == 1,
+        "The renderer gathers authored Directional and Point Lights from the scene");
 
     EngineLoop.Exit();
     Runner.Expect(

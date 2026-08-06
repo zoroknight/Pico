@@ -341,6 +341,7 @@ void FPicoEditorApp::DrawViewport(float Width, float Height)
         TransformService,
         Width,
         Height,
+        bPreviewSceneCamera,
         [this](
             PObject* Object,
             EEditorSelectionOperation Operation,
@@ -441,6 +442,25 @@ void FPicoEditorApp::DrawToolbar()
     ImGui::EndDisabled();
 
     ImGui::SameLine();
+    FSceneView SceneCameraView;
+    const bool bHasActiveSceneCamera =
+        TryBuildActiveCameraView(GetWorld(), SceneCameraView);
+    if (!bHasActiveSceneCamera)
+    {
+        bPreviewSceneCamera = false;
+    }
+    ImGui::BeginDisabled(!bHasActiveSceneCamera);
+    ImGui::Checkbox("Scene Camera", &bPreviewSceneCamera);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip(
+            bHasActiveSceneCamera
+                ? "Preview the first active Camera Component"
+                : "Add an active Camera Component to preview it");
+    }
+
+    ImGui::SameLine();
     ImGui::TextDisabled("|");
     ImGui::SameLine();
 
@@ -453,6 +473,22 @@ void FPicoEditorApp::DrawToolbar()
         if (ImGui::MenuItem("Cube"))
         {
             SpawnCubeActor();
+        }
+        if (ImGui::MenuItem("Camera"))
+        {
+            SpawnComponentActor(EEditorSceneComponentType::Camera);
+        }
+        if (ImGui::MenuItem("Spring Arm"))
+        {
+            SpawnComponentActor(EEditorSceneComponentType::SpringArm);
+        }
+        if (ImGui::MenuItem("Directional Light"))
+        {
+            SpawnComponentActor(EEditorSceneComponentType::DirectionalLight);
+        }
+        if (ImGui::MenuItem("Point Light"))
+        {
+            SpawnComponentActor(EEditorSceneComponentType::PointLight);
         }
         const FAssetPath* StaticMeshAsset = GetSelectedStaticMeshAsset();
         if (ImGui::MenuItem("Static Mesh", nullptr, false, StaticMeshAsset != nullptr))
@@ -483,6 +519,22 @@ void FPicoEditorApp::DrawToolbar()
         if (ImGui::MenuItem("Cube Component"))
         {
             AddCubeComponentToSelection();
+        }
+        if (ImGui::MenuItem("Camera Component"))
+        {
+            AddComponentToSelection(EEditorSceneComponentType::Camera);
+        }
+        if (ImGui::MenuItem("Spring Arm Component"))
+        {
+            AddComponentToSelection(EEditorSceneComponentType::SpringArm);
+        }
+        if (ImGui::MenuItem("Directional Light Component"))
+        {
+            AddComponentToSelection(EEditorSceneComponentType::DirectionalLight);
+        }
+        if (ImGui::MenuItem("Point Light Component"))
+        {
+            AddComponentToSelection(EEditorSceneComponentType::PointLight);
         }
         const FAssetPath* StaticMeshAsset = GetSelectedStaticMeshAsset();
         if (ImGui::MenuItem(
@@ -829,6 +881,12 @@ void FPicoEditorApp::SpawnCubeActor()
     ApplyCommandResult(CommandService.SpawnActor(true));
 }
 
+void FPicoEditorApp::SpawnComponentActor(EEditorSceneComponentType Type)
+{
+    FinishInteractiveEdit();
+    ApplyCommandResult(CommandService.SpawnComponentActor(Type));
+}
+
 void FPicoEditorApp::SpawnStaticMeshActor()
 {
     FinishInteractiveEdit();
@@ -849,6 +907,12 @@ void FPicoEditorApp::AddComponentToSelection(bool bCubeComponent)
 {
     FinishInteractiveEdit();
     ApplyCommandResult(CommandService.AddComponent(bCubeComponent));
+}
+
+void FPicoEditorApp::AddComponentToSelection(EEditorSceneComponentType Type)
+{
+    FinishInteractiveEdit();
+    ApplyCommandResult(CommandService.AddComponent(Type));
 }
 
 void FPicoEditorApp::AddSceneComponentToSelection()

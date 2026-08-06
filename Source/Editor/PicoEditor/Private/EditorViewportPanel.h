@@ -44,6 +44,7 @@ public:
         FEditorTransformService& TransformService,
         float Width,
         float Height,
+        bool bUseSceneCamera,
         const FSelectObject& SelectObject,
         const FSetStatus& SetStatus,
         const FBeginTransaction& BeginTransaction,

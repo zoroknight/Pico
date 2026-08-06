@@ -3,9 +3,14 @@
 #include "Pico/Core/App.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/CameraComponent.h"
 #include "Pico/Engine/CubeComponent.h"
+#include "Pico/Engine/DirectionalLightComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/LightComponent.h"
+#include "Pico/Engine/PointLightComponent.h"
+#include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
@@ -180,6 +185,14 @@ bool InitializeWorldTypes(FTestRunner& Runner)
 
     const bool bActorComponentRegistered = Pico::PActorComponent::RegisterClass();
     const bool bSceneComponentRegistered = Pico::PSceneComponent::RegisterClass();
+    const bool bCameraComponentRegistered = Pico::PCameraComponent::RegisterClass();
+    const bool bLightComponentRegistered = Pico::PLightComponent::RegisterClass();
+    const bool bDirectionalLightComponentRegistered =
+        Pico::PDirectionalLightComponent::RegisterClass();
+    const bool bPointLightComponentRegistered =
+        Pico::PPointLightComponent::RegisterClass();
+    const bool bSpringArmComponentRegistered =
+        Pico::PSpringArmComponent::RegisterClass();
     const bool bPrimitiveComponentRegistered = Pico::PPrimitiveComponent::RegisterClass();
     const bool bCubeComponentRegistered = Pico::PCubeComponent::RegisterClass();
     const bool bStaticMeshComponentRegistered =
@@ -194,6 +207,17 @@ bool InitializeWorldTypes(FTestRunner& Runner)
     const bool bWorldRegistered = Pico::PWorld::RegisterClass();
     Runner.Expect(bActorComponentRegistered, "PActorComponent registers with the class registry");
     Runner.Expect(bSceneComponentRegistered, "PSceneComponent registers with the class registry");
+    Runner.Expect(bCameraComponentRegistered, "PCameraComponent registers with the class registry");
+    Runner.Expect(bLightComponentRegistered, "PLightComponent registers with the class registry");
+    Runner.Expect(
+        bDirectionalLightComponentRegistered,
+        "PDirectionalLightComponent registers with the class registry");
+    Runner.Expect(
+        bPointLightComponentRegistered,
+        "PPointLightComponent registers with the class registry");
+    Runner.Expect(
+        bSpringArmComponentRegistered,
+        "PSpringArmComponent registers with the class registry");
     Runner.Expect(bPrimitiveComponentRegistered, "PPrimitiveComponent registers with the class registry");
     Runner.Expect(bCubeComponentRegistered, "PCubeComponent registers with the class registry");
     Runner.Expect(
@@ -208,6 +232,11 @@ bool InitializeWorldTypes(FTestRunner& Runner)
     Runner.Expect(bWorldRegistered, "PWorld registers with the class registry");
     return bActorComponentRegistered
         && bSceneComponentRegistered
+        && bCameraComponentRegistered
+        && bLightComponentRegistered
+        && bDirectionalLightComponentRegistered
+        && bPointLightComponentRegistered
+        && bSpringArmComponentRegistered
         && bPrimitiveComponentRegistered
         && bCubeComponentRegistered
         && bStaticMeshComponentRegistered
@@ -1237,7 +1266,11 @@ void TestWorldAssetDataSerialization(FTestRunner& Runner)
             && UnchangedData.WorldId.Value == 777,
         "Invalid world magic fails without changing the output data");
 
-    std::vector<Pico::uint8> Version1Data = Writer.GetData();
+    Pico::FMemoryWriter Version1Writer;
+    Runner.Expect(
+        Pico::SerializeWorldAsset(Version1Writer, EmptyWorldData, &Error),
+        "A relation-free scene prepares the legacy compatibility fixture");
+    std::vector<Pico::uint8> Version1Data = Version1Writer.GetData();
     Version1Data[4] = 1;
     Version1Data[5] = 0;
     Version1Data[6] = 0;
@@ -1246,8 +1279,8 @@ void TestWorldAssetDataSerialization(FTestRunner& Runner)
     Pico::FWorldAssetData Version1LoadedData;
     Runner.Expect(
         Pico::DeserializeWorldAsset(Version1Reader, Version1LoadedData, &Error)
-            && Version1LoadedData.Objects.size() == CapturedData.Objects.size(),
-        "World format version 2 remains compatible with version 1 scenes");
+            && Version1LoadedData.Objects.size() == EmptyWorldData.Objects.size(),
+        "World format version 3 remains compatible with version 1 scenes");
 
     std::vector<Pico::uint8> UnsupportedVersion = Writer.GetData();
     UnsupportedVersion[4] = 99;
@@ -1833,6 +1866,93 @@ void TestEngineLoopWorldLifecycle(FTestRunner& Runner)
     Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Engine exit leaves no registered objects");
 }
 
+void TestCameraSpringArmSockets(FTestRunner& Runner)
+{
+    char Program[] = "PicoCameraSocketTests";
+    char MaxFPS[] = "-maxfps=0";
+    char* Arguments[] = { Program, MaxFPS };
+    Pico::FEngineLoop EngineLoop;
+    const bool bInitialized =
+        EngineLoop.PreInit(2, Arguments) == 0 && EngineLoop.Init() == 0;
+    Runner.Expect(bInitialized, "Camera socket test initializes the engine");
+    if (!bInitialized)
+    {
+        EngineLoop.Exit();
+        return;
+    }
+
+    Pico::PWorld* World = EngineLoop.GetWorld();
+    Pico::PActor* Actor = World->SpawnActor<Pico::PActor>("CameraRig");
+    Pico::PSpringArmComponent* SpringArm = Actor != nullptr
+        ? Actor->CreateComponent<Pico::PSpringArmComponent>("SpringArm") : nullptr;
+    Pico::PCameraComponent* Camera = Actor != nullptr
+        ? Actor->CreateComponent<Pico::PCameraComponent>("Camera") : nullptr;
+    const bool bRigCreated = Actor != nullptr
+        && SpringArm != nullptr
+        && Camera != nullptr
+        && Actor->SetRootComponent(SpringArm)
+        && Camera->AttachToComponent(
+            SpringArm,
+            Pico::EAttachmentTransformRule::KeepRelative,
+            Pico::PSpringArmComponent::GetEndpointSocketName());
+    Runner.Expect(bRigCreated, "A Camera attaches to the SpringArm endpoint socket");
+    if (bRigCreated)
+    {
+        SpringArm->SetRelativeLocation(Pico::FVector3(100.0f, 0.0f, 50.0f));
+        SpringArm->SetTargetArmLength(300.0f);
+        SpringArm->SetSocketOffset(Pico::FVector3(0.0f, 20.0f, 10.0f));
+        SpringArm->SetTargetOffset(Pico::FVector3(5.0f, 0.0f, 0.0f));
+        Runner.Expect(
+            Camera->GetViewPosition().Equals(
+                Pico::FVector3(-195.0f, 20.0f, 60.0f), 0.001f),
+            "The SpringArm endpoint drives the attached Camera world position");
+        Runner.Expect(
+            Camera->GetAttachSocketName()
+                == Pico::PSpringArmComponent::GetEndpointSocketName(),
+            "The Camera retains its named attachment socket");
+    }
+
+    Pico::FWorldAssetData Data;
+    Pico::EWorldSerializationError Error = Pico::EWorldSerializationError::None;
+    const bool bCaptured = Pico::CaptureWorld(*World, Data, &Error);
+    bool bSocketCaptured = false;
+    for (const Pico::FSceneRelationRecord& Relation : Data.Relations)
+    {
+        bSocketCaptured = bSocketCaptured
+            || Relation.AttachSocketName == "SpringEndpoint";
+    }
+    Runner.Expect(
+        bCaptured && bSocketCaptured,
+        "World capture serializes named component sockets");
+    Runner.Expect(
+        bCaptured && EngineLoop.ReplaceWorld(Data, &Error),
+        "World replacement restores a scene containing socket attachments");
+
+    Pico::PCameraComponent* RestoredCamera = nullptr;
+    for (Pico::PLevel* Level : EngineLoop.GetWorld()->GetLevels())
+    {
+        for (Pico::PActor* RestoredActor : Level->GetActors())
+        {
+            for (Pico::PActorComponent* Component : RestoredActor->GetComponents())
+            {
+                if (Component->IsA(Pico::PCameraComponent::StaticClass()))
+                {
+                    RestoredCamera = static_cast<Pico::PCameraComponent*>(Component);
+                }
+            }
+        }
+    }
+    Runner.Expect(
+        RestoredCamera != nullptr
+            && RestoredCamera->GetAttachSocketName()
+                == Pico::PSpringArmComponent::GetEndpointSocketName()
+            && RestoredCamera->GetViewPosition().Equals(
+                Pico::FVector3(-195.0f, 20.0f, 60.0f), 0.001f),
+        "World replacement restores the socket name and Camera transform");
+
+    EngineLoop.Exit();
+}
+
 void TestTwoFrameLifecycle(FTestRunner& Runner)
 {
     char Program[] = "PicoEngineTests";
@@ -1891,6 +2011,7 @@ int main()
     TestWorldAssetDataSerialization(Runner);
     TestWorldFilePersistence(Runner);
     TestEngineLoopWorldReplacement(Runner);
+    TestCameraSpringArmSockets(Runner);
     TestEngineLoopWorldLifecycle(Runner);
     TestTwoFrameLifecycle(Runner);
     TestZeroFrameLifecycle(Runner);

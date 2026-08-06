@@ -15,6 +15,14 @@ class PActor;
 class PSceneComponent;
 class PWorld;
 
+enum class EEditorSceneComponentType
+{
+    Camera,
+    SpringArm,
+    DirectionalLight,
+    PointLight
+};
+
 struct FEditorCommandResult
 {
     bool bSucceeded = false;
@@ -31,9 +39,11 @@ public:
         FEditorSceneClipboard* Clipboard);
 
     FEditorCommandResult SpawnActor(bool bCubeActor);
+    FEditorCommandResult SpawnComponentActor(EEditorSceneComponentType Type);
     FEditorCommandResult SpawnStaticMeshActor(const FAssetPath& AssetPath);
     FEditorCommandResult AddSceneRoot();
     FEditorCommandResult AddComponent(bool bCubeComponent);
+    FEditorCommandResult AddComponent(EEditorSceneComponentType Type);
     FEditorCommandResult AddStaticMeshComponent(const FAssetPath& AssetPath);
     FEditorCommandResult AssignStaticMeshAsset(const FAssetPath& AssetPath);
     FEditorCommandResult ClearStaticMeshAsset();
@@ -70,6 +80,10 @@ private:
         PActor* Actor,
         PSceneComponent* Parent,
         bool bCubeComponent);
+    PSceneComponent* CreateComponent(
+        PActor* Actor,
+        PSceneComponent* Parent,
+        EEditorSceneComponentType Type);
     bool BeginTransaction(std::string Description, EWorldSerializationError& OutError);
     bool CommitTransaction(EWorldSerializationError& OutError);
     bool RollbackTransaction(EWorldSerializationError& OutError);
@@ -93,5 +107,13 @@ private:
     unsigned int NextComponentNumber = 1;
     unsigned int NextCubeComponentNumber = 1;
     unsigned int NextStaticMeshComponentNumber = 1;
+    unsigned int NextCameraNumber = 1;
+    unsigned int NextSpringArmNumber = 1;
+    unsigned int NextDirectionalLightNumber = 1;
+    unsigned int NextPointLightNumber = 1;
+    unsigned int NextCameraComponentNumber = 1;
+    unsigned int NextSpringArmComponentNumber = 1;
+    unsigned int NextDirectionalLightComponentNumber = 1;
+    unsigned int NextPointLightComponentNumber = 1;
 };
 }

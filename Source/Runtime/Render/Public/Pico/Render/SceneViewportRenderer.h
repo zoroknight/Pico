@@ -7,6 +7,7 @@
 #include "Pico/Object/ObjectTypes.h"
 
 #include <memory>
+#include <array>
 #include <span>
 
 namespace Pico
@@ -28,10 +29,38 @@ struct FSceneView
     float FarPlane = 10000.0f;
 };
 
+struct FDirectionalLightData
+{
+    bool bEnabled = false;
+    FVector3 Direction = FVector3(0.45f, -0.55f, 0.8f);
+    FVector3 Color = FVector3::OneVector;
+    float Intensity = 3.0f;
+};
+
+struct FPointLightData
+{
+    FVector3 Position = FVector3::ZeroVector;
+    FVector3 Color = FVector3::OneVector;
+    float Intensity = 1.0f;
+    float AttenuationRadius = 500.0f;
+};
+
+struct FSceneLighting
+{
+    static constexpr std::size_t MaxPointLights = 4;
+
+    FDirectionalLightData DirectionalLight;
+    std::array<FPointLightData, MaxPointLights> PointLights {};
+    std::size_t PointLightCount = 0;
+    bool bHasAuthoredLights = false;
+};
+
 FMatrix4 BuildSceneViewMatrix(const FSceneView& View);
 FMatrix4 BuildSceneProjectionMatrix(
     const FSceneView& View,
     float AspectRatio);
+bool TryBuildActiveCameraView(const PWorld* World, FSceneView& OutView);
+FSceneLighting GatherSceneLighting(const PWorld* World);
 
 class FSceneViewportRenderer
 {

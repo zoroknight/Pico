@@ -9,10 +9,15 @@
 #include "Pico/Core/Math/Transform.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/CameraComponent.h"
 #include "Pico/Engine/CubeComponent.h"
+#include "Pico/Engine/DirectionalLightComponent.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/LightComponent.h"
+#include "Pico/Engine/PointLightComponent.h"
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
+#include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/World.h"
 
 #include <glad/gl.h>
@@ -72,6 +77,93 @@ FMatrix4 BuildSceneViewMatrix(const FSceneView& View)
     return Result;
 }
 
+bool TryBuildActiveCameraView(const PWorld* World, FSceneView& OutView)
+{
+    if (World == nullptr)
+    {
+        return false;
+    }
+    for (const PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr) continue;
+        for (const PActor* Actor : Level->GetActors())
+        {
+            if (Actor == nullptr) continue;
+            for (const PActorComponent* Component : Actor->GetComponents())
+            {
+                const PCameraComponent* Camera = Component != nullptr
+                    && Component->IsA(PCameraComponent::StaticClass())
+                    ? static_cast<const PCameraComponent*>(Component) : nullptr;
+                if (Camera == nullptr || !Camera->IsActive()) continue;
+
+                OutView.Position = Camera->GetViewPosition();
+                OutView.Target = OutView.Position + Camera->GetViewForward();
+                OutView.Up = Camera->GetViewUp();
+                OutView.VerticalFieldOfViewDegrees =
+                    Camera->GetVerticalFieldOfViewDegrees();
+                OutView.NearPlane = Camera->GetNearPlane();
+                OutView.FarPlane = Camera->GetFarPlane();
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+FSceneLighting GatherSceneLighting(const PWorld* World)
+{
+    FSceneLighting Lighting;
+    if (World == nullptr)
+    {
+        return Lighting;
+    }
+    for (const PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr) continue;
+        for (const PActor* Actor : Level->GetActors())
+        {
+            if (Actor == nullptr) continue;
+            for (const PActorComponent* Component : Actor->GetComponents())
+            {
+                const PLightComponent* Light = Component != nullptr
+                    && Component->IsA(PLightComponent::StaticClass())
+                    ? static_cast<const PLightComponent*>(Component) : nullptr;
+                if (Light == nullptr) continue;
+                Lighting.bHasAuthoredLights = true;
+                if (!Light->IsEnabled()) continue;
+
+                if (!Lighting.DirectionalLight.bEnabled
+                    && Light->IsA(PDirectionalLightComponent::StaticClass()))
+                {
+                    const auto* Directional =
+                        static_cast<const PDirectionalLightComponent*>(Light);
+                    Lighting.DirectionalLight.bEnabled = true;
+                    Lighting.DirectionalLight.Direction =
+                        -Directional->GetLightDirection();
+                    Lighting.DirectionalLight.Color = Light->GetLightColor();
+                    Lighting.DirectionalLight.Intensity = Light->GetIntensity();
+                }
+                else if (Lighting.PointLightCount < FSceneLighting::MaxPointLights
+                    && Light->IsA(PPointLightComponent::StaticClass()))
+                {
+                    const auto* Point = static_cast<const PPointLightComponent*>(Light);
+                    FPointLightData& Data =
+                        Lighting.PointLights[Lighting.PointLightCount++];
+                    Data.Position = Point->GetLightPosition();
+                    Data.Color = Light->GetLightColor();
+                    Data.Intensity = Light->GetIntensity();
+                    Data.AttenuationRadius = Point->GetAttenuationRadius();
+                }
+            }
+        }
+    }
+    if (!Lighting.bHasAuthoredLights)
+    {
+        Lighting.DirectionalLight.bEnabled = true;
+    }
+    return Lighting;
+}
+
 namespace
 {
 
@@ -101,6 +193,207 @@ constexpr std::array<unsigned int, 24> CubeOutlineIndices {
      5,  4,  4,  7,  7,  6,  6,  5,
      0,  5,  1,  4,  2,  7,  3,  6
 };
+
+struct FComponentVisualization
+{
+    std::vector<FVector3> Vertices;
+    FVector3 Color = FVector3::OneVector;
+};
+
+void AddLine(
+    std::vector<FVector3>& Vertices,
+    const FVector3& Start,
+    const FVector3& End)
+{
+    Vertices.push_back(Start);
+    Vertices.push_back(End);
+}
+
+void AddCircle(
+    std::vector<FVector3>& Vertices,
+    const FVector3& Center,
+    const FVector3& AxisX,
+    const FVector3& AxisY,
+    float Radius)
+{
+    constexpr int SegmentCount = 32;
+    for (int Segment = 0; Segment < SegmentCount; ++Segment)
+    {
+        const float Angle0 = 2.0f * Pi * static_cast<float>(Segment)
+            / static_cast<float>(SegmentCount);
+        const float Angle1 = 2.0f * Pi * static_cast<float>(Segment + 1)
+            / static_cast<float>(SegmentCount);
+        AddLine(
+            Vertices,
+            Center + AxisX * (std::cos(Angle0) * Radius)
+                + AxisY * (std::sin(Angle0) * Radius),
+            Center + AxisX * (std::cos(Angle1) * Radius)
+                + AxisY * (std::sin(Angle1) * Radius));
+    }
+}
+
+FComponentVisualization BuildComponentVisualization(
+    const PSceneComponent* Component,
+    const FSceneView& View,
+    float AspectRatio,
+    bool bSelected)
+{
+    FComponentVisualization Result;
+    if (Component == nullptr)
+    {
+        return Result;
+    }
+
+    const FTransform WorldTransform = Component->GetWorldTransform();
+    const FVector3 Origin = WorldTransform.Translation;
+    const float Distance = (Origin - View.Position).Size();
+    const float VisualSize = std::clamp(Distance * 0.08f, 20.0f, 200.0f);
+    const FVector3 Forward = WorldTransform.Rotation.RotateVector(
+        FVector3::ForwardVector).GetSafeNormal();
+    const FVector3 Up = WorldTransform.Rotation.RotateVector(
+        FVector3::UpVector).GetSafeNormal();
+    const FVector3 Right = FVector3::Cross(Forward, Up).GetSafeNormal();
+
+    if (Component->IsA(PCameraComponent::StaticClass()))
+    {
+        const auto* Camera = static_cast<const PCameraComponent*>(Component);
+        const FVector3 ViewForward = (View.Target - View.Position).GetSafeNormal();
+        if (Origin.Equals(View.Position, 0.01f)
+            && Forward.Equals(ViewForward, 0.001f))
+        {
+            return Result;
+        }
+        const float Depth = VisualSize * 1.5f;
+        const float HalfHeight = std::tan(DegreesToRadians(
+            Camera->GetVerticalFieldOfViewDegrees()) * 0.5f) * Depth;
+        const float HalfWidth = HalfHeight * AspectRatio;
+        const FVector3 Center = Origin + Forward * Depth;
+        const std::array<FVector3, 4> Corners {
+            Center + Right * HalfWidth + Up * HalfHeight,
+            Center - Right * HalfWidth + Up * HalfHeight,
+            Center - Right * HalfWidth - Up * HalfHeight,
+            Center + Right * HalfWidth - Up * HalfHeight
+        };
+        for (const FVector3& Corner : Corners)
+        {
+            AddLine(Result.Vertices, Origin, Corner);
+        }
+        for (std::size_t Index = 0; Index < Corners.size(); ++Index)
+        {
+            AddLine(
+                Result.Vertices,
+                Corners[Index],
+                Corners[(Index + 1) % Corners.size()]);
+        }
+        AddLine(Result.Vertices, Origin, Origin + Up * (VisualSize * 0.5f));
+        Result.Color = FVector3(0.35f, 0.8f, 1.0f);
+    }
+    else if (Component->IsA(PDirectionalLightComponent::StaticClass()))
+    {
+        const auto* Light = static_cast<const PDirectionalLightComponent*>(Component);
+        const FVector3 Direction = Light->GetLightDirection();
+        const FVector3 End = Origin + Direction * (VisualSize * 2.0f);
+        const FVector3 ArrowRight = FVector3::Cross(Direction, Up).GetSafeNormal();
+        AddLine(Result.Vertices, Origin, End);
+        AddLine(
+            Result.Vertices,
+            End,
+            End - Direction * (VisualSize * 0.45f)
+                + Up * (VisualSize * 0.25f));
+        AddLine(
+            Result.Vertices,
+            End,
+            End - Direction * (VisualSize * 0.45f)
+                - Up * (VisualSize * 0.25f));
+        AddLine(
+            Result.Vertices,
+            End,
+            End - Direction * (VisualSize * 0.45f)
+                + ArrowRight * (VisualSize * 0.25f));
+        AddLine(
+            Result.Vertices,
+            End,
+            End - Direction * (VisualSize * 0.45f)
+                - ArrowRight * (VisualSize * 0.25f));
+        AddCircle(Result.Vertices, Origin, Up, Right, VisualSize * 0.3f);
+        Result.Color = FVector3(1.0f, 0.82f, 0.25f);
+    }
+    else if (Component->IsA(PPointLightComponent::StaticClass()))
+    {
+        const auto* Light = static_cast<const PPointLightComponent*>(Component);
+        const float IconRadius = VisualSize * 0.28f;
+        AddCircle(
+            Result.Vertices,
+            Origin,
+            FVector3::ForwardVector,
+            FVector3::RightVector,
+            IconRadius);
+        AddCircle(
+            Result.Vertices,
+            Origin,
+            FVector3::ForwardVector,
+            FVector3::UpVector,
+            IconRadius);
+        AddCircle(
+            Result.Vertices,
+            Origin,
+            FVector3::RightVector,
+            FVector3::UpVector,
+            IconRadius);
+        if (bSelected)
+        {
+            const float Radius = Light->GetAttenuationRadius();
+            AddCircle(
+                Result.Vertices,
+                Origin,
+                FVector3::ForwardVector,
+                FVector3::RightVector,
+                Radius);
+            AddCircle(
+                Result.Vertices,
+                Origin,
+                FVector3::ForwardVector,
+                FVector3::UpVector,
+                Radius);
+            AddCircle(
+                Result.Vertices,
+                Origin,
+                FVector3::RightVector,
+                FVector3::UpVector,
+                Radius);
+        }
+        AddLine(
+            Result.Vertices,
+            Origin - FVector3::ForwardVector * (VisualSize * 0.3f),
+            Origin + FVector3::ForwardVector * (VisualSize * 0.3f));
+        AddLine(
+            Result.Vertices,
+            Origin - FVector3::RightVector * (VisualSize * 0.3f),
+            Origin + FVector3::RightVector * (VisualSize * 0.3f));
+        AddLine(
+            Result.Vertices,
+            Origin - FVector3::UpVector * (VisualSize * 0.3f),
+            Origin + FVector3::UpVector * (VisualSize * 0.3f));
+        Result.Color = FVector3(1.0f, 0.65f, 0.2f);
+    }
+    else if (Component->IsA(PSpringArmComponent::StaticClass()))
+    {
+        const auto* SpringArm = static_cast<const PSpringArmComponent*>(Component);
+        const FVector3 Endpoint = SpringArm->GetSocketTransform(
+            PSpringArmComponent::GetEndpointSocketName()).Translation;
+        AddLine(Result.Vertices, Origin, Endpoint);
+        AddLine(
+            Result.Vertices,
+            Endpoint - Up * (VisualSize * 0.2f),
+            Endpoint + Up * (VisualSize * 0.2f));
+        AddLine(
+            Result.Vertices,
+            Endpoint - Right * (VisualSize * 0.2f),
+            Endpoint + Right * (VisualSize * 0.2f));
+        Result.Color = FVector3(0.65f, 0.45f, 1.0f);
+    }
+    return Result;
+}
 }
 
 struct FSceneViewportRenderer::FImpl
@@ -131,6 +424,8 @@ struct FSceneViewportRenderer::FImpl
     GLuint GridVertexArray = 0;
     GLuint GridVertexBuffer = 0;
     GLsizei GridVertexCount = 0;
+    GLuint ComponentVisualizationVertexArray = 0;
+    GLuint ComponentVisualizationVertexBuffer = 0;
     std::vector<FStaticMeshGpuResource> StaticMeshes;
     std::vector<FTextureGpuResource> Textures;
     GLuint Framebuffer = 0;
@@ -197,6 +492,15 @@ uniform float Roughness;
 uniform sampler2D BaseColorTexture;
 uniform int UseBaseColorTexture;
 uniform int UseLighting;
+uniform int DirectionalLightEnabled;
+uniform vec3 DirectionalLightDirection;
+uniform vec3 DirectionalLightColor;
+uniform float DirectionalLightIntensity;
+uniform int PointLightCount;
+uniform vec3 PointLightPositions[4];
+uniform vec3 PointLightColors[4];
+uniform float PointLightIntensities[4];
+uniform float PointLightRadii[4];
 uniform uint PickingId;
 layout(location = 0) out vec4 FragColor;
 layout(location = 1) out uint FragPickingId;
@@ -223,6 +527,30 @@ vec3 FresnelSchlick(float CosTheta, vec3 F0)
     return F0 + (1.0 - F0) * pow(1.0 - CosTheta, 5.0);
 }
 
+vec3 EvaluatePbrLight(
+    vec3 N,
+    vec3 V,
+    vec3 L,
+    vec3 Radiance,
+    vec3 Albedo)
+{
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotV = max(dot(N, V), 0.0);
+    if (NdotL <= 0.0 || NdotV <= 0.0)
+    {
+        return vec3(0.0);
+    }
+    vec3 H = normalize(V + L);
+    vec3 F0 = mix(vec3(0.04), Albedo, Metallic);
+    vec3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
+    float D = DistributionGGX(N, H, Roughness);
+    float G = GeometrySchlickGGX(NdotV, Roughness)
+        * GeometrySchlickGGX(NdotL, Roughness);
+    vec3 Specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.0001);
+    vec3 Diffuse = (1.0 - F) * (1.0 - Metallic) * Albedo / PI;
+    return (Diffuse + Specular) * Radiance * NdotL;
+}
+
 void main()
 {
     vec3 Albedo = BaseColor;
@@ -235,19 +563,32 @@ void main()
     {
         vec3 N = normalize(WorldNormal);
         vec3 V = normalize(CameraPosition - WorldPosition);
-        vec3 L = normalize(vec3(0.45, -0.55, 0.8));
-        vec3 H = normalize(V + L);
-        float NdotL = max(dot(N, L), 0.0);
-        float NdotV = max(dot(N, V), 0.0);
-        vec3 F0 = mix(vec3(0.04), Albedo, Metallic);
-        vec3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
-        float D = DistributionGGX(N, H, Roughness);
-        float G = GeometrySchlickGGX(NdotV, Roughness)
-            * GeometrySchlickGGX(NdotL, Roughness);
-        vec3 Specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.0001);
-        vec3 Diffuse = (1.0 - F) * (1.0 - Metallic) * Albedo / PI;
-        vec3 Direct = (Diffuse + Specular) * vec3(3.0) * NdotL;
-        vec3 Ambient = Albedo * 0.08;
+        vec3 Direct = vec3(0.0);
+        if (DirectionalLightEnabled != 0)
+        {
+            Direct += EvaluatePbrLight(
+                N,
+                V,
+                normalize(DirectionalLightDirection),
+                DirectionalLightColor * DirectionalLightIntensity,
+                Albedo);
+        }
+        for (int Index = 0; Index < PointLightCount; ++Index)
+        {
+            vec3 ToLight = PointLightPositions[Index] - WorldPosition;
+            float Distance = length(ToLight);
+            if (Distance <= 0.0001)
+            {
+                continue;
+            }
+            float Radius = max(PointLightRadii[Index], 0.0001);
+            float Falloff = max(1.0 - Distance / Radius, 0.0);
+            vec3 Radiance = PointLightColors[Index]
+                * PointLightIntensities[Index] * Falloff * Falloff;
+            Direct += EvaluatePbrLight(
+                N, V, normalize(ToLight), Radiance, Albedo);
+        }
+        vec3 Ambient = Albedo * 0.04;
         Color = Ambient + Direct;
         Color = Color / (Color + vec3(1.0));
         Color = pow(Color, vec3(1.0 / 2.2));
@@ -382,6 +723,20 @@ void main()
             GL_FALSE,
             6 * sizeof(float),
             reinterpret_cast<const void*>(3 * sizeof(float)));
+
+        glGenVertexArrays(1, &ComponentVisualizationVertexArray);
+        glBindVertexArray(ComponentVisualizationVertexArray);
+        glGenBuffers(1, &ComponentVisualizationVertexBuffer);
+        glBindBuffer(GL_ARRAY_BUFFER, ComponentVisualizationVertexBuffer);
+        glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0,
+            3,
+            GL_FLOAT,
+            GL_FALSE,
+            sizeof(FVector3),
+            nullptr);
         glBindVertexArray(0);
         return true;
     }
@@ -481,6 +836,16 @@ void FSceneViewportRenderer::Shutdown()
         }
     }
     Impl->Textures.clear();
+    if (Impl->ComponentVisualizationVertexBuffer != 0)
+    {
+        glDeleteBuffers(1, &Impl->ComponentVisualizationVertexBuffer);
+        Impl->ComponentVisualizationVertexBuffer = 0;
+    }
+    if (Impl->ComponentVisualizationVertexArray != 0)
+    {
+        glDeleteVertexArrays(1, &Impl->ComponentVisualizationVertexArray);
+        Impl->ComponentVisualizationVertexArray = 0;
+    }
     if (Impl->GridVertexBuffer != 0)
     {
         glDeleteBuffers(1, &Impl->GridVertexBuffer);
@@ -690,6 +1055,16 @@ bool FSceneViewportRenderer::Render(
     const GLint TextureLocation = glGetUniformLocation(Impl->Program, "BaseColorTexture");
     const GLint UseTextureLocation = glGetUniformLocation(Impl->Program, "UseBaseColorTexture");
     const GLint LightingLocation = glGetUniformLocation(Impl->Program, "UseLighting");
+    const GLint DirectionalEnabledLocation =
+        glGetUniformLocation(Impl->Program, "DirectionalLightEnabled");
+    const GLint DirectionalDirectionLocation =
+        glGetUniformLocation(Impl->Program, "DirectionalLightDirection");
+    const GLint DirectionalColorLocation =
+        glGetUniformLocation(Impl->Program, "DirectionalLightColor");
+    const GLint DirectionalIntensityLocation =
+        glGetUniformLocation(Impl->Program, "DirectionalLightIntensity");
+    const GLint PointLightCountLocation =
+        glGetUniformLocation(Impl->Program, "PointLightCount");
     const GLint PickingIdLocation = glGetUniformLocation(Impl->Program, "PickingId");
     glUniformMatrix4fv(
         ViewProjectionLocation,
@@ -705,6 +1080,48 @@ bool FSceneViewportRenderer::Render(
     glUniform1f(RoughnessLocation, 0.8f);
     glUniform1i(TextureLocation, 0);
     glUniform1i(UseTextureLocation, 0);
+    const FSceneLighting SceneLighting = GatherSceneLighting(World);
+    const FDirectionalLightData& Directional = SceneLighting.DirectionalLight;
+    glUniform1i(DirectionalEnabledLocation, Directional.bEnabled ? 1 : 0);
+    glUniform3f(
+        DirectionalDirectionLocation,
+        Directional.Direction.X,
+        Directional.Direction.Y,
+        Directional.Direction.Z);
+    glUniform3f(
+        DirectionalColorLocation,
+        Directional.Color.X,
+        Directional.Color.Y,
+        Directional.Color.Z);
+    glUniform1f(DirectionalIntensityLocation, Directional.Intensity);
+    glUniform1i(
+        PointLightCountLocation,
+        static_cast<GLint>(SceneLighting.PointLightCount));
+    for (std::size_t Index = 0; Index < SceneLighting.PointLightCount; ++Index)
+    {
+        const FPointLightData& Point = SceneLighting.PointLights[Index];
+        const std::string Suffix = "[" + std::to_string(Index) + "]";
+        glUniform3f(
+            glGetUniformLocation(
+                Impl->Program, ("PointLightPositions" + Suffix).c_str()),
+            Point.Position.X,
+            Point.Position.Y,
+            Point.Position.Z);
+        glUniform3f(
+            glGetUniformLocation(
+                Impl->Program, ("PointLightColors" + Suffix).c_str()),
+            Point.Color.X,
+            Point.Color.Y,
+            Point.Color.Z);
+        glUniform1f(
+            glGetUniformLocation(
+                Impl->Program, ("PointLightIntensities" + Suffix).c_str()),
+            Point.Intensity);
+        glUniform1f(
+            glGetUniformLocation(
+                Impl->Program, ("PointLightRadii" + Suffix).c_str()),
+            Point.AttenuationRadius);
+    }
     glUniform1i(LightingLocation, 0);
     glUniform1ui(PickingIdLocation, 0);
     glBindVertexArray(Impl->GridVertexArray);
@@ -967,6 +1384,62 @@ bool FSceneViewportRenderer::Render(
                     }
                     glUniform1i(LightingLocation, 1);
                 }
+            }
+        }
+    }
+
+    glUniformMatrix4fv(ModelLocation, 1, GL_TRUE, Identity.GetData());
+    glUniform1i(UseTextureLocation, 0);
+    glUniform1i(LightingLocation, 0);
+    glBindVertexArray(Impl->ComponentVisualizationVertexArray);
+    for (PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr) continue;
+        for (PActor* Actor : Level->GetActors())
+        {
+            if (Actor == nullptr) continue;
+            for (PActorComponent* Component : Actor->GetComponents())
+            {
+                const PSceneComponent* SceneComponent = Component != nullptr
+                    && Component->IsA(PSceneComponent::StaticClass())
+                    ? static_cast<const PSceneComponent*>(Component) : nullptr;
+                const bool bSelected = std::find(
+                        SelectedObjects.begin(),
+                        SelectedObjects.end(),
+                        Component->GetHandle()) != SelectedObjects.end()
+                    || std::find(
+                        SelectedObjects.begin(),
+                        SelectedObjects.end(),
+                        Actor->GetHandle()) != SelectedObjects.end();
+                FComponentVisualization Visualization =
+                    BuildComponentVisualization(
+                        SceneComponent,
+                        View,
+                        Aspect,
+                        bSelected);
+                if (Visualization.Vertices.empty()) continue;
+
+                const FVector3 Color = bSelected
+                    ? FVector3::OneVector : Visualization.Color;
+                Impl->PickHandles.push_back(Component->GetHandle());
+                const GLuint PickingId =
+                    static_cast<GLuint>(Impl->PickHandles.size());
+                glBindBuffer(
+                    GL_ARRAY_BUFFER,
+                    Impl->ComponentVisualizationVertexBuffer);
+                glBufferData(
+                    GL_ARRAY_BUFFER,
+                    static_cast<std::ptrdiff_t>(
+                        Visualization.Vertices.size() * sizeof(FVector3)),
+                    Visualization.Vertices.data(),
+                    GL_DYNAMIC_DRAW);
+                glUniform3f(ColorLocation, Color.X, Color.Y, Color.Z);
+                glUniform1ui(PickingIdLocation, PickingId);
+                glLineWidth(bSelected ? 3.0f : 2.0f);
+                glDrawArrays(
+                    GL_LINES,
+                    0,
+                    static_cast<GLsizei>(Visualization.Vertices.size()));
             }
         }
     }

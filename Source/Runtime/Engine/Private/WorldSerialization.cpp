@@ -23,7 +23,7 @@ namespace Pico
 namespace
 {
 constexpr uint32 WorldMagic = 0x444c5750;
-constexpr uint32 WorldFormatVersion = 2;
+constexpr uint32 WorldFormatVersion = 3;
 constexpr uint32 MinimumWorldFormatVersion = 1;
 constexpr uint32 MaxSceneObjectCount = 64 * 1024;
 constexpr uint32 MaxSceneRelationCount = 128 * 1024;
@@ -188,11 +188,18 @@ bool SerializeObjectRecord(FArchive& Archive, FSceneObjectRecord& Record)
     return !Archive.HasError();
 }
 
-void SerializeRelationRecord(FArchive& Archive, FSceneRelationRecord& Relation)
+void SerializeRelationRecord(
+    FArchive& Archive,
+    FSceneRelationRecord& Relation,
+    uint32 Version)
 {
     Archive.SerializeUInt64(Relation.ObjectId.Value);
     Archive.SerializeUInt64(Relation.RootComponentId.Value);
     Archive.SerializeUInt64(Relation.AttachParentId.Value);
+    if (Version >= 3)
+    {
+        Archive.SerializeString(Relation.AttachSocketName);
+    }
 }
 }
 
@@ -378,7 +385,8 @@ public:
                 Objects.at(Relation.AttachParentId.Value));
             if (!Component->AttachToComponent(
                     Parent,
-                    EAttachmentTransformRule::KeepRelative))
+                    EAttachmentTransformRule::KeepRelative,
+                    FName(Relation.AttachSocketName)))
             {
                 return Fail(EWorldSerializationError::RelationRestoreFailed);
             }
@@ -557,7 +565,8 @@ bool CaptureWorld(
                         FSceneRelationRecord {
                             ObjectIds.at(SceneComponent),
                             {},
-                            ParentId->second });
+                            ParentId->second,
+                            SceneComponent->GetAttachSocketName().ToString() });
                 }
             }
         }
@@ -715,7 +724,10 @@ bool ValidateWorldAssetData(
         if (Object == nullptr
             || !RelatedObjects.insert(Relation.ObjectId.Value).second
             || (Relation.RootComponentId.IsValid()
-                == Relation.AttachParentId.IsValid()))
+                == Relation.AttachParentId.IsValid())
+            || Relation.AttachSocketName.size() > MaxSceneNameLength
+            || (Relation.RootComponentId.IsValid()
+                && !Relation.AttachSocketName.empty()))
         {
             ReportError(OutError, EWorldSerializationError::InvalidObjectGraph);
             return false;
@@ -806,7 +818,7 @@ bool SerializeWorldAsset(
     }
     for (FSceneRelationRecord& Relation : SerializedData.Relations)
     {
-        SerializeRelationRecord(Archive, Relation);
+        SerializeRelationRecord(Archive, Relation, Version);
     }
     if (Archive.HasError())
     {
@@ -889,7 +901,7 @@ bool DeserializeWorldAsset(
     Data.Relations.resize(RelationCount);
     for (FSceneRelationRecord& Relation : Data.Relations)
     {
-        SerializeRelationRecord(Archive, Relation);
+        SerializeRelationRecord(Archive, Relation, Version);
     }
     if (Archive.HasError())
     {

@@ -26,6 +26,10 @@ The first five development months are complete. Pico can currently:
 - Create `PWorld`, `PLevel`, `PActor`, and component instances with explicit lifecycles.
 - Use a root scene component as the Actor transform provider.
 - Build parent-child scene-component attachment trees with relative and world transforms.
+- Attach scene components to named parent sockets, persist socket relationships in `.pworld` v3,
+  and load older v1/v2 scenes without socket data.
+- Author runtime Camera, Spring Arm, Directional Light, and Point Light components through the
+  same reflection, serialization, hierarchy, and editor transaction paths as other components.
 - Open a `.pico` project with separate engine and project roots.
 - Represent persistent references with validated `/Game/...` asset paths instead of machine-specific
   disk paths.
@@ -53,6 +57,13 @@ The first five development months are complete. Pico can currently:
   use type folders such as `Meshes`, `Textures`, `Materials`, and `Maps`.
 - Display runtime objects in an Outliner and Details panel.
 - Render `PCubeComponent` instances in an interactive OpenGL 3.3 editor viewport.
+- Preview the first active scene Camera in the editor, including a Camera attached to the
+  `SpringEndpoint` socket of a reflected Spring Arm.
+- Visualize non-renderable scene components with selectable editor wireframes: Camera frustums,
+  Directional Light arrows, compact Point Light icons with selection-only attenuation spheres,
+  and Spring Arm endpoint lines.
+- Shade PBR geometry with scene-authored Directional and Point Lights; scenes without authored
+  lights retain the legacy default directional light.
 - Select Actors and components individually, additively, by range, or with `Ctrl+A`; the viewport
   renders the complete selection set with scene highlights.
 - Undo and redo scene hierarchy, Actor Transform, and reflected-property edits through editor
@@ -65,7 +76,7 @@ The first five development months are complete. Pico can currently:
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
 Debug and Release configurations build successfully, all eight CTest targets pass,
-and `PicoEditorTests` currently reports 69 passing checks.
+and `PicoEditorTests` currently reports 74 passing checks.
 
 ## Architecture
 
@@ -125,6 +136,11 @@ PWorld
     -> PActor
       -> PActorComponent
         -> PSceneComponent
+          -> PCameraComponent
+          -> PSpringArmComponent
+          -> PLightComponent
+            -> PDirectionalLightComponent
+            -> PPointLightComponent
           -> PPrimitiveComponent
             -> PCubeComponent
 ```
@@ -207,6 +223,30 @@ GameWorld
 
 - Use `Add > Empty Actor` to create an editor-authored Actor with `DefaultSceneRoot`.
 - Use `Add > Cube` to create an Actor whose renderable `PCubeComponent` is also its root.
+- Use `Add > Camera`, `Spring Arm`, `Directional Light`, or `Point Light` to create reflected,
+  transaction-backed scene actors. The same types are available under `Add Component`.
+- To build a camera rig, select a Spring Arm component and add a Camera component. Pico attaches
+  it to the named `SpringEndpoint` socket automatically. Edit `TargetArmLength`, `SocketOffset`,
+  and `TargetOffset` in Details.
+- Enable `Scene Camera` in the toolbar to preview the first active Camera component. Disable it to
+  return to the independent editor fly camera.
+- Edit a Light component's `bEnabled`, `LightColor`, and `Intensity`; Point Lights additionally
+  expose `AttenuationRadius`. The renderer currently uses one Directional Light and up to four
+  Point Lights.
+
+Camera-rig parameter reference:
+
+| Component | Property | Meaning |
+| --- | --- | --- |
+| Camera | `bActive` | Makes the component eligible for `Scene Camera`; the first active Camera is used. |
+| Camera | `VerticalFieldOfViewDegrees` | Vertical field of view in degrees; larger values show a wider view. |
+| Camera | `NearPlane` / `FarPlane` | Nearest and farthest rendered distances. |
+| Spring Arm | `TargetArmLength` | Distance from the arm origin to `SpringEndpoint` along local `-X`. |
+| Spring Arm | `TargetOffset` | World-space offset applied to the arm origin. |
+| Spring Arm | `SocketOffset` | Arm-local offset applied at `SpringEndpoint`, useful for over-shoulder cameras. |
+
+An attached Camera normally keeps an identity Relative Transform and lets the Spring Arm control
+distance, rotation, and offset. Collision retraction and camera lag are not implemented yet.
 - Select a `.pmesh` in Content Browser, then use `Add > Static Mesh` or double-click the asset to
   create an Actor. `Ctrl` toggles assets, `Shift` selects a range, and `Ctrl+A` selects every asset
   visible under the current folder, search, and type filters.

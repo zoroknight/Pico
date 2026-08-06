@@ -4,10 +4,14 @@
 #include "Pico/Core/Paths.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/CameraComponent.h"
 #include "Pico/Engine/CubeComponent.h"
+#include "Pico/Engine/DirectionalLightComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/PointLightComponent.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
@@ -32,6 +36,18 @@ FEditorCommandResult Success(std::string Message)
 FEditorCommandResult Failure(std::string Message)
 {
     return { false, std::move(Message) };
+}
+
+const char* GetComponentTypeLabel(EEditorSceneComponentType Type)
+{
+    switch (Type)
+    {
+    case EEditorSceneComponentType::Camera: return "Camera";
+    case EEditorSceneComponentType::SpringArm: return "Spring Arm";
+    case EEditorSceneComponentType::DirectionalLight: return "Directional Light";
+    case EEditorSceneComponentType::PointLight: return "Point Light";
+    }
+    return "Component";
 }
 }
 
@@ -155,6 +171,77 @@ PSceneComponent* FEditorCommandService::CreateComponent(
     return Component;
 }
 
+PSceneComponent* FEditorCommandService::CreateComponent(
+    PActor* Actor,
+    PSceneComponent* Parent,
+    EEditorSceneComponentType Type)
+{
+    if (Actor == nullptr || (Parent != nullptr && Parent->GetOwner() != Actor))
+    {
+        return nullptr;
+    }
+
+    const PClass* ComponentClass = nullptr;
+    const char* Prefix = nullptr;
+    unsigned int* NextNumber = nullptr;
+    switch (Type)
+    {
+    case EEditorSceneComponentType::Camera:
+        ComponentClass = PCameraComponent::StaticClass();
+        Prefix = "CameraComponent_";
+        NextNumber = &NextCameraComponentNumber;
+        break;
+    case EEditorSceneComponentType::SpringArm:
+        ComponentClass = PSpringArmComponent::StaticClass();
+        Prefix = "SpringArmComponent_";
+        NextNumber = &NextSpringArmComponentNumber;
+        break;
+    case EEditorSceneComponentType::DirectionalLight:
+        ComponentClass = PDirectionalLightComponent::StaticClass();
+        Prefix = "DirectionalLightComponent_";
+        NextNumber = &NextDirectionalLightComponentNumber;
+        break;
+    case EEditorSceneComponentType::PointLight:
+        ComponentClass = PPointLightComponent::StaticClass();
+        Prefix = "PointLightComponent_";
+        NextNumber = &NextPointLightComponentNumber;
+        break;
+    }
+
+    PSceneComponent* Component = nullptr;
+    do
+    {
+        PActorComponent* Created = Actor->CreateComponent(
+            ComponentClass,
+            std::string(Prefix) + std::to_string((*NextNumber)++));
+        Component = Created != nullptr
+            ? static_cast<PSceneComponent*>(Created) : nullptr;
+    }
+    while (Component == nullptr && *NextNumber < 10000);
+
+    if (Component == nullptr)
+    {
+        return nullptr;
+    }
+    PSceneComponent* Root = Actor->GetRootComponent();
+    const bool bConnected = Root == nullptr
+        ? Actor->SetRootComponent(Component)
+        : Component->AttachToComponent(
+            Parent != nullptr ? Parent : Root,
+            EAttachmentTransformRule::KeepRelative,
+            Type == EEditorSceneComponentType::Camera
+                    && Parent != nullptr
+                    && Parent->IsA(PSpringArmComponent::StaticClass())
+                ? PSpringArmComponent::GetEndpointSocketName()
+                : FName {});
+    if (!bConnected)
+    {
+        Actor->DestroyComponent(Component);
+        return nullptr;
+    }
+    return Component;
+}
+
 bool FEditorCommandService::BeginTransaction(
     std::string Description,
     EWorldSerializationError& OutError)
@@ -242,6 +329,72 @@ FEditorCommandResult FEditorCommandService::SpawnActor(bool bCubeActor)
     return Success("Spawned " + Path);
 }
 
+FEditorCommandResult FEditorCommandService::SpawnComponentActor(
+    EEditorSceneComponentType Type)
+{
+    const char* Label = GetComponentTypeLabel(Type);
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    if (!BeginTransaction(std::string("Create ") + Label, Error))
+    {
+        return Failure("Could not begin create transaction");
+    }
+
+    const char* Prefix = nullptr;
+    unsigned int* NextNumber = nullptr;
+    switch (Type)
+    {
+    case EEditorSceneComponentType::Camera:
+        Prefix = "Camera_";
+        NextNumber = &NextCameraNumber;
+        break;
+    case EEditorSceneComponentType::SpringArm:
+        Prefix = "SpringArm_";
+        NextNumber = &NextSpringArmNumber;
+        break;
+    case EEditorSceneComponentType::DirectionalLight:
+        Prefix = "DirectionalLight_";
+        NextNumber = &NextDirectionalLightNumber;
+        break;
+    case EEditorSceneComponentType::PointLight:
+        Prefix = "PointLight_";
+        NextNumber = &NextPointLightNumber;
+        break;
+    }
+
+    PWorld* World = GetWorld();
+    PActor* Actor = nullptr;
+    do
+    {
+        Actor = World != nullptr
+            ? World->SpawnActor<PActor>(
+                std::string(Prefix) + std::to_string((*NextNumber)++))
+            : nullptr;
+    }
+    while (Actor == nullptr && *NextNumber < 10000);
+
+    PSceneComponent* Component = CreateComponent(Actor, nullptr, Type);
+    if (Component == nullptr)
+    {
+        if (Actor != nullptr) World->DestroyActor(Actor);
+        RollbackTransaction(Error);
+        return Failure(std::string("Failed to spawn a ") + Label);
+    }
+    if (Type == EEditorSceneComponentType::Camera)
+    {
+        Actor->SetActorLocation(FVector3(-500.0f, 0.0f, 200.0f));
+        Actor->SetActorRotation(FRotator(-20.0f, 0.0f, 0.0f));
+    }
+    else if (Type == EEditorSceneComponentType::PointLight)
+    {
+        Actor->SetActorLocation(FVector3(0.0f, -200.0f, 250.0f));
+    }
+
+    const std::string Path = Actor->GetPathName();
+    Selection->Set(Actor);
+    return CommitTransaction(Error) ? Success("Spawned " + Path)
+                                    : Failure("Could not commit create transaction");
+}
+
 FEditorCommandResult FEditorCommandService::SpawnStaticMeshActor(
     const FAssetPath& AssetPath)
 {
@@ -324,6 +477,41 @@ FEditorCommandResult FEditorCommandService::AddComponent(bool bCubeComponent)
     {
         RollbackTransaction(Error);
         return Failure("Could not add the selected component type");
+    }
+    const std::string Path = Component->GetPathName();
+    Selection->Set(Component);
+    return CommitTransaction(Error) ? Success("Added " + Path)
+                                    : Failure("Could not commit add-component transaction");
+}
+
+FEditorCommandResult FEditorCommandService::AddComponent(
+    EEditorSceneComponentType Type)
+{
+    PObject* Object = Selection != nullptr ? Selection->Resolve() : nullptr;
+    PActor* Actor = Object != nullptr && Object->IsA(PActor::StaticClass())
+        ? static_cast<PActor*>(Object) : nullptr;
+    PSceneComponent* Parent = Object != nullptr && Object->IsA(PSceneComponent::StaticClass())
+        ? static_cast<PSceneComponent*>(Object) : nullptr;
+    if (Actor == nullptr && Parent != nullptr)
+    {
+        Actor = Parent->GetOwner();
+    }
+    if (Actor == nullptr)
+    {
+        return Failure("Select an Actor or SceneComponent before adding a component");
+    }
+
+    const char* Label = GetComponentTypeLabel(Type);
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    if (!BeginTransaction(std::string("Add ") + Label + " Component", Error))
+    {
+        return Failure("Could not begin add-component transaction");
+    }
+    PSceneComponent* Component = CreateComponent(Actor, Parent, Type);
+    if (Component == nullptr)
+    {
+        RollbackTransaction(Error);
+        return Failure(std::string("Could not add a ") + Label + " Component");
     }
     const std::string Path = Component->GetPathName();
     Selection->Set(Component);

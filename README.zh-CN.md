@@ -24,6 +24,10 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 创建具有明确生命周期的 `PWorld`、`PLevel`、`PActor` 和 Component。
 - 使用 RootComponent 为 Actor 提供 Transform。
 - 建立 SceneComponent 父子挂接树并计算 Relative/World Transform。
+- 将 SceneComponent 挂到父组件的命名 Socket，在 `.pworld` v3 中保存 Socket 关系，并兼容
+  没有 Socket 数据的 v1/v2 场景。
+- 通过统一的反射、序列化、层级和编辑器事务创建 Camera、Spring Arm、Directional Light
+  和 Point Light 运行时组件。
 - 通过 `.pico` 打开引擎目录之外的项目边界。
 - 使用经过校验的 `/Game/...` 资产路径保存持久引用，不把本机磁盘路径写入对象或场景。
 - 确定性扫描项目中的 `.pworld`、`.pmesh`、`.ptex` 和 `.pmat` 原生文件，并通过支持
@@ -48,6 +52,11 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   资产按类型放入 `Meshes`、`Textures`、`Materials` 和 `Maps` 等目录。
 - 在 Outliner 和 Details 中查看、创建、修改和销毁运行时对象。
 - 在 OpenGL 3.3 编辑器视口中渲染 `PCubeComponent`。
+- 在编辑器中预览第一个激活的场景 Camera，包括挂在 Spring Arm 的 `SpringEndpoint` 上的 Camera。
+- 为无实体组件绘制可拾取的编辑器线框：Camera 视锥、Directional Light 箭头、Point Light
+  小型图标与仅选中时显示的衰减范围球，以及 Spring Arm 末端连线。
+- 使用场景中的一个 Directional Light 和最多四个 Point Light 进行 PBR 光照；没有创建
+  Light 组件的旧场景继续使用兼容的默认方向光。
 - 单选、追加选择、范围选择或使用 `Ctrl+A` 选择 Actor 和 Component，并在 Viewport 中
   高亮完整选择集。
 - 通过编辑器事务撤销和重做场景层级、Actor Transform 与反射属性修改，并恢复完整多选集。
@@ -59,7 +68,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
 Debug 和 Release 均可完整构建，八个 CTest 目标全部通过；`PicoEditorTests`
-目前包含 69 项通过的检查。
+目前包含 74 项通过的检查。
 
 ## 架构
 
@@ -118,6 +127,11 @@ PWorld
     -> PActor
       -> PActorComponent
         -> PSceneComponent
+          -> PCameraComponent
+          -> PSpringArmComponent
+          -> PLightComponent
+            -> PDirectionalLightComponent
+            -> PPointLightComponent
           -> PPrimitiveComponent
             -> PCubeComponent
 ```
@@ -196,6 +210,26 @@ GameWorld
 
 - 使用 `Add > Empty Actor` 创建带有 `DefaultSceneRoot` 的编辑器 Actor。
 - 使用 `Add > Cube` 创建以可渲染 `PCubeComponent` 直接作为根组件的 Actor。
+- 使用 `Add > Camera`、`Spring Arm`、`Directional Light` 或 `Point Light` 创建支持事务的
+  场景 Actor；同样的类型也可通过 `Add Component` 添加。
+- 构建相机支架时，先选中 Spring Arm Component，再添加 Camera Component；Camera 会自动
+  挂到命名 Socket `SpringEndpoint`。工具栏的 `Scene Camera` 可在场景相机与编辑器飞行相机间切换。
+- Light 的 `bEnabled`、`LightColor` 和 `Intensity` 分别控制启用状态、颜色和强度；Point Light
+  还可通过 `AttenuationRadius` 控制照明范围。
+
+相机支架参数速查：
+
+| 组件 | 属性 | 含义 |
+| --- | --- | --- |
+| Camera | `bActive` | 是否可以被 `Scene Camera` 使用；当前取第一个激活的 Camera。 |
+| Camera | `VerticalFieldOfViewDegrees` | 垂直视野角；数值越大，画面范围越宽。 |
+| Camera | `NearPlane` / `FarPlane` | 最近和最远的可渲染距离。 |
+| Spring Arm | `TargetArmLength` | 从起点沿局部 `-X` 到 `SpringEndpoint` 的距离。 |
+| Spring Arm | `TargetOffset` | 施加在弹簧臂起点上的世界空间偏移。 |
+| Spring Arm | `SocketOffset` | 施加在末端的弹簧臂局部偏移，适合越肩相机。 |
+
+挂到弹簧臂后的 Camera 通常保持单位 Relative Transform，由 Spring Arm 统一控制距离、旋转和
+偏移。当前版本尚未实现碰撞回缩和 Camera Lag。
 - 在 Content Browser 中选择 `.pmesh`，再使用 `Add > Static Mesh` 或双击资产创建 Actor；
   `Ctrl` 可切换多选，`Shift` 可范围选择，`Ctrl+A` 会选择当前目录、搜索和类型过滤结果中的全部资产。
 - 使用 `Import OBJ` 检查源模型，并选择 Auto、Centimeters、Meters、Millimeters、Normalize

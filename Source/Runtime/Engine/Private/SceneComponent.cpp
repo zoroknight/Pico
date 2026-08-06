@@ -29,6 +29,11 @@ PSceneComponent* PSceneComponent::GetAttachParent() const
     return ResolveSceneComponent(AttachParentHandle);
 }
 
+FName PSceneComponent::GetAttachSocketName() const
+{
+    return AttachSocketName;
+}
+
 std::vector<PSceneComponent*> PSceneComponent::GetAttachChildren() const
 {
     std::vector<PSceneComponent*> Children;
@@ -64,7 +69,8 @@ bool PSceneComponent::IsAttachedTo(const PSceneComponent* Component) const
 
 bool PSceneComponent::AttachToComponent(
     PSceneComponent* Parent,
-    EAttachmentTransformRule Rule)
+    EAttachmentTransformRule Rule,
+    FName SocketName)
 {
     PActor* Owner = GetOwner();
     if (Parent == nullptr
@@ -74,12 +80,13 @@ bool PSceneComponent::AttachToComponent(
         || IsBeginningDestroy()
         || Parent->IsBeginningDestroy()
         || Owner->GetRootComponent() == this
-        || Parent->IsAttachedTo(this))
+        || Parent->IsAttachedTo(this)
+        || !Parent->DoesSocketExist(SocketName))
     {
         return false;
     }
 
-    if (GetAttachParent() == Parent)
+    if (GetAttachParent() == Parent && AttachSocketName == SocketName)
     {
         return true;
     }
@@ -91,10 +98,12 @@ bool PSceneComponent::AttachToComponent(
     }
 
     AttachParentHandle = Parent->GetHandle();
+    AttachSocketName = SocketName;
     Parent->AddAttachChild(GetHandle());
     if (Rule == EAttachmentTransformRule::KeepWorld)
     {
-        RelativeTransform = WorldTransform.GetRelativeTransform(Parent->GetWorldTransform());
+        RelativeTransform = WorldTransform.GetRelativeTransform(
+            Parent->GetSocketTransform(SocketName));
     }
     return true;
 }
@@ -105,12 +114,14 @@ bool PSceneComponent::DetachFromComponent(EAttachmentTransformRule Rule)
     if (Parent == nullptr)
     {
         AttachParentHandle = {};
+        AttachSocketName = {};
         return false;
     }
 
     const FTransform WorldTransform = GetWorldTransform();
     Parent->RemoveAttachChild(GetHandle());
     AttachParentHandle = {};
+    AttachSocketName = {};
     if (Rule == EAttachmentTransformRule::KeepWorld)
     {
         RelativeTransform = WorldTransform;
@@ -162,15 +173,26 @@ FTransform PSceneComponent::GetWorldTransform() const
 {
     const PSceneComponent* Parent = GetAttachParent();
     return Parent != nullptr
-        ? RelativeTransform * Parent->GetWorldTransform()
+        ? RelativeTransform * Parent->GetSocketTransform(AttachSocketName)
         : RelativeTransform;
+}
+
+bool PSceneComponent::DoesSocketExist(FName SocketName) const
+{
+    return SocketName.IsNone();
+}
+
+FTransform PSceneComponent::GetSocketTransform(FName SocketName) const
+{
+    (void)SocketName;
+    return GetWorldTransform();
 }
 
 void PSceneComponent::SetWorldTransform(const FTransform& Transform)
 {
     const PSceneComponent* Parent = GetAttachParent();
     RelativeTransform = Parent != nullptr
-        ? Transform.GetRelativeTransform(Parent->GetWorldTransform())
+        ? Transform.GetRelativeTransform(Parent->GetSocketTransform(AttachSocketName))
         : Transform;
 }
 
@@ -182,6 +204,7 @@ void PSceneComponent::BeginDestroy()
         Parent->RemoveAttachChild(GetHandle());
     }
     AttachParentHandle = {};
+    AttachSocketName = {};
     RelativeTransform = WorldTransform;
 
     const std::vector<PSceneComponent*> Children = GetAttachChildren();
@@ -194,6 +217,7 @@ void PSceneComponent::BeginDestroy()
 
         const FTransform ChildWorldTransform = Child->GetWorldTransform();
         Child->AttachParentHandle = {};
+        Child->AttachSocketName = {};
         Child->RelativeTransform = ChildWorldTransform;
     }
     AttachChildrenHandles.clear();

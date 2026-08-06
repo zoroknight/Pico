@@ -2,8 +2,13 @@
 #include "Pico/Core/AssetPath.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/CameraComponent.h"
 #include "Pico/Engine/CubeComponent.h"
+#include "Pico/Engine/DirectionalLightComponent.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/LightComponent.h"
+#include "Pico/Engine/PointLightComponent.h"
+#include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
@@ -23,6 +28,11 @@ bool RegisterEngineClasses()
     return Pico::PObjectSystem::Init()
         && Pico::PActorComponent::RegisterClass()
         && Pico::PSceneComponent::RegisterClass()
+        && Pico::PCameraComponent::RegisterClass()
+        && Pico::PLightComponent::RegisterClass()
+        && Pico::PDirectionalLightComponent::RegisterClass()
+        && Pico::PPointLightComponent::RegisterClass()
+        && Pico::PSpringArmComponent::RegisterClass()
         && Pico::PPrimitiveComponent::RegisterClass()
         && Pico::PCubeComponent::RegisterClass()
         && Pico::PStaticMeshComponent::RegisterClass()
