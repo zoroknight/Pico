@@ -10,6 +10,8 @@
 
 namespace Pico
 {
+class FAssetManager;
+class FAssetRegistry;
 class PWorld;
 
 using FOpenGLProcedure = void (*)();
@@ -44,6 +46,8 @@ public:
     bool Resize(uint32 Width, uint32 Height);
     bool Render(
         PWorld* World,
+        FAssetRegistry& AssetRegistry,
+        FAssetManager& AssetManager,
         const FSceneView& View,
         std::span<const FObjectHandle> SelectedObjects = {});
     FObjectHandle Pick(uint32 X, uint32 Y) const;

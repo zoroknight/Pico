@@ -23,7 +23,8 @@ namespace Pico
 namespace
 {
 constexpr uint32 WorldMagic = 0x444c5750;
-constexpr uint32 WorldFormatVersion = 1;
+constexpr uint32 WorldFormatVersion = 2;
+constexpr uint32 MinimumWorldFormatVersion = 1;
 constexpr uint32 MaxSceneObjectCount = 64 * 1024;
 constexpr uint32 MaxSceneRelationCount = 128 * 1024;
 constexpr uint32 MaxObjectPropertyCount = 4 * 1024;
@@ -840,7 +841,7 @@ bool DeserializeWorldAsset(
         ReportError(OutError, EWorldSerializationError::InvalidArchive);
         return false;
     }
-    if (Version != WorldFormatVersion)
+    if (Version < MinimumWorldFormatVersion || Version > WorldFormatVersion)
     {
         ReportError(OutError, EWorldSerializationError::UnsupportedVersion);
         return false;
@@ -871,6 +872,17 @@ bool DeserializeWorldAsset(
                     ? EWorldSerializationError::InvalidArchive
                     : EWorldSerializationError::PropertyLimitExceeded);
             return false;
+        }
+        if (Version == 1)
+        {
+            for (const FSerializedPropertyRecord& Property : Record.Properties)
+            {
+                if (Property.Type > EPropertyType::Transform)
+                {
+                    ReportError(OutError, EWorldSerializationError::InvalidArchive);
+                    return false;
+                }
+            }
         }
     }
 

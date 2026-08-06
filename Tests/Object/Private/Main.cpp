@@ -65,6 +65,29 @@ protected:
 
 PICO_DEFINE_CLASS_NO_PROPERTIES(PMacroDerivedObject)
 
+class PAssetReferenceObject final : public Pico::PObject
+{
+    PICO_DECLARE_CLASS(PAssetReferenceObject, Pico::PObject)
+
+protected:
+    explicit PAssetReferenceObject(const Pico::FObjectConstructionParams& Params)
+        : PObject(Params)
+    {
+    }
+
+private:
+    Pico::FAssetPath AssetPath;
+};
+
+PICO_DEFINE_CLASS(PAssetReferenceObject)
+
+bool PAssetReferenceObject::RegisterProperties(Pico::PClass& Class)
+{
+    std::vector<Pico::PProperty> Properties;
+    PICO_ADD_PROPERTY(Properties, AssetPath);
+    return Class.AddProperties(std::move(Properties));
+}
+
 class PInvalidMacroObject : public Pico::PObject
 {
     PICO_DECLARE_CLASS(PInvalidMacroObject, Pico::PObject)
@@ -942,7 +965,7 @@ void TestObjectSerialization(FTestRunner& Runner)
     Pico::PObject* Version1Object = Pico::LoadObject(Version1Reader, nullptr, &SerializationError);
     Runner.Expect(
         Version1Object != nullptr && SerializationError == Pico::EObjectSerializationError::None,
-        "Version 2 reader remains compatible with version 1 scalar archives");
+        "Version 3 reader remains compatible with version 1 scalar archives");
     if (Version1Object != nullptr)
     {
         Pico::int32 Version1Score = 0;
@@ -1100,6 +1123,75 @@ void TestObjectSerialization(FTestRunner& Runner)
         "PostLoad failure rolls back the object and children it created");
 }
 
+void TestAssetPathSerialization(FTestRunner& Runner)
+{
+    Runner.Expect(
+        PAssetReferenceObject::RegisterClass(),
+        "An object class can register a reflected AssetPath property");
+    PAssetReferenceObject* Source =
+        Pico::NewObject<PAssetReferenceObject>(nullptr, "AssetReference");
+    const Pico::PProperty* Property = Source != nullptr
+        ? Source->GetClass()->FindProperty(Pico::FName("AssetPath"))
+        : nullptr;
+    Pico::FAssetPath AssetPath;
+    const bool bPathCreated = Pico::FAssetPath::TryParse(
+        "/Game/Models/Robot.pmesh",
+        AssetPath);
+    Runner.Expect(
+        Source != nullptr
+            && Property != nullptr
+            && Property->GetType() == Pico::EPropertyType::AssetPath
+            && bPathCreated
+            && Property->SetValue(Source, AssetPath),
+        "Reflection reads and writes a type-safe AssetPath");
+    if (Source == nullptr || Property == nullptr || !bPathCreated)
+    {
+        if (Source != nullptr)
+        {
+            Pico::DestroyObject(Source);
+        }
+        return;
+    }
+
+    Pico::FMemoryWriter Writer;
+    Runner.Expect(
+        Pico::SaveObject(Writer, Source),
+        "An AssetPath property serializes through the generic object archive");
+    const std::vector<Pico::uint8> Data = Writer.GetData();
+    Pico::DestroyObject(Source);
+
+    Pico::EObjectSerializationError Error = Pico::EObjectSerializationError::InvalidArchive;
+    Pico::FMemoryReader Reader(Data);
+    Pico::PObject* Loaded = Pico::LoadObject(Reader, nullptr, &Error);
+    Pico::FAssetPath LoadedPath;
+    Runner.Expect(
+        Loaded != nullptr
+            && Error == Pico::EObjectSerializationError::None
+            && Property->GetValue(Loaded, LoadedPath)
+            && LoadedPath == AssetPath,
+        "Object format version 3 restores an AssetPath exactly");
+    Runner.Expect(
+        Loaded != nullptr
+            && Pico::DumpObject(Loaded).find("/Game/Models/Robot.pmesh")
+                != std::string::npos,
+        "Reflection diagnostics display AssetPath values");
+    if (Loaded != nullptr)
+    {
+        Pico::DestroyObject(Loaded);
+    }
+
+    std::vector<Pico::uint8> PretendVersion2 = Data;
+    PretendVersion2[4] = 2;
+    PretendVersion2[5] = 0;
+    PretendVersion2[6] = 0;
+    PretendVersion2[7] = 0;
+    Pico::FMemoryReader Version2Reader(PretendVersion2);
+    Runner.Expect(
+        Pico::LoadObject(Version2Reader, nullptr, &Error) == nullptr
+            && Error == Pico::EObjectSerializationError::InvalidArchive,
+        "Older object format versions reject AssetPath payloads");
+}
+
 void TestShutdownAndReinitialize(FTestRunner& Runner)
 {
     PTestObject* Root = Pico::NewObject<PTestObject>(nullptr, "ShutdownRoot");
@@ -1143,6 +1235,7 @@ int main()
         TestPropertyReflection(Runner);
         TestBeginDestroy(Runner);
         TestReflectionObservation(Runner);
+        TestAssetPathSerialization(Runner);
         TestObjectSerialization(Runner);
         TestShutdownAndReinitialize(Runner);
         Pico::PObjectSystem::Shutdown();

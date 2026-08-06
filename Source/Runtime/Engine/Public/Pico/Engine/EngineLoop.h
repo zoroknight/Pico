@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Pico/Asset/AssetManager.h"
+#include "Pico/Asset/AssetRegistry.h"
 #include "Pico/Core/Time.h"
 #include "Pico/Object/ObjectTypes.h"
 
@@ -30,8 +32,14 @@ public:
 
     bool ShouldExit() const;
     PWorld* GetWorld() const;
+    FAssetRegistry& GetAssetRegistry();
+    const FAssetRegistry& GetAssetRegistry() const;
+    FAssetManager& GetAssetManager();
+    const FAssetManager& GetAssetManager() const;
 
 private:
+    FAssetRegistry AssetRegistry;
+    FAssetManager AssetManager;
     FFrameTimer FrameTimer;
     FObjectHandle WorldHandle;
     int MaxFrameCount = -1;

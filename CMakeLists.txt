@@ -19,6 +19,7 @@ set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMake")
 option(PICO_BUILD_INSPECTOR "Build the Pico reflection inspector" ON)
 
 add_library(PicoCore STATIC
+    Source/Runtime/Core/Private/AssetPath.cpp
     Source/Runtime/Core/Private/App.cpp
     Source/Runtime/Core/Private/CommandLine.cpp
     Source/Runtime/Core/Private/Config.cpp
@@ -47,6 +48,67 @@ if(MSVC)
     target_compile_options(PicoCore PRIVATE /W4 /permissive-)
 else()
     target_compile_options(PicoCore PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_library(PicoAsset STATIC
+    Source/Runtime/Asset/Private/AssetManager.cpp
+    Source/Runtime/Asset/Private/AssetRegistry.cpp
+    Source/Runtime/Asset/Private/StaticMesh.cpp
+)
+
+target_include_directories(PicoAsset
+    PUBLIC
+        Source/Runtime/Asset/Public
+)
+
+target_link_libraries(PicoAsset
+    PUBLIC
+        PicoCore
+)
+
+set_target_properties(PicoAsset PROPERTIES FOLDER "Pico")
+
+if(MSVC)
+    target_compile_options(PicoAsset PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoAsset PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_library(tinyobjloader STATIC
+    ThirdParty/TinyObjLoader/tiny_obj_loader.cc
+)
+
+target_include_directories(tinyobjloader PUBLIC ThirdParty/TinyObjLoader)
+set_target_properties(tinyobjloader PROPERTIES FOLDER "ThirdParty")
+
+if(MSVC)
+    target_compile_options(tinyobjloader PRIVATE /W0)
+else()
+    target_compile_options(tinyobjloader PRIVATE -w)
+endif()
+
+add_library(PicoAssetImport STATIC
+    Source/Developer/AssetImport/Private/StaticMeshImporter.cpp
+)
+
+target_include_directories(PicoAssetImport
+    PUBLIC
+        Source/Developer/AssetImport/Public
+)
+
+target_link_libraries(PicoAssetImport
+    PUBLIC
+        PicoAsset
+    PRIVATE
+        tinyobjloader
+)
+
+set_target_properties(PicoAssetImport PROPERTIES FOLDER "Developer")
+
+if(MSVC)
+    target_compile_options(PicoAssetImport PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoAssetImport PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_library(PicoObject STATIC
@@ -121,6 +183,7 @@ add_library(PicoEngine STATIC
     Source/Runtime/Engine/Private/Level.cpp
     Source/Runtime/Engine/Private/PrimitiveComponent.cpp
     Source/Runtime/Engine/Private/SceneComponent.cpp
+    Source/Runtime/Engine/Private/StaticMeshComponent.cpp
     Source/Runtime/Engine/Private/World.cpp
     Source/Runtime/Engine/Private/WorldSerialization.cpp
 )
@@ -132,6 +195,7 @@ target_include_directories(PicoEngine
 
 target_link_libraries(PicoEngine
     PUBLIC
+        PicoAsset
         PicoObject
 )
 
@@ -146,6 +210,19 @@ endif()
 add_executable(PicoLaunch
     Source/Runtime/Launch/Private/Launch.cpp
 )
+
+add_executable(PicoAssetTool
+    Source/Programs/PicoAssetTool/Private/Main.cpp
+)
+
+target_link_libraries(PicoAssetTool PRIVATE PicoAssetImport)
+set_target_properties(PicoAssetTool PROPERTIES FOLDER "Programs")
+
+if(MSVC)
+    target_compile_options(PicoAssetTool PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoAssetTool PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 target_link_libraries(PicoLaunch
     PRIVATE
@@ -370,6 +447,25 @@ else()
     target_compile_options(PicoCoreTests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_executable(PicoAssetTests
+    Tests/Asset/Private/Main.cpp
+)
+
+target_include_directories(PicoAssetTests PRIVATE Tests/Common)
+
+target_link_libraries(PicoAssetTests
+    PRIVATE
+        PicoAsset
+)
+
+set_target_properties(PicoAssetTests PROPERTIES FOLDER "Tests/Asset")
+
+if(MSVC)
+    target_compile_options(PicoAssetTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoAssetTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(PicoObjectTests
     Tests/Object/Private/Main.cpp
 )
@@ -388,6 +484,20 @@ if(MSVC)
     target_compile_options(PicoObjectTests PRIVATE /W4 /permissive-)
 else()
     target_compile_options(PicoObjectTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(PicoAssetImportTests
+    Tests/AssetImport/Private/Main.cpp
+)
+
+target_include_directories(PicoAssetImportTests PRIVATE Tests/Common)
+target_link_libraries(PicoAssetImportTests PRIVATE PicoAssetImport)
+set_target_properties(PicoAssetImportTests PROPERTIES FOLDER "Tests/AssetImport")
+
+if(MSVC)
+    target_compile_options(PicoAssetImportTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoAssetImportTests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_executable(PicoEngineTests
@@ -415,12 +525,20 @@ add_subdirectory(Projects/PicoSandbox)
 
 if(BUILD_TESTING)
     add_test(NAME PicoCoreTests COMMAND PicoCoreTests)
+    add_test(NAME PicoAssetTests COMMAND PicoAssetTests)
+    add_test(NAME PicoAssetImportTests COMMAND PicoAssetImportTests)
     add_test(NAME PicoObjectTests COMMAND PicoObjectTests)
     add_test(NAME PicoEngineTests COMMAND PicoEngineTests)
     if(PICO_BUILD_INSPECTOR)
         add_test(NAME PicoEditorTests COMMAND PicoEditorTests)
     endif()
     set_tests_properties(PicoCoreTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoAssetTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoAssetImportTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoObjectTests PROPERTIES

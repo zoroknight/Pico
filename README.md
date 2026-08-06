@@ -13,7 +13,7 @@ enough to study while preserving clear ownership boundaries and an end-to-end ru
 
 ## Current State
 
-The first four development months are complete. Pico can currently:
+The first four development months and the first two Month 5 asset milestones are complete. Pico can currently:
 
 - Run a UE-style `PreInit -> Init -> Tick -> Exit` engine loop.
 - Create reflected native objects through `PClass` and `NewObject`.
@@ -27,6 +27,16 @@ The first four development months are complete. Pico can currently:
 - Use a root scene component as the Actor transform provider.
 - Build parent-child scene-component attachment trees with relative and world transforms.
 - Open a `.pico` project with separate engine and project roots.
+- Represent persistent references with validated `/Game/...` asset paths instead of machine-specific
+  disk paths.
+- Deterministically scan native `.pworld`, `.pmesh`, `.ptex`, and `.pmat` files into a project asset
+  registry with case-insensitive lookup and refresh.
+- Import triangulated OBJ source data through TinyObjLoader into a validated, deterministic `.pmesh`
+  format with positions, normals, UVs, sections, and bounds.
+- Cache immutable CPU static-mesh data and renderer-owned OpenGL mesh buffers, refreshing them when
+  Registry metadata changes.
+- Persist `PStaticMeshComponent` asset references and render, pick, highlight, and transform imported
+  meshes in the editor viewport.
 - Display runtime objects in an Outliner and Details panel.
 - Render `PCubeComponent` instances in an interactive OpenGL 3.3 editor viewport.
 - Select Actors and components individually, additively, by range, or with `Ctrl+A`; the viewport
@@ -40,8 +50,8 @@ The first four development months are complete. Pico can currently:
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-Debug and Release configurations build successfully, all four automated test executables pass,
-and `PicoEditorTests` currently reports 67 passing checks.
+Debug and Release configurations build successfully, all seven CTest targets pass,
+and `PicoEditorTests` currently reports 69 passing checks.
 
 ## Architecture
 
@@ -53,7 +63,7 @@ PicoEditor
   -> PicoImGuizmo / PicoImGui
   -> PicoRender
   -> PicoEngine
-  -> PicoObject
+  -> PicoAsset / PicoObject
   -> PicoCore
 ```
 
@@ -61,6 +71,7 @@ Supporting tools and samples depend on public runtime interfaces:
 
 ```text
 PicoReflectionTools -> PicoObject
+PicoAssetImport     -> PicoAsset / TinyObjLoader
 PicoSandbox         -> PicoEngine / PicoObject
 PicoInspector       -> PicoReflectionTools
 ```
@@ -68,6 +79,8 @@ PicoInspector       -> PicoReflectionTools
 | Module | Responsibility |
 | --- | --- |
 | `PicoCore` | App state, command line, config, logging, names, paths, time, math, project descriptor |
+| `PicoAsset` | Validated virtual asset discovery, deterministic project registry, and file metadata |
+| `PicoAssetImport` | Developer-only OBJ conversion into validated native static-mesh assets |
 | `PicoObject` | `PObject`, `PClass`, `PProperty`, reflection, registry, handles, Outer graph, serialization |
 | `PicoEngine` | Engine loop, World, Level, Actor, components, attachment, primitive scene data |
 | `PicoRender` | GLAD-backed OpenGL, shaders, geometry, framebuffer, scene traversal and draw submission |
@@ -76,7 +89,7 @@ PicoInspector       -> PicoReflectionTools
 | `PicoReflectionTools` | Generic metadata inspection and reflected-property helpers |
 | `PicoSandbox` | Project-side reflection, serialization, editor and testing example |
 
-The runtime modules do not depend on ImGui. `PicoCore`, `PicoObject`, and `PicoEngine` also remain
+The runtime modules do not depend on ImGui. `PicoCore`, `PicoAsset`, `PicoObject`, and `PicoEngine` also remain
 independent of GLFW and OpenGL.
 
 ## Runtime Object Model
@@ -131,6 +144,10 @@ Engine source and project source are not automatic write targets.
 `Projects/PicoSandbox/PicoSandbox.pico` is the maintained example project. The same project shape
 can live outside the Pico repository.
 
+Native project assets use virtual identifiers such as `/Game/Maps/EditorWorld.pworld`. The registry
+maps those identifiers to files under the active project's `Content` directory; persistent scene and
+object data never stores an absolute workstation path.
+
 ## Requirements
 
 - Windows 10 or Windows 11 (x64)
@@ -176,6 +193,8 @@ GameWorld
 
 - Use `Add > Empty Actor` to create an editor-authored Actor with `DefaultSceneRoot`.
 - Use `Add > Cube` to create an Actor whose renderable `PCubeComponent` is also its root.
+- Use `Add > Static Mesh` to create an Actor from the first registered `.pmesh`; the Content Browser
+  milestone will replace this temporary deterministic choice with an asset picker.
 - Add Scene or Cube components to a selected Actor, or add them as children of a selected scene
   component.
 - Press `F2` to rename a selected Actor or Component and `Delete` to remove it. Deleting a scene
@@ -223,6 +242,7 @@ Editor panel layout is separate from scene data and persists in
 | `PicoEditor` | Runtime scene editor with OpenGL viewport |
 | `PicoInspector` | Generic reflected-object inspector |
 | `PicoReflectionDemo` | Console reflection walkthrough |
+| `PicoAssetTool` | Developer command-line OBJ to `.pmesh` importer |
 | `PicoSandboxDemo` | Complete project-side create, edit, save, destroy and load workflow |
 
 Example commands:
@@ -230,6 +250,7 @@ Example commands:
 ```powershell
 .\Build\Debug\PicoLaunch.exe -frames=5
 .\Build\Debug\PicoReflectionDemo.exe
+.\Build\Debug\PicoAssetTool.exe import-obj source.obj destination.pmesh
 .\Build\Debug\PicoInspector.exe
 .\Build\Projects\PicoSandbox\Debug\PicoSandboxDemo.exe
 .\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico

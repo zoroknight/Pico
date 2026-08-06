@@ -74,6 +74,8 @@ bool CaptureProperty(
         return Property.GetValue(Object, OutProperty.RotatorValue);
     case EPropertyType::Transform:
         return Property.GetValue(Object, OutProperty.TransformValue);
+    case EPropertyType::AssetPath:
+        return Property.GetValue(Object, OutProperty.AssetPathValue);
     }
     return false;
 }
@@ -100,6 +102,23 @@ bool SerializePropertyValue(FArchive& Archive, FSerializedPropertyRecord& Proper
     case EPropertyType::Transform:
         SerializeTransform(Archive, Property.TransformValue);
         break;
+    case EPropertyType::AssetPath:
+    {
+        std::string Value = Archive.IsSaving()
+            ? std::string(Property.AssetPathValue.ToString())
+            : std::string {};
+        Archive.SerializeString(Value);
+        if (Archive.IsLoading() && !Archive.HasError())
+        {
+            FAssetPath ParsedPath;
+            if (!FAssetPath::TryParse(Value, ParsedPath))
+            {
+                return false;
+            }
+            Property.AssetPathValue = std::move(ParsedPath);
+        }
+        break;
+    }
     default:
         return false;
     }
@@ -109,7 +128,7 @@ bool SerializePropertyValue(FArchive& Archive, FSerializedPropertyRecord& Proper
 
 bool IsValidSerializedPropertyType(EPropertyType Type)
 {
-    return Type >= EPropertyType::Int32 && Type <= EPropertyType::Transform;
+    return Type >= EPropertyType::Int32 && Type <= EPropertyType::AssetPath;
 }
 
 bool CaptureSerializedProperties(
@@ -200,6 +219,9 @@ ESerializedPropertyApplyResult ApplySerializedProperty(
         break;
     case EPropertyType::Transform:
         bApplied = Property->SetValue(Object, SerializedProperty.TransformValue);
+        break;
+    case EPropertyType::AssetPath:
+        bApplied = Property->SetValue(Object, SerializedProperty.AssetPathValue);
         break;
     default:
         return ESerializedPropertyApplyResult::TypeMismatch;

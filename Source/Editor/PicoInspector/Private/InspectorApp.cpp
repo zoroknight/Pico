@@ -377,6 +377,15 @@ void FInspectorApp::DrawPropertyEditor(PObject* Object, const PProperty* Propert
         }
         break;
     }
+    case EPropertyType::AssetPath:
+    {
+        FAssetPath Value;
+        if (Property->GetValue(Object, Value))
+        {
+            ImGui::TextUnformatted(std::string(Value.ToString()).c_str());
+        }
+        break;
+    }
     }
 
     ImGui::PopID();

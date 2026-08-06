@@ -6,6 +6,7 @@
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Object/Object.h"
@@ -90,6 +91,27 @@ PSceneComponent* FEditorCommandService::CreateSceneRoot(PActor* Actor)
         return nullptr;
     }
     return Root;
+}
+
+PActor* FEditorCommandService::CreateStaticMeshActor(
+    std::string Name,
+    const FAssetPath& AssetPath)
+{
+    PWorld* World = GetWorld();
+    PActor* Actor = World != nullptr ? World->SpawnActor<PActor>(Name) : nullptr;
+    if (Actor == nullptr)
+    {
+        return nullptr;
+    }
+    PStaticMeshComponent* Component =
+        Actor->CreateComponent<PStaticMeshComponent>("StaticMeshComponent");
+    if (Component == nullptr || !Actor->SetRootComponent(Component))
+    {
+        World->DestroyActor(Actor);
+        return nullptr;
+    }
+    Component->SetStaticMeshAsset(AssetPath);
+    return Actor;
 }
 
 PSceneComponent* FEditorCommandService::CreateComponent(
@@ -218,6 +240,37 @@ FEditorCommandResult FEditorCommandService::SpawnActor(bool bCubeActor)
     return Success("Spawned " + Path);
 }
 
+FEditorCommandResult FEditorCommandService::SpawnStaticMeshActor(
+    const FAssetPath& AssetPath)
+{
+    if (!AssetPath.IsValid())
+    {
+        return Failure("Select a valid Static Mesh asset");
+    }
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    if (!BeginTransaction("Create Static Mesh Actor", Error))
+    {
+        return Failure("Could not begin create transaction");
+    }
+    PActor* Actor = nullptr;
+    do
+    {
+        Actor = CreateStaticMeshActor(
+            "StaticMesh_" + std::to_string(NextStaticMeshNumber++),
+            AssetPath);
+    }
+    while (Actor == nullptr && NextStaticMeshNumber < 10000);
+    if (Actor == nullptr)
+    {
+        RollbackTransaction(Error);
+        return Failure("Failed to spawn a Static Mesh Actor");
+    }
+    const std::string Path = Actor->GetPathName();
+    Selection->Set(Actor);
+    return CommitTransaction(Error) ? Success("Spawned " + Path)
+                                    : Failure("Could not commit create transaction");
+}
+
 FEditorCommandResult FEditorCommandService::AddSceneRoot()
 {
     PObject* Object = Selection != nullptr ? Selection->Resolve() : nullptr;
@@ -270,6 +323,62 @@ FEditorCommandResult FEditorCommandService::AddComponent(bool bCubeComponent)
         RollbackTransaction(Error);
         return Failure("Could not add the selected component type");
     }
+    const std::string Path = Component->GetPathName();
+    Selection->Set(Component);
+    return CommitTransaction(Error) ? Success("Added " + Path)
+                                    : Failure("Could not commit add-component transaction");
+}
+
+FEditorCommandResult FEditorCommandService::AddStaticMeshComponent(
+    const FAssetPath& AssetPath)
+{
+    if (!AssetPath.IsValid())
+    {
+        return Failure("Select a valid Static Mesh asset");
+    }
+    PObject* Object = Selection != nullptr ? Selection->Resolve() : nullptr;
+    PActor* Actor = Object != nullptr && Object->IsA(PActor::StaticClass())
+        ? static_cast<PActor*>(Object) : nullptr;
+    PSceneComponent* Parent = Object != nullptr
+        && Object->IsA(PSceneComponent::StaticClass())
+        ? static_cast<PSceneComponent*>(Object) : nullptr;
+    if (Actor == nullptr && Parent != nullptr)
+    {
+        Actor = Parent->GetOwner();
+    }
+    if (Actor == nullptr)
+    {
+        return Failure("Select an Actor or SceneComponent before adding a component");
+    }
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    if (!BeginTransaction("Add Static Mesh Component", Error))
+    {
+        return Failure("Could not begin add-component transaction");
+    }
+    PStaticMeshComponent* Component = nullptr;
+    do
+    {
+        Component = Actor->CreateComponent<PStaticMeshComponent>(
+            "StaticMeshComponent_"
+            + std::to_string(NextStaticMeshComponentNumber++));
+    }
+    while (Component == nullptr && NextStaticMeshComponentNumber < 10000);
+    const bool bConnected = Component != nullptr
+        && (Actor->GetRootComponent() == nullptr
+            ? Actor->SetRootComponent(Component)
+            : Component->AttachToComponent(
+                Parent != nullptr ? Parent : Actor->GetRootComponent(),
+                EAttachmentTransformRule::KeepRelative));
+    if (!bConnected)
+    {
+        if (Component != nullptr)
+        {
+            Actor->DestroyComponent(Component);
+        }
+        RollbackTransaction(Error);
+        return Failure("Could not add a Static Mesh Component");
+    }
+    Component->SetStaticMeshAsset(AssetPath);
     const std::string Path = Component->GetPathName();
     Selection->Set(Component);
     return CommitTransaction(Error) ? Success("Added " + Path)

@@ -15,6 +15,7 @@
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Object/ObjectGlobals.h"
@@ -169,6 +170,26 @@ int FEngineLoop::Init()
         return 1;
     }
 
+    FAssetScanReport AssetScanReport;
+    if (!AssetRegistry.ScanProjectContent(&AssetScanReport))
+    {
+        PICO_LOG(
+            LogAsset,
+            Warning,
+            "Init: asset scan failed with {} issue(s)",
+            AssetScanReport.Issues.size());
+    }
+    else if (FPaths::HasProject())
+    {
+        PICO_LOG(
+            LogAsset,
+            Info,
+            "Init: registered {} asset(s), ignored {} file(s), issues={}",
+            AssetScanReport.RegisteredAssetCount,
+            AssetScanReport.IgnoredFileCount,
+            AssetScanReport.Issues.size());
+    }
+
     if (!PObjectSystem::Init())
     {
         PICO_LOG(LogEngine, Error, "Init: object system initialization failed");
@@ -181,6 +202,7 @@ int FEngineLoop::Init()
         || !PSceneComponent::RegisterClass()
         || !PPrimitiveComponent::RegisterClass()
         || !PCubeComponent::RegisterClass()
+        || !PStaticMeshComponent::RegisterClass()
         || !PActor::RegisterClass()
         || !PLevel::RegisterClass()
         || !PWorld::RegisterClass())
@@ -286,6 +308,8 @@ void FEngineLoop::Exit()
         DestroyObjectTree(World);
     }
     WorldHandle = {};
+    AssetManager.Clear();
+    AssetRegistry.Clear();
 
     if (bObjectSystemInitialized)
     {
@@ -455,5 +479,25 @@ int GuardedMain(int Argc, char** Argv)
 
     EngineLoop.Exit();
     return Result;
+}
+
+FAssetRegistry& FEngineLoop::GetAssetRegistry()
+{
+    return AssetRegistry;
+}
+
+const FAssetRegistry& FEngineLoop::GetAssetRegistry() const
+{
+    return AssetRegistry;
+}
+
+FAssetManager& FEngineLoop::GetAssetManager()
+{
+    return AssetManager;
+}
+
+const FAssetManager& FEngineLoop::GetAssetManager() const
+{
+    return AssetManager;
 }
 }

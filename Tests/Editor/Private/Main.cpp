@@ -9,6 +9,7 @@
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ObjectGlobals.h"
@@ -455,6 +456,34 @@ void TestEditorCommandService(FTestRunner& Runner)
             && Pico::FindEditorWorldObjectByPath(
                 EngineLoop.GetWorld(), SecondSelectedPath) == nullptr,
         "Batch delete Redo removes the complete multi-selection again");
+
+    Pico::FAssetPath StaticMeshPath;
+    Pico::FAssetPath::TryParse(
+        "/Game/Models/PicoPyramid.pmesh",
+        StaticMeshPath);
+    const Pico::FEditorCommandResult SpawnStaticMesh =
+        Commands.SpawnStaticMeshActor(StaticMeshPath);
+    Pico::PActor* StaticMeshActor = Selection.Resolve() != nullptr
+        && Selection.Resolve()->IsA(Pico::PActor::StaticClass())
+        ? static_cast<Pico::PActor*>(Selection.Resolve())
+        : nullptr;
+    Pico::PStaticMeshComponent* StaticMeshRoot = StaticMeshActor != nullptr
+        && StaticMeshActor->GetRootComponent() != nullptr
+        && StaticMeshActor->GetRootComponent()->IsA(
+            Pico::PStaticMeshComponent::StaticClass())
+        ? static_cast<Pico::PStaticMeshComponent*>(
+            StaticMeshActor->GetRootComponent())
+        : nullptr;
+    Runner.Expect(
+        SpawnStaticMesh.bSucceeded
+            && StaticMeshRoot != nullptr
+            && StaticMeshRoot->GetStaticMeshAsset() == StaticMeshPath,
+        "Command service transactionally spawns an asset-backed Static Mesh Actor");
+    Runner.Expect(
+        Commands.AddStaticMeshComponent(StaticMeshPath).bSucceeded
+            && Selection.Resolve() != nullptr
+            && Selection.Resolve()->IsA(Pico::PStaticMeshComponent::StaticClass()),
+        "Command service adds and selects an asset-backed Static Mesh Component");
 
     EngineLoop.Exit();
     Runner.Expect(

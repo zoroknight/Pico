@@ -224,6 +224,8 @@ void FPicoEditorApp::DrawViewport(float Width, float Height)
 {
     ViewportPanel.Draw(
         GetWorld(),
+        EngineLoop->GetAssetRegistry(),
+        EngineLoop->GetAssetManager(),
         Selection,
         ToolState,
         TransformService,
@@ -342,6 +344,11 @@ void FPicoEditorApp::DrawToolbar()
         {
             SpawnCubeActor();
         }
+        const FAssetPath* StaticMeshAsset = FindFirstStaticMeshAsset();
+        if (ImGui::MenuItem("Static Mesh", nullptr, false, StaticMeshAsset != nullptr))
+        {
+            SpawnStaticMeshActor();
+        }
         ImGui::EndMenu();
     }
 
@@ -366,6 +373,15 @@ void FPicoEditorApp::DrawToolbar()
         if (ImGui::MenuItem("Cube Component"))
         {
             AddCubeComponentToSelection();
+        }
+        const FAssetPath* StaticMeshAsset = FindFirstStaticMeshAsset();
+        if (ImGui::MenuItem(
+                "Static Mesh Component",
+                nullptr,
+                false,
+                StaticMeshAsset != nullptr))
+        {
+            AddStaticMeshComponentToSelection();
         }
         ImGui::EndMenu();
     }
@@ -656,6 +672,16 @@ void FPicoEditorApp::SpawnCubeActor()
     ApplyCommandResult(CommandService.SpawnActor(true));
 }
 
+void FPicoEditorApp::SpawnStaticMeshActor()
+{
+    FinishInteractiveEdit();
+    const FAssetPath* AssetPath = FindFirstStaticMeshAsset();
+    ApplyCommandResult(
+        AssetPath != nullptr
+            ? CommandService.SpawnStaticMeshActor(*AssetPath)
+            : FEditorCommandResult { false, "No Static Mesh asset is registered" });
+}
+
 void FPicoEditorApp::AddRootToSelectedActor()
 {
     FinishInteractiveEdit();
@@ -676,6 +702,32 @@ void FPicoEditorApp::AddSceneComponentToSelection()
 void FPicoEditorApp::AddCubeComponentToSelection()
 {
     AddComponentToSelection(true);
+}
+
+void FPicoEditorApp::AddStaticMeshComponentToSelection()
+{
+    FinishInteractiveEdit();
+    const FAssetPath* AssetPath = FindFirstStaticMeshAsset();
+    ApplyCommandResult(
+        AssetPath != nullptr
+            ? CommandService.AddStaticMeshComponent(*AssetPath)
+            : FEditorCommandResult { false, "No Static Mesh asset is registered" });
+}
+
+const FAssetPath* FPicoEditorApp::FindFirstStaticMeshAsset() const
+{
+    if (EngineLoop == nullptr)
+    {
+        return nullptr;
+    }
+    for (const FAssetRecord& Record : EngineLoop->GetAssetRegistry().GetAssets())
+    {
+        if (Record.Type == EAssetType::StaticMesh)
+        {
+            return &Record.AssetPath;
+        }
+    }
+    return nullptr;
 }
 
 void FPicoEditorApp::SetSelectedComponentAsRoot()

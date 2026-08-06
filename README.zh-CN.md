@@ -11,7 +11,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 
 ## 当前状态
 
-前四个月的开发任务已经完成。目前 Pico 可以：
+前四个月的开发任务和第五月前两个资产里程碑已经完成。目前 Pico 可以：
 
 - 运行类似 UE 的 `PreInit -> Init -> Tick -> Exit` 引擎循环。
 - 通过 `PClass` 和 `NewObject` 创建具有反射信息的原生 C++ 对象。
@@ -25,6 +25,13 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 使用 RootComponent 为 Actor 提供 Transform。
 - 建立 SceneComponent 父子挂接树并计算 Relative/World Transform。
 - 通过 `.pico` 打开引擎目录之外的项目边界。
+- 使用经过校验的 `/Game/...` 资产路径保存持久引用，不把本机磁盘路径写入对象或场景。
+- 确定性扫描项目中的 `.pworld`、`.pmesh`、`.ptex` 和 `.pmat` 原生文件，并通过支持
+  大小写不敏感查询和刷新的资产注册表提供元数据。
+- 通过 TinyObjLoader 将三角化 OBJ 源数据导入经过校验且确定性的 `.pmesh`，保存位置、
+  法线、UV、Section 和 Bounds。
+- 缓存不可变 CPU Static Mesh 数据和渲染器私有的 OpenGL 网格，并在 Registry 元数据变化后刷新。
+- 持久化 `PStaticMeshComponent` 资产引用，在编辑器视口中渲染、拾取、高亮和变换导入网格。
 - 在 Outliner 和 Details 中查看、创建、修改和销毁运行时对象。
 - 在 OpenGL 3.3 编辑器视口中渲染 `PCubeComponent`。
 - 单选、追加选择、范围选择或使用 `Ctrl+A` 选择 Actor 和 Component，并在 Viewport 中
@@ -37,8 +44,8 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
-Debug 和 Release 均可完整构建，四个自动化测试程序全部通过；`PicoEditorTests`
-目前包含 67 项通过的检查。
+Debug 和 Release 均可完整构建，七个 CTest 目标全部通过；`PicoEditorTests`
+目前包含 69 项通过的检查。
 
 ## 架构
 
@@ -50,7 +57,7 @@ PicoEditor
   -> PicoImGuizmo / PicoImGui
   -> PicoRender
   -> PicoEngine
-  -> PicoObject
+  -> PicoAsset / PicoObject
   -> PicoCore
 ```
 
@@ -58,6 +65,7 @@ PicoEditor
 
 ```text
 PicoReflectionTools -> PicoObject
+PicoAssetImport     -> PicoAsset / TinyObjLoader
 PicoSandbox         -> PicoEngine / PicoObject
 PicoInspector       -> PicoReflectionTools
 ```
@@ -65,6 +73,8 @@ PicoInspector       -> PicoReflectionTools
 | 模块 | 职责 |
 | --- | --- |
 | `PicoCore` | App状态、命令行、配置、日志、FName、路径、时间、数学和项目描述 |
+| `PicoAsset` | 经过校验的虚拟资产发现、确定性项目注册表和文件元数据 |
+| `PicoAssetImport` | 仅供开发阶段使用的 OBJ 到原生 Static Mesh 转换 |
 | `PicoObject` | `PObject`、`PClass`、`PProperty`、反射、注册表、Handle、Outer和序列化 |
 | `PicoEngine` | EngineLoop、World、Level、Actor、Component、挂接和可渲染场景数据 |
 | `PicoRender` | 基于GLAD的OpenGL、Shader、几何体、Framebuffer、场景遍历和绘制提交 |
@@ -73,7 +83,7 @@ PicoInspector       -> PicoReflectionTools
 | `PicoReflectionTools` | 通用元数据检查和反射属性工具 |
 | `PicoSandbox` | 项目侧反射、序列化、资产和自动化测试示例 |
 
-运行时模块不依赖 ImGui。`PicoCore`、`PicoObject` 和 `PicoEngine` 也不依赖 GLFW 或 OpenGL。
+运行时模块不依赖 ImGui。`PicoCore`、`PicoAsset`、`PicoObject` 和 `PicoEngine` 也不依赖 GLFW 或 OpenGL。
 
 ## 运行时对象模型
 
@@ -125,6 +135,9 @@ ProjectRoot/
 
 `Projects/PicoSandbox/PicoSandbox.pico` 是仓库维护的示例项目。同样的项目结构也可以放在 Pico 仓库之外。
 
+项目原生资产使用 `/Game/Maps/EditorWorld.pworld` 这样的虚拟标识。资产注册表把它映射到当前
+项目 `Content` 下的文件；对象和场景持久化数据不会保存开发机器上的绝对路径。
+
 ## 环境要求
 
 - Windows 10 或 Windows 11（x64）
@@ -169,6 +182,8 @@ GameWorld
 
 - 使用 `Add > Empty Actor` 创建带有 `DefaultSceneRoot` 的编辑器 Actor。
 - 使用 `Add > Cube` 创建以可渲染 `PCubeComponent` 直接作为根组件的 Actor。
+- 使用 `Add > Static Mesh` 通过第一个已登记的 `.pmesh` 创建 Actor；Content Browser
+  里程碑会用正式资产选择器替换这个临时的确定性选择。
 - 可以向选中的 Actor 添加 Scene 或 Cube Component，也可以向选中的 SceneComponent 添加子组件。
 - 按 `F2` 重命名 Actor 或 Component，按 `Delete` 删除；删除 SceneComponent 会删除完整的附着子树。
 - 右键 World、Level、Actor 或 Component 节点可执行对应的创建、重命名、设置根组件和删除操作。
@@ -208,6 +223,7 @@ GameWorld
 | `PicoEditor` | 带有 OpenGL 场景视口的运行时编辑器 |
 | `PicoInspector` | 通用反射对象检查器 |
 | `PicoReflectionDemo` | 控制台反射流程演示 |
+| `PicoAssetTool` | 开发阶段使用的 OBJ 到 `.pmesh` 命令行导入器 |
 | `PicoSandboxDemo` | 项目侧创建、修改、保存、销毁和加载完整流程 |
 
 运行示例：
@@ -215,6 +231,7 @@ GameWorld
 ```powershell
 .\Build\Debug\PicoLaunch.exe -frames=5
 .\Build\Debug\PicoReflectionDemo.exe
+.\Build\Debug\PicoAssetTool.exe import-obj source.obj destination.pmesh
 .\Build\Debug\PicoInspector.exe
 .\Build\Projects\PicoSandbox\Debug\PicoSandboxDemo.exe
 .\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico

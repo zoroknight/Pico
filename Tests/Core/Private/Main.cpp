@@ -1,6 +1,7 @@
 #include "TestRunner.h"
 
 #include "Pico/Core/App.h"
+#include "Pico/Core/AssetPath.h"
 #include "Pico/Core/CommandLine.h"
 #include "Pico/Core/Config.h"
 #include "Pico/Core/Math/Math.h"
@@ -18,6 +19,42 @@
 
 namespace
 {
+void TestAssetPath(FTestRunner& Runner)
+{
+    Pico::FAssetPath Path;
+    Pico::EAssetPathError Error = Pico::EAssetPathError::None;
+    Runner.Expect(
+        Pico::FAssetPath::TryParse("/Game/Models/Robot.pmesh", Path, &Error)
+            && Error == Pico::EAssetPathError::None
+            && Path.ToString() == "/Game/Models/Robot.pmesh"
+            && Path.GetGameRelativePath() == "Models/Robot.pmesh"
+            && Path.GetExtension() == ".pmesh",
+        "Asset paths expose a canonical /Game identity");
+
+    Pico::FAssetPath WindowsStyle;
+    Runner.Expect(
+        Pico::FAssetPath::TryParse(
+            "\\Game\\Textures\\Grid.ptex",
+            WindowsStyle)
+            && WindowsStyle.ToString() == "/Game/Textures/Grid.ptex",
+        "Asset paths normalize directory separators");
+    Runner.Expect(
+        !Pico::FAssetPath::TryParse("C:/Game/Robot.pmesh", Path, &Error)
+            && Error == Pico::EAssetPathError::InvalidRoot,
+        "Asset paths reject disk paths");
+    Runner.Expect(
+        !Pico::FAssetPath::TryParse("/Game/../Source/Hacked.pmesh", Path, &Error)
+            && Error == Pico::EAssetPathError::InvalidSegment,
+        "Asset paths reject parent traversal");
+    Runner.Expect(
+        !Pico::FAssetPath::TryParse("/Game/Models/Robot", Path, &Error)
+            && Error == Pico::EAssetPathError::MissingExtension,
+        "Asset paths require an asset extension");
+    Runner.Expect(
+        !Path.IsValid(),
+        "A failed asset path parse clears the output value");
+}
+
 void TestCommandLine(FTestRunner& Runner)
 {
     char Program[] = "PicoCoreTests";
@@ -298,6 +335,7 @@ int main(int Argc, char** Argv)
     Pico::FPaths::Init(Argc > 0 ? Argv[0] : "PicoCoreTests");
 
     FTestRunner Runner;
+    TestAssetPath(Runner);
     TestCommandLine(Runner);
     TestConfig(Runner);
     TestPaths(Runner);

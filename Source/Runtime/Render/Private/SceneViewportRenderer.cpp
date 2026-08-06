@@ -1,5 +1,8 @@
 #include "Pico/Render/SceneViewportRenderer.h"
 
+#include "Pico/Asset/AssetManager.h"
+#include "Pico/Asset/AssetRegistry.h"
+#include "Pico/Asset/StaticMesh.h"
 #include "Pico/Core/Log.h"
 #include "Pico/Core/Math/MathUtility.h"
 #include "Pico/Core/Math/Matrix4.h"
@@ -8,6 +11,8 @@
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/PrimitiveComponent.h"
+#include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
 
 #include <glad/gl.h>
@@ -16,6 +21,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -99,6 +105,16 @@ constexpr std::array<unsigned int, 24> CubeOutlineIndices {
 
 struct FSceneViewportRenderer::FImpl
 {
+    struct FStaticMeshGpuResource
+    {
+        FAssetPath AssetPath;
+        std::shared_ptr<const FStaticMeshData> Source;
+        GLuint VertexArray = 0;
+        GLuint VertexBuffer = 0;
+        GLuint IndexBuffer = 0;
+        GLsizei IndexCount = 0;
+    };
+
     GLuint Program = 0;
     GLuint CubeVertexArray = 0;
     GLuint CubeVertexBuffer = 0;
@@ -108,6 +124,7 @@ struct FSceneViewportRenderer::FImpl
     GLuint GridVertexArray = 0;
     GLuint GridVertexBuffer = 0;
     GLsizei GridVertexCount = 0;
+    std::vector<FStaticMeshGpuResource> StaticMeshes;
     GLuint Framebuffer = 0;
     GLuint ColorTexture = 0;
     GLuint PickingTexture = 0;
@@ -377,6 +394,22 @@ bool FSceneViewportRenderer::Initialize(FOpenGLProcLoader Loader)
 void FSceneViewportRenderer::Shutdown()
 {
     Impl->DestroyRenderTarget();
+    for (FImpl::FStaticMeshGpuResource& Mesh : Impl->StaticMeshes)
+    {
+        if (Mesh.IndexBuffer != 0)
+        {
+            glDeleteBuffers(1, &Mesh.IndexBuffer);
+        }
+        if (Mesh.VertexBuffer != 0)
+        {
+            glDeleteBuffers(1, &Mesh.VertexBuffer);
+        }
+        if (Mesh.VertexArray != 0)
+        {
+            glDeleteVertexArrays(1, &Mesh.VertexArray);
+        }
+    }
+    Impl->StaticMeshes.clear();
     if (Impl->GridVertexBuffer != 0)
     {
         glDeleteBuffers(1, &Impl->GridVertexBuffer);
@@ -516,6 +549,8 @@ bool FSceneViewportRenderer::Resize(uint32 Width, uint32 Height)
 
 bool FSceneViewportRenderer::Render(
     PWorld* World,
+    FAssetRegistry& AssetRegistry,
+    FAssetManager& AssetManager,
     const FSceneView& View,
     std::span<const FObjectHandle> SelectedObjects)
 {
@@ -567,8 +602,76 @@ bool FSceneViewportRenderer::Render(
     glLineWidth(1.0f);
     glDrawArrays(GL_LINES, 0, Impl->GridVertexCount);
 
-    glBindVertexArray(Impl->CubeVertexArray);
     glUniform1i(LightingLocation, 1);
+
+    const auto GetStaticMeshResource =
+        [this, &AssetRegistry, &AssetManager](const FAssetPath& AssetPath)
+            -> FImpl::FStaticMeshGpuResource*
+        {
+            const std::shared_ptr<const FStaticMeshData> Mesh =
+                AssetManager.LoadStaticMesh(AssetPath, AssetRegistry);
+            if (Mesh == nullptr)
+            {
+                return nullptr;
+            }
+            auto Found = std::find_if(
+                Impl->StaticMeshes.begin(),
+                Impl->StaticMeshes.end(),
+                [&AssetPath](const FImpl::FStaticMeshGpuResource& Resource)
+                {
+                    return Resource.AssetPath == AssetPath;
+                });
+            if (Found != Impl->StaticMeshes.end() && Found->Source == Mesh)
+            {
+                return &*Found;
+            }
+            if (Found == Impl->StaticMeshes.end())
+            {
+                Impl->StaticMeshes.push_back({});
+                Found = std::prev(Impl->StaticMeshes.end());
+                Found->AssetPath = AssetPath;
+                glGenVertexArrays(1, &Found->VertexArray);
+                glGenBuffers(1, &Found->VertexBuffer);
+                glGenBuffers(1, &Found->IndexBuffer);
+            }
+            Found->Source = Mesh;
+            Found->IndexCount = static_cast<GLsizei>(Mesh->Indices.size());
+            glBindVertexArray(Found->VertexArray);
+            glBindBuffer(GL_ARRAY_BUFFER, Found->VertexBuffer);
+            glBufferData(
+                GL_ARRAY_BUFFER,
+                static_cast<std::ptrdiff_t>(
+                    Mesh->Vertices.size() * sizeof(FStaticMeshVertex)),
+                Mesh->Vertices.data(),
+                GL_STATIC_DRAW);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, Found->IndexBuffer);
+            glBufferData(
+                GL_ELEMENT_ARRAY_BUFFER,
+                static_cast<std::ptrdiff_t>(
+                    Mesh->Indices.size() * sizeof(uint32)),
+                Mesh->Indices.data(),
+                GL_STATIC_DRAW);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(
+                0,
+                3,
+                GL_FLOAT,
+                GL_FALSE,
+                sizeof(FStaticMeshVertex),
+                reinterpret_cast<const void*>(
+                    offsetof(FStaticMeshVertex, Position)));
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(
+                1,
+                3,
+                GL_FLOAT,
+                GL_FALSE,
+                sizeof(FStaticMeshVertex),
+                reinterpret_cast<const void*>(
+                    offsetof(FStaticMeshVertex, Normal)));
+            return &*Found;
+        };
+
     for (PLevel* Level : World->GetLevels())
     {
         if (Level == nullptr)
@@ -583,22 +686,49 @@ bool FSceneViewportRenderer::Render(
             }
             for (PActorComponent* Component : Actor->GetComponents())
             {
-                if (Component == nullptr || !Component->IsA(PCubeComponent::StaticClass()))
+                if (Component == nullptr
+                    || !Component->IsA(PPrimitiveComponent::StaticClass()))
                 {
                     continue;
                 }
 
-                PCubeComponent* Cube = static_cast<PCubeComponent*>(Component);
-                if (!Cube->IsVisible())
+                PPrimitiveComponent* Primitive =
+                    static_cast<PPrimitiveComponent*>(Component);
+                if (!Primitive->IsVisible())
                 {
                     continue;
                 }
 
-                FTransform ModelTransform = Cube->GetWorldTransform();
-                ModelTransform.Scale = ModelTransform.Scale * Cube->GetExtent();
+                GLsizei IndexCount = 0;
+                FTransform ModelTransform = Primitive->GetWorldTransform();
+                if (Component->IsA(PCubeComponent::StaticClass()))
+                {
+                    PCubeComponent* Cube = static_cast<PCubeComponent*>(Component);
+                    ModelTransform.Scale = ModelTransform.Scale * Cube->GetExtent();
+                    glBindVertexArray(Impl->CubeVertexArray);
+                    IndexCount = static_cast<GLsizei>(CubeIndices.size());
+                }
+                else if (Component->IsA(PStaticMeshComponent::StaticClass()))
+                {
+                    PStaticMeshComponent* StaticMesh =
+                        static_cast<PStaticMeshComponent*>(Component);
+                    FImpl::FStaticMeshGpuResource* Resource =
+                        GetStaticMeshResource(StaticMesh->GetStaticMeshAsset());
+                    if (Resource == nullptr)
+                    {
+                        continue;
+                    }
+                    glBindVertexArray(Resource->VertexArray);
+                    IndexCount = Resource->IndexCount;
+                }
+                else
+                {
+                    continue;
+                }
+
                 const FMatrix4 Model = ModelTransform.ToMatrix();
-                const FVector3 Color = Cube->GetColor();
-                Impl->PickHandles.push_back(Cube->GetHandle());
+                const FVector3 Color = Primitive->GetColor();
+                Impl->PickHandles.push_back(Primitive->GetHandle());
                 const GLuint PickingId =
                     static_cast<GLuint>(Impl->PickHandles.size());
                 glUniformMatrix4fv(ModelLocation, 1, GL_TRUE, Model.GetData());
@@ -606,23 +736,22 @@ bool FSceneViewportRenderer::Render(
                 glUniform1ui(PickingIdLocation, PickingId);
                 glDrawElements(
                     GL_TRIANGLES,
-                    static_cast<GLsizei>(CubeIndices.size()),
+                    IndexCount,
                     GL_UNSIGNED_INT,
                     nullptr);
 
                 const bool bSelected = std::find(
                         SelectedObjects.begin(),
                         SelectedObjects.end(),
-                        Cube->GetHandle()) != SelectedObjects.end()
+                        Primitive->GetHandle()) != SelectedObjects.end()
                     || std::find(
                         SelectedObjects.begin(),
                         SelectedObjects.end(),
                         Actor->GetHandle()) != SelectedObjects.end();
                 if (bSelected)
                 {
-                    FTransform OutlineTransform = Cube->GetWorldTransform();
-                    OutlineTransform.Scale =
-                        OutlineTransform.Scale * Cube->GetExtent() * 1.02f;
+                    FTransform OutlineTransform = ModelTransform;
+                    OutlineTransform.Scale *= 1.02f;
                     const FMatrix4 OutlineModel = OutlineTransform.ToMatrix();
                     glUniformMatrix4fv(
                         ModelLocation,
@@ -631,14 +760,27 @@ bool FSceneViewportRenderer::Render(
                         OutlineModel.GetData());
                     glUniform3f(ColorLocation, 1.0f, 1.0f, 1.0f);
                     glUniform1i(LightingLocation, 0);
-                    glBindVertexArray(Impl->CubeOutlineVertexArray);
+                    const bool bCube = Component->IsA(PCubeComponent::StaticClass());
+                    if (bCube)
+                    {
+                        glBindVertexArray(Impl->CubeOutlineVertexArray);
+                    }
+                    else
+                    {
+                        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+                    }
                     glLineWidth(2.0f);
                     glDrawElements(
-                        GL_LINES,
-                        static_cast<GLsizei>(CubeOutlineIndices.size()),
+                        bCube ? GL_LINES : GL_TRIANGLES,
+                        bCube
+                            ? static_cast<GLsizei>(CubeOutlineIndices.size())
+                            : IndexCount,
                         GL_UNSIGNED_INT,
                         nullptr);
-                    glBindVertexArray(Impl->CubeVertexArray);
+                    if (!bCube)
+                    {
+                        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                    }
                     glUniform1i(LightingLocation, 1);
                 }
             }

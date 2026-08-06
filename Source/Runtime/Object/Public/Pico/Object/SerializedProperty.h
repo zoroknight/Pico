@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Pico/Core/AssetPath.h"
 #include "Pico/Core/Math/Transform.h"
 #include "Pico/Core/Types.h"
 #include "Pico/Object/Property.h"
@@ -22,6 +23,7 @@ struct FSerializedPropertyRecord
     FVector3 Vector3Value;
     FRotator RotatorValue;
     FTransform TransformValue;
+    FAssetPath AssetPathValue;
 };
 
 enum class ESerializedPropertyApplyResult

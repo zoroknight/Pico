@@ -97,6 +97,13 @@ void AppendPropertyValue(std::ostringstream& Stream, const PProperty& Property, 
         }
         break;
     }
+    case EPropertyType::AssetPath:
+    {
+        FAssetPath Value;
+        Stream << (Property.GetValue(&Object, Value)
+            ? std::string(Value.ToString()) : "<unavailable>");
+        break;
+    }
     }
 }
 }
@@ -117,6 +124,8 @@ std::string_view GetPropertyTypeName(EPropertyType Type)
         return "Rotator";
     case EPropertyType::Transform:
         return "Transform";
+    case EPropertyType::AssetPath:
+        return "AssetPath";
     }
 
     return "Unknown";

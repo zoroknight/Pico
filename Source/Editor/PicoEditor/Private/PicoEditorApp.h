@@ -59,10 +59,13 @@ private:
 
     void SpawnEmptyActor();
     void SpawnCubeActor();
+    void SpawnStaticMeshActor();
     void AddRootToSelectedActor();
     void AddComponentToSelection(bool bCubeComponent);
     void AddSceneComponentToSelection();
     void AddCubeComponentToSelection();
+    void AddStaticMeshComponentToSelection();
+    const FAssetPath* FindFirstStaticMeshAsset() const;
     void SetSelectedComponentAsRoot();
     void DestroySelectedObject();
     void QueueDestroy(PObject* Object);

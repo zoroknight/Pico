@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Pico/Core/AssetPath.h"
 #include "Pico/Editor/EditorSceneClipboard.h"
 #include "Pico/Editor/EditorSelection.h"
 #include "Pico/Editor/EditorTransactionManager.h"
@@ -29,8 +30,10 @@ public:
         FEditorSceneClipboard* Clipboard);
 
     FEditorCommandResult SpawnActor(bool bCubeActor);
+    FEditorCommandResult SpawnStaticMeshActor(const FAssetPath& AssetPath);
     FEditorCommandResult AddSceneRoot();
     FEditorCommandResult AddComponent(bool bCubeComponent);
+    FEditorCommandResult AddStaticMeshComponent(const FAssetPath& AssetPath);
     FEditorCommandResult SetSelectedComponentAsRoot();
     FEditorCommandResult DeleteSelectedObject();
     FEditorCommandResult RenameObject(FObjectHandle ObjectHandle, std::string NewName);
@@ -48,6 +51,7 @@ private:
     PWorld* GetWorld() const;
     PActor* CreateActor(std::string Name, bool bCubeActor);
     PSceneComponent* CreateSceneRoot(PActor* Actor);
+    PActor* CreateStaticMeshActor(std::string Name, const FAssetPath& AssetPath);
     PSceneComponent* CreateComponent(
         PActor* Actor,
         PSceneComponent* Parent,
@@ -65,7 +69,9 @@ private:
     FEditorSceneClipboard* Clipboard = nullptr;
     unsigned int NextActorNumber = 1;
     unsigned int NextCubeNumber = 1;
+    unsigned int NextStaticMeshNumber = 1;
     unsigned int NextComponentNumber = 1;
     unsigned int NextCubeComponentNumber = 1;
+    unsigned int NextStaticMeshComponentNumber = 1;
 };
 }

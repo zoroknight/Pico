@@ -18,7 +18,7 @@ namespace Pico
 namespace
 {
 constexpr uint32 ObjectMagic = 0x4a424f50;
-constexpr uint32 ObjectFormatVersion = 2;
+constexpr uint32 ObjectFormatVersion = 3;
 constexpr uint32 MinimumObjectFormatVersion = 1;
 constexpr uint32 MaxSerializedPropertyCount = 64 * 1024;
 constexpr std::size_t MaxObjectFileSize = 16 * 1024 * 1024;
@@ -168,8 +168,11 @@ PObject* LoadObject(FArchive& Archive, PObject* Outer, EObjectSerializationError
     for (uint32 Index = 0; Index < PropertyCount; ++Index)
     {
         FSerializedPropertyRecord Property;
+        const EPropertyType MaximumPropertyType = Version == 1
+            ? EPropertyType::Bool
+            : (Version == 2 ? EPropertyType::Transform : EPropertyType::AssetPath);
         if (!SerializePropertyRecord(Archive, Property)
-            || (Version == 1 && Property.Type > EPropertyType::Bool))
+            || Property.Type > MaximumPropertyType)
         {
             ReportError(OutError, EObjectSerializationError::InvalidArchive);
             return nullptr;

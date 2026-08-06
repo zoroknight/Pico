@@ -60,6 +60,8 @@ FEditorViewportPanel::~FEditorViewportPanel()
 
 void FEditorViewportPanel::Draw(
     PWorld* World,
+    FAssetRegistry& AssetRegistry,
+    FAssetManager& AssetManager,
     const FEditorSelection& Selection,
     const FEditorToolState& ToolState,
     FEditorTransformService& TransformService,
@@ -97,7 +99,12 @@ void FEditorViewportPanel::Draw(
     View.Position = CameraPosition;
     View.Target = CameraPosition + Forward;
     if (!Renderer->Resize(RenderWidth, RenderHeight)
-        || !Renderer->Render(World, View, Selection.GetHandles()))
+        || !Renderer->Render(
+            World,
+            AssetRegistry,
+            AssetManager,
+            View,
+            Selection.GetHandles()))
     {
         ImGui::TextDisabled("Viewport render failed");
         return;

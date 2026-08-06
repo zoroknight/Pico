@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Pico/Core/AssetPath.h"
 #include "Pico/Core/Name.h"
 #include "Pico/Core/Math/Transform.h"
 #include "Pico/Core/Types.h"
@@ -40,7 +41,8 @@ enum class EPropertyType : uint8
     Bool,
     Vector3,
     Rotator,
-    Transform
+    Transform,
+    AssetPath
 };
 
 constexpr std::size_t GetPropertyTypeSize(EPropertyType Type)
@@ -59,6 +61,8 @@ constexpr std::size_t GetPropertyTypeSize(EPropertyType Type)
         return sizeof(FRotator);
     case EPropertyType::Transform:
         return sizeof(FTransform);
+    case EPropertyType::AssetPath:
+        return sizeof(FAssetPath);
     }
 
     return 0;
@@ -71,7 +75,8 @@ inline constexpr bool TIsSupportedPropertyType =
     || std::is_same_v<TValue, bool>
     || std::is_same_v<TValue, FVector3>
     || std::is_same_v<TValue, FRotator>
-    || std::is_same_v<TValue, FTransform>;
+    || std::is_same_v<TValue, FTransform>
+    || std::is_same_v<TValue, FAssetPath>;
 
 template <typename TValue>
 constexpr EPropertyType GetPropertyType()
@@ -98,9 +103,13 @@ constexpr EPropertyType GetPropertyType()
     {
         return EPropertyType::Rotator;
     }
-    else
+    else if constexpr (std::is_same_v<TValue, FTransform>)
     {
         return EPropertyType::Transform;
+    }
+    else
+    {
+        return EPropertyType::AssetPath;
     }
 }
 

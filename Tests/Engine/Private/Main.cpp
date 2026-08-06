@@ -8,6 +8,7 @@
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Object/ObjectGlobals.h"
@@ -181,6 +182,8 @@ bool InitializeWorldTypes(FTestRunner& Runner)
     const bool bSceneComponentRegistered = Pico::PSceneComponent::RegisterClass();
     const bool bPrimitiveComponentRegistered = Pico::PPrimitiveComponent::RegisterClass();
     const bool bCubeComponentRegistered = Pico::PCubeComponent::RegisterClass();
+    const bool bStaticMeshComponentRegistered =
+        Pico::PStaticMeshComponent::RegisterClass();
     const bool bCountingSceneComponentRegistered = PCountingSceneComponent::RegisterClass();
     const bool bActorRegistered = Pico::PActor::RegisterClass();
     const bool bCountingActorRegistered = PCountingActor::RegisterClass();
@@ -193,6 +196,9 @@ bool InitializeWorldTypes(FTestRunner& Runner)
     Runner.Expect(bSceneComponentRegistered, "PSceneComponent registers with the class registry");
     Runner.Expect(bPrimitiveComponentRegistered, "PPrimitiveComponent registers with the class registry");
     Runner.Expect(bCubeComponentRegistered, "PCubeComponent registers with the class registry");
+    Runner.Expect(
+        bStaticMeshComponentRegistered,
+        "PStaticMeshComponent registers with the class registry");
     Runner.Expect(bCountingSceneComponentRegistered, "A test scene component registers with the class registry");
     Runner.Expect(bActorRegistered, "PActor registers with the class registry");
     Runner.Expect(bCountingActorRegistered, "A test actor registers with the class registry");
@@ -204,6 +210,7 @@ bool InitializeWorldTypes(FTestRunner& Runner)
         && bSceneComponentRegistered
         && bPrimitiveComponentRegistered
         && bCubeComponentRegistered
+        && bStaticMeshComponentRegistered
         && bCountingSceneComponentRegistered
         && bActorRegistered
         && bCountingActorRegistered
@@ -868,12 +875,19 @@ void TestPrimitiveComponentSceneData(FTestRunner& Runner)
         Actor != nullptr ? Actor->CreateComponent<Pico::PSceneComponent>("Root") : nullptr;
     Pico::PCubeComponent* Cube =
         Actor != nullptr ? Actor->CreateComponent<Pico::PCubeComponent>("Cube") : nullptr;
+    Pico::PStaticMeshComponent* StaticMesh = Actor != nullptr
+        ? Actor->CreateComponent<Pico::PStaticMeshComponent>("StaticMesh")
+        : nullptr;
     const bool bSceneReady =
         Actor != nullptr
         && Root != nullptr
         && Cube != nullptr
+        && StaticMesh != nullptr
         && Actor->SetRootComponent(Root)
-        && Cube->AttachToComponent(Root, Pico::EAttachmentTransformRule::KeepRelative);
+        && Cube->AttachToComponent(Root, Pico::EAttachmentTransformRule::KeepRelative)
+        && StaticMesh->AttachToComponent(
+            Root,
+            Pico::EAttachmentTransformRule::KeepRelative);
     Runner.Expect(bSceneReady, "An Actor creates and attaches a renderable cube component");
 
     if (bSceneReady)
@@ -886,6 +900,14 @@ void TestPrimitiveComponentSceneData(FTestRunner& Runner)
         Runner.Expect(
             Cube->GetExtent().Equals(Pico::FVector3(50.0f)),
             "A cube component starts with a fifty-unit half extent");
+
+        Pico::FAssetPath MeshPath;
+        Pico::FAssetPath::TryParse("/Game/Models/Robot.pmesh", MeshPath);
+        StaticMesh->SetStaticMeshAsset(MeshPath);
+        Runner.Expect(
+            StaticMesh->IsA(Pico::PPrimitiveComponent::StaticClass())
+                && StaticMesh->GetStaticMeshAsset() == MeshPath,
+            "A static mesh component stores a typed virtual asset reference");
 
         Root->SetRelativeLocation(Pico::FVector3(100.0f, 0.0f, 0.0f));
         Cube->SetRelativeLocation(Pico::FVector3(25.0f, 0.0f, 50.0f));
@@ -1102,6 +1124,35 @@ void TestWorldAssetDataSerialization(FTestRunner& Runner)
                 Pico::FVector3(20.0f, 30.0f, 40.0f)),
         "World asset round trip preserves reflected property values");
 
+    Pico::FAssetPath StaticMeshPath;
+    Pico::FAssetPath::TryParse("/Game/Models/Robot.pmesh", StaticMeshPath);
+    Pico::FWorldAssetData AssetReferenceData = CapturedData;
+    Pico::FSerializedPropertyRecord AssetReference;
+    AssetReference.Name = "StaticMeshAsset";
+    AssetReference.Type = Pico::EPropertyType::AssetPath;
+    AssetReference.AssetPathValue = StaticMeshPath;
+    AssetReferenceData.Objects.back().Properties.push_back(AssetReference);
+    Pico::FMemoryWriter AssetReferenceWriter;
+    Pico::FWorldAssetData LoadedAssetReferenceData;
+    Runner.Expect(
+        Pico::SerializeWorldAsset(AssetReferenceWriter, AssetReferenceData, &Error),
+        "World format version 2 serializes AssetPath property records");
+    Pico::FMemoryReader AssetReferenceReader(AssetReferenceWriter.GetData());
+    const bool bLoadedAssetReference = Pico::DeserializeWorldAsset(
+        AssetReferenceReader,
+        LoadedAssetReferenceData,
+        &Error);
+    const Pico::FSerializedPropertyRecord* LoadedAssetReference =
+        FindSceneProperty(
+            FindSceneRecord(LoadedAssetReferenceData, "Cube"),
+            "StaticMeshAsset");
+    Runner.Expect(
+        bLoadedAssetReference
+            && LoadedAssetReference != nullptr
+            && LoadedAssetReference->Type == Pico::EPropertyType::AssetPath
+            && LoadedAssetReference->AssetPathValue == StaticMeshPath,
+        "World format version 2 restores AssetPath property records");
+
     Pico::FWorldAssetData InvalidData = CapturedData;
     InvalidData.Objects[1].Id = InvalidData.Objects[0].Id;
     Runner.Expect(
@@ -1186,8 +1237,20 @@ void TestWorldAssetDataSerialization(FTestRunner& Runner)
             && UnchangedData.WorldId.Value == 777,
         "Invalid world magic fails without changing the output data");
 
+    std::vector<Pico::uint8> Version1Data = Writer.GetData();
+    Version1Data[4] = 1;
+    Version1Data[5] = 0;
+    Version1Data[6] = 0;
+    Version1Data[7] = 0;
+    Pico::FMemoryReader Version1Reader(Version1Data);
+    Pico::FWorldAssetData Version1LoadedData;
+    Runner.Expect(
+        Pico::DeserializeWorldAsset(Version1Reader, Version1LoadedData, &Error)
+            && Version1LoadedData.Objects.size() == CapturedData.Objects.size(),
+        "World format version 2 remains compatible with version 1 scenes");
+
     std::vector<Pico::uint8> UnsupportedVersion = Writer.GetData();
-    UnsupportedVersion[4] = 2;
+    UnsupportedVersion[4] = 99;
     UnsupportedVersion[5] = 0;
     UnsupportedVersion[6] = 0;
     UnsupportedVersion[7] = 0;

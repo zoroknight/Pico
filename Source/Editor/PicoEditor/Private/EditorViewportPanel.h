@@ -10,6 +10,8 @@ struct GLFWwindow;
 
 namespace Pico
 {
+class FAssetManager;
+class FAssetRegistry;
 class FEditorSelection;
 class FEditorTransformService;
 class FSceneViewportRenderer;
@@ -34,6 +36,8 @@ public:
 
     void Draw(
         PWorld* World,
+        FAssetRegistry& AssetRegistry,
+        FAssetManager& AssetManager,
         const FEditorSelection& Selection,
         const FEditorToolState& ToolState,
         FEditorTransformService& TransformService,
