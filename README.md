@@ -9,11 +9,11 @@ serialization, worlds, actors, components, transforms, editor tooling, and rende
 Pico is not intended to compete with production engines. It deliberately keeps each system small
 enough to study while preserving clear ownership boundaries and an end-to-end runtime.
 
-![Pico Editor with scene hierarchy editing and viewport selection](Docs/Images/PicoEditorMonth04.png)
+![Pico Editor with imported models, materials, textures, and PBR viewport rendering](Docs/Images/PicoEditorMonth05PBR.png)
 
 ## Current State
 
-The first four development months and the first two Month 5 asset milestones are complete. Pico can currently:
+The first five development months are complete. Pico can currently:
 
 - Run a UE-style `PreInit -> Init -> Tick -> Exit` engine loop.
 - Create reflected native objects through `PClass` and `NewObject`.
@@ -33,10 +33,24 @@ The first four development months and the first two Month 5 asset milestones are
   registry with case-insensitive lookup and refresh.
 - Import triangulated OBJ source data through TinyObjLoader into a validated, deterministic `.pmesh`
   format with positions, normals, UVs, sections, and bounds.
+- Import PNG/JPG/TGA/BMP images through stb_image into validated `.ptex` RGBA8 assets, and author
+  `.pmat` assets with BaseColor, BaseColorTexture, Metallic, and Roughness.
+- Assign reflected Material references to StaticMeshComponents with Undo/Redo and render them through
+  an OpenGL 3.3 Cook-Torrance PBR path with renderer-owned texture caching and mipmaps.
 - Cache immutable CPU static-mesh data and renderer-owned OpenGL mesh buffers, refreshing them when
   Registry metadata changes.
 - Persist `PStaticMeshComponent` asset references and render, pick, highlight, and transform imported
   meshes in the editor viewport.
+- Browse project assets by folder, search text, and type in a dockable Content Browser; import OBJ
+  files, refresh the Registry, and reimport from project-local source metadata.
+- Inspect OBJ geometry before import, choose automatic or explicit source units, preview final mesh
+  dimensions, and reopen persisted settings through `Import Options`.
+- Batch-delete mixed Static Mesh, Texture, and Material assets with scene/asset dependency
+  reporting, optional project-source removal, transaction-backed scene cleanup, and staged rollback.
+- Select assets by stable `/Game/...` paths, drag Static Mesh assets into Details, and create or
+  transactionally assign mesh components without relying on Registry order.
+- Keep reimportable user source files under `Content/Source`; editor-authored native runtime assets
+  use type folders such as `Meshes`, `Textures`, `Materials`, and `Maps`.
 - Display runtime objects in an Outliner and Details panel.
 - Render `PCubeComponent` instances in an interactive OpenGL 3.3 editor viewport.
 - Select Actors and components individually, additively, by range, or with `Ctrl+A`; the viewport
@@ -50,7 +64,7 @@ The first four development months and the first two Month 5 asset milestones are
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-Debug and Release configurations build successfully, all seven CTest targets pass,
+Debug and Release configurations build successfully, all eight CTest targets pass,
 and `PicoEditorTests` currently reports 69 passing checks.
 
 ## Architecture
@@ -84,8 +98,8 @@ PicoInspector       -> PicoReflectionTools
 | `PicoObject` | `PObject`, `PClass`, `PProperty`, reflection, registry, handles, Outer graph, serialization |
 | `PicoEngine` | Engine loop, World, Level, Actor, components, attachment, primitive scene data |
 | `PicoRender` | GLAD-backed OpenGL, shaders, geometry, framebuffer, scene traversal and draw submission |
-| `PicoEditorCore` | UI-independent selection, commands, clipboard, transactions, and transform operations |
-| `PicoEditor` | Outliner, Details, editor camera, viewport picking, tool state, and transform gizmo UI |
+| `PicoEditorCore` | UI-independent object/asset selection, asset operations, commands, clipboard, transactions, and transforms |
+| `PicoEditor` | Content Browser, asset workflow controller and dialogs, Outliner, Details, editor camera, viewport picking, tool state, and transform gizmo UI |
 | `PicoReflectionTools` | Generic metadata inspection and reflected-property helpers |
 | `PicoSandbox` | Project-side reflection, serialization, editor and testing example |
 
@@ -157,7 +171,7 @@ object data never stores an absolute workstation path.
 - Git for Windows
 - A GPU and driver supporting OpenGL 3.3
 
-GLFW, Dear ImGui, and ImGuizmo are included under `ThirdParty`.
+GLFW, Dear ImGui, ImGuizmo, TinyObjLoader, and stb_image are included under `ThirdParty`.
 
 ## Quick Start
 
@@ -193,8 +207,23 @@ GameWorld
 
 - Use `Add > Empty Actor` to create an editor-authored Actor with `DefaultSceneRoot`.
 - Use `Add > Cube` to create an Actor whose renderable `PCubeComponent` is also its root.
-- Use `Add > Static Mesh` to create an Actor from the first registered `.pmesh`; the Content Browser
-  milestone will replace this temporary deterministic choice with an asset picker.
+- Select a `.pmesh` in Content Browser, then use `Add > Static Mesh` or double-click the asset to
+  create an Actor. `Ctrl` toggles assets, `Shift` selects a range, and `Ctrl+A` selects every asset
+  visible under the current folder, search, and type filters.
+- Use `Import OBJ` to inspect source geometry, choose Auto/Centimeters/Meters/Millimeters/Normalize/
+  Custom scaling, copy the source into `Content/Source/Meshes`, and build a native `.pmesh` under
+  `Content/Meshes`.
+- Use `Import Texture` to create a native `.ptex`, then `Create Material` to edit BaseColor,
+  BaseColorTexture, Metallic, and Roughness. Double-click a `.pmat` to edit it later.
+- With Content Browser focused, press `Delete` or use its Delete button to review scene and asset
+  references and remove selected Static Mesh, Texture, and Material assets as one batch.
+  Scene-focused `Delete` still removes objects.
+  `Reimport` uses the saved settings; `Import Options` edits them before rebuilding.
+- Use `Delete` to review references before removing assets. Project-local source deletion is
+  optional; scene cleanup is one Undo/Redo transaction, Material-to-Texture references are updated
+  transactionally with staged files, and file deletion itself is not a World transaction.
+- Drag a Static Mesh row onto the Details `AssetPath` value, or use `Use Selected` and `Clear`.
+  Assignment and clearing participate in scene Undo/Redo; import and reimport do not.
 - Add Scene or Cube components to a selected Actor, or add them as children of a selected scene
   component.
 - Press `F2` to rename a selected Actor or Component and `Delete` to remove it. Deleting a scene
@@ -207,6 +236,8 @@ GameWorld
   select a range, or use `Ctrl+A` to select all scene Actors.
 - Press `Q` for selection, `W` for translation, `E` for rotation, and `R` for scale. The toolbar
   exposes the same transform modes.
+- Press `F` to frame selected Actors or components from their transformed world bounds. Camera
+  distance, near plane, and movement speed adapt to very small and very large meshes.
 - Use `World` coordinates to align the gizmo with the scene axes, or `Local` coordinates to align
   it with the primary selected object's rotation. Multi-object rotation and scaling use the primary
   object as their pivot.

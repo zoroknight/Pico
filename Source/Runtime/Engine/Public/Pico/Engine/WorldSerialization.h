@@ -100,6 +100,10 @@ bool SaveWorldToFile(
     const std::filesystem::path& FilePath,
     const PWorld& World,
     EWorldSerializationError* OutError = nullptr);
+bool SaveWorldAssetDataToFile(
+    const std::filesystem::path& FilePath,
+    const FWorldAssetData& Data,
+    EWorldSerializationError* OutError = nullptr);
 bool LoadWorldAssetDataFromFile(
     const std::filesystem::path& FilePath,
     FWorldAssetData& OutData,

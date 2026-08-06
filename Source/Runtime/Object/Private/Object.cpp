@@ -89,6 +89,10 @@ bool PObject::IsBeginningDestroy() const
     return LifecycleState != ELifecycleState::Alive;
 }
 
+void PObject::PostEditChangeProperty(const FPropertyChangedEvent&)
+{
+}
+
 void PObject::PostInitProperties()
 {
 }

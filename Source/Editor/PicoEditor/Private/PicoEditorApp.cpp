@@ -9,6 +9,7 @@
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Render/SceneViewportRenderer.h"
@@ -24,8 +25,6 @@
 #include <ImGuizmo.h>
 
 #include <algorithm>
-#include <cctype>
-#include <cmath>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -45,6 +44,7 @@ void BuildDefaultDockLayout(ImGuiID DockspaceId, const ImVec2& DockspaceSize)
     ImGuiID CenterNodeId = DockspaceId;
     ImGuiID OutlinerNodeId = 0;
     ImGuiID DetailsNodeId = 0;
+    ImGuiID ContentBrowserNodeId = 0;
     ImGui::DockBuilderSplitNode(
         CenterNodeId,
         ImGuiDir_Left,
@@ -57,10 +57,17 @@ void BuildDefaultDockLayout(ImGuiID DockspaceId, const ImVec2& DockspaceSize)
         0.28f,
         &DetailsNodeId,
         &CenterNodeId);
+    ImGui::DockBuilderSplitNode(
+        CenterNodeId,
+        ImGuiDir_Down,
+        0.30f,
+        &ContentBrowserNodeId,
+        &CenterNodeId);
 
     ImGui::DockBuilderDockWindow("Scene Outliner", OutlinerNodeId);
     ImGui::DockBuilderDockWindow("Viewport", CenterNodeId);
     ImGui::DockBuilderDockWindow("Details", DetailsNodeId);
+    ImGui::DockBuilderDockWindow("Content Browser", ContentBrowserNodeId);
     ImGui::DockBuilderFinish(DockspaceId);
 }
 
@@ -71,8 +78,32 @@ FPicoEditorApp::FPicoEditorApp(
     FSceneViewportRenderer* InViewportRenderer,
     GLFWwindow* InWindow)
     : EngineLoop(InEngineLoop)
+    , AssetService(InEngineLoop)
     , CommandService(InEngineLoop, &Selection, &TransactionManager, &SceneClipboard)
+    , PropertyService(
+        InEngineLoop,
+        &Selection,
+        &TransactionManager,
+        [this](
+            const FEditorWorldSnapshot& Snapshot,
+            EWorldSerializationError* Error)
+        {
+            return RestoreEditorSnapshot(Snapshot, Error);
+        })
     , ViewportPanel(InViewportRenderer, InWindow)
+    , AssetWorkflow(
+        InEngineLoop,
+        &AssetService,
+        &CommandService,
+        &AssetSelection,
+        [this](std::string Message, bool bError)
+        {
+            SetStatus(std::move(Message), bError);
+        },
+        [this](const FAssetPath& AssetPath)
+        {
+            ViewportPanel.InvalidateStaticMesh(AssetPath);
+        })
 {
     PWorld* World = GetWorld();
     Select(World);
@@ -208,12 +239,91 @@ void FPicoEditorApp::Draw()
             [this]()
             {
                 AddRootToSelectedActor();
+            },
+            EngineLoop->GetAssetRegistry(),
+            [this](const FAssetPath& AssetPath)
+            {
+                const bool bFocused = ContentBrowserPanel.FocusAsset(
+                    EngineLoop->GetAssetRegistry(),
+                    AssetSelection,
+                    AssetPath);
+                SetStatus(
+                    bFocused ? "Focused asset in Content Browser"
+                             : "Asset is not registered",
+                    !bFocused);
+            },
+            AssetSelection.GetSelectedPath(),
+            [this](
+                FObjectHandle ObjectHandle,
+                FName PropertyName,
+                const FAssetPath& AssetPath)
+            {
+                CommandQueue.Enqueue(
+                    [this, ObjectHandle, PropertyName, AssetPath]()
+                    {
+                        FinishInteractiveEdit();
+                        FEditorPropertyResult Result = PropertyService.SetProperty(
+                            ObjectHandle,
+                            PropertyName,
+                            AssetPath);
+                        SetStatus(std::move(Result.Message), !Result.bSucceeded);
+                    });
             });
     }
     ImGui::End();
 
-    if (!InteractiveEditKey.empty() && !bInteractiveEditVisited)
+    if (ImGui::Begin("Content Browser"))
     {
+        ContentBrowserPanel.Draw(
+            EngineLoop->GetAssetRegistry(),
+            AssetSelection,
+            [this]() { AssetWorkflow.OpenImport(); },
+            [this]() { AssetWorkflow.OpenTextureImport(); },
+            [this]() { AssetWorkflow.OpenCreateMaterial(); },
+            [this]() { AssetWorkflow.RefreshRegistry(); },
+            [this](const FAssetPath& AssetPath)
+            {
+                const FAssetPath StablePath = AssetPath;
+                CommandQueue.Enqueue(
+                    [this, StablePath]() { AssetWorkflow.Reimport(StablePath); });
+            },
+            [this](const FAssetPath& AssetPath)
+            {
+                AssetWorkflow.OpenReimportOptions(AssetPath);
+            },
+            [this](const std::vector<FAssetPath>& AssetPaths)
+            {
+                AssetWorkflow.OpenDelete(AssetPaths);
+            },
+            [this](const FAssetPath& AssetPath)
+            {
+                AssetWorkflow.OpenRename(AssetPath);
+            },
+            [this](const FAssetPath& AssetPath)
+            {
+                AssetWorkflow.OpenEditMaterial(AssetPath);
+            },
+            [this](const FAssetPath& AssetPath) { CreateStaticMeshActor(AssetPath); },
+            [this](const FAssetPath& AssetPath) { AssignSelectedAsset(AssetPath); },
+            [this](const FAssetPath& AssetPath)
+            {
+                return AssetWorkflow.CanReimport(AssetPath);
+            });
+    }
+    ImGui::End();
+
+    AssetWorkflow.Draw();
+
+    if (bCancelInteractiveEditRequested)
+    {
+        bCancelInteractiveEditRequested = false;
+        bFinishInteractiveEditRequested = false;
+        CancelInteractiveEdit();
+    }
+    else if (bFinishInteractiveEditRequested
+        || (!InteractiveEditKey.empty() && !bInteractiveEditVisited))
+    {
+        bFinishInteractiveEditRequested = false;
         FinishInteractiveEdit();
     }
 
@@ -344,7 +454,7 @@ void FPicoEditorApp::DrawToolbar()
         {
             SpawnCubeActor();
         }
-        const FAssetPath* StaticMeshAsset = FindFirstStaticMeshAsset();
+        const FAssetPath* StaticMeshAsset = GetSelectedStaticMeshAsset();
         if (ImGui::MenuItem("Static Mesh", nullptr, false, StaticMeshAsset != nullptr))
         {
             SpawnStaticMeshActor();
@@ -374,7 +484,7 @@ void FPicoEditorApp::DrawToolbar()
         {
             AddCubeComponentToSelection();
         }
-        const FAssetPath* StaticMeshAsset = FindFirstStaticMeshAsset();
+        const FAssetPath* StaticMeshAsset = GetSelectedStaticMeshAsset();
         if (ImGui::MenuItem(
                 "Static Mesh Component",
                 nullptr,
@@ -469,20 +579,67 @@ void FPicoEditorApp::HandleShortcuts()
     }
     else if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false))
     {
-        SelectAllActors();
+        if (ContentBrowserPanel.IsKeyboardFocused())
+        {
+            ContentBrowserPanel.SelectAllVisible(
+                EngineLoop->GetAssetRegistry(), AssetSelection);
+            SetStatus(
+                "Selected " + std::to_string(AssetSelection.Num()) + " asset(s)");
+        }
+        else
+        {
+            SelectAllActors();
+        }
     }
     else if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
     {
-        DestroySelectedObject();
+        if (ContentBrowserPanel.IsKeyboardFocused() && AssetSelection.Num() > 0)
+        {
+            AssetWorkflow.OpenDelete(AssetSelection.GetSelectedPaths());
+        }
+        else
+        {
+            DestroySelectedObject();
+        }
     }
     else if (ImGui::IsKeyPressed(ImGuiKey_F2, false))
     {
-        RenameSelectedObject();
+        if (ContentBrowserPanel.IsKeyboardFocused())
+        {
+            if (AssetSelection.Num() == 1)
+            {
+                AssetWorkflow.OpenRename(AssetSelection.GetSelectedPath());
+            }
+            else
+            {
+                SetStatus("Select exactly one asset to rename", true);
+            }
+        }
+        else
+        {
+            RenameSelectedObject();
+        }
+    }
+    else if (ImGui::IsKeyPressed(ImGuiKey_F, false))
+    {
+        const bool bFocused = ViewportPanel.FocusSelection(
+            EngineLoop->GetAssetRegistry(),
+            EngineLoop->GetAssetManager(),
+            Selection);
+        SetStatus(bFocused ? "Focused selection" : "Selection has no scene bounds", !bFocused);
     }
     else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
     {
-        Select(nullptr);
-        SetStatus("Cleared selection");
+        if (ContentBrowserPanel.IsKeyboardFocused())
+        {
+            AssetSelection.Clear();
+            SetStatus("Cleared asset selection");
+        }
+        else
+        {
+            Select(nullptr);
+            SetStatus("Cleared selection");
+        }
     }
     else if (!IO.KeyCtrl && !IO.KeyAlt && !ViewportPanel.IsCameraCaptured())
     {
@@ -675,11 +832,11 @@ void FPicoEditorApp::SpawnCubeActor()
 void FPicoEditorApp::SpawnStaticMeshActor()
 {
     FinishInteractiveEdit();
-    const FAssetPath* AssetPath = FindFirstStaticMeshAsset();
+    const FAssetPath* AssetPath = GetSelectedStaticMeshAsset();
     ApplyCommandResult(
         AssetPath != nullptr
             ? CommandService.SpawnStaticMeshActor(*AssetPath)
-            : FEditorCommandResult { false, "No Static Mesh asset is registered" });
+            : FEditorCommandResult { false, "Select a Static Mesh in Content Browser" });
 }
 
 void FPicoEditorApp::AddRootToSelectedActor()
@@ -707,27 +864,64 @@ void FPicoEditorApp::AddCubeComponentToSelection()
 void FPicoEditorApp::AddStaticMeshComponentToSelection()
 {
     FinishInteractiveEdit();
-    const FAssetPath* AssetPath = FindFirstStaticMeshAsset();
+    const FAssetPath* AssetPath = GetSelectedStaticMeshAsset();
     ApplyCommandResult(
         AssetPath != nullptr
             ? CommandService.AddStaticMeshComponent(*AssetPath)
-            : FEditorCommandResult { false, "No Static Mesh asset is registered" });
+            : FEditorCommandResult { false, "Select a Static Mesh in Content Browser" });
 }
 
-const FAssetPath* FPicoEditorApp::FindFirstStaticMeshAsset() const
+const FAssetPath* FPicoEditorApp::GetSelectedStaticMeshAsset() const
 {
     if (EngineLoop == nullptr)
     {
         return nullptr;
     }
-    for (const FAssetRecord& Record : EngineLoop->GetAssetRegistry().GetAssets())
+    const FAssetRecord* Record = AssetSelection.Resolve(EngineLoop->GetAssetRegistry());
+    return Record != nullptr && Record->Type == EAssetType::StaticMesh
+        ? &Record->AssetPath : nullptr;
+}
+
+const FAssetPath* FPicoEditorApp::GetSelectedMaterialAsset() const
+{
+    if (EngineLoop == nullptr) return nullptr;
+    const FAssetRecord* Record = AssetSelection.Resolve(EngineLoop->GetAssetRegistry());
+    return Record != nullptr && Record->Type == EAssetType::Material
+        ? &Record->AssetPath : nullptr;
+}
+
+
+void FPicoEditorApp::CreateStaticMeshActor(const FAssetPath& AssetPath)
+{
+    AssetSelection.Select(AssetPath);
+    FinishInteractiveEdit();
+    ApplyCommandResult(CommandService.SpawnStaticMeshActor(AssetPath));
+}
+
+void FPicoEditorApp::AssignStaticMeshAsset(const FAssetPath& AssetPath)
+{
+    FinishInteractiveEdit();
+    ApplyCommandResult(CommandService.AssignStaticMeshAsset(AssetPath));
+}
+
+void FPicoEditorApp::AssignMaterialAsset(const FAssetPath& AssetPath)
+{
+    FinishInteractiveEdit();
+    ApplyCommandResult(CommandService.AssignMaterialAsset(AssetPath));
+}
+
+void FPicoEditorApp::AssignSelectedAsset(const FAssetPath& AssetPath)
+{
+    const FAssetRecord* Record = EngineLoop != nullptr
+        ? EngineLoop->GetAssetRegistry().Find(AssetPath) : nullptr;
+    if (Record != nullptr && Record->Type == EAssetType::Material)
     {
-        if (Record.Type == EAssetType::StaticMesh)
-        {
-            return &Record.AssetPath;
-        }
+        AssignMaterialAsset(AssetPath);
     }
-    return nullptr;
+    else
+    {
+        AssignStaticMeshAsset(AssetPath);
+    }
 }
 
 void FPicoEditorApp::SetSelectedComponentAsRoot()
@@ -876,7 +1070,7 @@ void FPicoEditorApp::CompleteInteractiveEdit(
     {
         if (!bChangeApplied)
         {
-            CancelInteractiveEdit();
+            bCancelInteractiveEditRequested = true;
             SetStatus("Could not apply editor property change", true);
             return;
         }
@@ -885,7 +1079,7 @@ void FPicoEditorApp::CompleteInteractiveEdit(
 
     if (!bActive)
     {
-        FinishInteractiveEdit();
+        bFinishInteractiveEditRequested = true;
     }
 }
 
@@ -900,6 +1094,7 @@ void FPicoEditorApp::FinishInteractiveEdit()
     InteractiveEditKey.clear();
     bInteractiveEditChanged = false;
     bInteractiveEditVisited = false;
+    bFinishInteractiveEditRequested = false;
 
     if (bShouldCommit)
     {
@@ -907,7 +1102,7 @@ void FPicoEditorApp::FinishInteractiveEdit()
     }
     else
     {
-        CancelEditorTransaction();
+        TransactionManager.Cancel();
     }
 
 }
@@ -922,6 +1117,8 @@ void FPicoEditorApp::CancelInteractiveEdit()
     InteractiveEditKey.clear();
     bInteractiveEditChanged = false;
     bInteractiveEditVisited = false;
+    bFinishInteractiveEditRequested = false;
+    bCancelInteractiveEditRequested = false;
     CancelEditorTransaction();
 }
 

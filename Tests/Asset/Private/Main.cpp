@@ -2,7 +2,9 @@
 
 #include "Pico/Asset/AssetManager.h"
 #include "Pico/Asset/AssetRegistry.h"
+#include "Pico/Asset/Material.h"
 #include "Pico/Asset/StaticMesh.h"
+#include "Pico/Asset/Texture.h"
 #include "Pico/Core/Paths.h"
 
 #include <chrono>
@@ -80,6 +82,49 @@ void TestStaticMeshFormat(FTestRunner& Runner)
         "Static mesh loading rejects unsupported format versions");
 }
 
+void TestTextureAndMaterialFormats(FTestRunner& Runner)
+{
+    Pico::FTextureData Texture;
+    Texture.Width = 2;
+    Texture.Height = 2;
+    Texture.Pixels = {
+        255, 0, 0, 255, 0, 255, 0, 255,
+        0, 0, 255, 255, 255, 255, 255, 255};
+    std::vector<Pico::uint8> TextureBytes;
+    Pico::FTextureData LoadedTexture;
+    Runner.Expect(
+        Pico::SerializeTexture(Texture, TextureBytes)
+            && Pico::DeserializeTexture(TextureBytes, LoadedTexture)
+            && LoadedTexture.Width == 2
+            && LoadedTexture.Height == 2
+            && LoadedTexture.Pixels == Texture.Pixels,
+        "RGBA8 texture data round trips through deterministic .ptex bytes");
+    TextureBytes.push_back(0xffu);
+    Runner.Expect(
+        !Pico::DeserializeTexture(TextureBytes, LoadedTexture),
+        "Texture loading rejects trailing bytes");
+
+    Pico::FMaterialData Material;
+    Material.BaseColor = Pico::FVector3(0.8f, 0.2f, 0.1f);
+    Material.Metallic = 0.75f;
+    Material.Roughness = 0.2f;
+    Pico::FAssetPath::TryParse("/Game/Textures/Grid.ptex", Material.BaseColorTexture);
+    std::vector<Pico::uint8> MaterialBytes;
+    Pico::FMaterialData LoadedMaterial;
+    Runner.Expect(
+        Pico::SerializeMaterial(Material, MaterialBytes)
+            && Pico::DeserializeMaterial(MaterialBytes, LoadedMaterial)
+            && LoadedMaterial.BaseColor.Equals(Material.BaseColor)
+            && LoadedMaterial.Metallic == Material.Metallic
+            && LoadedMaterial.Roughness == Material.Roughness
+            && LoadedMaterial.BaseColorTexture == Material.BaseColorTexture,
+        "PBR material parameters and texture reference round trip through .pmat bytes");
+    Material.Roughness = 0.0f;
+    Runner.Expect(
+        !Pico::ValidateMaterial(Material),
+        "Material validation rejects out-of-range PBR parameters");
+}
+
 void TestAssetRegistry(FTestRunner& Runner, const char* Argv0)
 {
     const std::filesystem::path EngineRoot = Pico::FPaths::GetEngineRootDir();
@@ -107,7 +152,7 @@ void TestAssetRegistry(FTestRunner& Runner, const char* Argv0)
 
     const std::filesystem::path Content = TestRoot / "Content";
     WriteFixture(Content / "Maps" / "Main.pworld", "world");
-    const std::filesystem::path RobotPath = Content / "Models" / "Robot.pmesh";
+    const std::filesystem::path RobotPath = Content / "Meshes" / "Robot.pmesh";
     Pico::SaveStaticMeshToFile(RobotPath, MakeTriangleMesh());
     WriteFixture(Content / "Textures" / "Grid.ptex", "texture");
     WriteFixture(Content / "Materials" / "Metal.pmat", "material");
@@ -125,12 +170,12 @@ void TestAssetRegistry(FTestRunner& Runner, const char* Argv0)
         Assets.size() == 4
             && Assets[0].AssetPath.ToString() == "/Game/Maps/Main.pworld"
             && Assets[1].AssetPath.ToString() == "/Game/Materials/Metal.pmat"
-            && Assets[2].AssetPath.ToString() == "/Game/Models/Robot.pmesh"
+            && Assets[2].AssetPath.ToString() == "/Game/Meshes/Robot.pmesh"
             && Assets[3].AssetPath.ToString() == "/Game/Textures/Grid.ptex",
         "Registry results use deterministic virtual-path ordering");
 
     Pico::FAssetPath LowerCaseQuery;
-    Pico::FAssetPath::TryParse("/Game/models/robot.pmesh", LowerCaseQuery);
+    Pico::FAssetPath::TryParse("/Game/meshes/robot.pmesh", LowerCaseQuery);
     const Pico::FAssetRecord* Robot = Registry.Find(LowerCaseQuery);
     Runner.Expect(
         Robot != nullptr
@@ -165,7 +210,7 @@ void TestAssetRegistry(FTestRunner& Runner, const char* Argv0)
             && Reloaded->Bounds.Max.Z == 2.0f,
         "Asset manager reloads a static mesh after registry metadata changes");
 
-    std::filesystem::remove(Content / "Models" / "Robot.pmesh", ErrorCode);
+    std::filesystem::remove(RobotPath, ErrorCode);
     Runner.Expect(
         Registry.ScanProjectContent(&Report)
             && Registry.Find(LowerCaseQuery) == nullptr
@@ -188,6 +233,7 @@ int main(int Argc, char** Argv)
     Pico::FPaths::Init(Argv0);
     FTestRunner Runner;
     TestStaticMeshFormat(Runner);
+    TestTextureAndMaterialFormats(Runner);
     TestAssetRegistry(Runner, Argv0);
     return Runner.Finish();
 }

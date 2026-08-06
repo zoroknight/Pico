@@ -115,6 +115,13 @@ struct FSceneViewportRenderer::FImpl
         GLsizei IndexCount = 0;
     };
 
+    struct FTextureGpuResource
+    {
+        FAssetPath AssetPath;
+        std::shared_ptr<const FTextureData> Source;
+        GLuint Texture = 0;
+    };
+
     GLuint Program = 0;
     GLuint CubeVertexArray = 0;
     GLuint CubeVertexBuffer = 0;
@@ -125,6 +132,7 @@ struct FSceneViewportRenderer::FImpl
     GLuint GridVertexBuffer = 0;
     GLsizei GridVertexCount = 0;
     std::vector<FStaticMeshGpuResource> StaticMeshes;
+    std::vector<FTextureGpuResource> Textures;
     GLuint Framebuffer = 0;
     GLuint ColorTexture = 0;
     GLuint PickingTexture = 0;
@@ -162,34 +170,89 @@ struct FSceneViewportRenderer::FImpl
 #version 330 core
 layout(location = 0) in vec3 InPosition;
 layout(location = 1) in vec3 InNormal;
+layout(location = 2) in vec2 InTexCoord;
 uniform mat4 ViewProjection;
 uniform mat4 Model;
+out vec3 WorldPosition;
 out vec3 WorldNormal;
+out vec2 TexCoord;
 void main()
 {
-    vec4 WorldPosition = Model * vec4(InPosition, 1.0);
+    vec4 Position = Model * vec4(InPosition, 1.0);
+    WorldPosition = Position.xyz;
     WorldNormal = mat3(Model) * InNormal;
-    gl_Position = ViewProjection * WorldPosition;
+    TexCoord = InTexCoord;
+    gl_Position = ViewProjection * Position;
 }
 )";
         static constexpr char FragmentSource[] = R"(
 #version 330 core
+in vec3 WorldPosition;
 in vec3 WorldNormal;
+in vec2 TexCoord;
 uniform vec3 BaseColor;
+uniform vec3 CameraPosition;
+uniform float Metallic;
+uniform float Roughness;
+uniform sampler2D BaseColorTexture;
+uniform int UseBaseColorTexture;
 uniform int UseLighting;
 uniform uint PickingId;
 layout(location = 0) out vec4 FragColor;
 layout(location = 1) out uint FragPickingId;
+const float PI = 3.14159265359;
+
+float DistributionGGX(vec3 N, vec3 H, float RoughnessValue)
+{
+    float A = RoughnessValue * RoughnessValue;
+    float A2 = A * A;
+    float NdotH = max(dot(N, H), 0.0);
+    float Denominator = NdotH * NdotH * (A2 - 1.0) + 1.0;
+    return A2 / max(PI * Denominator * Denominator, 0.0001);
+}
+
+float GeometrySchlickGGX(float NdotV, float RoughnessValue)
+{
+    float R = RoughnessValue + 1.0;
+    float K = (R * R) / 8.0;
+    return NdotV / max(NdotV * (1.0 - K) + K, 0.0001);
+}
+
+vec3 FresnelSchlick(float CosTheta, vec3 F0)
+{
+    return F0 + (1.0 - F0) * pow(1.0 - CosTheta, 5.0);
+}
+
 void main()
 {
-    float Lighting = 1.0;
+    vec3 Albedo = BaseColor;
+    if (UseBaseColorTexture != 0)
+    {
+        Albedo *= texture(BaseColorTexture, TexCoord).rgb;
+    }
+    vec3 Color = Albedo;
     if (UseLighting != 0)
     {
-        vec3 Normal = normalize(WorldNormal);
-        vec3 LightDirection = normalize(vec3(0.45, -0.55, 0.8));
-        Lighting = 0.32 + 0.68 * max(dot(Normal, LightDirection), 0.0);
+        vec3 N = normalize(WorldNormal);
+        vec3 V = normalize(CameraPosition - WorldPosition);
+        vec3 L = normalize(vec3(0.45, -0.55, 0.8));
+        vec3 H = normalize(V + L);
+        float NdotL = max(dot(N, L), 0.0);
+        float NdotV = max(dot(N, V), 0.0);
+        vec3 F0 = mix(vec3(0.04), Albedo, Metallic);
+        vec3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
+        float D = DistributionGGX(N, H, Roughness);
+        float G = GeometrySchlickGGX(NdotV, Roughness)
+            * GeometrySchlickGGX(NdotL, Roughness);
+        vec3 Specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.0001);
+        vec3 Diffuse = (1.0 - F) * (1.0 - Metallic) * Albedo / PI;
+        vec3 Direct = (Diffuse + Specular) * vec3(3.0) * NdotL;
+        vec3 Ambient = Albedo * 0.08;
+        Color = Ambient + Direct;
+        Color = Color / (Color + vec3(1.0));
+        Color = pow(Color, vec3(1.0 / 2.2));
     }
-    FragColor = vec4(BaseColor * Lighting, 1.0);
+    FragColor = vec4(Color, 1.0);
     FragPickingId = PickingId;
 }
 )";
@@ -410,6 +473,14 @@ void FSceneViewportRenderer::Shutdown()
         }
     }
     Impl->StaticMeshes.clear();
+    for (FImpl::FTextureGpuResource& Texture : Impl->Textures)
+    {
+        if (Texture.Texture != 0)
+        {
+            glDeleteTextures(1, &Texture.Texture);
+        }
+    }
+    Impl->Textures.clear();
     if (Impl->GridVertexBuffer != 0)
     {
         glDeleteBuffers(1, &Impl->GridVertexBuffer);
@@ -451,6 +522,34 @@ void FSceneViewportRenderer::Shutdown()
         Impl->Program = 0;
     }
     Impl->bInitialized = false;
+}
+
+void FSceneViewportRenderer::InvalidateStaticMesh(const FAssetPath& AssetPath)
+{
+    const auto Found = std::find_if(
+        Impl->StaticMeshes.begin(),
+        Impl->StaticMeshes.end(),
+        [&AssetPath](const FImpl::FStaticMeshGpuResource& Resource)
+        {
+            return Resource.AssetPath == AssetPath;
+        });
+    if (Found == Impl->StaticMeshes.end())
+    {
+        return;
+    }
+    if (Found->IndexBuffer != 0)
+    {
+        glDeleteBuffers(1, &Found->IndexBuffer);
+    }
+    if (Found->VertexBuffer != 0)
+    {
+        glDeleteBuffers(1, &Found->VertexBuffer);
+    }
+    if (Found->VertexArray != 0)
+    {
+        glDeleteVertexArrays(1, &Found->VertexArray);
+    }
+    Impl->StaticMeshes.erase(Found);
 }
 
 bool FSceneViewportRenderer::Resize(uint32 Width, uint32 Height)
@@ -585,6 +684,11 @@ bool FSceneViewportRenderer::Render(
         glGetUniformLocation(Impl->Program, "ViewProjection");
     const GLint ModelLocation = glGetUniformLocation(Impl->Program, "Model");
     const GLint ColorLocation = glGetUniformLocation(Impl->Program, "BaseColor");
+    const GLint CameraLocation = glGetUniformLocation(Impl->Program, "CameraPosition");
+    const GLint MetallicLocation = glGetUniformLocation(Impl->Program, "Metallic");
+    const GLint RoughnessLocation = glGetUniformLocation(Impl->Program, "Roughness");
+    const GLint TextureLocation = glGetUniformLocation(Impl->Program, "BaseColorTexture");
+    const GLint UseTextureLocation = glGetUniformLocation(Impl->Program, "UseBaseColorTexture");
     const GLint LightingLocation = glGetUniformLocation(Impl->Program, "UseLighting");
     const GLint PickingIdLocation = glGetUniformLocation(Impl->Program, "PickingId");
     glUniformMatrix4fv(
@@ -596,6 +700,11 @@ bool FSceneViewportRenderer::Render(
     const FMatrix4 Identity = FMatrix4::Identity;
     glUniformMatrix4fv(ModelLocation, 1, GL_TRUE, Identity.GetData());
     glUniform3f(ColorLocation, 0.25f, 0.29f, 0.31f);
+    glUniform3f(CameraLocation, View.Position.X, View.Position.Y, View.Position.Z);
+    glUniform1f(MetallicLocation, 0.0f);
+    glUniform1f(RoughnessLocation, 0.8f);
+    glUniform1i(TextureLocation, 0);
+    glUniform1i(UseTextureLocation, 0);
     glUniform1i(LightingLocation, 0);
     glUniform1ui(PickingIdLocation, 0);
     glBindVertexArray(Impl->GridVertexArray);
@@ -669,7 +778,59 @@ bool FSceneViewportRenderer::Render(
                 sizeof(FStaticMeshVertex),
                 reinterpret_cast<const void*>(
                     offsetof(FStaticMeshVertex, Normal)));
+            glEnableVertexAttribArray(2);
+            glVertexAttribPointer(
+                2,
+                2,
+                GL_FLOAT,
+                GL_FALSE,
+                sizeof(FStaticMeshVertex),
+                reinterpret_cast<const void*>(offsetof(FStaticMeshVertex, TexCoord)));
             return &*Found;
+        };
+
+    const auto GetTextureResource =
+        [this, &AssetRegistry, &AssetManager](const FAssetPath& AssetPath) -> GLuint
+        {
+            const std::shared_ptr<const FTextureData> Texture =
+                AssetManager.LoadTexture(AssetPath, AssetRegistry);
+            if (Texture == nullptr) return 0;
+            auto Found = std::find_if(
+                Impl->Textures.begin(),
+                Impl->Textures.end(),
+                [&AssetPath](const FImpl::FTextureGpuResource& Resource)
+                {
+                    return Resource.AssetPath == AssetPath;
+                });
+            if (Found != Impl->Textures.end() && Found->Source == Texture)
+            {
+                return Found->Texture;
+            }
+            if (Found == Impl->Textures.end())
+            {
+                Impl->Textures.push_back({});
+                Found = std::prev(Impl->Textures.end());
+                Found->AssetPath = AssetPath;
+                glGenTextures(1, &Found->Texture);
+            }
+            Found->Source = Texture;
+            glBindTexture(GL_TEXTURE_2D, Found->Texture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            glTexImage2D(
+                GL_TEXTURE_2D,
+                0,
+                GL_SRGB8_ALPHA8,
+                static_cast<GLsizei>(Texture->Width),
+                static_cast<GLsizei>(Texture->Height),
+                0,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                Texture->Pixels.data());
+            glGenerateMipmap(GL_TEXTURE_2D);
+            return Found->Texture;
         };
 
     for (PLevel* Level : World->GetLevels())
@@ -700,6 +861,9 @@ bool FSceneViewportRenderer::Render(
                 }
 
                 GLsizei IndexCount = 0;
+                FMaterialData Material;
+                GLuint BaseColorTexture = 0;
+                bool bHasMaterial = false;
                 FTransform ModelTransform = Primitive->GetWorldTransform();
                 if (Component->IsA(PCubeComponent::StaticClass()))
                 {
@@ -720,6 +884,19 @@ bool FSceneViewportRenderer::Render(
                     }
                     glBindVertexArray(Resource->VertexArray);
                     IndexCount = Resource->IndexCount;
+                    const std::shared_ptr<const FMaterialData> LoadedMaterial =
+                        AssetManager.LoadMaterial(
+                            StaticMesh->GetMaterialAsset(), AssetRegistry);
+                    if (LoadedMaterial != nullptr)
+                    {
+                        bHasMaterial = true;
+                        Material = *LoadedMaterial;
+                        if (Material.BaseColorTexture.IsValid())
+                        {
+                            BaseColorTexture =
+                                GetTextureResource(Material.BaseColorTexture);
+                        }
+                    }
                 }
                 else
                 {
@@ -727,12 +904,18 @@ bool FSceneViewportRenderer::Render(
                 }
 
                 const FMatrix4 Model = ModelTransform.ToMatrix();
-                const FVector3 Color = Primitive->GetColor();
+                const FVector3 Color = bHasMaterial
+                    ? Material.BaseColor : Primitive->GetColor();
                 Impl->PickHandles.push_back(Primitive->GetHandle());
                 const GLuint PickingId =
                     static_cast<GLuint>(Impl->PickHandles.size());
                 glUniformMatrix4fv(ModelLocation, 1, GL_TRUE, Model.GetData());
                 glUniform3f(ColorLocation, Color.X, Color.Y, Color.Z);
+                glUniform1f(MetallicLocation, Material.Metallic);
+                glUniform1f(RoughnessLocation, Material.Roughness);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, BaseColorTexture);
+                glUniform1i(UseTextureLocation, BaseColorTexture != 0 ? 1 : 0);
                 glUniform1ui(PickingIdLocation, PickingId);
                 glDrawElements(
                     GL_TRIANGLES,
@@ -759,6 +942,7 @@ bool FSceneViewportRenderer::Render(
                         GL_TRUE,
                         OutlineModel.GetData());
                     glUniform3f(ColorLocation, 1.0f, 1.0f, 1.0f);
+                    glUniform1i(UseTextureLocation, 0);
                     glUniform1i(LightingLocation, 0);
                     const bool bCube = Component->IsA(PCubeComponent::StaticClass());
                     if (bCube)

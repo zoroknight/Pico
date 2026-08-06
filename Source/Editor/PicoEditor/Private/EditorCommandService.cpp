@@ -1,10 +1,12 @@
 #include "Pico/Editor/EditorCommandService.h"
+#include "Pico/Editor/AssetDependencyService.h"
 
 #include "Pico/Core/Paths.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
+#include "Pico/Engine/Level.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
@@ -383,6 +385,204 @@ FEditorCommandResult FEditorCommandService::AddStaticMeshComponent(
     Selection->Set(Component);
     return CommitTransaction(Error) ? Success("Added " + Path)
                                     : Failure("Could not commit add-component transaction");
+}
+
+FEditorCommandResult FEditorCommandService::AssignStaticMeshAsset(
+    const FAssetPath& AssetPath)
+{
+    return SetSelectedStaticMeshAsset(AssetPath, false);
+}
+
+FEditorCommandResult FEditorCommandService::ClearStaticMeshAsset()
+{
+    return SetSelectedStaticMeshAsset({}, true);
+}
+
+FEditorCommandResult FEditorCommandService::AssignMaterialAsset(
+    const FAssetPath& AssetPath)
+{
+    return SetSelectedMaterialAsset(AssetPath, false);
+}
+
+FEditorCommandResult FEditorCommandService::ClearMaterialAsset()
+{
+    return SetSelectedMaterialAsset({}, true);
+}
+
+FEditorCommandResult FEditorCommandService::ReplaceAssetReferences(
+    const FAssetPath& OldAssetPath,
+    const FAssetPath& NewAssetPath,
+    EAssetType AssetType)
+{
+    PWorld* World = GetWorld();
+    if (World == nullptr || !OldAssetPath.IsValid() || !NewAssetPath.IsValid())
+    {
+        return Failure("Could not update scene asset references");
+    }
+    if (AssetType != EAssetType::StaticMesh
+        && AssetType != EAssetType::Material)
+    {
+        return Success("Asset type has no direct scene references");
+    }
+
+    const std::size_t UpdatedCount =
+        FAssetDependencyService::ReplaceWorldReferences(
+            World, OldAssetPath, NewAssetPath);
+    if (Transactions != nullptr)
+    {
+        Transactions->Clear();
+    }
+    return Success(
+        "Updated " + std::to_string(UpdatedCount) + " scene reference(s)");
+}
+
+FEditorCommandResult FEditorCommandService::ClearStaticMeshAssetReferences(
+    const FAssetPath& AssetPath)
+{
+    return ClearStaticMeshAssetReferences(std::vector<FAssetPath> {AssetPath});
+}
+
+FEditorCommandResult FEditorCommandService::ClearStaticMeshAssetReferences(
+    const std::vector<FAssetPath>& AssetPaths)
+{
+    return ClearAssetReferences(AssetPaths);
+}
+
+FEditorCommandResult FEditorCommandService::ClearAssetReferences(
+    const std::vector<FAssetPath>& AssetPaths)
+{
+    PWorld* World = GetWorld();
+    if (World == nullptr || AssetPaths.empty())
+    {
+        return Failure("Select one or more valid assets");
+    }
+    std::size_t ReferenceCount = 0;
+    for (const FAssetPath& AssetPath : AssetPaths)
+    {
+        ReferenceCount += FAssetDependencyService::FindWorldReferencers(
+            World, AssetPath).size();
+    }
+    if (ReferenceCount == 0)
+    {
+        return Success("Asset has no scene references");
+    }
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    const std::string Description = "Clear " + std::to_string(ReferenceCount)
+        + " Asset Reference(s)";
+    if (!BeginTransaction(Description, Error))
+    {
+        return Failure("Could not begin reference-cleanup transaction");
+    }
+    std::size_t ClearedCount = 0;
+    for (const FAssetPath& AssetPath : AssetPaths)
+    {
+        ClearedCount += FAssetDependencyService::ReplaceWorldReferences(
+            World, AssetPath, {});
+    }
+    if (ClearedCount != ReferenceCount)
+    {
+        RollbackTransaction(Error);
+        return Failure("Could not clear every scene asset reference");
+    }
+    return CommitTransaction(Error)
+        ? Success("Cleared " + std::to_string(ClearedCount) + " scene reference(s)")
+        : Failure("Could not commit reference-cleanup transaction");
+}
+
+FEditorCommandResult FEditorCommandService::SetSelectedStaticMeshAsset(
+    const FAssetPath& AssetPath,
+    bool bClear)
+{
+    if (!bClear)
+    {
+        const FAssetRecord* Record = EngineLoop != nullptr
+            ? EngineLoop->GetAssetRegistry().Find(AssetPath) : nullptr;
+        if (Record == nullptr || Record->Type != EAssetType::StaticMesh)
+        {
+            return Failure("Select a registered Static Mesh asset");
+        }
+    }
+    std::vector<PStaticMeshComponent*> Components;
+    if (Selection != nullptr)
+    {
+        for (PObject* Object : Selection->ResolveAll())
+        {
+            if (Object->IsA(PStaticMeshComponent::StaticClass()))
+            {
+                Components.push_back(static_cast<PStaticMeshComponent*>(Object));
+            }
+        }
+    }
+    if (Components.empty())
+    {
+        return Failure("Select one or more StaticMeshComponents");
+    }
+
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    const std::string Description = bClear
+        ? "Clear Static Mesh Asset" : "Assign Static Mesh Asset";
+    if (!BeginTransaction(Description, Error))
+    {
+        return Failure("Could not begin asset-assignment transaction");
+    }
+    for (PStaticMeshComponent* Component : Components)
+    {
+        Component->SetStaticMeshAsset(AssetPath);
+    }
+    if (!CommitTransaction(Error))
+    {
+        return Failure("Could not commit asset-assignment transaction");
+    }
+    return Success(
+        (bClear ? "Cleared asset on " : "Assigned asset to ")
+        + std::to_string(Components.size()) + " component(s)");
+}
+
+FEditorCommandResult FEditorCommandService::SetSelectedMaterialAsset(
+    const FAssetPath& AssetPath,
+    bool bClear)
+{
+    if (!bClear)
+    {
+        const FAssetRecord* Record = EngineLoop != nullptr
+            ? EngineLoop->GetAssetRegistry().Find(AssetPath) : nullptr;
+        if (Record == nullptr || Record->Type != EAssetType::Material)
+        {
+            return Failure("Select a registered Material asset");
+        }
+    }
+    std::vector<PStaticMeshComponent*> Components;
+    if (Selection != nullptr)
+    {
+        for (PObject* Object : Selection->ResolveAll())
+        {
+            if (Object->IsA(PStaticMeshComponent::StaticClass()))
+            {
+                Components.push_back(static_cast<PStaticMeshComponent*>(Object));
+            }
+        }
+    }
+    if (Components.empty())
+    {
+        return Failure("Select one or more StaticMeshComponents");
+    }
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    if (!BeginTransaction(
+            bClear ? "Clear Material Asset" : "Assign Material Asset", Error))
+    {
+        return Failure("Could not begin material-assignment transaction");
+    }
+    for (PStaticMeshComponent* Component : Components)
+    {
+        Component->SetMaterialAsset(AssetPath);
+    }
+    if (!CommitTransaction(Error))
+    {
+        return Failure("Could not commit material-assignment transaction");
+    }
+    return Success(
+        (bClear ? "Cleared material on " : "Assigned material to ")
+        + std::to_string(Components.size()) + " component(s)");
 }
 
 FEditorCommandResult FEditorCommandService::SetSelectedComponentAsRoot()

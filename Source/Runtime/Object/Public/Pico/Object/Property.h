@@ -45,6 +45,50 @@ enum class EPropertyType : uint8
     AssetPath
 };
 
+enum class EAssetReferenceType : uint8
+{
+    None,
+    StaticMesh,
+    Texture,
+    Material
+};
+
+enum class EPropertyFlags : uint32
+{
+    None = 0,
+    Editable = 1 << 0,
+    Serializable = 1 << 1,
+    Transient = 1 << 2,
+    Replicated = 1 << 3,
+    ReadOnly = 1 << 4
+};
+
+constexpr EPropertyFlags operator|(EPropertyFlags Left, EPropertyFlags Right)
+{
+    return static_cast<EPropertyFlags>(
+        static_cast<uint32>(Left) | static_cast<uint32>(Right));
+}
+
+constexpr EPropertyFlags operator&(EPropertyFlags Left, EPropertyFlags Right)
+{
+    return static_cast<EPropertyFlags>(
+        static_cast<uint32>(Left) & static_cast<uint32>(Right));
+}
+
+constexpr bool HasAnyPropertyFlags(
+    EPropertyFlags Value,
+    EPropertyFlags Flags)
+{
+    return (Value & Flags) != EPropertyFlags::None;
+}
+
+struct FPropertyMetadata
+{
+    EPropertyFlags Flags =
+        EPropertyFlags::Editable | EPropertyFlags::Serializable;
+    EAssetReferenceType AssetReferenceType = EAssetReferenceType::None;
+};
+
 constexpr std::size_t GetPropertyTypeSize(EPropertyType Type)
 {
     switch (Type)
@@ -117,7 +161,9 @@ class PProperty
 {
 public:
     template <auto Member>
-    static PProperty Create(FName InName)
+    static PProperty Create(
+        FName InName,
+        FPropertyMetadata InMetadata = {})
     {
         static_assert(std::is_member_object_pointer_v<decltype(Member)>, "Reflected properties require a data member");
 
@@ -140,11 +186,32 @@ public:
             [](const PObject* Object) -> const void*
             {
                 return std::addressof(static_cast<const TObject*>(Object)->*Member);
-            });
+            },
+            InMetadata);
+    }
+
+    template <auto Member>
+    static PProperty CreateAssetReference(
+        FName InName,
+        EAssetReferenceType InAssetReferenceType)
+    {
+        using FMemberTraits = TMemberPointerTraits<decltype(Member)>;
+        using TValue = typename FMemberTraits::ValueType;
+        static_assert(
+            std::is_same_v<TValue, FAssetPath>,
+            "Asset reference metadata requires an FAssetPath property");
+
+        FPropertyMetadata Metadata;
+        Metadata.AssetReferenceType = InAssetReferenceType;
+        return Create<Member>(InName, Metadata);
     }
 
     FName GetName() const;
     EPropertyType GetType() const;
+    const FPropertyMetadata& GetMetadata() const;
+    EPropertyFlags GetFlags() const;
+    bool HasAnyFlags(EPropertyFlags Flags) const;
+    EAssetReferenceType GetAssetReferenceType() const;
     std::size_t GetSize() const;
     const PClass* GetOwnerClass() const;
 
@@ -198,7 +265,8 @@ private:
         std::size_t InSize,
         const void* InOwnerTypeToken,
         FMutableAccessor InMutableAccessor,
-        FConstAccessor InConstAccessor);
+        FConstAccessor InConstAccessor,
+        FPropertyMetadata InMetadata);
 
     bool HasValidAccessors() const;
     const void* GetOwnerTypeToken() const;
@@ -212,6 +280,7 @@ private:
 
     FName Name;
     EPropertyType Type;
+    FPropertyMetadata Metadata;
     std::size_t Size = 0;
     const void* OwnerTypeToken = nullptr;
     FMutableAccessor MutableAccessor = nullptr;

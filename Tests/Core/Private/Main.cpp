@@ -24,10 +24,10 @@ void TestAssetPath(FTestRunner& Runner)
     Pico::FAssetPath Path;
     Pico::EAssetPathError Error = Pico::EAssetPathError::None;
     Runner.Expect(
-        Pico::FAssetPath::TryParse("/Game/Models/Robot.pmesh", Path, &Error)
+        Pico::FAssetPath::TryParse("/Game/Meshes/Robot.pmesh", Path, &Error)
             && Error == Pico::EAssetPathError::None
-            && Path.ToString() == "/Game/Models/Robot.pmesh"
-            && Path.GetGameRelativePath() == "Models/Robot.pmesh"
+            && Path.ToString() == "/Game/Meshes/Robot.pmesh"
+            && Path.GetGameRelativePath() == "Meshes/Robot.pmesh"
             && Path.GetExtension() == ".pmesh",
         "Asset paths expose a canonical /Game identity");
 
@@ -47,7 +47,7 @@ void TestAssetPath(FTestRunner& Runner)
             && Error == Pico::EAssetPathError::InvalidSegment,
         "Asset paths reject parent traversal");
     Runner.Expect(
-        !Pico::FAssetPath::TryParse("/Game/Models/Robot", Path, &Error)
+        !Pico::FAssetPath::TryParse("/Game/Meshes/Robot", Path, &Error)
             && Error == Pico::EAssetPathError::MissingExtension,
         "Asset paths require an asset extension");
     Runner.Expect(

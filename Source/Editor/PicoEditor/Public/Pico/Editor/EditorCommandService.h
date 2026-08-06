@@ -1,11 +1,12 @@
 #pragma once
 
-#include "Pico/Core/AssetPath.h"
+#include "Pico/Asset/AssetRegistry.h"
 #include "Pico/Editor/EditorSceneClipboard.h"
 #include "Pico/Editor/EditorSelection.h"
 #include "Pico/Editor/EditorTransactionManager.h"
 
 #include <string>
+#include <vector>
 
 namespace Pico
 {
@@ -34,6 +35,19 @@ public:
     FEditorCommandResult AddSceneRoot();
     FEditorCommandResult AddComponent(bool bCubeComponent);
     FEditorCommandResult AddStaticMeshComponent(const FAssetPath& AssetPath);
+    FEditorCommandResult AssignStaticMeshAsset(const FAssetPath& AssetPath);
+    FEditorCommandResult ClearStaticMeshAsset();
+    FEditorCommandResult AssignMaterialAsset(const FAssetPath& AssetPath);
+    FEditorCommandResult ClearMaterialAsset();
+    FEditorCommandResult ReplaceAssetReferences(
+        const FAssetPath& OldAssetPath,
+        const FAssetPath& NewAssetPath,
+        EAssetType AssetType);
+    FEditorCommandResult ClearStaticMeshAssetReferences(const FAssetPath& AssetPath);
+    FEditorCommandResult ClearStaticMeshAssetReferences(
+        const std::vector<FAssetPath>& AssetPaths);
+    FEditorCommandResult ClearAssetReferences(
+        const std::vector<FAssetPath>& AssetPaths);
     FEditorCommandResult SetSelectedComponentAsRoot();
     FEditorCommandResult DeleteSelectedObject();
     FEditorCommandResult RenameObject(FObjectHandle ObjectHandle, std::string NewName);
@@ -62,6 +76,12 @@ private:
     bool RestoreSnapshot(
         const FEditorWorldSnapshot& Snapshot,
         EWorldSerializationError* OutError);
+    FEditorCommandResult SetSelectedStaticMeshAsset(
+        const FAssetPath& AssetPath,
+        bool bClear);
+    FEditorCommandResult SetSelectedMaterialAsset(
+        const FAssetPath& AssetPath,
+        bool bClear);
 
     FEngineLoop* EngineLoop = nullptr;
     FEditorSelection* Selection = nullptr;

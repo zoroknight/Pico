@@ -77,8 +77,8 @@ call `FEditorCommandService`; UI code must not construct scene objects directly.
 The PicoSandbox sample includes:
 
 ```text
-Content/Source/PicoPyramid.obj
-Content/Models/PicoPyramid.pmesh
+Content/Source/Meshes/PicoPyramid.obj
+Content/Meshes/PicoPyramid.pmesh
 ```
 
 ## Current Boundary

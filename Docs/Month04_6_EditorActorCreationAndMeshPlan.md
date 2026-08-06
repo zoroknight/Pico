@@ -53,7 +53,7 @@ Primitive shapes become built-in mesh assets rather than permanent component cla
 ```text
 /Engine/BasicMeshes/Cube.pmesh
 /Engine/BasicMeshes/Sphere.pmesh
-/Game/Models/Tree.pmesh
+/Game/Meshes/Tree.pmesh
 ```
 
 The `.pworld` file stores the component, transform, material overrides, and mesh asset reference. It

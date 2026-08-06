@@ -20,7 +20,7 @@ Release/
 RelWithDebInfo/
 MinSizeRel/
 *.obj
-!Projects/PicoSandbox/Content/Source/PicoPyramid.obj
+!Projects/*/Content/Source/**/*.obj
 *.pdb
 *.ilk
 *.exe

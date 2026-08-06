@@ -1,0 +1,6 @@
+[PicoStaticMeshImport]
+Version=1
+Source=/Game/Source/Meshes/spot_triangulated_good.obj
+UniformScale=100
+ConvertYUpToZUp=true
+FlipTexCoordV=true

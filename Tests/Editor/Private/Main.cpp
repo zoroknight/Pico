@@ -459,7 +459,7 @@ void TestEditorCommandService(FTestRunner& Runner)
 
     Pico::FAssetPath StaticMeshPath;
     Pico::FAssetPath::TryParse(
-        "/Game/Models/PicoPyramid.pmesh",
+        "/Game/Meshes/PicoPyramid.pmesh",
         StaticMeshPath);
     const Pico::FEditorCommandResult SpawnStaticMesh =
         Commands.SpawnStaticMeshActor(StaticMeshPath);

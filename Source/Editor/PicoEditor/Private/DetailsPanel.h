@@ -1,5 +1,11 @@
 #pragma once
 
+#include "AssetReferenceWidget.h"
+
+#include "Pico/Core/AssetPath.h"
+#include "Pico/Core/Name.h"
+#include "Pico/Object/ObjectTypes.h"
+
 #include <functional>
 #include <string>
 
@@ -26,13 +32,22 @@ public:
         bool)>;
     using FSetStatus = std::function<void(std::string, bool)>;
     using FAddRoot = std::function<void()>;
+    using FSetAssetReference = std::function<void(
+        FObjectHandle,
+        FName,
+        const FAssetPath&)>;
+    using FBrowseAsset = std::function<void(const FAssetPath&)>;
 
     void Draw(
         FEditorSelection& Selection,
         FPrepareEdit PrepareEdit,
         FCompleteEdit CompleteEdit,
         FSetStatus SetStatus,
-        FAddRoot AddRoot);
+        FAddRoot AddRoot,
+        const FAssetRegistry& AssetRegistry,
+        FBrowseAsset BrowseAsset,
+        const FAssetPath& SelectedAsset,
+        FSetAssetReference SetAssetReference);
 
 private:
     void DrawObjectIdentity(PObject* Object);
@@ -57,5 +72,10 @@ private:
     FCompleteEdit CompleteEdit;
     FSetStatus StatusSink;
     FAddRoot AddRoot;
+    const FAssetRegistry* AssetRegistry = nullptr;
+    FBrowseAsset BrowseAsset;
+    FAssetPath SelectedAsset;
+    FSetAssetReference SetAssetReference;
+    FAssetReferenceWidget AssetReferenceWidget;
 };
 }

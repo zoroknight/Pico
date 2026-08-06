@@ -69,6 +69,12 @@ class PAssetReferenceObject final : public Pico::PObject
 {
     PICO_DECLARE_CLASS(PAssetReferenceObject, Pico::PObject)
 
+public:
+    Pico::int32 GetTransientValue() const
+    {
+        return TransientValue;
+    }
+
 protected:
     explicit PAssetReferenceObject(const Pico::FObjectConstructionParams& Params)
         : PObject(Params)
@@ -77,6 +83,7 @@ protected:
 
 private:
     Pico::FAssetPath AssetPath;
+    Pico::int32 TransientValue = 7;
 };
 
 PICO_DEFINE_CLASS(PAssetReferenceObject)
@@ -84,7 +91,14 @@ PICO_DEFINE_CLASS(PAssetReferenceObject)
 bool PAssetReferenceObject::RegisterProperties(Pico::PClass& Class)
 {
     std::vector<Pico::PProperty> Properties;
-    PICO_ADD_PROPERTY(Properties, AssetPath);
+    PICO_ADD_ASSET_PROPERTY(Properties, AssetPath, StaticMesh);
+    Pico::FPropertyMetadata TransientMetadata;
+    TransientMetadata.Flags =
+        Pico::EPropertyFlags::Editable | Pico::EPropertyFlags::Transient;
+    Properties.push_back(
+        Pico::PProperty::Create<&ThisClass::TransientValue>(
+            Pico::FName("TransientValue"),
+            TransientMetadata));
     return Class.AddProperties(std::move(Properties));
 }
 
@@ -1133,17 +1147,28 @@ void TestAssetPathSerialization(FTestRunner& Runner)
     const Pico::PProperty* Property = Source != nullptr
         ? Source->GetClass()->FindProperty(Pico::FName("AssetPath"))
         : nullptr;
+    const Pico::PProperty* TransientProperty = Source != nullptr
+        ? Source->GetClass()->FindProperty(Pico::FName("TransientValue"))
+        : nullptr;
     Pico::FAssetPath AssetPath;
     const bool bPathCreated = Pico::FAssetPath::TryParse(
-        "/Game/Models/Robot.pmesh",
+        "/Game/Meshes/Robot.pmesh",
         AssetPath);
     Runner.Expect(
         Source != nullptr
             && Property != nullptr
             && Property->GetType() == Pico::EPropertyType::AssetPath
+            && Property->GetAssetReferenceType()
+                == Pico::EAssetReferenceType::StaticMesh
+            && Property->HasAnyFlags(Pico::EPropertyFlags::Editable)
+            && Property->HasAnyFlags(Pico::EPropertyFlags::Serializable)
+            && TransientProperty != nullptr
+            && TransientProperty->HasAnyFlags(Pico::EPropertyFlags::Transient)
+            && !TransientProperty->HasAnyFlags(Pico::EPropertyFlags::Serializable)
             && bPathCreated
-            && Property->SetValue(Source, AssetPath),
-        "Reflection reads and writes a type-safe AssetPath");
+            && Property->SetValue(Source, AssetPath)
+            && TransientProperty->SetValue(Source, Pico::int32 {99}),
+        "Reflection exposes typed flags and asset-reference metadata");
     if (Source == nullptr || Property == nullptr || !bPathCreated)
     {
         if (Source != nullptr)
@@ -1168,11 +1193,12 @@ void TestAssetPathSerialization(FTestRunner& Runner)
         Loaded != nullptr
             && Error == Pico::EObjectSerializationError::None
             && Property->GetValue(Loaded, LoadedPath)
-            && LoadedPath == AssetPath,
-        "Object format version 3 restores an AssetPath exactly");
+            && LoadedPath == AssetPath
+            && static_cast<PAssetReferenceObject*>(Loaded)->GetTransientValue() == 7,
+        "Object format version 3 restores serializable values and skips transient state");
     Runner.Expect(
         Loaded != nullptr
-            && Pico::DumpObject(Loaded).find("/Game/Models/Robot.pmesh")
+            && Pico::DumpObject(Loaded).find("/Game/Meshes/Robot.pmesh")
                 != std::string::npos,
         "Reflection diagnostics display AssetPath values");
     if (Loaded != nullptr)

@@ -931,6 +931,21 @@ bool SaveWorldToFile(
         return false;
     }
 
+    return SaveWorldAssetDataToFile(FilePath, Data, OutError);
+}
+
+bool SaveWorldAssetDataToFile(
+    const std::filesystem::path& FilePath,
+    const FWorldAssetData& Data,
+    EWorldSerializationError* OutError)
+{
+    ReportError(OutError, EWorldSerializationError::None);
+    if (FilePath.empty())
+    {
+        ReportError(OutError, EWorldSerializationError::InvalidArgument);
+        return false;
+    }
+
     FMemoryWriter Writer;
     if (!SerializeWorldAsset(Writer, Data, OutError))
     {

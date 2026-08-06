@@ -2,6 +2,7 @@
 
 #include "Pico/Core/Math/Vector3.h"
 #include "Pico/Core/Math/Matrix4.h"
+#include "Pico/Core/AssetPath.h"
 #include "Pico/Core/Types.h"
 #include "Pico/Object/ObjectTypes.h"
 
@@ -56,6 +57,7 @@ public:
     uint32 GetWidth() const;
     uint32 GetHeight() const;
     bool IsInitialized() const;
+    void InvalidateStaticMesh(const FAssetPath& AssetPath);
 
 private:
     struct FImpl;

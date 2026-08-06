@@ -128,11 +128,20 @@ bool PClass::ValidateProperty(
     std::span<const PProperty> PendingProperties) const
 {
     const std::size_t TypeSize = GetPropertyTypeSize(Property.GetType());
+    const bool bSerializable =
+        Property.HasAnyFlags(EPropertyFlags::Serializable);
+    const bool bTransient =
+        Property.HasAnyFlags(EPropertyFlags::Transient);
+    const bool bValidAssetMetadata =
+        Property.GetAssetReferenceType() == EAssetReferenceType::None
+        || Property.GetType() == EPropertyType::AssetPath;
     if (Property.GetName().IsNone()
         || TypeSize == 0
         || Property.GetSize() != TypeSize
         || Property.GetOwnerTypeToken() != NativeTypeToken
-        || !Property.HasValidAccessors())
+        || !Property.HasValidAccessors()
+        || (bSerializable && bTransient)
+        || !bValidAssetMetadata)
     {
         return false;
     }

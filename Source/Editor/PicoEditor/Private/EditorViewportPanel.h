@@ -11,6 +11,7 @@ struct GLFWwindow;
 namespace Pico
 {
 class FAssetManager;
+class FAssetPath;
 class FAssetRegistry;
 class FEditorSelection;
 class FEditorTransformService;
@@ -51,6 +52,11 @@ public:
     bool IsCameraCaptured() const;
     bool IsTransformActive() const;
     bool CancelActiveTransform();
+    bool FocusSelection(
+        const FAssetRegistry& AssetRegistry,
+        FAssetManager& AssetManager,
+        const FEditorSelection& Selection);
+    void InvalidateStaticMesh(const FAssetPath& AssetPath);
 
 private:
     void BeginCameraCapture();
@@ -62,6 +68,8 @@ private:
     float CameraYawDegrees = 135.0f;
     float CameraPitchDegrees = -28.0f;
     float CameraMoveSpeed = 600.0f;
+    float CameraNearPlane = 1.0f;
+    float CameraFarPlane = 10000.0f;
     bool bCameraCaptured = false;
     bool bIgnoreGizmoUntilRelease = false;
     bool bTransformChanged = false;

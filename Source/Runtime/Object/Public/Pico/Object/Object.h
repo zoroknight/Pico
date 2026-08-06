@@ -13,7 +13,20 @@ class FObjectRegistry;
 class FWorldAssetLoader;
 class PClass;
 class PObject;
+class PProperty;
 enum class EObjectSerializationError;
+
+enum class EPropertyChangeType
+{
+    ValueSet,
+    Interactive
+};
+
+struct FPropertyChangedEvent
+{
+    const PProperty* Property = nullptr;
+    EPropertyChangeType ChangeType = EPropertyChangeType::ValueSet;
+};
 
 PObject* LoadObject(FArchive& Archive, PObject* Outer, EObjectSerializationError* OutError);
 
@@ -38,6 +51,7 @@ public:
     std::string GetPathName() const;
     bool IsA(const PClass* Class) const;
     bool IsBeginningDestroy() const;
+    virtual void PostEditChangeProperty(const FPropertyChangedEvent& Event);
 
 protected:
     static void* operator new(std::size_t Size);

@@ -2,6 +2,7 @@
 
 #include "Pico/Asset/StaticMesh.h"
 #include "Pico/AssetImport/StaticMeshImporter.h"
+#include "Pico/AssetImport/TextureImporter.h"
 
 #include <chrono>
 #include <filesystem>
@@ -74,11 +75,44 @@ void TestObjImport(FTestRunner& Runner)
     std::error_code ErrorCode;
     std::filesystem::remove_all(Root, ErrorCode);
 }
+
+void TestTextureImport(FTestRunner& Runner)
+{
+    const auto Suffix = std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::filesystem::path Root = std::filesystem::temp_directory_path()
+        / ("PicoTextureImportTests_" + std::to_string(Suffix));
+    const std::filesystem::path Source = Root / "Colors.ppm";
+    const std::filesystem::path Destination = Root / "Colors.ptex";
+    std::filesystem::create_directories(Root);
+    {
+        std::ofstream File(Source, std::ios::binary | std::ios::trunc);
+        File << "P6\n2 1\n255\n";
+        const unsigned char Pixels[] = {255, 0, 0, 0, 255, 0};
+        File.write(reinterpret_cast<const char*>(Pixels), sizeof(Pixels));
+    }
+    Pico::ETextureImportError Error = Pico::ETextureImportError::None;
+    Pico::FTextureData Texture;
+    Runner.Expect(
+        Pico::ImportTexture(Source, Texture, &Error)
+            && Texture.Width == 2
+            && Texture.Height == 1
+            && Texture.Pixels.size() == 8
+            && Texture.Pixels[0] == 255
+            && Texture.Pixels[5] == 255,
+        "stb_image decodes source images into validated RGBA8 texture data");
+    Runner.Expect(
+        Pico::ImportTextureToFile(Source, Destination, &Error)
+            && Pico::LoadTextureFromFile(Destination, Texture),
+        "Texture importer writes a runtime-loadable .ptex asset");
+    std::error_code ErrorCode;
+    std::filesystem::remove_all(Root, ErrorCode);
+}
 }
 
 int main()
 {
     FTestRunner Runner;
     TestObjImport(Runner);
+    TestTextureImport(Runner);
     return Runner.Finish();
 }

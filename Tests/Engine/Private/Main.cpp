@@ -902,7 +902,7 @@ void TestPrimitiveComponentSceneData(FTestRunner& Runner)
             "A cube component starts with a fifty-unit half extent");
 
         Pico::FAssetPath MeshPath;
-        Pico::FAssetPath::TryParse("/Game/Models/Robot.pmesh", MeshPath);
+        Pico::FAssetPath::TryParse("/Game/Meshes/Robot.pmesh", MeshPath);
         StaticMesh->SetStaticMeshAsset(MeshPath);
         Runner.Expect(
             StaticMesh->IsA(Pico::PPrimitiveComponent::StaticClass())
@@ -1125,7 +1125,7 @@ void TestWorldAssetDataSerialization(FTestRunner& Runner)
         "World asset round trip preserves reflected property values");
 
     Pico::FAssetPath StaticMeshPath;
-    Pico::FAssetPath::TryParse("/Game/Models/Robot.pmesh", StaticMeshPath);
+    Pico::FAssetPath::TryParse("/Game/Meshes/Robot.pmesh", StaticMeshPath);
     Pico::FWorldAssetData AssetReferenceData = CapturedData;
     Pico::FSerializedPropertyRecord AssetReference;
     AssetReference.Name = "StaticMeshAsset";
@@ -1577,6 +1577,13 @@ void TestWorldFilePersistence(FTestRunner& Runner)
         !std::filesystem::exists(TemporaryPath)
             && !std::filesystem::exists(BackupPath),
         "Successful World replacement leaves no temporary files");
+
+    Pico::FWorldAssetData FileAssetData;
+    Runner.Expect(
+        Pico::LoadWorldAssetDataFromFile(FilePath, FileAssetData, &Error)
+            && Pico::SaveWorldAssetDataToFile(FilePath, FileAssetData, &Error)
+            && ReadFileBytes() == ReplacedBytes,
+        "Parsed World asset data can be edited and saved without reconstructing objects");
 
     const std::size_t ExistingObjectCount =
         Pico::FObjectRegistry::GetObjectCount();

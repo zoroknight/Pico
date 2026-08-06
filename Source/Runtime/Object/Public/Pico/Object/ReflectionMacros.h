@@ -54,3 +54,15 @@ private: \
 #define PICO_ADD_PROPERTY(PropertyList, Member) \
     (PropertyList).push_back( \
         ::Pico::PProperty::Create<&ThisClass::Member>(::Pico::FName(#Member)))
+
+#define PICO_ADD_PROPERTY_METADATA(PropertyList, Member, Metadata) \
+    (PropertyList).push_back( \
+        ::Pico::PProperty::Create<&ThisClass::Member>( \
+            ::Pico::FName(#Member), \
+            Metadata))
+
+#define PICO_ADD_ASSET_PROPERTY(PropertyList, Member, AssetType) \
+    (PropertyList).push_back( \
+        ::Pico::PProperty::CreateAssetReference<&ThisClass::Member>( \
+            ::Pico::FName(#Member), \
+            ::Pico::EAssetReferenceType::AssetType))

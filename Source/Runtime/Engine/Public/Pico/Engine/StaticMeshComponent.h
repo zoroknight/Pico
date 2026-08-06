@@ -12,11 +12,14 @@ class PStaticMeshComponent final : public PPrimitiveComponent
 public:
     const FAssetPath& GetStaticMeshAsset() const;
     void SetStaticMeshAsset(const FAssetPath& InAssetPath);
+    const FAssetPath& GetMaterialAsset() const;
+    void SetMaterialAsset(const FAssetPath& InAssetPath);
 
 protected:
     explicit PStaticMeshComponent(const FObjectConstructionParams& Params);
 
 private:
     FAssetPath StaticMeshAsset;
+    FAssetPath MaterialAsset;
 };
 }

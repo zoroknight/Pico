@@ -151,13 +151,21 @@ void FDetailsPanel::Draw(
     FPrepareEdit InPrepareEdit,
     FCompleteEdit InCompleteEdit,
     FSetStatus InSetStatus,
-    FAddRoot InAddRoot)
+    FAddRoot InAddRoot,
+    const FAssetRegistry& InAssetRegistry,
+    FBrowseAsset InBrowseAsset,
+    const FAssetPath& InSelectedAsset,
+    FSetAssetReference InSetAssetReference)
 {
     Selection = &InSelection;
     PrepareEdit = std::move(InPrepareEdit);
     CompleteEdit = std::move(InCompleteEdit);
     StatusSink = std::move(InSetStatus);
     AddRoot = std::move(InAddRoot);
+    AssetRegistry = &InAssetRegistry;
+    BrowseAsset = std::move(InBrowseAsset);
+    SelectedAsset = InSelectedAsset;
+    SetAssetReference = std::move(InSetAssetReference);
 
     PObject* Object = Selection->Resolve();
     if (Object == nullptr)
@@ -312,7 +320,12 @@ void FDetailsPanel::DrawReflectedProperties(PObject* Object)
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
         for (const PProperty* Property : Properties)
         {
-            DrawPropertyEditor(Object, Property);
+            if (Property != nullptr
+                && Property->HasAnyFlags(
+                    EPropertyFlags::Editable | EPropertyFlags::ReadOnly))
+            {
+                DrawPropertyEditor(Object, Property);
+            }
         }
         ImGui::EndTable();
     }
@@ -336,6 +349,8 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
         Object->GetPathName() + "." + PropertyName;
     const std::string Description =
         "Edit " + Object->GetPathName() + "." + PropertyName;
+    const bool bReadOnly = Property->HasAnyFlags(EPropertyFlags::ReadOnly);
+    ImGui::BeginDisabled(bReadOnly);
     const auto ApplyValue =
         [this, &EditKey, &Description, &bChanged, &bChangeApplied](
             const FEditorControlState& State,
@@ -461,11 +476,46 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
         FAssetPath Value;
         if (Property->GetValue(Object, Value))
         {
-            ImGui::TextUnformatted(std::string(Value.ToString()).c_str());
+            const EAssetReferenceType ReferenceType =
+                Property->GetAssetReferenceType();
+            if (ReferenceType == EAssetReferenceType::None
+                || AssetRegistry == nullptr)
+            {
+                ImGui::TextUnformatted(
+                    Value.IsValid() ? Value.ToString().data() : "<None>");
+                break;
+            }
+
+            const FAssetReferenceEditResult Result = AssetReferenceWidget.Draw(
+                PropertyName.c_str(),
+                Value,
+                ReferenceType,
+                *AssetRegistry,
+                SelectedAsset);
+            if (Result.bRejectedDrop)
+            {
+                SetStatus("Dropped asset type is not valid for " + PropertyName, true);
+            }
+            if (Result.bBrowseRequested && BrowseAsset)
+            {
+                BrowseAsset(Value);
+            }
+            if (Result.bChanged)
+            {
+                if (SetAssetReference)
+                {
+                    SetAssetReference(
+                        Object->GetHandle(),
+                        Property->GetName(),
+                        Result.Value);
+                }
+            }
         }
         break;
     }
     }
+
+    ImGui::EndDisabled();
 
     if (bChanged && bChangeApplied)
     {

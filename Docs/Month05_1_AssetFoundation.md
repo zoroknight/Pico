@@ -28,7 +28,7 @@ background gatherers before Pico needs them.
 
 ```text
 /Game/Maps/EditorWorld.pworld
-/Game/Models/Robot.pmesh
+/Game/Meshes/Robot.pmesh
 /Game/Textures/Grid.ptex
 /Game/Materials/Metal.pmat
 ```

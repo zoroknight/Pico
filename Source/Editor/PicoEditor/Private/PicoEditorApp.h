@@ -1,12 +1,17 @@
 #pragma once
 
 #include "EditorViewportPanel.h"
+#include "EditorAssetWorkflowController.h"
+#include "ContentBrowserPanel.h"
 #include "DetailsPanel.h"
 #include "SceneOutlinerPanel.h"
 
 #include "Pico/Core/Math/Vector3.h"
 #include "Pico/Editor/EditorCommandService.h"
+#include "Pico/Editor/EditorAssetSelection.h"
+#include "Pico/Editor/EditorAssetService.h"
 #include "Pico/Editor/EditorCommandQueue.h"
+#include "Pico/Editor/EditorPropertyService.h"
 #include "Pico/Editor/EditorSceneClipboard.h"
 #include "Pico/Editor/EditorSelection.h"
 #include "Pico/Editor/EditorToolState.h"
@@ -15,7 +20,6 @@
 #include "Pico/Object/ObjectTypes.h"
 
 #include <array>
-#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -65,7 +69,12 @@ private:
     void AddSceneComponentToSelection();
     void AddCubeComponentToSelection();
     void AddStaticMeshComponentToSelection();
-    const FAssetPath* FindFirstStaticMeshAsset() const;
+    const FAssetPath* GetSelectedStaticMeshAsset() const;
+    const FAssetPath* GetSelectedMaterialAsset() const;
+    void CreateStaticMeshActor(const FAssetPath& AssetPath);
+    void AssignStaticMeshAsset(const FAssetPath& AssetPath);
+    void AssignMaterialAsset(const FAssetPath& AssetPath);
+    void AssignSelectedAsset(const FAssetPath& AssetPath);
     void SetSelectedComponentAsRoot();
     void DestroySelectedObject();
     void QueueDestroy(PObject* Object);
@@ -114,17 +123,24 @@ private:
     FEditorSceneClipboard SceneClipboard;
     FEditorTransactionManager TransactionManager;
     FEngineLoop* EngineLoop = nullptr;
+    FEditorAssetSelection AssetSelection;
+    FEditorAssetService AssetService;
     FEditorCommandService CommandService;
+    FEditorPropertyService PropertyService;
     FEditorCommandQueue CommandQueue;
     FEditorViewportPanel ViewportPanel;
     FSceneOutlinerPanel OutlinerPanel;
     FDetailsPanel DetailsPanel;
+    FContentBrowserPanel ContentBrowserPanel;
+    FEditorAssetWorkflowController AssetWorkflow;
     FObjectHandle RenameObjectHandle;
     std::array<char, 128> RenameBuffer {};
     std::string InteractiveEditKey;
     std::string Status;
     bool bInteractiveEditChanged = false;
     bool bInteractiveEditVisited = false;
+    bool bFinishInteractiveEditRequested = false;
+    bool bCancelInteractiveEditRequested = false;
     bool bStatusIsError = false;
     bool bResetDockLayout = false;
     bool bOpenRenamePopup = false;

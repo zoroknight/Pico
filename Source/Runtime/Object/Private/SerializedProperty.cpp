@@ -146,6 +146,12 @@ bool CaptureSerializedProperties(
     OutProperties.reserve(Properties.size());
     for (const PProperty* Property : Properties)
     {
+        if (Property != nullptr
+            && (!Property->HasAnyFlags(EPropertyFlags::Serializable)
+                || Property->HasAnyFlags(EPropertyFlags::Transient)))
+        {
+            continue;
+        }
         FSerializedPropertyRecord Record;
         if (Property == nullptr || !CaptureProperty(*Property, Object, Record))
         {
@@ -191,6 +197,11 @@ ESerializedPropertyApplyResult ApplySerializedProperty(
     const PProperty* Property =
         Object->GetClass()->FindProperty(FName(SerializedProperty.Name));
     if (Property == nullptr)
+    {
+        return ESerializedPropertyApplyResult::None;
+    }
+    if (!Property->HasAnyFlags(EPropertyFlags::Serializable)
+        || Property->HasAnyFlags(EPropertyFlags::Transient))
     {
         return ESerializedPropertyApplyResult::None;
     }

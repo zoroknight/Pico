@@ -2,11 +2,17 @@
 #include "EditorTransformGizmo.h"
 
 #include "Pico/Core/Math/MathUtility.h"
+#include "Pico/Asset/AssetManager.h"
+#include "Pico/Asset/AssetRegistry.h"
 #include "Pico/Editor/EditorSelection.h"
 #include "Pico/Editor/EditorToolState.h"
 #include "Pico/Editor/EditorTransformService.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/CubeComponent.h"
+#include "Pico/Engine/PrimitiveComponent.h"
+#include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Render/SceneViewportRenderer.h"
@@ -17,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 namespace Pico
 {
@@ -98,6 +105,8 @@ void FEditorViewportPanel::Draw(
     FSceneView View;
     View.Position = CameraPosition;
     View.Target = CameraPosition + Forward;
+    View.NearPlane = CameraNearPlane;
+    View.FarPlane = CameraFarPlane;
     if (!Renderer->Resize(RenderWidth, RenderHeight)
         || !Renderer->Render(
             World,
@@ -267,7 +276,7 @@ void FEditorViewportPanel::Draw(
     if (IO.MouseWheel != 0.0f)
     {
         CameraMoveSpeed = std::clamp(
-            CameraMoveSpeed * std::pow(1.25f, IO.MouseWheel), 25.0f, 10000.0f);
+            CameraMoveSpeed * std::pow(1.25f, IO.MouseWheel), 0.01f, 10000.0f);
         SetStatus("Camera speed " + std::to_string(static_cast<int>(CameraMoveSpeed)));
     }
 
@@ -320,6 +329,130 @@ bool FEditorViewportPanel::CancelActiveTransform()
     bIgnoreGizmoUntilRelease = true;
     bTransformChanged = false;
     return true;
+}
+
+bool FEditorViewportPanel::FocusSelection(
+    const FAssetRegistry& AssetRegistry,
+    FAssetManager& AssetManager,
+    const FEditorSelection& Selection)
+{
+    FVector3 BoundsMin(std::numeric_limits<float>::max());
+    FVector3 BoundsMax(std::numeric_limits<float>::lowest());
+    bool bHasBounds = false;
+    const auto AddPoint = [&BoundsMin, &BoundsMax, &bHasBounds](const FVector3& Point)
+    {
+        BoundsMin.X = std::min(BoundsMin.X, Point.X);
+        BoundsMin.Y = std::min(BoundsMin.Y, Point.Y);
+        BoundsMin.Z = std::min(BoundsMin.Z, Point.Z);
+        BoundsMax.X = std::max(BoundsMax.X, Point.X);
+        BoundsMax.Y = std::max(BoundsMax.Y, Point.Y);
+        BoundsMax.Z = std::max(BoundsMax.Z, Point.Z);
+        bHasBounds = true;
+    };
+    const auto AddTransformedBounds = [&AddPoint](
+        const FVector3& LocalMin,
+        const FVector3& LocalMax,
+        const FTransform& Transform)
+    {
+        for (int X = 0; X < 2; ++X)
+        {
+            for (int Y = 0; Y < 2; ++Y)
+            {
+                for (int Z = 0; Z < 2; ++Z)
+                {
+                    AddPoint(Transform.TransformPosition(FVector3(
+                        X == 0 ? LocalMin.X : LocalMax.X,
+                        Y == 0 ? LocalMin.Y : LocalMax.Y,
+                        Z == 0 ? LocalMin.Z : LocalMax.Z)));
+                }
+            }
+        }
+    };
+    const auto AddComponent = [&](PSceneComponent* Component)
+    {
+        if (Component == nullptr)
+        {
+            return;
+        }
+        if (Component->IsA(PCubeComponent::StaticClass()))
+        {
+            const FVector3 Extent = static_cast<PCubeComponent*>(Component)->GetExtent();
+            AddTransformedBounds(-Extent, Extent, Component->GetWorldTransform());
+            return;
+        }
+        if (Component->IsA(PStaticMeshComponent::StaticClass()))
+        {
+            PStaticMeshComponent* StaticMesh = static_cast<PStaticMeshComponent*>(Component);
+            const std::shared_ptr<const FStaticMeshData> Mesh = AssetManager.LoadStaticMesh(
+                StaticMesh->GetStaticMeshAsset(), AssetRegistry);
+            if (Mesh != nullptr)
+            {
+                AddTransformedBounds(
+                    Mesh->Bounds.Min,
+                    Mesh->Bounds.Max,
+                    Component->GetWorldTransform());
+                return;
+            }
+        }
+        AddPoint(Component->GetWorldTransform().Translation);
+    };
+
+    for (PObject* Object : Selection.ResolveAll())
+    {
+        if (Object->IsA(PActor::StaticClass()))
+        {
+            PActor* Actor = static_cast<PActor*>(Object);
+            bool bAddedPrimitive = false;
+            for (PActorComponent* Component : Actor->GetComponents())
+            {
+                if (Component != nullptr && Component->IsA(PPrimitiveComponent::StaticClass()))
+                {
+                    AddComponent(static_cast<PSceneComponent*>(Component));
+                    bAddedPrimitive = true;
+                }
+            }
+            if (!bAddedPrimitive)
+            {
+                AddPoint(Actor->GetActorLocation());
+            }
+        }
+        else if (Object->IsA(PSceneComponent::StaticClass()))
+        {
+            AddComponent(static_cast<PSceneComponent*>(Object));
+        }
+    }
+    if (!bHasBounds)
+    {
+        return false;
+    }
+
+    const FVector3 Center = (BoundsMin + BoundsMax) * 0.5f;
+    const FVector3 Extent = (BoundsMax - BoundsMin) * 0.5f;
+    float Radius = std::sqrt(FVector3::Dot(Extent, Extent));
+    Radius = std::max(Radius, 0.01f);
+    const float YawRadians = DegreesToRadians(CameraYawDegrees);
+    const float PitchRadians = DegreesToRadians(CameraPitchDegrees);
+    const float CosPitch = std::cos(PitchRadians);
+    const FVector3 Forward(
+        CosPitch * std::cos(YawRadians),
+        CosPitch * std::sin(YawRadians),
+        std::sin(PitchRadians));
+    const float Distance = std::max(
+        Radius / std::tan(DegreesToRadians(25.0f)) * 1.25f,
+        Radius * 2.0f);
+    CameraPosition = Center - Forward * Distance;
+    CameraNearPlane = std::clamp(Radius * 0.02f, 0.0001f, 1.0f);
+    CameraFarPlane = std::max(10000.0f, Distance + Radius * 8.0f);
+    CameraMoveSpeed = std::clamp(Radius * 4.0f, 0.01f, 10000.0f);
+    return true;
+}
+
+void FEditorViewportPanel::InvalidateStaticMesh(const FAssetPath& AssetPath)
+{
+    if (Renderer != nullptr && Renderer->IsInitialized())
+    {
+        Renderer->InvalidateStaticMesh(AssetPath);
+    }
 }
 
 void FEditorViewportPanel::BeginCameraCapture()

@@ -11,9 +11,11 @@ PProperty::PProperty(
     std::size_t InSize,
     const void* InOwnerTypeToken,
     FMutableAccessor InMutableAccessor,
-    FConstAccessor InConstAccessor)
+    FConstAccessor InConstAccessor,
+    FPropertyMetadata InMetadata)
     : Name(InName)
     , Type(InType)
+    , Metadata(InMetadata)
     , Size(InSize)
     , OwnerTypeToken(InOwnerTypeToken)
     , MutableAccessor(InMutableAccessor)
@@ -29,6 +31,26 @@ FName PProperty::GetName() const
 EPropertyType PProperty::GetType() const
 {
     return Type;
+}
+
+const FPropertyMetadata& PProperty::GetMetadata() const
+{
+    return Metadata;
+}
+
+EPropertyFlags PProperty::GetFlags() const
+{
+    return Metadata.Flags;
+}
+
+bool PProperty::HasAnyFlags(EPropertyFlags Flags) const
+{
+    return HasAnyPropertyFlags(Metadata.Flags, Flags);
+}
+
+EAssetReferenceType PProperty::GetAssetReferenceType() const
+{
+    return Metadata.AssetReferenceType;
 }
 
 std::size_t PProperty::GetSize() const

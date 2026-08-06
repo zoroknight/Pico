@@ -7,11 +7,11 @@ Pico 是一个以学习为目的、参考 Unreal Engine 架构设计的小型 C+
 
 Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小而清晰，同时保留可以完整运行和继续扩展的架构边界。
 
-![支持场景层级编辑和视口选择的 Pico 编辑器](Docs/Images/PicoEditorMonth04.png)
+![展示导入模型、材质、纹理和 PBR 视口渲染的 Pico 编辑器](Docs/Images/PicoEditorMonth05PBR.png)
 
 ## 当前状态
 
-前四个月的开发任务和第五月前两个资产里程碑已经完成。目前 Pico 可以：
+前五个月的开发任务已经完成。目前 Pico 可以：
 
 - 运行类似 UE 的 `PreInit -> Init -> Tick -> Exit` 引擎循环。
 - 通过 `PClass` 和 `NewObject` 创建具有反射信息的原生 C++ 对象。
@@ -30,8 +30,22 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   大小写不敏感查询和刷新的资产注册表提供元数据。
 - 通过 TinyObjLoader 将三角化 OBJ 源数据导入经过校验且确定性的 `.pmesh`，保存位置、
   法线、UV、Section 和 Bounds。
+- 通过 stb_image 将 PNG/JPG/TGA/BMP 导入经过校验的 RGBA8 `.ptex`，并创建包含 BaseColor、
+  BaseColorTexture、Metallic 和 Roughness 的 `.pmat`。
+- 为 StaticMeshComponent 分配可反射的 Material 引用，通过 Undo/Redo 编辑，并使用带纹理缓存和
+  Mipmap 的 OpenGL 3.3 Cook-Torrance PBR 路径渲染。
 - 缓存不可变 CPU Static Mesh 数据和渲染器私有的 OpenGL 网格，并在 Registry 元数据变化后刷新。
 - 持久化 `PStaticMeshComponent` 资产引用，在编辑器视口中渲染、拾取、高亮和变换导入网格。
+- 在可停靠的 Content Browser 中按目录、搜索文本和类型浏览项目资产，并支持 OBJ 导入、
+  Registry 刷新以及基于项目内源文件元数据的重新导入。
+- 导入前分析 OBJ 几何数据，选择自动或明确的源单位、预览最终尺寸，并通过 `Import Options`
+  重新打开已持久化的设置。
+- 批量删除混合选择的 Static Mesh、Texture 和 Material；删除前报告场景/资产依赖，可选删除
+  项目内源文件，并支持场景事务清理与暂存回滚。
+- 通过稳定的 `/Game/...` 路径选择和拖放 Static Mesh；创建或事务化分配网格时不再依赖
+  Registry 的排列顺序。
+- 将支持重新导入的用户源文件保存在 `Content/Source`；编辑器生成、供运行时直接读取的原生
+  资产按类型放入 `Meshes`、`Textures`、`Materials` 和 `Maps` 等目录。
 - 在 Outliner 和 Details 中查看、创建、修改和销毁运行时对象。
 - 在 OpenGL 3.3 编辑器视口中渲染 `PCubeComponent`。
 - 单选、追加选择、范围选择或使用 `Ctrl+A` 选择 Actor 和 Component，并在 Viewport 中
@@ -44,7 +58,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
-Debug 和 Release 均可完整构建，七个 CTest 目标全部通过；`PicoEditorTests`
+Debug 和 Release 均可完整构建，八个 CTest 目标全部通过；`PicoEditorTests`
 目前包含 69 项通过的检查。
 
 ## 架构
@@ -78,8 +92,8 @@ PicoInspector       -> PicoReflectionTools
 | `PicoObject` | `PObject`、`PClass`、`PProperty`、反射、注册表、Handle、Outer和序列化 |
 | `PicoEngine` | EngineLoop、World、Level、Actor、Component、挂接和可渲染场景数据 |
 | `PicoRender` | 基于GLAD的OpenGL、Shader、几何体、Framebuffer、场景遍历和绘制提交 |
-| `PicoEditorCore` | 不依赖 UI 的选择、命令、剪贴板、事务和 Transform 操作 |
-| `PicoEditor` | Outliner、Details、编辑器相机、Viewport 拾取、工具状态和 Transform Gizmo UI |
+| `PicoEditorCore` | 不依赖 UI 的对象/资产选择、资产操作、命令、剪贴板、事务和 Transform 操作 |
+| `PicoEditor` | Content Browser、资产工作流控制器与弹窗、Outliner、Details、编辑器相机、Viewport 拾取、工具状态和 Transform Gizmo UI |
 | `PicoReflectionTools` | 通用元数据检查和反射属性工具 |
 | `PicoSandbox` | 项目侧反射、序列化、资产和自动化测试示例 |
 
@@ -147,7 +161,7 @@ ProjectRoot/
 - Git for Windows
 - 支持 OpenGL 3.3 的显卡和驱动
 
-GLFW、Dear ImGui 和 ImGuizmo 已包含在 `ThirdParty` 中。
+GLFW、Dear ImGui、ImGuizmo、TinyObjLoader 和 stb_image 已包含在 `ThirdParty` 中。
 
 ## 快速开始
 
@@ -182,8 +196,20 @@ GameWorld
 
 - 使用 `Add > Empty Actor` 创建带有 `DefaultSceneRoot` 的编辑器 Actor。
 - 使用 `Add > Cube` 创建以可渲染 `PCubeComponent` 直接作为根组件的 Actor。
-- 使用 `Add > Static Mesh` 通过第一个已登记的 `.pmesh` 创建 Actor；Content Browser
-  里程碑会用正式资产选择器替换这个临时的确定性选择。
+- 在 Content Browser 中选择 `.pmesh`，再使用 `Add > Static Mesh` 或双击资产创建 Actor；
+  `Ctrl` 可切换多选，`Shift` 可范围选择，`Ctrl+A` 会选择当前目录、搜索和类型过滤结果中的全部资产。
+- 使用 `Import OBJ` 检查源模型，并选择 Auto、Centimeters、Meters、Millimeters、Normalize
+  或 Custom 缩放；源文件会复制到 `Content/Source/Meshes`，原生 `.pmesh` 写入
+  `Content/Meshes`。
+- 使用 `Import Texture` 创建原生 `.ptex`，再通过 `Create Material` 编辑 BaseColor、
+  BaseColorTexture、Metallic 和 Roughness；双击 `.pmat` 可以再次编辑。
+  `Reimport` 沿用已保存设置，`Import Options` 可修改设置后重新构建。
+- Content Browser 获得焦点时，按 `Delete` 或点击其 Delete 按钮可查看汇总的场景与资产引用，
+  并批量移除选中的 Static Mesh、Texture 和 Material。删除项目内源文件是可选项；清理场景
+  引用是一次支持 Undo/Redo 的事务，Material 到 Texture 的引用随暂存文件一起支持回滚，资产
+  文件删除本身不进入场景事务。场景获得焦点时，`Delete` 仍删除场景对象。
+- 可将 Static Mesh 拖到 Details 的 `AssetPath`，也可使用 `Use Selected` 和 `Clear`。
+  分配和清除支持场景 Undo/Redo，导入和重导入不进入场景事务。
 - 可以向选中的 Actor 添加 Scene 或 Cube Component，也可以向选中的 SceneComponent 添加子组件。
 - 按 `F2` 重命名 Actor 或 Component，按 `Delete` 删除；删除 SceneComponent 会删除完整的附着子树。
 - 右键 World、Level、Actor 或 Component 节点可执行对应的创建、重命名、设置根组件和删除操作。
@@ -192,6 +218,8 @@ GameWorld
 - 按住 `Ctrl` 点击可以切换对象的选择状态；在 Outliner 中按住 `Shift` 可以范围选择，
   `Ctrl+A` 会选择所有场景 Actor。
 - `Q` 为选择模式，`W` 为平移，`E` 为旋转，`R` 为缩放；工具栏提供相同入口。
+- 按 `F` 根据选中 Actor 或组件变换后的世界 Bounds 聚焦；相机距离、近裁剪面和移动速度会
+  同时适配非常小和非常大的网格。
 - `World` 使 Gizmo 与场景坐标轴对齐，`Local` 使 Gizmo 与主选择对象的旋转对齐；多选
   旋转和缩放以主选择对象为枢轴。
 - 开启 `Snap` 可以吸附平移、旋转和缩放；拖动过程中按 `Esc` 会将所有目标恢复到拖动前。

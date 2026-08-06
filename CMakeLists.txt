@@ -53,7 +53,9 @@ endif()
 add_library(PicoAsset STATIC
     Source/Runtime/Asset/Private/AssetManager.cpp
     Source/Runtime/Asset/Private/AssetRegistry.cpp
+    Source/Runtime/Asset/Private/Material.cpp
     Source/Runtime/Asset/Private/StaticMesh.cpp
+    Source/Runtime/Asset/Private/Texture.cpp
 )
 
 target_include_directories(PicoAsset
@@ -89,6 +91,7 @@ endif()
 
 add_library(PicoAssetImport STATIC
     Source/Developer/AssetImport/Private/StaticMeshImporter.cpp
+    Source/Developer/AssetImport/Private/TextureImporter.cpp
 )
 
 target_include_directories(PicoAssetImport
@@ -102,6 +105,8 @@ target_link_libraries(PicoAssetImport
     PRIVATE
         tinyobjloader
 )
+
+target_include_directories(PicoAssetImport PRIVATE ThirdParty/stb)
 
 set_target_properties(PicoAssetImport PROPERTIES FOLDER "Developer")
 
@@ -215,7 +220,7 @@ add_executable(PicoAssetTool
     Source/Programs/PicoAssetTool/Private/Main.cpp
 )
 
-target_link_libraries(PicoAssetTool PRIVATE PicoAssetImport)
+target_link_libraries(PicoAssetTool PRIVATE PicoAssetImport PicoEngine)
 set_target_properties(PicoAssetTool PROPERTIES FOLDER "Programs")
 
 if(MSVC)
@@ -328,11 +333,17 @@ if(PICO_BUILD_INSPECTOR)
     endif()
 
     add_library(PicoEditorCore STATIC
+        Source/Editor/PicoEditor/Private/AssetDependencyService.cpp
+        Source/Editor/PicoEditor/Private/EditorAssetSelection.cpp
+        Source/Editor/PicoEditor/Private/EditorAssetService.cpp
         Source/Editor/PicoEditor/Private/EditorCommandService.cpp
+        Source/Editor/PicoEditor/Private/EditorPropertyService.cpp
         Source/Editor/PicoEditor/Private/EditorSceneClipboard.cpp
         Source/Editor/PicoEditor/Private/EditorSelection.cpp
         Source/Editor/PicoEditor/Private/EditorTransformService.cpp
         Source/Editor/PicoEditor/Private/EditorTransactionManager.cpp
+        Source/Editor/PicoEditor/Public/Pico/Editor/EditorPropertyService.h
+        Source/Editor/PicoEditor/Public/Pico/Editor/AssetDependencyService.h
     )
 
     target_include_directories(PicoEditorCore
@@ -343,12 +354,13 @@ if(PICO_BUILD_INSPECTOR)
     target_link_libraries(PicoEditorCore
         PUBLIC
             PicoEngine
+            PicoAssetImport
     )
 
     set_target_properties(PicoEditorCore PROPERTIES FOLDER "Pico")
 
     if(MSVC)
-        target_compile_options(PicoEditorCore PRIVATE /W4 /permissive-)
+        target_compile_options(PicoEditorCore PRIVATE /W4 /permissive- /FS)
     else()
         target_compile_options(PicoEditorCore PRIVATE -Wall -Wextra -Wpedantic)
     endif()
@@ -369,15 +381,29 @@ if(PICO_BUILD_INSPECTOR)
     set_target_properties(PicoInspector PROPERTIES FOLDER "Programs")
 
     add_executable(PicoEditor
+        Source/Editor/PicoEditor/Private/AssetReferenceWidget.cpp
+        Source/Editor/PicoEditor/Private/AssetReferenceWidget.h
+        Source/Editor/PicoEditor/Private/ContentBrowserPanel.cpp
+        Source/Editor/PicoEditor/Private/ContentBrowserPanel.h
+        Source/Editor/PicoEditor/Private/DeleteAssetsDialog.cpp
+        Source/Editor/PicoEditor/Private/DeleteAssetsDialog.h
+        Source/Editor/PicoEditor/Private/EditorAssetWorkflowController.cpp
+        Source/Editor/PicoEditor/Private/EditorAssetWorkflowController.h
         Source/Editor/PicoEditor/Private/EditorTransformGizmo.cpp
         Source/Editor/PicoEditor/Private/EditorTransformGizmo.h
         Source/Editor/PicoEditor/Private/EditorViewportPanel.cpp
         Source/Editor/PicoEditor/Private/EditorViewportPanel.h
+        Source/Editor/PicoEditor/Private/MaterialDialog.cpp
+        Source/Editor/PicoEditor/Private/MaterialDialog.h
         Source/Editor/PicoEditor/Private/DetailsPanel.cpp
         Source/Editor/PicoEditor/Private/DetailsPanel.h
         Source/Editor/PicoEditor/Private/SceneOutlinerPanel.cpp
         Source/Editor/PicoEditor/Private/SceneOutlinerPanel.h
+        Source/Editor/PicoEditor/Private/StaticMeshImportDialog.cpp
+        Source/Editor/PicoEditor/Private/StaticMeshImportDialog.h
         Source/Editor/PicoEditor/Private/Main.cpp
+        Source/Editor/PicoEditor/Private/NativeFileDialog.cpp
+        Source/Editor/PicoEditor/Private/NativeFileDialog.h
         Source/Editor/PicoEditor/Private/PicoEditorApp.cpp
         Source/Editor/PicoEditor/Private/PicoEditorApp.h
     )
@@ -397,13 +423,17 @@ if(PICO_BUILD_INSPECTOR)
             PICO_DEFAULT_PROJECT_FILE="${PICO_ROOT_DIR}/Projects/PicoSandbox/PicoSandbox.pico"
     )
 
+    if(WIN32)
+        target_link_libraries(PicoEditor PRIVATE comdlg32)
+    endif()
+
     set_target_properties(PicoEditor PROPERTIES
         FOLDER "Programs"
         VS_DPI_AWARE "PerMonitor"
     )
 
     if(MSVC)
-        target_compile_options(PicoEditor PRIVATE /W4 /permissive-)
+        target_compile_options(PicoEditor PRIVATE /W4 /permissive- /FS)
     else()
         target_compile_options(PicoEditor PRIVATE -Wall -Wextra -Wpedantic)
     endif()
@@ -411,6 +441,20 @@ if(PICO_BUILD_INSPECTOR)
     add_executable(PicoEditorTests
         Tests/Editor/Private/Main.cpp
     )
+
+    add_executable(PicoEditorAssetTests
+        Tests/EditorAsset/Private/Main.cpp
+    )
+
+    target_include_directories(PicoEditorAssetTests PRIVATE Tests/Common)
+    target_link_libraries(PicoEditorAssetTests PRIVATE PicoEditorCore)
+    set_target_properties(PicoEditorAssetTests PROPERTIES FOLDER "Tests/Editor")
+
+    if(MSVC)
+        target_compile_options(PicoEditorAssetTests PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(PicoEditorAssetTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
 
     target_include_directories(PicoEditorTests PRIVATE Tests/Common)
 
@@ -531,6 +575,7 @@ if(BUILD_TESTING)
     add_test(NAME PicoEngineTests COMMAND PicoEngineTests)
     if(PICO_BUILD_INSPECTOR)
         add_test(NAME PicoEditorTests COMMAND PicoEditorTests)
+        add_test(NAME PicoEditorAssetTests COMMAND PicoEditorAssetTests)
     endif()
     set_tests_properties(PicoCoreTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
@@ -549,6 +594,9 @@ if(BUILD_TESTING)
     )
     if(PICO_BUILD_INSPECTOR)
         set_tests_properties(PicoEditorTests PROPERTIES
+            WORKING_DIRECTORY ${PICO_ROOT_DIR}
+        )
+        set_tests_properties(PicoEditorAssetTests PROPERTIES
             WORKING_DIRECTORY ${PICO_ROOT_DIR}
         )
     endif()
