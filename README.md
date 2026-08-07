@@ -82,8 +82,7 @@ The current implementation can:
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-Debug and Release configurations build successfully, all nine CTest targets pass,
-`PicoEditorTests` reports 81 passing checks, and `PicoGameTests` reports 29.
+Debug and Release configurations build successfully, and all nine CTest targets pass.
 
 ## Architecture
 
@@ -104,8 +103,12 @@ Supporting tools and samples depend on public runtime interfaces:
 ```text
 PicoReflectionTools -> PicoObject
 PicoAssetImport     -> PicoAsset / TinyObjLoader
-PicoSandbox         -> PicoEngine / PicoObject
 PicoInspector       -> PicoReflectionTools
+
+PicoSandboxGame
+  -> PicoSandboxModule
+  -> PicoGameRuntime
+  -> PicoEngine / PicoInput / PicoRender
 ```
 
 | Module | Responsibility |
@@ -117,10 +120,11 @@ PicoInspector       -> PicoReflectionTools
 | `PicoObject` | `PObject`, `PClass`, `PProperty`, reflection, registry, handles, Outer graph, serialization |
 | `PicoEngine` | Engine loop, World, Level, Actor, components, attachment, primitive scene data |
 | `PicoRender` | GLAD-backed OpenGL, shaders, geometry, framebuffer, scene traversal and draw submission |
+| `PicoGameRuntime` | Reusable project launch, GLFW window, input polling, frame loop, and runtime rendering |
 | `PicoEditorCore` | UI-independent World documents, object/asset selection, asset operations, commands, clipboard, transactions, and transforms |
 | `PicoEditor` | World file dialogs, Content Browser, asset workflow controller, Outliner, Details, editor camera, viewport picking, tool state, and transform gizmo UI |
 | `PicoReflectionTools` | Generic metadata inspection and reflected-property helpers |
-| `PicoSandbox` | Project-side reflection, serialization, editor and testing example |
+| `PicoSandboxModule` | Project classes, Game Module startup, GameInstance creation, reflection, serialization, and tests |
 
 The runtime modules do not depend on ImGui. `PicoCore`, `PicoAsset`, `PicoObject`, and `PicoEngine` also remain
 independent of GLFW and OpenGL.
@@ -151,6 +155,7 @@ PWorld
             -> PPointLightComponent
           -> PPrimitiveComponent
             -> PCubeComponent
+            -> PStaticMeshComponent
 ```
 
 `FObjectRegistry` owns object memory. Handles do not extend lifetime, and stale handles resolve to
@@ -231,9 +236,10 @@ The project runtime reads `[Game] DefaultMap` and the Action/Axis mappings in `[
 `-map=/Game/Maps/Example.pworld` overrides the default map, and `-frames=N` supports automated
 smoke runs. The generic `PicoGame` target remains available for projects without native code.
 
-The editor toolbar's `Play` button saves the current World when needed and launches this standalone
-runtime with the current document's `/Game/...` map path. While it is running, the button changes
-to `Stop`; closing either process is detected and the editor returns to its ready state.
+The editor toolbar's green triangle saves the current World when needed and launches this standalone
+runtime with the current document's `/Game/...` map path. While it is running, the control becomes
+a red square that stops the game process. Tooltips identify both controls; closing either process is
+detected and the editor returns to its ready state.
 
 ## Editor Controls
 
@@ -445,22 +451,18 @@ See:
 
 ## Roadmap
 
-Month 5 focuses on turning the persistent scene editor into an asset-driven 3D workflow:
+The asset-driven editor, imported static meshes, materials, textures, PBR rendering, standalone Play,
+and the first project Game Module/GameInstance path are complete. The remaining learning path is:
 
-- Project-scoped asset registry and Content Browser
-- Static-mesh asset format, model importing, and stable scene asset references
-- Editor asset creation, inspection, assignment, save/load, and reimport workflows
-- Render-scene caching plus a small material, texture, and PBR path
-- An end-to-end scene that survives editor restart and is ready for packaging work
+- CDOs, object initialization, and default subobjects
+- Delegates, reflected functions, PicoHeaderTool, and tracing garbage collection
+- A UE-inspired Gameplay Framework with GameMode, GameState, PlayerController, PlayerState, Pawn,
+  Character, and movement components
+- Jolt physics, character movement, and a small animation integration
+- Replication, RPC, transform synchronization, client prediction, and correction
+- Dedicated-server/WAN validation, Cook, Package, and a standalone Windows build
+- A compact Gameplay Ability System with AbilityTask, followed by AI tools and an Agent workflow
 
-Later stages will explore:
-
-- Tracing garbage collection
-- Delegates and events
-- Replication and RPC
-- Physics and animation integration
-- Packaging and generated project code
-- Ray tracing
-- A compact Gameplay Ability System if the core engine is mature enough
-
-Detailed milestone notes are available in [`Docs`](Docs).
+The maintained schedule and acceptance criteria are in the
+[Remaining Development Roadmap](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md). Detailed milestone
+notes are also available in [`Docs`](Docs).

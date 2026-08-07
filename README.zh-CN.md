@@ -71,8 +71,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
-Debug 和 Release 均可完整构建，九个 CTest 目标全部通过；`PicoEditorTests`
-目前包含 81 项通过的检查。
+Debug 和 Release 均可完整构建，九个 CTest 目标全部通过。
 
 ## 架构
 
@@ -93,8 +92,12 @@ PicoEditor
 ```text
 PicoReflectionTools -> PicoObject
 PicoAssetImport     -> PicoAsset / TinyObjLoader
-PicoSandbox         -> PicoEngine / PicoObject
 PicoInspector       -> PicoReflectionTools
+
+PicoSandboxGame
+  -> PicoSandboxModule
+  -> PicoGameRuntime
+  -> PicoEngine / PicoInput / PicoRender
 ```
 
 | 模块 | 职责 |
@@ -106,10 +109,11 @@ PicoInspector       -> PicoReflectionTools
 | `PicoObject` | `PObject`、`PClass`、`PProperty`、反射、注册表、Handle、Outer和序列化 |
 | `PicoEngine` | EngineLoop、World、Level、Actor、Component、挂接和可渲染场景数据 |
 | `PicoRender` | 基于GLAD的OpenGL、Shader、几何体、Framebuffer、场景遍历和绘制提交 |
+| `PicoGameRuntime` | 可复用的项目启动、GLFW 窗口、输入轮询、逐帧循环和运行时渲染 |
 | `PicoEditorCore` | 不依赖 UI 的 World 文档、对象/资产选择、资产操作、命令、剪贴板、事务和 Transform 操作 |
 | `PicoEditor` | World 文件对话框、Content Browser、资产工作流控制器、Outliner、Details、编辑器相机、Viewport 拾取、工具状态和 Transform Gizmo UI |
 | `PicoReflectionTools` | 通用元数据检查和反射属性工具 |
-| `PicoSandbox` | 项目侧反射、序列化、资产和自动化测试示例 |
+| `PicoSandboxModule` | 项目类、Game Module 启动、GameInstance 创建、反射、序列化和自动化测试 |
 
 运行时模块不依赖 ImGui。`PicoCore`、`PicoAsset`、`PicoObject` 和 `PicoEngine` 也不依赖 GLFW 或 OpenGL。
 
@@ -139,6 +143,7 @@ PWorld
             -> PPointLightComponent
           -> PPrimitiveComponent
             -> PCubeComponent
+            -> PStaticMeshComponent
 ```
 
 对象内存由 `FObjectRegistry` 实际持有。Handle 不延长生命周期，失效 Handle 会解析为 `nullptr`。
@@ -214,8 +219,9 @@ powershell -ExecutionPolicy Bypass -File .\Scripts\SetupWindows.ps1
 `[Game] Executable` 决定编辑器 Play 启动哪个项目程序。`-map=/Game/Maps/Example.pworld` 可以覆盖
 默认地图，自动冒烟测试可以附加 `-frames=N`；通用 `PicoGame` 仍可用于没有原生项目代码的项目。
 
-编辑器工具栏中的 `Play` 会在需要时保存当前 World，并把当前文档的 `/Game/...` 地图路径传给独立 Runtime。
-运行期间按钮会切换为 `Stop`；游戏自行退出后，编辑器也会检测到并恢复可运行状态。
+编辑器工具栏中的绿色三角形会在需要时保存当前 World，并把当前文档的 `/Game/...` 地图路径传给独立
+Runtime。运行期间控件会变成用于终止游戏进程的红色正方形，两个控件均提供 Tooltip；游戏自行退出后，
+编辑器也会检测到并恢复可运行状态。
 
 ## 编辑器操作
 
@@ -410,22 +416,17 @@ Pico 目前还没有类似 UHT 的头文件工具。未来的 PicoHeaderTool 可
 
 ## 路线图
 
-第五个月的重点是将持久化场景编辑器发展为资产驱动的 3D 工作流：
+资产驱动编辑器、Static Mesh 导入、材质、贴图、PBR 渲染、独立 Play，以及第一版项目 Game Module/
+GameInstance 链路已经完成。后续学习路线为：
 
-- 项目级 Asset Registry 和 Content Browser
-- Static Mesh 资产格式、模型导入和稳定的场景资产引用
-- 编辑器内的资产创建、检查、分配、保存/加载和重新导入流程
-- Render Scene 缓存，以及精简的材质、贴图和 PBR 路径
-- 完成一个重启编辑器后仍可恢复、并可继续进入打包阶段的端到端场景
+- CDO、对象初始化和默认子对象
+- 委托、函数反射、PicoHeaderTool 和追踪式垃圾回收
+- 参考 UE 的 Gameplay Framework：GameMode、GameState、PlayerController、PlayerState、Pawn、Character
+  和 MovementComponent
+- Jolt 物理、角色移动和精简动画接入
+- Replication、RPC、Transform 同步、客户端预测与修正
+- Dedicated Server/广域网验证、Cook、Package 和可独立运行的 Windows 构建
+- 精简版 Gameplay Ability System 与 AbilityTask，随后接入 AI 工具和 Agent 工作流
 
-更后面的阶段计划探索：
-
-- 追踪式垃圾回收
-- 委托和事件
-- Replication和RPC
-- 物理与动画集成
-- 打包和项目代码生成
-- 光线追踪
-- 核心引擎成熟后实现精简版Gameplay Ability System
-
-详细里程碑记录位于 [`Docs`](Docs)。
+持续维护的排期和验收标准位于 [Pico 剩余开发路线](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)，
+其他阶段记录位于 [`Docs`](Docs)。

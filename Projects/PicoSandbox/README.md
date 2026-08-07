@@ -103,9 +103,11 @@ bool PSandboxCharacter::RegisterProperties(Pico::PClass& Class)
 
 Without PicoHeaderTool, these declarations are real C++ code rather than annotations. A future header tool may generate `PICO_DEFINE_CLASS` and `RegisterProperties`, but it will still use the same `PClass`, `PProperty`, and `FClassRegistry` runtime.
 
-## Registration
+## Game Module And Registration
 
-The project owns its class registration entry point:
+The project owns both its reusable persistence-class registration entry point and its Game Module.
+The module registers every project class before the startup map is loaded, then creates the
+project-specific GameInstance:
 
 ```cpp
 bool RegisterSandboxClasses()
@@ -113,9 +115,21 @@ bool RegisterSandboxClasses()
     return PSandboxEntity::RegisterClass()
         && PSandboxCharacter::RegisterClass();
 }
+
+bool FPicoSandboxGameModule::StartupModule()
+{
+    return RegisterSandboxClasses() && PSandboxPawn::RegisterClass();
+}
+
+std::unique_ptr<Pico::FGameInstance> FPicoSandboxGameModule::CreateGameInstance()
+{
+    return std::make_unique<FSandboxGameInstance>();
+}
 ```
 
-Register base classes before derived classes. The engine does not know about Sandbox types and does not require a special case for them.
+Register base classes before derived classes. `PicoSandboxGame` statically links this module and
+passes it to `PicoGameRuntime`; the engine remains unaware of Sandbox types and contains no
+project-specific special case.
 
 ## Persistence Asset
 
@@ -169,7 +183,7 @@ Use this checklist:
 4. Add `PICO_DEFINE_CLASS(Type)` in one `.cpp`.
 5. Add members with `PICO_ADD_PROPERTY` in `RegisterProperties`.
 6. Register the superclass before the new class in `SandboxModule.cpp`.
-7. Add the `.cpp` to `PicoSandboxGame` in `CMakeLists.txt`.
+7. Add the `.cpp` to `PicoSandboxModule` in `CMakeLists.txt`.
 8. Rebuild and inspect the class through `PicoEditor`.
 
 For a class without local reflected properties, use:
