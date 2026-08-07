@@ -4,12 +4,19 @@
 #include "Pico/Input/InputSystem.h"
 
 #include <filesystem>
+#include <memory>
 
 namespace Pico
 {
+class FGameInstance;
+class IGameModule;
+
 class FGameEngine
 {
 public:
+    explicit FGameEngine(IGameModule* InGameModule = nullptr);
+    ~FGameEngine();
+
     int PreInit(
         int Argc,
         char** Argv,
@@ -23,6 +30,8 @@ public:
     const FEngineLoop& GetEngineLoop() const;
     FInputSystem& GetInputSystem();
     const FInputSystem& GetInputSystem() const;
+    FGameInstance* GetGameInstance() const;
+    IGameModule* GetGameModule() const;
     const std::filesystem::path& GetDefaultMapPath() const;
 
     static bool ResolveContentPath(
@@ -33,7 +42,10 @@ public:
 private:
     FEngineLoop EngineLoop;
     FInputSystem InputSystem;
+    IGameModule* GameModule = nullptr;
+    std::unique_ptr<FGameInstance> GameInstance;
     std::filesystem::path DefaultMapPath;
+    bool bModuleStarted = false;
     bool bPreInitialized = false;
     bool bInitialized = false;
 };

@@ -18,6 +18,9 @@ The current implementation can:
 - Run a UE-style `PreInit -> Init -> Tick -> Exit` engine loop.
 - Launch a standalone `PicoGame` runtime with frame-based input, configurable Action/Axis mappings,
   and a project default map or command-line map override.
+- Build a project-specific `PicoSandboxGame` runtime whose statically linked Game Module registers
+  native project classes before map loading and creates a project GameInstance afterward.
+- Spawn a reflected project Pawn that consumes mapped WASD input through the normal World/Actor Tick.
 - Create reflected native objects through `PClass` and `NewObject`.
 - Register classes and properties with thin C++ reflection macros.
 - Inspect and edit supported properties through generic metadata-driven UI.
@@ -220,12 +223,13 @@ The editor starts maximized. Its default UI scale is `1.4`; override it when nee
 Start the game runtime without editor UI:
 
 ```powershell
-.\Build\Debug\PicoGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
+.\Build\Debug\PicoSandboxGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
 
-`PicoGame` reads `[Game] DefaultMap` and the Action/Axis mappings in `[Input]` from the
-project's `Config/Pico.ini`. `-map=/Game/Maps/Example.pworld` overrides the default map, and
-`-frames=N` supports automated smoke runs.
+The project runtime reads `[Game] DefaultMap` and the Action/Axis mappings in `[Input]` from
+`Config/Pico.ini`. `[Game] Executable` selects the project program used by editor Play.
+`-map=/Game/Maps/Example.pworld` overrides the default map, and `-frames=N` supports automated
+smoke runs. The generic `PicoGame` target remains available for projects without native code.
 
 The editor toolbar's `Play` button saves the current World when needed and launches this standalone
 runtime with the current document's `/Game/...` map path. While it is running, the button changes
@@ -333,7 +337,9 @@ Editor panel layout is separate from scene data and persists in
 | --- | --- |
 | `PicoLaunch` | Headless engine-loop and World lifecycle executable |
 | `PicoEditor` | Runtime scene editor with OpenGL viewport |
-| `PicoGame` | Standalone GLFW/OpenGL game runtime launched directly or from editor Play |
+| `PicoGameRuntime` | Reusable GLFW/input/render loop linked by game targets |
+| `PicoGame` | Generic standalone runtime without project-native code |
+| `PicoSandboxGame` | Project runtime with Sandbox module, GameInstance, and controllable Pawn |
 | `PicoInspector` | Generic reflected-object inspector |
 | `PicoReflectionDemo` | Console reflection walkthrough |
 | `PicoAssetTool` | Developer command-line OBJ to `.pmesh` importer |
@@ -347,6 +353,7 @@ Example commands:
 .\Build\Debug\PicoAssetTool.exe import-obj source.obj destination.pmesh
 .\Build\Debug\PicoInspector.exe
 .\Build\Projects\PicoSandbox\Debug\PicoSandboxDemo.exe
+.\Build\Debug\PicoSandboxGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
 .\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
 
@@ -425,6 +432,7 @@ continuing to use the same runtime metadata system.
 
 See:
 
+- [Remaining Development Roadmap (Chinese)](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
 - [Reflection Authoring Guide](Docs/ReflectionAuthoringGuide.md)
 - [PicoSandbox Guide](Projects/PicoSandbox/README.md)
 - [Month 3 Editor Viewport](Docs/Month03_10_Editor3DViewport.md)
@@ -433,6 +441,7 @@ See:
 - [Month 4 Editor Transactions](Docs/Month04_9_EditorTransactions.md)
 - [Month 4 Property Transactions](Docs/Month04_10_EditorPropertyTransactions.md)
 - [Month 4 Editor Clipboard](Docs/Month04_11_EditorClipboard.md)
+- [Project Game Module and Runtime Target](Docs/Month06_2_ProjectGameModule.md)
 
 ## Roadmap
 

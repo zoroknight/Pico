@@ -34,7 +34,8 @@ to either Engine `Source` or project `Source`.
 
 | Target | Purpose |
 | --- | --- |
-| `PicoSandboxGame` | Project classes, registration entry point, and reusable workflow |
+| `PicoSandboxModule` | Project classes, module entry point, GameInstance, and reusable workflow |
+| `PicoSandboxGame` | Project-specific standalone runtime with mapped-input Pawn movement |
 | `PicoSandboxDemo` | Readable console walkthrough of the full workflow |
 | `PicoSandboxTests` | Automated end-to-end acceptance test |
 
@@ -42,6 +43,7 @@ Build and run from the Pico repository root:
 
 ```powershell
 cmake --build Build --config Debug --parallel
+.\Build\Debug\PicoSandboxGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
 .\Build\Projects\PicoSandbox\Debug\PicoSandboxDemo.exe
 .\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ctest --test-dir Build -C Debug --output-on-failure

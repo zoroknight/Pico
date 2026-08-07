@@ -206,6 +206,7 @@ add_library(PicoEngine STATIC
     Source/Runtime/Engine/Private/CubeComponent.cpp
     Source/Runtime/Engine/Private/DirectionalLightComponent.cpp
     Source/Runtime/Engine/Private/EngineLoop.cpp
+    Source/Runtime/Engine/Private/GameInstance.cpp
     Source/Runtime/Engine/Private/GameEngine.cpp
     Source/Runtime/Engine/Private/Level.cpp
     Source/Runtime/Engine/Private/LightComponent.cpp
@@ -321,7 +322,25 @@ add_executable(PicoGame
     Source/Programs/PicoGame/Private/Main.cpp
 )
 
-target_link_libraries(PicoGame PRIVATE glfw PicoRender)
+add_library(PicoGameRuntime STATIC
+    Source/Runtime/Launch/Private/GameLaunch.cpp
+)
+
+target_include_directories(PicoGameRuntime
+    PUBLIC
+        Source/Runtime/Launch/Public
+)
+
+target_link_libraries(PicoGameRuntime PUBLIC glfw PicoRender)
+set_target_properties(PicoGameRuntime PROPERTIES FOLDER "Pico")
+
+if(MSVC)
+    target_compile_options(PicoGameRuntime PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoGameRuntime PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+target_link_libraries(PicoGame PRIVATE PicoGameRuntime)
 target_compile_definitions(PicoGame
     PRIVATE
         PICO_DEFAULT_PROJECT_FILE="${PICO_ROOT_DIR}/Projects/PicoSandbox/PicoSandbox.pico"

@@ -15,6 +15,8 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 
 - 运行类似 UE 的 `PreInit -> Init -> Tick -> Exit` 引擎循环。
 - 启动独立的 `PicoGame` Runtime，提供逐帧输入、可配置的 Action/Axis 映射，并支持项目默认地图或命令行地图覆盖。
+- 构建项目专属的 `PicoSandboxGame` Runtime：静态链接的 Game Module 在地图加载前注册项目原生类型，随后创建项目 GameInstance。
+- 生成可反射的项目 Pawn，通过正常的 World/Actor Tick 消费 WASD 映射输入。
 - 通过 `PClass` 和 `NewObject` 创建具有反射信息的原生 C++ 对象。
 - 使用薄反射宏注册类和属性。
 - 通过通用的元数据驱动界面查看和修改属性。
@@ -205,11 +207,12 @@ powershell -ExecutionPolicy Bypass -File .\Scripts\SetupWindows.ps1
 启动不包含编辑器界面的游戏 Runtime：
 
 ```powershell
-.\Build\Debug\PicoGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
+.\Build\Debug\PicoSandboxGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
 
-`PicoGame` 从项目的 `Config/Pico.ini` 读取 `[Game] DefaultMap` 和 `[Input]` 中的
-Action/Axis 映射。`-map=/Game/Maps/Example.pworld` 可以覆盖默认地图，自动冒烟测试可以附加 `-frames=N`。
+项目 Runtime 从 `Config/Pico.ini` 读取 `[Game] DefaultMap` 和 `[Input]` 中的 Action/Axis 映射，
+`[Game] Executable` 决定编辑器 Play 启动哪个项目程序。`-map=/Game/Maps/Example.pworld` 可以覆盖
+默认地图，自动冒烟测试可以附加 `-frames=N`；通用 `PicoGame` 仍可用于没有原生项目代码的项目。
 
 编辑器工具栏中的 `Play` 会在需要时保存当前 World，并把当前文档的 `/Game/...` 地图路径传给独立 Runtime。
 运行期间按钮会切换为 `Stop`；游戏自行退出后，编辑器也会检测到并恢复可运行状态。
@@ -300,7 +303,9 @@ GameWorld
 | --- | --- |
 | `PicoLaunch` | 无窗口的 EngineLoop 和 World 生命周期程序 |
 | `PicoEditor` | 带有 OpenGL 场景视口的运行时编辑器 |
-| `PicoGame` | 可直接启动或由编辑器 Play 拉起的独立 GLFW/OpenGL 游戏 Runtime |
+| `PicoGameRuntime` | 可供项目 Target 复用的 GLFW、输入和渲染主循环 |
+| `PicoGame` | 不包含项目原生代码的通用独立 Runtime |
+| `PicoSandboxGame` | 包含 Sandbox Module、GameInstance 和可控 Pawn 的项目 Runtime |
 | `PicoInspector` | 通用反射对象检查器 |
 | `PicoReflectionDemo` | 控制台反射流程演示 |
 | `PicoAssetTool` | 开发阶段使用的 OBJ 到 `.pmesh` 命令行导入器 |
@@ -314,6 +319,7 @@ GameWorld
 .\Build\Debug\PicoAssetTool.exe import-obj source.obj destination.pmesh
 .\Build\Debug\PicoInspector.exe
 .\Build\Projects\PicoSandbox\Debug\PicoSandboxDemo.exe
+.\Build\Debug\PicoSandboxGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
 .\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
 
@@ -391,6 +397,7 @@ Pico 目前还没有类似 UHT 的头文件工具。未来的 PicoHeaderTool 可
 
 相关文档：
 
+- [Pico 剩余开发路线](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
 - [反射类编写指南](Docs/ReflectionAuthoringGuide.md)
 - [PicoSandbox指南](Projects/PicoSandbox/README.md)
 - [第三个月编辑器视口](Docs/Month03_10_Editor3DViewport.md)
@@ -399,6 +406,7 @@ Pico 目前还没有类似 UHT 的头文件工具。未来的 PicoHeaderTool 可
 - [第四个月编辑器事务](Docs/Month04_9_EditorTransactions.md)
 - [第四个月属性事务](Docs/Month04_10_EditorPropertyTransactions.md)
 - [第四个月编辑器剪贴板](Docs/Month04_11_EditorClipboard.md)
+- [项目 Game Module 与 Runtime Target](Docs/Month06_2_ProjectGameModule.md)
 
 ## 路线图
 

@@ -3,11 +3,18 @@
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ClassRegistry.h"
 #include "Pico/Object/Property.h"
+#include "Pico/Engine/GameEngine.h"
+#include "Pico/Engine/GameModule.h"
+#include "Pico/Input/InputSystem.h"
 #include "PicoSandbox/SandboxCharacter.h"
 #include "PicoSandbox/SandboxEntity.h"
+#include "PicoSandbox/SandboxGameInstance.h"
+#include "PicoSandbox/SandboxModule.h"
+#include "PicoSandbox/SandboxPawn.h"
 #include "PicoSandbox/SandboxSession.h"
 
 #include <filesystem>
+#include <memory>
 
 int main()
 {
@@ -76,6 +83,53 @@ int main()
         Runner.Expect(
             !TransformProperty->SetValue(Session.GetObject(), Pico::FVector3::ZeroVector),
             "Transform property rejects a mismatched reflected value type");
+    }
+
+    {
+        std::unique_ptr<Pico::IGameModule> Module =
+            PicoSandbox::CreateSandboxGameModule();
+        Pico::FGameEngine GameEngine(Module.get());
+        char ProgramName[] = "PicoSandboxTests";
+        char* Arguments[] = { ProgramName };
+        const std::filesystem::path ProjectFile =
+            std::filesystem::absolute("PicoSandbox.pico");
+
+        Runner.Expect(
+            GameEngine.PreInit(1, Arguments, ProjectFile) == 0,
+            "Sandbox game engine pre-initializes the project");
+        Runner.Expect(
+            GameEngine.Init() == 0,
+            "Sandbox module starts before the default map is loaded");
+        Runner.Expect(
+            Pico::FClassRegistry::FindClass(Pico::FName("PSandboxPawn"))
+                == PicoSandbox::PSandboxPawn::StaticClass(),
+            "Sandbox runtime registers its project Actor class");
+
+        auto* GameInstance = dynamic_cast<PicoSandbox::FSandboxGameInstance*>(
+            GameEngine.GetGameInstance());
+        PicoSandbox::PSandboxPawn* Pawn =
+            GameInstance != nullptr ? GameInstance->GetPawn() : nullptr;
+        Runner.Expect(
+            Pawn != nullptr && Pawn->GetRootComponent() != nullptr,
+            "Sandbox GameInstance spawns a visible project Pawn");
+
+        if (Pawn != nullptr)
+        {
+            const Pico::FVector3 StartLocation = Pawn->GetActorLocation();
+            Pico::FInputSystem& Input = GameEngine.GetInputSystem();
+            Input.BeginFrame();
+            Input.SetKeyState(Pico::EKey::W, true);
+            GameEngine.Tick();
+            Input.EndFrame();
+            Runner.Expect(
+                !Pawn->GetActorLocation().Equals(StartLocation),
+                "Sandbox Pawn consumes mapped input through the World Tick");
+        }
+
+        GameEngine.Exit();
+        Runner.Expect(
+            GameEngine.GetGameInstance() == nullptr,
+            "GameInstance shuts down before the engine exits");
     }
 
     std::error_code FileError;

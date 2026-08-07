@@ -5,11 +5,20 @@
 #include "Pico/Core/Log.h"
 #include "Pico/Core/Paths.h"
 #include "Pico/Engine/WorldSerialization.h"
+#include "Pico/Engine/GameInstance.h"
+#include "Pico/Engine/GameModule.h"
 
 #include <string>
 
 namespace Pico
 {
+FGameEngine::FGameEngine(IGameModule* InGameModule)
+    : GameModule(InGameModule)
+{
+}
+
+FGameEngine::~FGameEngine() = default;
+
 int FGameEngine::PreInit(
     int Argc,
     char** Argv,
@@ -62,6 +71,16 @@ int FGameEngine::Init()
         return Result;
     }
 
+    if (GameModule != nullptr)
+    {
+        if (!GameModule->StartupModule())
+        {
+            PICO_LOG(LogEngine, Error, "Game Init failed to start the project game module");
+            return 1;
+        }
+        bModuleStarted = true;
+    }
+
     EWorldSerializationError WorldError = EWorldSerializationError::None;
     if (!EngineLoop.LoadWorld(DefaultMapPath, &WorldError))
     {
@@ -74,6 +93,20 @@ int FGameEngine::Init()
         return 1;
     }
 
+    GameInstance = GameModule != nullptr
+        ? GameModule->CreateGameInstance()
+        : std::make_unique<FGameInstance>();
+    if (GameInstance == nullptr || !GameInstance->Init(*this))
+    {
+        PICO_LOG(LogEngine, Error, "Game Init failed to initialize the game instance");
+        if (GameInstance != nullptr)
+        {
+            GameInstance->Shutdown();
+        }
+        GameInstance.reset();
+        return 1;
+    }
+
     bInitialized = true;
     PICO_LOG(LogEngine, Info, "Game Init: default map={}", DefaultMapPath.string());
     return 0;
@@ -82,10 +115,24 @@ int FGameEngine::Init()
 void FGameEngine::Tick()
 {
     EngineLoop.Tick();
+    if (GameInstance != nullptr)
+    {
+        GameInstance->Tick(EngineLoop.GetDeltaSeconds());
+    }
 }
 
 void FGameEngine::Exit()
 {
+    if (GameInstance != nullptr)
+    {
+        GameInstance->Shutdown();
+        GameInstance.reset();
+    }
+    if (bModuleStarted && GameModule != nullptr)
+    {
+        GameModule->ShutdownModule();
+    }
+    bModuleStarted = false;
     bInitialized = false;
     bPreInitialized = false;
     DefaultMapPath.clear();
@@ -115,6 +162,16 @@ FInputSystem& FGameEngine::GetInputSystem()
 const FInputSystem& FGameEngine::GetInputSystem() const
 {
     return InputSystem;
+}
+
+FGameInstance* FGameEngine::GetGameInstance() const
+{
+    return GameInstance.get();
+}
+
+IGameModule* FGameEngine::GetGameModule() const
+{
+    return GameModule;
 }
 
 const std::filesystem::path& FGameEngine::GetDefaultMapPath() const

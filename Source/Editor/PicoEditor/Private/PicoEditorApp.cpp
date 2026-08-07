@@ -46,6 +46,45 @@ enum EDocumentAction
     DocumentActionExit
 };
 
+bool DrawPlayStopButton(bool bGameRunning)
+{
+    const float Size = ImGui::GetFrameHeight();
+    const char* Id = bGameRunning ? "##StopGame" : "##PlayGame";
+    const bool bPressed = ImGui::InvisibleButton(Id, ImVec2(Size, Size));
+    const bool bHovered = ImGui::IsItemHovered();
+    const bool bHeld = ImGui::IsItemActive();
+
+    ImDrawList* DrawList = ImGui::GetWindowDrawList();
+    const ImVec2 Min = ImGui::GetItemRectMin();
+    const ImVec2 Max = ImGui::GetItemRectMax();
+    const ImU32 Background = ImGui::GetColorU32(
+        bHeld ? ImGuiCol_ButtonActive
+              : (bHovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button));
+    DrawList->AddRectFilled(Min, Max, Background, ImGui::GetStyle().FrameRounding);
+
+    const ImVec2 Center((Min.x + Max.x) * 0.5f, (Min.y + Max.y) * 0.5f);
+    if (bGameRunning)
+    {
+        const float HalfExtent = Size * 0.23f;
+        DrawList->AddRectFilled(
+            ImVec2(Center.x - HalfExtent, Center.y - HalfExtent),
+            ImVec2(Center.x + HalfExtent, Center.y + HalfExtent),
+            IM_COL32(232, 67, 62, 255),
+            1.0f);
+    }
+    else
+    {
+        const float HalfHeight = Size * 0.24f;
+        const float HalfWidth = Size * 0.20f;
+        DrawList->AddTriangleFilled(
+            ImVec2(Center.x - HalfWidth, Center.y - HalfHeight),
+            ImVec2(Center.x - HalfWidth, Center.y + HalfHeight),
+            ImVec2(Center.x + HalfWidth * 1.35f, Center.y),
+            IM_COL32(62, 207, 104, 255));
+    }
+    return bPressed;
+}
+
 void BuildDefaultDockLayout(ImGuiID DockspaceId, const ImVec2& DockspaceSize)
 {
     ImGui::DockBuilderRemoveNode(DockspaceId);
@@ -490,7 +529,7 @@ void FPicoEditorApp::DrawToolbar()
     };
 
     const bool bGameRunning = GameProcess.IsValid();
-    if (ImGui::Button(bGameRunning ? "Stop" : "Play"))
+    if (DrawPlayStopButton(bGameRunning))
     {
         if (bGameRunning)
         {
@@ -1045,24 +1084,37 @@ void FPicoEditorApp::StartGame()
         return;
     }
 
-#if defined(_WIN32)
-    const std::filesystem::path GameExecutable =
-        FPaths::GetExecutableDir() / "PicoGame.exe";
-#else
-    const std::filesystem::path GameExecutable =
-        FPaths::GetExecutableDir() / "PicoGame";
-#endif
-    if (!std::filesystem::is_regular_file(GameExecutable))
-    {
-        SetStatus(
-            "PicoGame was not found next to the editor: "
-                + GameExecutable.string(),
-            true);
-        return;
-    }
     if (!FPaths::HasProject())
     {
         SetStatus("Play requires an active Pico project", true);
+        return;
+    }
+
+    FConfigFile ProjectConfig;
+    ProjectConfig.Load(FPaths::GetProjectConfigFile("Pico.ini"));
+    std::filesystem::path GameExecutableName =
+        ProjectConfig.GetString("Game", "Executable", "PicoGame");
+    if (GameExecutableName.empty()
+        || GameExecutableName.has_parent_path()
+        || GameExecutableName.filename() != GameExecutableName)
+    {
+        SetStatus("[Game] Executable must be a file name", true);
+        return;
+    }
+#if defined(_WIN32)
+    if (!GameExecutableName.has_extension())
+    {
+        GameExecutableName += ".exe";
+    }
+#endif
+    const std::filesystem::path GameExecutable =
+        FPaths::GetExecutableDir() / GameExecutableName;
+    if (!std::filesystem::is_regular_file(GameExecutable))
+    {
+        SetStatus(
+            "Project game executable was not found next to the editor: "
+                + GameExecutable.string(),
+            true);
         return;
     }
 
@@ -1077,7 +1129,7 @@ void FPicoEditorApp::StartGame()
         &Error);
     if (!GameProcess.IsValid())
     {
-        SetStatus("Could not start PicoGame: " + Error, true);
+        SetStatus("Could not start project game: " + Error, true);
         return;
     }
     SetStatus(

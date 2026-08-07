@@ -447,6 +447,11 @@ bool FEngineLoop::ShouldExit() const
     return FApp::IsExitRequested();
 }
 
+float FEngineLoop::GetDeltaSeconds() const
+{
+    return static_cast<float>(FrameTimer.GetDeltaSeconds());
+}
+
 PWorld* FEngineLoop::GetWorld() const
 {
     PObject* Object = ResolveObject(WorldHandle);

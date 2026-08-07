@@ -31,6 +31,7 @@ public:
         EWorldSerializationError* OutError = nullptr);
 
     bool ShouldExit() const;
+    float GetDeltaSeconds() const;
     PWorld* GetWorld() const;
     FAssetRegistry& GetAssetRegistry();
     const FAssetRegistry& GetAssetRegistry() const;
