@@ -5,6 +5,7 @@
 #include "Pico/Editor/EditorSelection.h"
 #include "Pico/Editor/EditorTransactionManager.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -36,7 +37,8 @@ public:
         FEngineLoop* EngineLoop,
         FEditorSelection* Selection,
         FEditorTransactionManager* Transactions,
-        FEditorSceneClipboard* Clipboard);
+        FEditorSceneClipboard* Clipboard,
+        std::function<void()> OnWorldChanged = {});
 
     FEditorCommandResult SpawnActor(bool bCubeActor);
     FEditorCommandResult SpawnComponentActor(EEditorSceneComponentType Type);
@@ -63,8 +65,6 @@ public:
     FEditorCommandResult RenameObject(FObjectHandle ObjectHandle, std::string NewName);
     FEditorCommandResult CopySelectedObject();
     FEditorCommandResult PasteClipboard();
-    FEditorCommandResult SaveWorld();
-    FEditorCommandResult OpenWorld();
     FEditorCommandResult Undo();
     FEditorCommandResult Redo();
 
@@ -101,6 +101,7 @@ private:
     FEditorSelection* Selection = nullptr;
     FEditorTransactionManager* Transactions = nullptr;
     FEditorSceneClipboard* Clipboard = nullptr;
+    std::function<void()> OnWorldChanged;
     unsigned int NextActorNumber = 1;
     unsigned int NextCubeNumber = 1;
     unsigned int NextStaticMeshNumber = 1;

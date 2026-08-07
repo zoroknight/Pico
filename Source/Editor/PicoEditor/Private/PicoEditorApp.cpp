@@ -1,7 +1,10 @@
 #include "PicoEditorApp.h"
+#include "NativeFileDialog.h"
 
 #include "Pico/Developer/ReflectionDebug.h"
 #include "Pico/Core/Paths.h"
+#include "Pico/Core/Config.h"
+#include "Pico/Core/PlatformProcess.h"
 #include "Pico/Core/Math/MathUtility.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
@@ -35,6 +38,14 @@ namespace Pico
 {
 namespace
 {
+enum EDocumentAction
+{
+    DocumentActionNone,
+    DocumentActionNew,
+    DocumentActionOpen,
+    DocumentActionExit
+};
+
 void BuildDefaultDockLayout(ImGuiID DockspaceId, const ImVec2& DockspaceSize)
 {
     ImGui::DockBuilderRemoveNode(DockspaceId);
@@ -78,8 +89,15 @@ FPicoEditorApp::FPicoEditorApp(
     FSceneViewportRenderer* InViewportRenderer,
     GLFWwindow* InWindow)
     : EngineLoop(InEngineLoop)
+    , Window(InWindow)
+    , WorldDocument(InEngineLoop)
     , AssetService(InEngineLoop)
-    , CommandService(InEngineLoop, &Selection, &TransactionManager, &SceneClipboard)
+    , CommandService(
+        InEngineLoop,
+        &Selection,
+        &TransactionManager,
+        &SceneClipboard,
+        [this]() { WorldDocument.MarkDirty(); })
     , PropertyService(
         InEngineLoop,
         &Selection,
@@ -105,19 +123,48 @@ FPicoEditorApp::FPicoEditorApp(
             ViewportPanel.InvalidateStaticMesh(AssetPath);
         })
 {
-    PWorld* World = GetWorld();
-    Select(World);
-    SetStatus(
-        World != nullptr ? "Editor world is ready" : "No active editor World",
-        World == nullptr);
+    FConfigFile Config;
+    const std::filesystem::path ConfigPath = FPaths::GetProjectConfigFile("Pico.ini");
+    const bool bHasConfig = Config.Load(ConfigPath);
+    const std::string StartupMap = bHasConfig
+        ? Config.GetString(
+            "Editor",
+            "StartupMap",
+            Config.GetString("Game", "DefaultMap", ""))
+        : std::string {};
+    FAssetPath StartupAssetPath;
+    if (FAssetPath::TryParse(StartupMap, StartupAssetPath))
+    {
+        FEditorDocumentResult OpenResult = WorldDocument.Open(StartupAssetPath);
+        SetStatus(std::move(OpenResult.Message), !OpenResult.bSucceeded);
+        if (OpenResult.bSucceeded)
+        {
+            FinishDocumentChange();
+        }
+        else
+        {
+            Select(GetWorld());
+        }
+    }
+    else
+    {
+        PWorld* World = GetWorld();
+        Select(World);
+        SetStatus(
+            World != nullptr ? "New editor World is ready" : "No active editor World",
+            World == nullptr);
+    }
+    UpdateWindowTitle();
 }
 
 FPicoEditorApp::~FPicoEditorApp()
 {
+    StopGame(false);
 }
 
 void FPicoEditorApp::Draw()
 {
+    UpdateGameProcess();
     bInteractiveEditVisited = false;
     ImGuizmo::BeginFrame();
     HandleShortcuts();
@@ -177,6 +224,7 @@ void FPicoEditorApp::Draw()
         bResetDockLayout = false;
     }
     DrawRenamePopup();
+    DrawUnsavedChangesPopup();
     ImGui::End();
 
     if (ImGui::Begin("Scene Outliner"))
@@ -266,6 +314,10 @@ void FPicoEditorApp::Draw()
                             ObjectHandle,
                             PropertyName,
                             AssetPath);
+                        if (Result.bSucceeded)
+                        {
+                            WorldDocument.MarkDirty();
+                        }
                         SetStatus(std::move(Result.Message), !Result.bSucceeded);
                     });
             });
@@ -303,6 +355,17 @@ void FPicoEditorApp::Draw()
             {
                 AssetWorkflow.OpenEditMaterial(AssetPath);
             },
+            [this](const FAssetPath& AssetPath)
+            {
+                const FAssetPath StablePath = AssetPath;
+                CommandQueue.Enqueue(
+                    [this, StablePath]()
+                    {
+                        FinishInteractiveEdit();
+                        PendingWorldAssetPath = StablePath;
+                        RequestDocumentAction(DocumentActionOpen);
+                    });
+            },
             [this](const FAssetPath& AssetPath) { CreateStaticMeshActor(AssetPath); },
             [this](const FAssetPath& AssetPath) { AssignSelectedAsset(AssetPath); },
             [this](const FAssetPath& AssetPath)
@@ -328,6 +391,17 @@ void FPicoEditorApp::Draw()
     }
 
     ProcessDeferredActions();
+    UpdateWindowTitle();
+}
+
+void FPicoEditorApp::RequestClose()
+{
+    RequestDocumentAction(DocumentActionExit);
+}
+
+bool FPicoEditorApp::ShouldClose() const
+{
+    return bShouldClose;
 }
 
 void FPicoEditorApp::DrawViewport(float Width, float Height)
@@ -414,6 +488,29 @@ void FPicoEditorApp::DrawToolbar()
             ImGui::SetTooltip("%s", Tooltip);
         }
     };
+
+    const bool bGameRunning = GameProcess.IsValid();
+    if (ImGui::Button(bGameRunning ? "Stop" : "Play"))
+    {
+        if (bGameRunning)
+        {
+            StopGame();
+        }
+        else
+        {
+            StartGame();
+        }
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip(
+            bGameRunning
+                ? "Stop the standalone game"
+                : "Save the World and play in a standalone game window");
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
 
     ImGui::BeginDisabled(ViewportPanel.IsTransformActive());
     DrawToolButton("Q", "Select (Q)", EEditorTransformMode::Select);
@@ -621,6 +718,10 @@ void FPicoEditorApp::HandleShortcuts()
     {
         PasteClipboard();
     }
+    else if (IO.KeyCtrl && IO.KeyShift && ImGui::IsKeyPressed(ImGuiKey_S, false))
+    {
+        SaveWorldAs();
+    }
     else if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
     {
         SaveWorld();
@@ -628,6 +729,10 @@ void FPicoEditorApp::HandleShortcuts()
     else if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false))
     {
         OpenWorld();
+    }
+    else if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N, false))
+    {
+        NewWorld();
     }
     else if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false))
     {
@@ -721,13 +826,26 @@ void FPicoEditorApp::DrawFileMenu()
         return;
     }
 
-    if (ImGui::MenuItem("Open World", "Ctrl+O"))
+    if (ImGui::MenuItem("New World", "Ctrl+N"))
+    {
+        NewWorld();
+    }
+    if (ImGui::MenuItem("Open World...", "Ctrl+O"))
     {
         OpenWorld();
     }
     if (ImGui::MenuItem("Save World", "Ctrl+S"))
     {
         SaveWorld();
+    }
+    if (ImGui::MenuItem("Save World As...", "Ctrl+Shift+S"))
+    {
+        SaveWorldAs();
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Exit"))
+    {
+        RequestClose();
     }
     ImGui::EndMenu();
 }
@@ -864,9 +982,147 @@ void FPicoEditorApp::DrawRenamePopup()
     ImGui::EndPopup();
 }
 
+void FPicoEditorApp::DrawUnsavedChangesPopup()
+{
+    if (bOpenUnsavedChangesPopup)
+    {
+        ImGui::OpenPopup("Unsaved World");
+        bOpenUnsavedChangesPopup = false;
+    }
+    if (!ImGui::BeginPopupModal(
+            "Unsaved World", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        return;
+    }
+
+    ImGui::Text("Save changes to %s?", WorldDocument.GetDisplayName().c_str());
+    ImGui::TextDisabled("Unsaved changes will be lost if you discard them.");
+    ImGui::Separator();
+    if (ImGui::Button("Save", ImVec2(100.0f, 0.0f)))
+    {
+        const int Action = PendingDocumentAction;
+        if (SaveWorld())
+        {
+            PendingDocumentAction = DocumentActionNone;
+            ImGui::CloseCurrentPopup();
+            ContinueDocumentAction(Action);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Discard", ImVec2(100.0f, 0.0f)))
+    {
+        const int Action = PendingDocumentAction;
+        PendingDocumentAction = DocumentActionNone;
+        ImGui::CloseCurrentPopup();
+        ContinueDocumentAction(Action);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(100.0f, 0.0f)))
+    {
+        PendingDocumentAction = DocumentActionNone;
+        PendingWorldAssetPath = {};
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 void FPicoEditorApp::ProcessDeferredActions()
 {
     CommandQueue.Flush();
+}
+
+void FPicoEditorApp::StartGame()
+{
+    if (GameProcess.IsValid())
+    {
+        return;
+    }
+
+    FinishInteractiveEdit();
+    if ((!WorldDocument.HasAssetPath() || WorldDocument.IsDirty())
+        && !SaveWorld())
+    {
+        return;
+    }
+
+#if defined(_WIN32)
+    const std::filesystem::path GameExecutable =
+        FPaths::GetExecutableDir() / "PicoGame.exe";
+#else
+    const std::filesystem::path GameExecutable =
+        FPaths::GetExecutableDir() / "PicoGame";
+#endif
+    if (!std::filesystem::is_regular_file(GameExecutable))
+    {
+        SetStatus(
+            "PicoGame was not found next to the editor: "
+                + GameExecutable.string(),
+            true);
+        return;
+    }
+    if (!FPaths::HasProject())
+    {
+        SetStatus("Play requires an active Pico project", true);
+        return;
+    }
+
+    std::string Error;
+    GameProcess = FPlatformProcess::CreateProcess(
+        GameExecutable,
+        {
+            FPaths::GetProjectFile().string(),
+            "-map=" + std::string(WorldDocument.GetAssetPath().ToString())
+        },
+        FPaths::GetEngineRootDir(),
+        &Error);
+    if (!GameProcess.IsValid())
+    {
+        SetStatus("Could not start PicoGame: " + Error, true);
+        return;
+    }
+    SetStatus(
+        "Playing standalone game (process "
+            + std::to_string(GameProcess.GetProcessId()) + ")");
+}
+
+void FPicoEditorApp::StopGame(bool bUpdateStatus)
+{
+    if (!GameProcess.IsValid())
+    {
+        return;
+    }
+
+    bool bStopped = true;
+    if (FPlatformProcess::IsRunning(GameProcess))
+    {
+        bStopped = FPlatformProcess::Terminate(GameProcess);
+        if (bStopped)
+        {
+            FPlatformProcess::WaitForExit(GameProcess, 2000);
+        }
+    }
+    GameProcess.Reset();
+    if (bUpdateStatus)
+    {
+        SetStatus(
+            bStopped ? "Standalone game stopped" : "Could not stop PicoGame",
+            !bStopped);
+    }
+}
+
+void FPicoEditorApp::UpdateGameProcess()
+{
+    if (!GameProcess.IsValid() || FPlatformProcess::IsRunning(GameProcess))
+    {
+        return;
+    }
+
+    int ExitCode = 0;
+    FPlatformProcess::WaitForExit(GameProcess, 0, &ExitCode);
+    GameProcess.Reset();
+    SetStatus(
+        "Standalone game exited with code " + std::to_string(ExitCode),
+        ExitCode != 0);
 }
 
 void FPicoEditorApp::SpawnEmptyActor()
@@ -1076,16 +1332,133 @@ void FPicoEditorApp::PasteClipboard()
     ApplyCommandResult(CommandService.PasteClipboard());
 }
 
-void FPicoEditorApp::SaveWorld()
+bool FPicoEditorApp::SaveWorld()
 {
     FinishInteractiveEdit();
-    ApplyCommandResult(CommandService.SaveWorld());
+    if (!WorldDocument.HasAssetPath())
+    {
+        return SaveWorldAs();
+    }
+    FEditorDocumentResult Result = WorldDocument.Save();
+    SetStatus(std::move(Result.Message), !Result.bSucceeded);
+    return Result.bSucceeded;
+}
+
+bool FPicoEditorApp::SaveWorldAs()
+{
+    FinishInteractiveEdit();
+    const std::filesystem::path MapsDirectory =
+        FPaths::GetProjectContentDir() / "Maps";
+    const std::optional<std::filesystem::path> SelectedPath = SaveWorldFileDialog(
+        MapsDirectory,
+        WorldDocument.HasAssetPath()
+            ? WorldDocument.GetFilePath().filename()
+            : std::filesystem::path("NewWorld.pworld"));
+    if (!SelectedPath.has_value())
+    {
+        SetStatus("Save World was cancelled");
+        return false;
+    }
+
+    FEditorDocumentResult Result = WorldDocument.SaveAs(*SelectedPath);
+    SetStatus(std::move(Result.Message), !Result.bSucceeded);
+    return Result.bSucceeded;
 }
 
 void FPicoEditorApp::OpenWorld()
 {
     FinishInteractiveEdit();
-    ApplyCommandResult(CommandService.OpenWorld());
+    PendingWorldAssetPath = {};
+    RequestDocumentAction(DocumentActionOpen);
+}
+
+void FPicoEditorApp::NewWorld()
+{
+    FinishInteractiveEdit();
+    RequestDocumentAction(DocumentActionNew);
+}
+
+void FPicoEditorApp::PerformOpenWorld()
+{
+    FEditorDocumentResult Result;
+    if (PendingWorldAssetPath.IsValid())
+    {
+        const FAssetPath AssetPath = PendingWorldAssetPath;
+        PendingWorldAssetPath = {};
+        Result = WorldDocument.Open(AssetPath);
+    }
+    else
+    {
+        const std::optional<std::filesystem::path> SelectedPath =
+            OpenWorldFileDialog(FPaths::GetProjectContentDir() / "Maps");
+        if (!SelectedPath.has_value())
+        {
+            SetStatus("Open World was cancelled");
+            return;
+        }
+        Result = WorldDocument.Open(*SelectedPath);
+    }
+    if (Result.bSucceeded)
+    {
+        FinishDocumentChange();
+    }
+    SetStatus(std::move(Result.Message), !Result.bSucceeded);
+}
+
+void FPicoEditorApp::PerformNewWorld()
+{
+    FEditorDocumentResult Result = WorldDocument.NewWorld();
+    if (Result.bSucceeded)
+    {
+        FinishDocumentChange();
+    }
+    SetStatus(std::move(Result.Message), !Result.bSucceeded);
+}
+
+void FPicoEditorApp::RequestDocumentAction(int Action)
+{
+    if (WorldDocument.IsDirty())
+    {
+        PendingDocumentAction = Action;
+        bOpenUnsavedChangesPopup = true;
+        return;
+    }
+    ContinueDocumentAction(Action);
+}
+
+void FPicoEditorApp::ContinueDocumentAction(int Action)
+{
+    switch (Action)
+    {
+    case DocumentActionNew: PerformNewWorld(); break;
+    case DocumentActionOpen: PerformOpenWorld(); break;
+    case DocumentActionExit: bShouldClose = true; break;
+    default: break;
+    }
+}
+
+void FPicoEditorApp::FinishDocumentChange()
+{
+    CommandQueue.Clear();
+    TransactionManager.Clear();
+    RenameObjectHandle = {};
+    bOpenRenamePopup = false;
+    AssetSelection.Clear();
+    Selection.Set(GetWorld());
+}
+
+void FPicoEditorApp::UpdateWindowTitle()
+{
+    if (Window == nullptr)
+    {
+        return;
+    }
+    const std::string NewTitle = WorldDocument.GetDisplayName() + " - Pico Editor";
+    if (NewTitle != WindowTitle)
+    {
+        WindowTitle = NewTitle;
+        glfwSetWindowTitle(Window, WindowTitle.c_str());
+    }
 }
 
 bool FPicoEditorApp::PrepareInteractiveEdit(
@@ -1246,6 +1619,7 @@ bool FPicoEditorApp::CommitEditorTransaction()
             true);
         return false;
     }
+    WorldDocument.MarkDirty();
     return true;
 }
 

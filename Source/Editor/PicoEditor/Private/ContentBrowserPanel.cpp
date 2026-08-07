@@ -76,6 +76,7 @@ void FContentBrowserPanel::Draw(
     FAssetsAction DeleteAssets,
     FAssetAction RenameAsset,
     FAssetAction EditMaterial,
+    FAssetAction OpenWorld,
     FAssetAction Create,
     FAssetAction Assign,
     FCanReimport CanReimport)
@@ -158,6 +159,7 @@ void FContentBrowserPanel::Draw(
             DeleteAssets,
             RenameAsset,
             EditMaterial,
+            OpenWorld,
             Create,
             Assign,
             CanReimport);
@@ -253,6 +255,7 @@ void FContentBrowserPanel::DrawAssetTable(
     const FAssetsAction& DeleteAssets,
     const FAssetAction& RenameAsset,
     const FAssetAction& EditMaterial,
+    const FAssetAction& OpenWorld,
     const FAssetAction& Create,
     const FAssetAction& Assign,
     const FCanReimport& CanReimport)
@@ -308,6 +311,11 @@ void FContentBrowserPanel::DrawAssetTable(
             }
         }
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
+            && Record.Type == EAssetType::World)
+        {
+            OpenWorld(Record.AssetPath);
+        }
+        else if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
             && Record.Type == EAssetType::StaticMesh)
         {
             Create(Record.AssetPath);
@@ -327,6 +335,11 @@ void FContentBrowserPanel::DrawAssetTable(
         }
         if (ImGui::BeginPopupContextItem())
         {
+            if (Record.Type == EAssetType::World
+                && ImGui::MenuItem("Open World"))
+            {
+                OpenWorld(Record.AssetPath);
+            }
             if (Record.Type != EAssetType::World
                 && ImGui::MenuItem("Rename", "F2"))
             {

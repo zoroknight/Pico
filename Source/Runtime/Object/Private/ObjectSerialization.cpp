@@ -1,5 +1,7 @@
 #include "Pico/Object/ObjectSerialization.h"
 
+#include "Pico/Core/Log.h"
+
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ClassRegistry.h"
 #include "Pico/Object/Object.h"
@@ -261,6 +263,11 @@ bool SaveObjectToFile(
     std::ofstream File(TemporaryPath, std::ios::binary | std::ios::trunc);
     if (!File)
     {
+        PICO_LOG(
+            LogObject,
+            Error,
+            "Could not open temporary object file '{}'",
+            TemporaryPath.string());
         ReportError(OutError, EObjectSerializationError::FileOpenFailed);
         return false;
     }

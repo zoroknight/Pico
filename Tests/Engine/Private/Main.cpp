@@ -1601,6 +1601,22 @@ void TestWorldFilePersistence(FTestRunner& Runner)
         Pico::SaveWorldToFile(FilePath, *World, &Error),
         "Saving again atomically replaces an existing .pworld file");
     const std::vector<Pico::uint8> ReplacedBytes = ReadFileBytes();
+    const auto ReadBackupBytes = [&]() -> std::vector<Pico::uint8>
+    {
+        std::ifstream File(BackupPath, std::ios::binary | std::ios::ate);
+        if (!File) return {};
+        const std::streampos EndPosition = File.tellg();
+        if (EndPosition < 0) return {};
+        std::vector<Pico::uint8> Bytes(static_cast<std::size_t>(EndPosition));
+        File.seekg(0, std::ios::beg);
+        if (!Bytes.empty())
+        {
+            File.read(
+                reinterpret_cast<char*>(Bytes.data()),
+                static_cast<std::streamsize>(Bytes.size()));
+        }
+        return File ? Bytes : std::vector<Pico::uint8> {};
+    };
     Runner.Expect(
         !ReplacedBytes.empty()
             && Pico::SaveWorldToFile(FilePath, *World, &Error)
@@ -1608,8 +1624,9 @@ void TestWorldFilePersistence(FTestRunner& Runner)
         "Repeated World saves produce deterministic file bytes");
     Runner.Expect(
         !std::filesystem::exists(TemporaryPath)
-            && !std::filesystem::exists(BackupPath),
-        "Successful World replacement leaves no temporary files");
+            && std::filesystem::is_regular_file(BackupPath)
+            && ReadBackupBytes() == ReplacedBytes,
+        "Successful World replacement keeps the previous version as a backup");
 
     Pico::FWorldAssetData FileAssetData;
     Runner.Expect(

@@ -1,7 +1,6 @@
 #include "Pico/Editor/EditorCommandService.h"
 #include "Pico/Editor/AssetDependencyService.h"
 
-#include "Pico/Core/Paths.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/CameraComponent.h"
@@ -20,7 +19,6 @@
 #include "Pico/Object/ObjectName.h"
 
 #include <algorithm>
-#include <filesystem>
 #include <utility>
 #include <vector>
 
@@ -55,11 +53,13 @@ FEditorCommandService::FEditorCommandService(
     FEngineLoop* InEngineLoop,
     FEditorSelection* InSelection,
     FEditorTransactionManager* InTransactions,
-    FEditorSceneClipboard* InClipboard)
+    FEditorSceneClipboard* InClipboard,
+    std::function<void()> InOnWorldChanged)
     : EngineLoop(InEngineLoop)
     , Selection(InSelection)
     , Transactions(InTransactions)
     , Clipboard(InClipboard)
+    , OnWorldChanged(std::move(InOnWorldChanged))
 {
 }
 
@@ -266,6 +266,10 @@ bool FEditorCommandService::CommitTransaction(EWorldSerializationError& OutError
             Selection->GetObjectPath(),
             &OutError))
     {
+        if (OnWorldChanged)
+        {
+            OnWorldChanged();
+        }
         return true;
     }
     EWorldSerializationError RollbackError = EWorldSerializationError::None;
@@ -1018,45 +1022,6 @@ FEditorCommandResult FEditorCommandService::PasteClipboard()
                                     : Failure("Could not commit paste transaction");
 }
 
-FEditorCommandResult FEditorCommandService::SaveWorld()
-{
-    PWorld* World = GetWorld();
-    std::filesystem::path Path;
-    if (World == nullptr || !FPaths::TryGetProjectWritePath(
-            EProjectWriteRoot::Content, std::filesystem::path("Maps") / "EditorWorld.pworld", Path))
-    {
-        return Failure("Cannot save without an active project World");
-    }
-    std::error_code FileError;
-    std::filesystem::create_directories(Path.parent_path(), FileError);
-    if (FileError)
-    {
-        return Failure("Could not create the project Maps directory");
-    }
-    EWorldSerializationError Error = EWorldSerializationError::None;
-    return SaveWorldToFile(Path, *World, &Error)
-        ? Success("Saved " + Path.string())
-        : Failure("Could not save World: " + std::string(ToString(Error)));
-}
-
-FEditorCommandResult FEditorCommandService::OpenWorld()
-{
-    std::filesystem::path Path;
-    if (EngineLoop == nullptr || !FPaths::TryGetProjectWritePath(
-            EProjectWriteRoot::Content, std::filesystem::path("Maps") / "EditorWorld.pworld", Path))
-    {
-        return Failure("Cannot open a World without an active project");
-    }
-    EWorldSerializationError Error = EWorldSerializationError::None;
-    if (!EngineLoop->LoadWorld(Path, &Error))
-    {
-        return Failure("Could not open World: " + std::string(ToString(Error)));
-    }
-    Transactions->Clear();
-    Selection->Set(GetWorld());
-    return Success("Opened " + Path.string());
-}
-
 FEditorCommandResult FEditorCommandService::Undo()
 {
     if (Transactions == nullptr || !Transactions->CanUndo())
@@ -1075,6 +1040,7 @@ FEditorCommandResult FEditorCommandService::Undo()
     {
         return Failure("Undo failed: " + std::string(ToString(Error)));
     }
+    if (OnWorldChanged) OnWorldChanged();
     return Success("Undid " + Description);
 }
 
@@ -1096,6 +1062,7 @@ FEditorCommandResult FEditorCommandService::Redo()
     {
         return Failure("Redo failed: " + std::string(ToString(Error)));
     }
+    if (OnWorldChanged) OnWorldChanged();
     return Success("Redid " + Description);
 }
 }

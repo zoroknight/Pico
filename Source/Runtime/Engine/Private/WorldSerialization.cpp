@@ -1,5 +1,7 @@
 #include "Pico/Engine/WorldSerialization.h"
 
+#include "Pico/Core/Log.h"
+
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/Level.h"
@@ -969,6 +971,11 @@ bool SaveWorldAssetDataToFile(
     std::ofstream File(TemporaryPath, std::ios::binary | std::ios::trunc);
     if (!File)
     {
+        PICO_LOG(
+            LogEngine,
+            Error,
+            "Could not open temporary World file '{}'",
+            TemporaryPath.string());
         ReportError(OutError, EWorldSerializationError::FileOpenFailed);
         return false;
     }
@@ -988,7 +995,7 @@ bool SaveWorldAssetDataToFile(
         return false;
     }
 
-    if (!Detail::ReplaceSerializedFile(TemporaryPath, FilePath))
+    if (!Detail::ReplaceSerializedFile(TemporaryPath, FilePath, true))
     {
         std::error_code ErrorCode;
         std::filesystem::remove(TemporaryPath, ErrorCode);

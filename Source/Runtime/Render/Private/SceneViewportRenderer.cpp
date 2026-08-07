@@ -77,12 +77,16 @@ FMatrix4 BuildSceneViewMatrix(const FSceneView& View)
     return Result;
 }
 
-bool TryBuildActiveCameraView(const PWorld* World, FSceneView& OutView)
+bool TryBuildActiveCameraView(
+    const PWorld* World,
+    FSceneView& OutView,
+    bool bAllowInactiveFallback)
 {
     if (World == nullptr)
     {
         return false;
     }
+    const PCameraComponent* FallbackCamera = nullptr;
     for (const PLevel* Level : World->GetLevels())
     {
         if (Level == nullptr) continue;
@@ -94,7 +98,15 @@ bool TryBuildActiveCameraView(const PWorld* World, FSceneView& OutView)
                 const PCameraComponent* Camera = Component != nullptr
                     && Component->IsA(PCameraComponent::StaticClass())
                     ? static_cast<const PCameraComponent*>(Component) : nullptr;
-                if (Camera == nullptr || !Camera->IsActive()) continue;
+                if (Camera == nullptr) continue;
+                if (!Camera->IsActive())
+                {
+                    if (FallbackCamera == nullptr)
+                    {
+                        FallbackCamera = Camera;
+                    }
+                    continue;
+                }
 
                 OutView.Position = Camera->GetViewPosition();
                 OutView.Target = OutView.Position + Camera->GetViewForward();
@@ -107,7 +119,18 @@ bool TryBuildActiveCameraView(const PWorld* World, FSceneView& OutView)
             }
         }
     }
-    return false;
+    if (!bAllowInactiveFallback || FallbackCamera == nullptr)
+    {
+        return false;
+    }
+    OutView.Position = FallbackCamera->GetViewPosition();
+    OutView.Target = OutView.Position + FallbackCamera->GetViewForward();
+    OutView.Up = FallbackCamera->GetViewUp();
+    OutView.VerticalFieldOfViewDegrees =
+        FallbackCamera->GetVerticalFieldOfViewDegrees();
+    OutView.NearPlane = FallbackCamera->GetNearPlane();
+    OutView.FarPlane = FallbackCamera->GetFarPlane();
+    return true;
 }
 
 FSceneLighting GatherSceneLighting(const PWorld* World)
@@ -1016,7 +1039,8 @@ bool FSceneViewportRenderer::Render(
     FAssetRegistry& AssetRegistry,
     FAssetManager& AssetManager,
     const FSceneView& View,
-    std::span<const FObjectHandle> SelectedObjects)
+    std::span<const FObjectHandle> SelectedObjects,
+    bool bDrawComponentVisualizations)
 {
     if (!Impl->bInitialized || Impl->Framebuffer == 0 || World == nullptr)
     {
@@ -1388,58 +1412,61 @@ bool FSceneViewportRenderer::Render(
         }
     }
 
-    glUniformMatrix4fv(ModelLocation, 1, GL_TRUE, Identity.GetData());
-    glUniform1i(UseTextureLocation, 0);
-    glUniform1i(LightingLocation, 0);
-    glBindVertexArray(Impl->ComponentVisualizationVertexArray);
-    for (PLevel* Level : World->GetLevels())
+    if (bDrawComponentVisualizations)
     {
-        if (Level == nullptr) continue;
-        for (PActor* Actor : Level->GetActors())
+        glUniformMatrix4fv(ModelLocation, 1, GL_TRUE, Identity.GetData());
+        glUniform1i(UseTextureLocation, 0);
+        glUniform1i(LightingLocation, 0);
+        glBindVertexArray(Impl->ComponentVisualizationVertexArray);
+        for (PLevel* Level : World->GetLevels())
         {
-            if (Actor == nullptr) continue;
-            for (PActorComponent* Component : Actor->GetComponents())
+            if (Level == nullptr) continue;
+            for (PActor* Actor : Level->GetActors())
             {
-                const PSceneComponent* SceneComponent = Component != nullptr
-                    && Component->IsA(PSceneComponent::StaticClass())
-                    ? static_cast<const PSceneComponent*>(Component) : nullptr;
-                const bool bSelected = std::find(
-                        SelectedObjects.begin(),
-                        SelectedObjects.end(),
-                        Component->GetHandle()) != SelectedObjects.end()
-                    || std::find(
-                        SelectedObjects.begin(),
-                        SelectedObjects.end(),
-                        Actor->GetHandle()) != SelectedObjects.end();
-                FComponentVisualization Visualization =
-                    BuildComponentVisualization(
-                        SceneComponent,
-                        View,
-                        Aspect,
-                        bSelected);
-                if (Visualization.Vertices.empty()) continue;
+                if (Actor == nullptr) continue;
+                for (PActorComponent* Component : Actor->GetComponents())
+                {
+                    const PSceneComponent* SceneComponent = Component != nullptr
+                        && Component->IsA(PSceneComponent::StaticClass())
+                        ? static_cast<const PSceneComponent*>(Component) : nullptr;
+                    const bool bSelected = std::find(
+                            SelectedObjects.begin(),
+                            SelectedObjects.end(),
+                            Component->GetHandle()) != SelectedObjects.end()
+                        || std::find(
+                            SelectedObjects.begin(),
+                            SelectedObjects.end(),
+                            Actor->GetHandle()) != SelectedObjects.end();
+                    FComponentVisualization Visualization =
+                        BuildComponentVisualization(
+                            SceneComponent,
+                            View,
+                            Aspect,
+                            bSelected);
+                    if (Visualization.Vertices.empty()) continue;
 
-                const FVector3 Color = bSelected
-                    ? FVector3::OneVector : Visualization.Color;
-                Impl->PickHandles.push_back(Component->GetHandle());
-                const GLuint PickingId =
-                    static_cast<GLuint>(Impl->PickHandles.size());
-                glBindBuffer(
-                    GL_ARRAY_BUFFER,
-                    Impl->ComponentVisualizationVertexBuffer);
-                glBufferData(
-                    GL_ARRAY_BUFFER,
-                    static_cast<std::ptrdiff_t>(
-                        Visualization.Vertices.size() * sizeof(FVector3)),
-                    Visualization.Vertices.data(),
-                    GL_DYNAMIC_DRAW);
-                glUniform3f(ColorLocation, Color.X, Color.Y, Color.Z);
-                glUniform1ui(PickingIdLocation, PickingId);
-                glLineWidth(bSelected ? 3.0f : 2.0f);
-                glDrawArrays(
-                    GL_LINES,
-                    0,
-                    static_cast<GLsizei>(Visualization.Vertices.size()));
+                    const FVector3 Color = bSelected
+                        ? FVector3::OneVector : Visualization.Color;
+                    Impl->PickHandles.push_back(Component->GetHandle());
+                    const GLuint PickingId =
+                        static_cast<GLuint>(Impl->PickHandles.size());
+                    glBindBuffer(
+                        GL_ARRAY_BUFFER,
+                        Impl->ComponentVisualizationVertexBuffer);
+                    glBufferData(
+                        GL_ARRAY_BUFFER,
+                        static_cast<std::ptrdiff_t>(
+                            Visualization.Vertices.size() * sizeof(FVector3)),
+                        Visualization.Vertices.data(),
+                        GL_DYNAMIC_DRAW);
+                    glUniform3f(ColorLocation, Color.X, Color.Y, Color.Z);
+                    glUniform1ui(PickingIdLocation, PickingId);
+                    glLineWidth(bSelected ? 3.0f : 2.0f);
+                    glDrawArrays(
+                        GL_LINES,
+                        0,
+                        static_cast<GLsizei>(Visualization.Vertices.size()));
+                }
             }
         }
     }
@@ -1448,6 +1475,34 @@ bool FSceneViewportRenderer::Render(
     glUseProgram(0);
     glDisable(GL_CULL_FACE);
     glDisable(GL_DEPTH_TEST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return true;
+}
+
+bool FSceneViewportRenderer::PresentToBackBuffer(uint32 Width, uint32 Height) const
+{
+    if (!Impl->bInitialized
+        || Impl->Framebuffer == 0
+        || Width == 0
+        || Height == 0)
+    {
+        return false;
+    }
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, Impl->Framebuffer);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glBlitFramebuffer(
+        0,
+        0,
+        static_cast<GLint>(Impl->Width),
+        static_cast<GLint>(Impl->Height),
+        0,
+        0,
+        static_cast<GLint>(Width),
+        static_cast<GLint>(Height),
+        GL_COLOR_BUFFER_BIT,
+        GL_LINEAR);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return true;
 }

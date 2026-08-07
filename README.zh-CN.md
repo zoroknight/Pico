@@ -7,19 +7,21 @@ Pico 是一个以学习为目的、参考 Unreal Engine 架构设计的小型 C+
 
 Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小而清晰，同时保留可以完整运行和继续扩展的架构边界。
 
-![展示导入模型、材质、纹理和 PBR 视口渲染的 Pico 编辑器](Docs/Images/PicoEditorMonth05PBR.png)
+![Pico 编辑器在独立游戏窗口中运行当前世界](Docs/Images/PicoEditorStandalonePlay.png)
 
 ## 当前状态
 
-前五个月的开发任务已经完成。目前 Pico 可以：
+当前实现可以：
 
 - 运行类似 UE 的 `PreInit -> Init -> Tick -> Exit` 引擎循环。
+- 启动独立的 `PicoGame` Runtime，提供逐帧输入、可配置的 Action/Axis 映射，并支持项目默认地图或命令行地图覆盖。
 - 通过 `PClass` 和 `NewObject` 创建具有反射信息的原生 C++ 对象。
 - 使用薄反射宏注册类和属性。
 - 通过通用的元数据驱动界面查看和修改属性。
 - 将反射对象序列化为 `.pobj`，并通过 `PostLoad` 完成加载后的处理。
 - 将经过校验的 World 场景图原子保存为确定性的 `.pworld` 文件，并在不持久化运行时 Handle 的前提下事务式重建运行时 World。
 - 事务式替换 `FEngineLoop` 的当前 World，并在文件加载或 `PostLoad` 失败时完整保留旧 World。
+- 将编辑器 World 作为文档管理，支持 New、Open、Save、Save As、稳定的 `/Game/...` 身份、Dirty 状态以及保存/放弃/取消保护。
 - 使用 `FObjectRegistry`、Outer 和带代数的 Handle 集中管理对象。
 - 创建具有明确生命周期的 `PWorld`、`PLevel`、`PActor` 和 Component。
 - 使用 RootComponent 为 Actor 提供 Transform。
@@ -67,8 +69,8 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
-Debug 和 Release 均可完整构建，八个 CTest 目标全部通过；`PicoEditorTests`
-目前包含 74 项通过的检查。
+Debug 和 Release 均可完整构建，九个 CTest 目标全部通过；`PicoEditorTests`
+目前包含 81 项通过的检查。
 
 ## 架构
 
@@ -96,13 +98,14 @@ PicoInspector       -> PicoReflectionTools
 | 模块 | 职责 |
 | --- | --- |
 | `PicoCore` | App状态、命令行、配置、日志、FName、路径、时间、数学和项目描述 |
+| `PicoInput` | 逐帧按键与指针状态，以及可配置的 Action/Axis 映射 |
 | `PicoAsset` | 经过校验的虚拟资产发现、确定性项目注册表和文件元数据 |
 | `PicoAssetImport` | 仅供开发阶段使用的 OBJ 到原生 Static Mesh 转换 |
 | `PicoObject` | `PObject`、`PClass`、`PProperty`、反射、注册表、Handle、Outer和序列化 |
 | `PicoEngine` | EngineLoop、World、Level、Actor、Component、挂接和可渲染场景数据 |
 | `PicoRender` | 基于GLAD的OpenGL、Shader、几何体、Framebuffer、场景遍历和绘制提交 |
-| `PicoEditorCore` | 不依赖 UI 的对象/资产选择、资产操作、命令、剪贴板、事务和 Transform 操作 |
-| `PicoEditor` | Content Browser、资产工作流控制器与弹窗、Outliner、Details、编辑器相机、Viewport 拾取、工具状态和 Transform Gizmo UI |
+| `PicoEditorCore` | 不依赖 UI 的 World 文档、对象/资产选择、资产操作、命令、剪贴板、事务和 Transform 操作 |
+| `PicoEditor` | World 文件对话框、Content Browser、资产工作流控制器、Outliner、Details、编辑器相机、Viewport 拾取、工具状态和 Transform Gizmo UI |
 | `PicoReflectionTools` | 通用元数据检查和反射属性工具 |
 | `PicoSandbox` | 项目侧反射、序列化、资产和自动化测试示例 |
 
@@ -199,6 +202,18 @@ powershell -ExecutionPolicy Bypass -File .\Scripts\SetupWindows.ps1
 .\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico -uiscale=1.6
 ```
 
+启动不包含编辑器界面的游戏 Runtime：
+
+```powershell
+.\Build\Debug\PicoGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
+```
+
+`PicoGame` 从项目的 `Config/Pico.ini` 读取 `[Game] DefaultMap` 和 `[Input]` 中的
+Action/Axis 映射。`-map=/Game/Maps/Example.pworld` 可以覆盖默认地图，自动冒烟测试可以附加 `-frames=N`。
+
+编辑器工具栏中的 `Play` 会在需要时保存当前 World，并把当前文档的 `/Game/...` 地图路径传给独立 Runtime。
+运行期间按钮会切换为 `Stop`；游戏自行退出后，编辑器也会检测到并恢复可运行状态。
+
 ## 编辑器操作
 
 编辑器启动后只有空场景：
@@ -271,8 +286,10 @@ GameWorld
 - 使用工具栏，可以创建 Actor、增加场景子组件、设置 Root 或销毁运行时对象。
 - 拖动面板标签可以重新停靠或合并面板，使用 `Reset Layout` 恢复默认布局。
 
-使用 `Ctrl+S` 可以将场景保存到当前项目的 `Content/Maps/EditorWorld.pworld`，使用 `Ctrl+O`
-可以重新加载。保存场景数据不会重写 C++ 源码。
+使用 `Ctrl+N` 新建未命名 World，使用 `Ctrl+O` 选择项目 Content 下的 `.pworld`，使用 `Ctrl+S`
+保存当前文档，使用 `Ctrl+Shift+S` 另存为新文件；也可以从 Content Browser 打开 World 资产。
+窗口标题用 `*` 标记 Dirty 文档，New、Open 和退出前会提供保存、放弃、取消选项。加载失败不会改变
+当前 World 和文档身份；安全保存通过临时文件替换，并为被覆盖文件保留 `.bak`。保存场景数据不会重写 C++ 源码。
 
 编辑器面板布局与场景数据相互独立，布局保存在
 `Projects/<ProjectName>/Saved/Editor/PicoEditorLayout.ini`。
@@ -283,6 +300,7 @@ GameWorld
 | --- | --- |
 | `PicoLaunch` | 无窗口的 EngineLoop 和 World 生命周期程序 |
 | `PicoEditor` | 带有 OpenGL 场景视口的运行时编辑器 |
+| `PicoGame` | 可直接启动或由编辑器 Play 拉起的独立 GLFW/OpenGL 游戏 Runtime |
 | `PicoInspector` | 通用反射对象检查器 |
 | `PicoReflectionDemo` | 控制台反射流程演示 |
 | `PicoAssetTool` | 开发阶段使用的 OBJ 到 `.pmesh` 命令行导入器 |

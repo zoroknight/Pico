@@ -29,6 +29,7 @@ public:
         FAssetsAction DeleteAssets,
         FAssetAction RenameAsset,
         FAssetAction EditMaterial,
+        FAssetAction OpenWorld,
         FAssetAction Create,
         FAssetAction Assign,
         FCanReimport CanReimport);
@@ -52,6 +53,7 @@ private:
         const FAssetsAction& DeleteAssets,
         const FAssetAction& RenameAsset,
         const FAssetAction& EditMaterial,
+        const FAssetAction& OpenWorld,
         const FAssetAction& Create,
         const FAssetAction& Assign,
         const FCanReimport& CanReimport);

@@ -9,19 +9,23 @@ serialization, worlds, actors, components, transforms, editor tooling, and rende
 Pico is not intended to compete with production engines. It deliberately keeps each system small
 enough to study while preserving clear ownership boundaries and an end-to-end runtime.
 
-![Pico Editor with imported models, materials, textures, and PBR viewport rendering](Docs/Images/PicoEditorMonth05PBR.png)
+![Pico Editor playing the current world in a standalone game window](Docs/Images/PicoEditorStandalonePlay.png)
 
 ## Current State
 
-The first five development months are complete. Pico can currently:
+The current implementation can:
 
 - Run a UE-style `PreInit -> Init -> Tick -> Exit` engine loop.
+- Launch a standalone `PicoGame` runtime with frame-based input, configurable Action/Axis mappings,
+  and a project default map or command-line map override.
 - Create reflected native objects through `PClass` and `NewObject`.
 - Register classes and properties with thin C++ reflection macros.
 - Inspect and edit supported properties through generic metadata-driven UI.
 - Serialize reflected objects to `.pobj` files and reconstruct them with `PostLoad`.
 - Save validated World scene graphs to deterministic `.pworld` files and transactionally reconstruct runtime Worlds without persisting runtime handles.
 - Transactionally replace the `FEngineLoop` active World while preserving the old World on load or `PostLoad` failure.
+- Treat the editor World as a document with New, Open, Save, and Save As workflows, a stable
+  `/Game/...` identity, dirty-state tracking, and save/discard/cancel protection.
 - Manage object memory centrally through `FObjectRegistry`, `Outer`, and generation-safe handles.
 - Create `PWorld`, `PLevel`, `PActor`, and component instances with explicit lifecycles.
 - Use a root scene component as the Actor transform provider.
@@ -75,8 +79,8 @@ The first five development months are complete. Pico can currently:
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-Debug and Release configurations build successfully, all eight CTest targets pass,
-and `PicoEditorTests` currently reports 74 passing checks.
+Debug and Release configurations build successfully, all nine CTest targets pass,
+`PicoEditorTests` reports 81 passing checks, and `PicoGameTests` reports 29.
 
 ## Architecture
 
@@ -104,13 +108,14 @@ PicoInspector       -> PicoReflectionTools
 | Module | Responsibility |
 | --- | --- |
 | `PicoCore` | App state, command line, config, logging, names, paths, time, math, project descriptor |
+| `PicoInput` | Frame-based key and pointer state plus configurable Action/Axis mappings |
 | `PicoAsset` | Validated virtual asset discovery, deterministic project registry, and file metadata |
 | `PicoAssetImport` | Developer-only OBJ conversion into validated native static-mesh assets |
 | `PicoObject` | `PObject`, `PClass`, `PProperty`, reflection, registry, handles, Outer graph, serialization |
 | `PicoEngine` | Engine loop, World, Level, Actor, components, attachment, primitive scene data |
 | `PicoRender` | GLAD-backed OpenGL, shaders, geometry, framebuffer, scene traversal and draw submission |
-| `PicoEditorCore` | UI-independent object/asset selection, asset operations, commands, clipboard, transactions, and transforms |
-| `PicoEditor` | Content Browser, asset workflow controller and dialogs, Outliner, Details, editor camera, viewport picking, tool state, and transform gizmo UI |
+| `PicoEditorCore` | UI-independent World documents, object/asset selection, asset operations, commands, clipboard, transactions, and transforms |
+| `PicoEditor` | World file dialogs, Content Browser, asset workflow controller, Outliner, Details, editor camera, viewport picking, tool state, and transform gizmo UI |
 | `PicoReflectionTools` | Generic metadata inspection and reflected-property helpers |
 | `PicoSandbox` | Project-side reflection, serialization, editor and testing example |
 
@@ -212,6 +217,20 @@ The editor starts maximized. Its default UI scale is `1.4`; override it when nee
 .\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico -uiscale=1.6
 ```
 
+Start the game runtime without editor UI:
+
+```powershell
+.\Build\Debug\PicoGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
+```
+
+`PicoGame` reads `[Game] DefaultMap` and the Action/Axis mappings in `[Input]` from the
+project's `Config/Pico.ini`. `-map=/Game/Maps/Example.pworld` overrides the default map, and
+`-frames=N` supports automated smoke runs.
+
+The editor toolbar's `Play` button saves the current World when needed and launches this standalone
+runtime with the current document's `/Game/...` map path. While it is running, the button changes
+to `Stop`; closing either process is detected and the editor returns to its ready state.
+
 ## Editor Controls
 
 The editor starts with an empty scene:
@@ -298,9 +317,12 @@ distance, rotation, and offset. Collision retraction and camera lag are not impl
 - Use the toolbar to add scene children, choose a root, or destroy runtime objects.
 - Drag panel tabs to rearrange or tab the workspace; use `Reset Layout` to restore the default.
 
-Editor scene changes can be saved to and loaded from the active project's
-`Content/Maps/EditorWorld.pworld` with `Ctrl+S` and `Ctrl+O`. Saving scene data never rewrites C++
-source.
+Use `Ctrl+N` to create an untitled World, `Ctrl+O` to choose a `.pworld` under project Content,
+`Ctrl+S` to save the current document, and `Ctrl+Shift+S` to choose a new file. World assets can
+also be opened from the Content Browser. The window title marks dirty documents with `*`, and
+New, Open, and Exit offer save/discard/cancel protection. Failed loads preserve the current World
+and document identity; safe saves use temporary replacement and retain a `.bak` of overwritten files.
+Saving scene data never rewrites C++ source.
 
 Editor panel layout is separate from scene data and persists in
 `Projects/<ProjectName>/Saved/Editor/PicoEditorLayout.ini`.
@@ -311,6 +333,7 @@ Editor panel layout is separate from scene data and persists in
 | --- | --- |
 | `PicoLaunch` | Headless engine-loop and World lifecycle executable |
 | `PicoEditor` | Runtime scene editor with OpenGL viewport |
+| `PicoGame` | Standalone GLFW/OpenGL game runtime launched directly or from editor Play |
 | `PicoInspector` | Generic reflected-object inspector |
 | `PicoReflectionDemo` | Console reflection walkthrough |
 | `PicoAssetTool` | Developer command-line OBJ to `.pmesh` importer |

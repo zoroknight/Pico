@@ -3,6 +3,7 @@
 #include "Pico/Editor/EditorSelection.h"
 #include "Pico/Editor/EditorTransformService.h"
 #include "Pico/Editor/EditorTransactionManager.h"
+#include "Pico/Editor/EditorWorldDocument.h"
 
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/CameraComponent.h"
@@ -20,6 +21,7 @@
 #include "Pico/Render/SceneViewportRenderer.h"
 #include "TestRunner.h"
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -906,6 +908,66 @@ void TestEditorTransactions(FTestRunner& Runner)
         Pico::FObjectRegistry::GetObjectCount() == 0,
         "Editor transaction tests release all reconstructed objects");
 }
+
+void TestEditorWorldDocument(FTestRunner& Runner)
+{
+    char Program[] = "PicoEditorDocumentTests";
+    char MaxFPS[] = "-maxfps=0";
+    char* Arguments[] = { Program, MaxFPS };
+    const std::filesystem::path ProjectFile =
+        "Projects/PicoSandbox/PicoSandbox.pico";
+
+    Pico::FEngineLoop EngineLoop;
+    Runner.Expect(
+        EngineLoop.PreInit(2, Arguments, ProjectFile) == 0
+            && EngineLoop.Init() == 0,
+        "Editor document test initializes a project World");
+
+    Pico::FEditorWorldDocument Document(&EngineLoop);
+    Pico::FAssetPath WorldAssetPath;
+    Runner.Expect(
+        Pico::FAssetPath::TryParse(
+            "/Game/Maps/EditorWorld.pworld", WorldAssetPath),
+        "World asset path parses");
+    const Pico::FEditorDocumentResult OpenResult = Document.Open(WorldAssetPath);
+    Runner.Expect(
+        OpenResult.bSucceeded
+            && Document.HasAssetPath()
+            && !Document.IsDirty()
+            && Document.GetAssetPath() == WorldAssetPath,
+        "Opening a World establishes a clean document identity");
+
+    Pico::FAssetPath RoundTripPath;
+    Runner.Expect(
+        Pico::FEditorWorldDocument::TryMakeAssetPath(
+            Document.GetFilePath(), RoundTripPath)
+            && RoundTripPath == WorldAssetPath,
+        "World logical and physical paths round trip");
+
+    Pico::PWorld* LoadedWorld = EngineLoop.GetWorld();
+    Document.MarkDirty();
+    const Pico::FEditorDocumentResult FailedOpen =
+        Document.Open(ProjectFile);
+    Runner.Expect(
+        !FailedOpen.bSucceeded
+            && Document.IsDirty()
+            && Document.GetAssetPath() == WorldAssetPath
+            && EngineLoop.GetWorld() == LoadedWorld,
+        "A rejected open preserves the current World and document state");
+
+    const Pico::FEditorDocumentResult NewResult = Document.NewWorld();
+    Runner.Expect(
+        NewResult.bSucceeded
+            && !Document.HasAssetPath()
+            && !Document.IsDirty()
+            && Document.GetDisplayName() == "Untitled",
+        "New World resets the document to an untitled clean state");
+
+    EngineLoop.Exit();
+    Runner.Expect(
+        Pico::FObjectRegistry::GetObjectCount() == 0,
+        "Editor document tests release the World");
+}
 }
 
 int main()
@@ -913,5 +975,6 @@ int main()
     FTestRunner Runner;
     TestEditorCommandService(Runner);
     TestEditorTransactions(Runner);
+    TestEditorWorldDocument(Runner);
     return Runner.Finish();
 }

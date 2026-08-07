@@ -6,8 +6,7 @@
 *.VC.opendb
 
 # CMake build trees and generated files
-Build/
-BuildVerify/
+Build*/
 cmake-build-*/
 CMakeFiles/
 CMakeCache.txt

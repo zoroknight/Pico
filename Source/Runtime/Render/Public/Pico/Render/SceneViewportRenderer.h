@@ -59,7 +59,10 @@ FMatrix4 BuildSceneViewMatrix(const FSceneView& View);
 FMatrix4 BuildSceneProjectionMatrix(
     const FSceneView& View,
     float AspectRatio);
-bool TryBuildActiveCameraView(const PWorld* World, FSceneView& OutView);
+bool TryBuildActiveCameraView(
+    const PWorld* World,
+    FSceneView& OutView,
+    bool bAllowInactiveFallback = false);
 FSceneLighting GatherSceneLighting(const PWorld* World);
 
 class FSceneViewportRenderer
@@ -79,7 +82,9 @@ public:
         FAssetRegistry& AssetRegistry,
         FAssetManager& AssetManager,
         const FSceneView& View,
-        std::span<const FObjectHandle> SelectedObjects = {});
+        std::span<const FObjectHandle> SelectedObjects = {},
+        bool bDrawComponentVisualizations = true);
+    bool PresentToBackBuffer(uint32 Width, uint32 Height) const;
     FObjectHandle Pick(uint32 X, uint32 Y) const;
 
     uint32 GetColorTexture() const;

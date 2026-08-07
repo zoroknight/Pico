@@ -6,5 +6,6 @@ namespace Pico::Detail
 {
 bool ReplaceSerializedFile(
     const std::filesystem::path& TemporaryPath,
-    const std::filesystem::path& FilePath);
+    const std::filesystem::path& FilePath,
+    bool bKeepBackup = false);
 }

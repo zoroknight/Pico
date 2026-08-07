@@ -7,6 +7,7 @@
 #include "SceneOutlinerPanel.h"
 
 #include "Pico/Core/Math/Vector3.h"
+#include "Pico/Core/PlatformProcess.h"
 #include "Pico/Editor/EditorCommandService.h"
 #include "Pico/Editor/EditorAssetSelection.h"
 #include "Pico/Editor/EditorAssetService.h"
@@ -17,6 +18,7 @@
 #include "Pico/Editor/EditorToolState.h"
 #include "Pico/Editor/EditorTransformService.h"
 #include "Pico/Editor/EditorTransactionManager.h"
+#include "Pico/Editor/EditorWorldDocument.h"
 #include "Pico/Object/ObjectTypes.h"
 
 #include <array>
@@ -47,6 +49,8 @@ public:
     ~FPicoEditorApp();
 
     void Draw();
+    void RequestClose();
+    bool ShouldClose() const;
 
 private:
     PWorld* GetWorld() const;
@@ -58,8 +62,12 @@ private:
     void DrawToolbar();
     void DrawViewport(float Width, float Height);
     void DrawStatusBar();
+    void DrawUnsavedChangesPopup();
     void DrawRenamePopup();
     void ProcessDeferredActions();
+    void StartGame();
+    void StopGame(bool bUpdateStatus = true);
+    void UpdateGameProcess();
 
     void SpawnEmptyActor();
     void SpawnCubeActor();
@@ -87,8 +95,16 @@ private:
     bool CanPasteClipboard() const;
     void CopySelectedObject();
     void PasteClipboard();
-    void SaveWorld();
+    bool SaveWorld();
+    bool SaveWorldAs();
     void OpenWorld();
+    void NewWorld();
+    void PerformOpenWorld();
+    void PerformNewWorld();
+    void RequestDocumentAction(int Action);
+    void ContinueDocumentAction(int Action);
+    void FinishDocumentChange();
+    void UpdateWindowTitle();
     bool PrepareInteractiveEdit(
         const std::string& EditKey,
         std::string Description,
@@ -125,6 +141,8 @@ private:
     FEditorSceneClipboard SceneClipboard;
     FEditorTransactionManager TransactionManager;
     FEngineLoop* EngineLoop = nullptr;
+    GLFWwindow* Window = nullptr;
+    FEditorWorldDocument WorldDocument;
     FEditorAssetSelection AssetSelection;
     FEditorAssetService AssetService;
     FEditorCommandService CommandService;
@@ -135,6 +153,8 @@ private:
     FDetailsPanel DetailsPanel;
     FContentBrowserPanel ContentBrowserPanel;
     FEditorAssetWorkflowController AssetWorkflow;
+    FProcessHandle GameProcess;
+    FAssetPath PendingWorldAssetPath;
     FObjectHandle RenameObjectHandle;
     std::array<char, 128> RenameBuffer {};
     std::string InteractiveEditKey;
@@ -147,5 +167,9 @@ private:
     bool bResetDockLayout = false;
     bool bOpenRenamePopup = false;
     bool bPreviewSceneCamera = false;
+    bool bOpenUnsavedChangesPopup = false;
+    bool bShouldClose = false;
+    int PendingDocumentAction = 0;
+    std::string WindowTitle;
 };
 }

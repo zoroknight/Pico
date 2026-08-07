@@ -198,9 +198,14 @@ int main(int Argc, char** Argv)
         if (ExitCode == 0)
         {
             Pico::FPicoEditorApp App(&EngineLoop, &ViewportRenderer, Window);
-            while (!glfwWindowShouldClose(Window) && !EngineLoop.ShouldExit())
+            while (!EngineLoop.ShouldExit())
             {
                 glfwPollEvents();
+                if (glfwWindowShouldClose(Window))
+                {
+                    glfwSetWindowShouldClose(Window, GLFW_FALSE);
+                    App.RequestClose();
+                }
                 EngineLoop.Tick();
 
                 ImGui_ImplOpenGL3_NewFrame();
@@ -218,6 +223,10 @@ int main(int Argc, char** Argv)
                 glClear(GL_COLOR_BUFFER_BIT);
                 ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
                 glfwSwapBuffers(Window);
+                if (App.ShouldClose())
+                {
+                    break;
+                }
             }
         }
     }

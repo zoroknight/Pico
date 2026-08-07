@@ -133,6 +133,24 @@ bool FConfigFile::GetBool(std::string_view Section, std::string_view Key, bool D
     return DefaultValue;
 }
 
+std::vector<std::pair<std::string, std::string>> FConfigFile::GetSectionEntries(
+    std::string_view Section) const
+{
+    const auto SectionIt = Sections.find(std::string(Section));
+    if (SectionIt == Sections.end())
+    {
+        return {};
+    }
+
+    std::vector<std::pair<std::string, std::string>> Entries;
+    Entries.reserve(SectionIt->second.size());
+    for (const auto& [Key, Value] : SectionIt->second)
+    {
+        Entries.emplace_back(Key, Value);
+    }
+    return Entries;
+}
+
 std::string FConfigFile::Trim(std::string_view Text)
 {
     std::size_t Begin = 0;

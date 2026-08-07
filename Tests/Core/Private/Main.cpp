@@ -7,6 +7,7 @@
 #include "Pico/Core/Math/Math.h"
 #include "Pico/Core/Name.h"
 #include "Pico/Core/Paths.h"
+#include "Pico/Core/PlatformProcess.h"
 #include "Pico/Core/ProjectDescriptor.h"
 #include "Pico/Core/Time.h"
 
@@ -199,6 +200,39 @@ void TestPaths(FTestRunner& Runner)
     std::filesystem::remove_all(TestRoot, ErrorCode);
 }
 
+void TestPlatformProcess(FTestRunner& Runner)
+{
+    std::string Error;
+    Pico::FProcessHandle Child = Pico::FPlatformProcess::CreateProcess(
+        Pico::FPaths::GetExecutablePath(),
+        { "-platform-process-child", "argument with spaces" },
+        Pico::FPaths::GetEngineRootDir(),
+        &Error);
+    Runner.Expect(
+        Child.IsValid() && Child.GetProcessId() != 0,
+        "Platform process creates a managed child process");
+
+    int ExitCode = -1;
+    Runner.Expect(
+        Pico::FPlatformProcess::WaitForExit(Child, 5000, &ExitCode)
+            && ExitCode == 0,
+        "Platform process preserves quoted arguments and captures exit code");
+    Runner.Expect(
+        !Pico::FPlatformProcess::IsRunning(Child),
+        "Platform process detects child exit");
+    Child.Reset();
+    Runner.Expect(!Child.IsValid(), "Process handle can be released explicitly");
+
+    Pico::FProcessHandle Missing = Pico::FPlatformProcess::CreateProcess(
+        Pico::FPaths::GetEngineRootDir() / "MissingPicoProgram.exe",
+        {},
+        {},
+        &Error);
+    Runner.Expect(
+        !Missing.IsValid() && !Error.empty(),
+        "Platform process reports a missing executable safely");
+}
+
 void TestAppOwnsProjectName(FTestRunner& Runner)
 {
     std::string ProjectName = "OwnedProjectName";
@@ -332,6 +366,12 @@ void TestTransformMath(FTestRunner& Runner)
 
 int main(int Argc, char** Argv)
 {
+    if (Argc == 3
+        && std::string_view(Argv[1]) == "-platform-process-child")
+    {
+        return std::string_view(Argv[2]) == "argument with spaces" ? 0 : 7;
+    }
+
     Pico::FPaths::Init(Argc > 0 ? Argv[0] : "PicoCoreTests");
 
     FTestRunner Runner;
@@ -339,6 +379,7 @@ int main(int Argc, char** Argv)
     TestCommandLine(Runner);
     TestConfig(Runner);
     TestPaths(Runner);
+    TestPlatformProcess(Runner);
     TestAppOwnsProjectName(Runner);
     TestName(Runner);
     TestFrameTimer(Runner);

@@ -27,6 +27,7 @@ add_library(PicoCore STATIC
     Source/Runtime/Core/Private/Math/Math.cpp
     Source/Runtime/Core/Private/Name.cpp
     Source/Runtime/Core/Private/Paths.cpp
+    Source/Runtime/Core/Private/PlatformProcess.cpp
     Source/Runtime/Core/Private/ProjectDescriptor.cpp
     Source/Runtime/Core/Private/Time.cpp
 )
@@ -74,6 +75,24 @@ if(MSVC)
     target_compile_options(PicoAsset PRIVATE /W4 /permissive-)
 else()
     target_compile_options(PicoAsset PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_library(PicoInput STATIC
+    Source/Runtime/Input/Private/InputSystem.cpp
+)
+
+target_include_directories(PicoInput
+    PUBLIC
+        Source/Runtime/Input/Public
+)
+
+target_link_libraries(PicoInput PUBLIC PicoCore)
+set_target_properties(PicoInput PROPERTIES FOLDER "Pico")
+
+if(MSVC)
+    target_compile_options(PicoInput PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoInput PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_library(tinyobjloader STATIC
@@ -187,6 +206,7 @@ add_library(PicoEngine STATIC
     Source/Runtime/Engine/Private/CubeComponent.cpp
     Source/Runtime/Engine/Private/DirectionalLightComponent.cpp
     Source/Runtime/Engine/Private/EngineLoop.cpp
+    Source/Runtime/Engine/Private/GameEngine.cpp
     Source/Runtime/Engine/Private/Level.cpp
     Source/Runtime/Engine/Private/LightComponent.cpp
         Source/Runtime/Engine/Private/PointLightComponent.cpp
@@ -206,6 +226,7 @@ target_include_directories(PicoEngine
 target_link_libraries(PicoEngine
     PUBLIC
         PicoAsset
+        PicoInput
         PicoObject
 )
 
@@ -253,26 +274,70 @@ target_link_libraries(PicoReflectionDemo
 
 set_target_properties(PicoReflectionDemo PROPERTIES FOLDER "Programs")
 
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(ThirdParty/GLFW EXCLUDE_FROM_ALL)
+
+find_package(OpenGL REQUIRED)
+
+add_library(glad STATIC
+    ThirdParty/GLAD/src/gl.c
+)
+
+target_include_directories(glad
+    PUBLIC
+        ThirdParty/GLAD/include
+)
+
+set_target_properties(glad glfw PROPERTIES FOLDER "ThirdParty")
+
+add_library(PicoRender STATIC
+    Source/Runtime/Render/Private/SceneViewportRenderer.cpp
+)
+
+target_include_directories(PicoRender
+    PUBLIC
+        Source/Runtime/Render/Public
+)
+
+target_link_libraries(PicoRender
+    PUBLIC
+        PicoEngine
+    PRIVATE
+        glad
+)
+
+set_target_properties(PicoRender PROPERTIES FOLDER "Pico")
+
+if(MSVC)
+    target_compile_options(PicoRender PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoRender PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(PicoGame
+    Source/Programs/PicoGame/Private/Main.cpp
+)
+
+target_link_libraries(PicoGame PRIVATE glfw PicoRender)
+target_compile_definitions(PicoGame
+    PRIVATE
+        PICO_DEFAULT_PROJECT_FILE="${PICO_ROOT_DIR}/Projects/PicoSandbox/PicoSandbox.pico"
+)
+set_target_properties(PicoGame PROPERTIES
+    FOLDER "Programs"
+    VS_DPI_AWARE "PerMonitor"
+)
+
+if(MSVC)
+    target_compile_options(PicoGame PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoGame PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(PICO_BUILD_INSPECTOR)
-    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-    set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-    add_subdirectory(ThirdParty/GLFW EXCLUDE_FROM_ALL)
-
-    find_package(OpenGL REQUIRED)
-
-    add_library(glad STATIC
-        ThirdParty/GLAD/src/gl.c
-    )
-
-    target_include_directories(glad
-        PUBLIC
-            ThirdParty/GLAD/include
-    )
-
-    set_target_properties(glad PROPERTIES FOLDER "ThirdParty")
-
     add_library(PicoImGui STATIC
         ThirdParty/ImGui/imgui.cpp
         ThirdParty/ImGui/imgui_draw.cpp
@@ -295,7 +360,6 @@ if(PICO_BUILD_INSPECTOR)
     )
 
     set_target_properties(PicoImGui PROPERTIES FOLDER "ThirdParty")
-    set_target_properties(glfw PROPERTIES FOLDER "ThirdParty")
 
     add_library(PicoImGuizmo STATIC
         ThirdParty/ImGuizmo/src/ImGuizmo.cpp
@@ -313,30 +377,6 @@ if(PICO_BUILD_INSPECTOR)
 
     set_target_properties(PicoImGuizmo PROPERTIES FOLDER "ThirdParty")
 
-    add_library(PicoRender STATIC
-        Source/Runtime/Render/Private/SceneViewportRenderer.cpp
-    )
-
-    target_include_directories(PicoRender
-        PUBLIC
-            Source/Runtime/Render/Public
-    )
-
-    target_link_libraries(PicoRender
-        PUBLIC
-            PicoEngine
-        PRIVATE
-            glad
-    )
-
-    set_target_properties(PicoRender PROPERTIES FOLDER "Pico")
-
-    if(MSVC)
-        target_compile_options(PicoRender PRIVATE /W4 /permissive-)
-    else()
-        target_compile_options(PicoRender PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
-
     add_library(PicoEditorCore STATIC
         Source/Editor/PicoEditor/Private/AssetDependencyService.cpp
         Source/Editor/PicoEditor/Private/EditorAssetSelection.cpp
@@ -347,6 +387,7 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Private/EditorSelection.cpp
         Source/Editor/PicoEditor/Private/EditorTransformService.cpp
         Source/Editor/PicoEditor/Private/EditorTransactionManager.cpp
+        Source/Editor/PicoEditor/Private/EditorWorldDocument.cpp
         Source/Editor/PicoEditor/Public/Pico/Editor/EditorPropertyService.h
         Source/Editor/PicoEditor/Public/Pico/Editor/AssetDependencyService.h
     )
@@ -569,6 +610,20 @@ else()
     target_compile_options(PicoEngineTests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_executable(PicoGameTests
+    Tests/Game/Private/Main.cpp
+)
+
+target_include_directories(PicoGameTests PRIVATE Tests/Common)
+target_link_libraries(PicoGameTests PRIVATE PicoEngine)
+set_target_properties(PicoGameTests PROPERTIES FOLDER "Tests/Game")
+
+if(MSVC)
+    target_compile_options(PicoGameTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoGameTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 include(CTest)
 
 add_subdirectory(Projects/PicoSandbox)
@@ -579,6 +634,7 @@ if(BUILD_TESTING)
     add_test(NAME PicoAssetImportTests COMMAND PicoAssetImportTests)
     add_test(NAME PicoObjectTests COMMAND PicoObjectTests)
     add_test(NAME PicoEngineTests COMMAND PicoEngineTests)
+    add_test(NAME PicoGameTests COMMAND PicoGameTests)
     if(PICO_BUILD_INSPECTOR)
         add_test(NAME PicoEditorTests COMMAND PicoEditorTests)
         add_test(NAME PicoEditorAssetTests COMMAND PicoEditorAssetTests)
@@ -596,6 +652,9 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoEngineTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoGameTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     if(PICO_BUILD_INSPECTOR)
