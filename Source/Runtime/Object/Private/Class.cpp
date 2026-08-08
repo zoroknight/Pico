@@ -1,6 +1,7 @@
 #include "Pico/Object/Class.h"
 
 #include "Pico/Object/Object.h"
+#include "Pico/Object/ObjectInitializer.h"
 
 #include <algorithm>
 #include <utility>
@@ -74,6 +75,21 @@ FObjectPtr PClass::ConstructObject(const FObjectConstructionParams& Params) cons
     return Constructor != nullptr ? Constructor(Params) : nullptr;
 }
 
+const PObject* PClass::GetDefaultObject() const
+{
+    return ClassDefaultObject.get();
+}
+
+PObject* PClass::GetMutableDefaultObject() const
+{
+    return ClassDefaultObject.get();
+}
+
+const std::vector<FDefaultSubobjectRecord>& PClass::GetDefaultSubobjects() const
+{
+    return DefaultSubobjects;
+}
+
 bool PClass::AddProperty(PProperty Property)
 {
     std::vector<PProperty> NewProperties;
@@ -104,6 +120,40 @@ bool PClass::AddProperties(std::vector<PProperty> InProperties)
     {
         Property.OwnerClass = this;
         Properties.push_back(std::move(Property));
+    }
+    return true;
+}
+
+bool PClass::AddFunction(PFunction Function)
+{
+    std::vector<PFunction> NewFunctions;
+    NewFunctions.push_back(std::move(Function));
+    return AddFunctions(std::move(NewFunctions));
+}
+
+bool PClass::AddFunctions(std::vector<PFunction> InFunctions)
+{
+    if (bMetadataFinalized || !bMetadataValid || InFunctions.empty())
+    {
+        return false;
+    }
+
+    for (std::size_t Index = 0; Index < InFunctions.size(); ++Index)
+    {
+        if (!ValidateFunction(
+                InFunctions[Index],
+                std::span<const PFunction>(InFunctions.data(), Index)))
+        {
+            bMetadataValid = false;
+            MetadataError = EClassMetadataError::InvalidFunction;
+            return false;
+        }
+    }
+
+    for (PFunction& Function : InFunctions)
+    {
+        Function.OwnerClass = this;
+        Functions.push_back(std::move(Function));
     }
     return true;
 }
@@ -178,6 +228,29 @@ bool PClass::ValidateProperty(
     return true;
 }
 
+bool PClass::ValidateFunction(
+    const PFunction& Function,
+    std::span<const PFunction> PendingFunctions) const
+{
+    if (!Function.IsMetadataValid()
+        || Function.OwnerTypeToken != NativeTypeToken)
+    {
+        return false;
+    }
+
+    const auto HasName = [&Function](const PFunction& Candidate)
+    {
+        return Candidate.GetName() == Function.GetName();
+    };
+    if (std::find_if(Functions.begin(), Functions.end(), HasName) != Functions.end()
+        || std::find_if(PendingFunctions.begin(), PendingFunctions.end(), HasName) != PendingFunctions.end()
+        || (SuperClass != nullptr && SuperClass->FindFunction(Function.GetName()) != nullptr))
+    {
+        return false;
+    }
+    return true;
+}
+
 bool PClass::FinalizeMetadata() const
 {
     if (!bMetadataValid)
@@ -187,6 +260,56 @@ bool PClass::FinalizeMetadata() const
 
     bMetadataFinalized = true;
     return true;
+}
+
+bool PClass::CreateDefaultObject() const
+{
+    if (ClassDefaultObject != nullptr)
+    {
+        return true;
+    }
+    if (!bMetadataFinalized || !bMetadataValid || !CanConstruct())
+    {
+        return false;
+    }
+    if (SuperClass != nullptr && SuperClass->GetDefaultObject() == nullptr)
+    {
+        return false;
+    }
+
+    const FName DefaultObjectName("Default__" + Name.ToString());
+    const FObjectConstructionParams Params {
+        this,
+        nullptr,
+        DefaultObjectName,
+        EObjectFlags::Transient | EObjectFlags::ClassDefaultObject | EObjectFlags::RootSet,
+        nullptr
+    };
+    FObjectPtr Object = ConstructObject(Params);
+    if (Object == nullptr
+        || Object->GetClass() != this
+        || !HasAnyFlags(Object->GetFlags(), EObjectFlags::ClassDefaultObject))
+    {
+        return false;
+    }
+
+    ClassDefaultObject = std::move(Object);
+    FObjectInitializer Initializer(
+        ClassDefaultObject.get(),
+        SuperClass != nullptr ? SuperClass->GetDefaultObject() : nullptr);
+    if (!Initializer.InitializeClassDefaultObject(*const_cast<PClass*>(this)))
+    {
+        DefaultSubobjects.clear();
+        ClassDefaultObject.reset();
+        return false;
+    }
+    return true;
+}
+
+void PClass::ResetDefaultObject() const
+{
+    DefaultSubobjects.clear();
+    ClassDefaultObject.reset();
 }
 
 const PProperty* PClass::FindProperty(FName PropertyName) const
@@ -212,5 +335,29 @@ const PProperty* PClass::FindProperty(FName PropertyName) const
 const std::deque<PProperty>& PClass::GetProperties() const
 {
     return Properties;
+}
+
+const PFunction* PClass::FindFunction(FName FunctionName) const
+{
+    for (const PClass* Current = this; Current != nullptr; Current = Current->GetSuperClass())
+    {
+        const auto Existing = std::find_if(
+            Current->Functions.begin(),
+            Current->Functions.end(),
+            [FunctionName](const PFunction& Function)
+            {
+                return Function.GetName() == FunctionName;
+            });
+        if (Existing != Current->Functions.end())
+        {
+            return &*Existing;
+        }
+    }
+    return nullptr;
+}
+
+const std::deque<PFunction>& PClass::GetFunctions() const
+{
+    return Functions;
 }
 }

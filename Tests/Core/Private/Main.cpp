@@ -4,6 +4,7 @@
 #include "Pico/Core/AssetPath.h"
 #include "Pico/Core/CommandLine.h"
 #include "Pico/Core/Config.h"
+#include "Pico/Core/Delegate.h"
 #include "Pico/Core/Math/Math.h"
 #include "Pico/Core/Name.h"
 #include "Pico/Core/Paths.h"
@@ -16,10 +17,165 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <stdexcept>
 #include <unordered_map>
+#include <vector>
 
 namespace
 {
+int GStaticDelegateTotal = 0;
+
+void AccumulateStaticDelegate(int Value)
+{
+    GStaticDelegateTotal += Value;
+}
+
+int DoubleDelegateValue(int Value)
+{
+    return Value * 2;
+}
+
+void TestDelegates(FTestRunner& Runner)
+{
+    Pico::TDelegate<int(int)> SingleDelegate;
+    Runner.Expect(
+        !SingleDelegate.IsBound()
+            && !SingleDelegate.ExecuteIfBound(3).has_value(),
+        "An empty single-cast delegate is safely unbound");
+    SingleDelegate.BindStatic(&DoubleDelegateValue);
+    Runner.Expect(
+        SingleDelegate.IsBound()
+            && SingleDelegate.Execute(4) == 8
+            && SingleDelegate.ExecuteIfBound(5) == 10,
+        "A single-cast delegate invokes a type-safe static function");
+    SingleDelegate.BindLambda([](int Value) { return Value + 7; });
+    Runner.Expect(
+        SingleDelegate.Execute(3) == 10,
+        "A single-cast delegate replaces its binding with a compatible lambda");
+    SingleDelegate.Unbind();
+    Runner.Expect(!SingleDelegate.IsBound(), "A single-cast delegate can be unbound");
+
+    Pico::TDelegate<void(int)> VoidDelegate;
+    int VoidDelegateTotal = 0;
+    const bool bEmptyVoidSkipped = !VoidDelegate.ExecuteIfBound(2);
+    VoidDelegate.BindLambda(
+        [&VoidDelegateTotal](int Value)
+        {
+            VoidDelegateTotal += Value;
+        });
+    Runner.Expect(
+        bEmptyVoidSkipped
+            && VoidDelegate.ExecuteIfBound(3)
+            && VoidDelegateTotal == 3,
+        "A void single-cast delegate reports whether ExecuteIfBound invoked a callback");
+
+    Pico::TMulticastDelegate<void(int)> StaticDelegate;
+    GStaticDelegateTotal = 0;
+    const Pico::FDelegateHandle StaticHandle =
+        StaticDelegate.AddStatic(&AccumulateStaticDelegate);
+    StaticDelegate.Broadcast(6);
+    Runner.Expect(
+        StaticHandle.IsValid()
+            && GStaticDelegateTotal == 6
+            && StaticDelegate.Remove(StaticHandle)
+            && !StaticDelegate.Remove(StaticHandle),
+        "A multicast delegate adds and removes a static listener by stable handle");
+
+    Pico::TMulticastDelegate<void()> MutableDelegate;
+    std::vector<int> Calls;
+    bool bAddedDuringBroadcast = false;
+    Pico::FDelegateHandle SelfHandle;
+    Pico::FDelegateHandle RemovedBeforeTurnHandle;
+    MutableDelegate.AddLambda(
+        [&]()
+        {
+            Calls.push_back(1);
+            MutableDelegate.Remove(RemovedBeforeTurnHandle);
+            if (!bAddedDuringBroadcast)
+            {
+                bAddedDuringBroadcast = true;
+                MutableDelegate.AddLambda([&Calls]() { Calls.push_back(4); });
+            }
+        });
+    SelfHandle = MutableDelegate.AddLambda(
+        [&]()
+        {
+            Calls.push_back(2);
+            MutableDelegate.Remove(SelfHandle);
+        });
+    RemovedBeforeTurnHandle =
+        MutableDelegate.AddLambda([&Calls]() { Calls.push_back(3); });
+    MutableDelegate.Broadcast();
+    Runner.Expect(
+        Calls == std::vector<int>({1, 2}),
+        "Broadcast supports self-removal and skips listeners removed before their turn");
+    Calls.clear();
+    MutableDelegate.Broadcast();
+    Runner.Expect(
+        Calls == std::vector<int>({1, 4}),
+        "Listeners added during a broadcast begin on the next broadcast");
+
+    Pico::TMulticastDelegate<void()> ClearingDelegate;
+    Calls.clear();
+    ClearingDelegate.AddLambda(
+        [&]()
+        {
+            Calls.push_back(1);
+            ClearingDelegate.Clear();
+        });
+    ClearingDelegate.AddLambda([&Calls]() { Calls.push_back(2); });
+    ClearingDelegate.Broadcast();
+    Runner.Expect(
+        Calls == std::vector<int>({1}) && !ClearingDelegate.IsBound(),
+        "Clear during broadcast prevents remaining callbacks and compacts bindings");
+
+    Pico::TMulticastDelegate<void(int)> NestedDelegate;
+    Calls.clear();
+    bool bInsideNestedBroadcast = false;
+    NestedDelegate.AddLambda(
+        [&](int Value)
+        {
+            Calls.push_back(Value);
+            if (!bInsideNestedBroadcast)
+            {
+                bInsideNestedBroadcast = true;
+                NestedDelegate.Broadcast(2);
+                bInsideNestedBroadcast = false;
+            }
+        });
+    NestedDelegate.AddLambda([&Calls](int Value) { Calls.push_back(Value * 10); });
+    NestedDelegate.Broadcast(1);
+    Runner.Expect(
+        Calls == std::vector<int>({1, 2, 20, 10}),
+        "Nested broadcasts use independent stable listener snapshots");
+
+    Pico::TMulticastDelegate<void()> ThrowingDelegate;
+    Pico::FDelegateHandle ThrowingHandle;
+    int SurvivorCalls = 0;
+    ThrowingHandle = ThrowingDelegate.AddLambda(
+        [&]()
+        {
+            ThrowingDelegate.Remove(ThrowingHandle);
+            throw std::runtime_error("delegate test");
+        });
+    ThrowingDelegate.AddLambda([&SurvivorCalls]() { ++SurvivorCalls; });
+    bool bExceptionObserved = false;
+    try
+    {
+        ThrowingDelegate.Broadcast();
+    }
+    catch (const std::runtime_error&)
+    {
+        bExceptionObserved = true;
+    }
+    ThrowingDelegate.Broadcast();
+    Runner.Expect(
+        bExceptionObserved
+            && SurvivorCalls == 1
+            && ThrowingDelegate.Num() == 1,
+        "An exception restores broadcast state and preserves surviving listeners");
+}
+
 void TestAssetPath(FTestRunner& Runner)
 {
     Pico::FAssetPath Path;
@@ -366,6 +522,8 @@ void TestTransformMath(FTestRunner& Runner)
 
 int main(int Argc, char** Argv)
 {
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
     if (Argc == 3
         && std::string_view(Argv[1]) == "-platform-process-child")
     {
@@ -375,6 +533,7 @@ int main(int Argc, char** Argv)
     Pico::FPaths::Init(Argc > 0 ? Argv[0] : "PicoCoreTests");
 
     FTestRunner Runner;
+    TestDelegates(Runner);
     TestAssetPath(Runner);
     TestCommandLine(Runner);
     TestConfig(Runner);

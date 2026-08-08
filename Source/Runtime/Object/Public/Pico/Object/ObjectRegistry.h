@@ -13,7 +13,8 @@ class PObject;
 class FObjectRegistry
 {
 public:
-    static PObject* AddObject(FObjectPtr Object);
+    static PObject* AddObject(FObjectPtr Object, bool bDeferPostInitProperties = false);
+    static void PostInitObject(PObject* Object);
     static bool DestroyObject(PObject* Object);
     static void DestroyObjectTree(PObject* Root);
     static void DestroyAllObjects();

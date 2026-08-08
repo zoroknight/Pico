@@ -1,5 +1,6 @@
 #include "Pico/Engine/Actor.h"
 
+#include "Pico/Core/Log.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/World.h"
@@ -7,6 +8,7 @@
 #include "Pico/Object/ObjectGlobals.h"
 
 #include <algorithm>
+#include <exception>
 #include <functional>
 
 namespace Pico
@@ -32,6 +34,14 @@ PLevel* PActor::GetLevel() const
         : nullptr;
 }
 
+PActor* PActor::GetOwner() const
+{
+    PObject* Object = ResolveObject(OwnerHandle);
+    return Object != nullptr && Object->IsA(PActor::StaticClass())
+        ? static_cast<PActor*>(Object)
+        : nullptr;
+}
+
 bool PActor::HasBegunPlay() const
 {
     return bHasBegunPlay;
@@ -46,6 +56,11 @@ bool PActor::Destroy()
 {
     PWorld* World = GetWorld();
     return World != nullptr && World->DestroyActor(this);
+}
+
+FOnActorDestroyed& PActor::OnDestroyed()
+{
+    return ActorDestroyedEvent;
 }
 
 PActorComponent* PActor::CreateComponent(const PClass* ComponentClass, FName Name)
@@ -82,7 +97,8 @@ PActorComponent* PActor::CreateComponent(const PClass* ComponentClass, std::stri
 
 bool PActor::DestroyComponent(PActorComponent* Component)
 {
-    if (!OwnsComponent(Component))
+    if (!OwnsComponent(Component)
+        || HasAnyFlags(Component->GetFlags(), EObjectFlags::DefaultSubobject))
     {
         return false;
     }
@@ -233,9 +249,59 @@ void PActor::EndPlay()
 void PActor::BeginDestroy()
 {
     DispatchEndPlay();
+    DispatchDestroyed();
     ComponentHandles.clear();
     RootComponentHandle = {};
     PObject::BeginDestroy();
+}
+
+bool PActor::OnDefaultSubobjectCreated(PObject* Subobject)
+{
+    if (Subobject == nullptr
+        || !Subobject->IsA(PActorComponent::StaticClass())
+        || Subobject->GetOuter() != this)
+    {
+        return false;
+    }
+
+    PActorComponent* Component = static_cast<PActorComponent*>(Subobject);
+    if (!OwnsComponent(Component))
+    {
+        ComponentHandles.push_back(Component->GetHandle());
+    }
+    return true;
+}
+
+bool PActor::OnDefaultSubobjectRelation(
+    PObject* Subobject,
+    PObject* AttachParent,
+    FName AttachSocketName,
+    bool bIsRoot)
+{
+    if (Subobject == nullptr || !Subobject->IsA(PActorComponent::StaticClass()))
+    {
+        return false;
+    }
+
+    if (bIsRoot)
+    {
+        return AttachParent == nullptr
+            && Subobject->IsA(PSceneComponent::StaticClass())
+            && SetRootComponent(static_cast<PSceneComponent*>(Subobject));
+    }
+    if (AttachParent == nullptr)
+    {
+        return true;
+    }
+    if (!Subobject->IsA(PSceneComponent::StaticClass())
+        || !AttachParent->IsA(PSceneComponent::StaticClass()))
+    {
+        return false;
+    }
+    return static_cast<PSceneComponent*>(Subobject)->AttachToComponent(
+        static_cast<PSceneComponent*>(AttachParent),
+        EAttachmentTransformRule::KeepRelative,
+        AttachSocketName);
 }
 
 void PActor::DispatchBeginPlay()
@@ -266,9 +332,45 @@ void PActor::DispatchEndPlay()
     }
 }
 
+void PActor::DispatchDestroyed()
+{
+    if (bDestroyedEventBroadcast)
+    {
+        return;
+    }
+
+    bDestroyedEventBroadcast = true;
+    try
+    {
+        ActorDestroyedEvent.Broadcast(this);
+    }
+    catch (const std::exception& Exception)
+    {
+        PICO_LOG(
+            LogEngine,
+            Error,
+            "OnDestroyed listener for '{}' threw an exception: {}",
+            GetPathName(),
+            Exception.what());
+    }
+    catch (...)
+    {
+        PICO_LOG(
+            LogEngine,
+            Error,
+            "OnDestroyed listener for '{}' threw an unknown exception",
+            GetPathName());
+    }
+}
+
 void PActor::MarkPendingDestroy()
 {
     bPendingDestroy = true;
+}
+
+void PActor::SetOwner(PActor* InOwner)
+{
+    OwnerHandle = InOwner != nullptr ? InOwner->GetHandle() : FObjectHandle {};
 }
 
 PActorComponent* PActor::ResolveComponent(FObjectHandle Handle) const

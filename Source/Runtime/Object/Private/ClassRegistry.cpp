@@ -78,6 +78,21 @@ bool FClassRegistry::RegisterClass(const PClass* Class)
     }
 
     Classes.emplace(Class->GetName(), Class);
+    bool bDefaultObjectCreated = false;
+    try
+    {
+        bDefaultObjectCreated = Class->CreateDefaultObject();
+    }
+    catch (...)
+    {
+        bDefaultObjectCreated = false;
+    }
+    if (!bDefaultObjectCreated)
+    {
+        Classes.erase(Class->GetName());
+        PICO_LOG(LogObject, Error, "Class '{}' could not create its default object", Class->GetName().ToString());
+        return false;
+    }
     return true;
 }
 
@@ -115,6 +130,14 @@ std::size_t FClassRegistry::GetClassCount()
 
 void FClassRegistry::Clear()
 {
+    for (const auto& [Name, Class] : GetClassMap())
+    {
+        (void)Name;
+        if (Class != nullptr)
+        {
+            Class->ResetDefaultObject();
+        }
+    }
     GetClassMap().clear();
 }
 }

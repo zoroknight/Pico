@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Pico/Core/Types.h"
+#include "Pico/Object/ObjectDelegate.h"
 #include "Pico/Object/ReflectionMacros.h"
 
 #include <string_view>
@@ -12,6 +13,16 @@ namespace Pico
 class PActor;
 class FWorldAssetLoader;
 class PLevel;
+
+using FOnActorSpawned = TObjectMulticastDelegate<void(PActor*)>;
+
+struct FActorSpawnParameters
+{
+    FName Name;
+    PLevel* OverrideLevel = nullptr;
+    PActor* Owner = nullptr;
+    EObjectFlags ObjectFlags = EObjectFlags::None;
+};
 
 enum class EWorldState
 {
@@ -34,9 +45,18 @@ public:
     PLevel* CreateLevel(std::string_view Name);
     bool RemoveLevel(PLevel* Level);
     bool SetCurrentLevel(PLevel* Level);
+    PActor* SpawnActor(const PClass* ActorClass, const FActorSpawnParameters& SpawnParameters);
     PActor* SpawnActor(const PClass* ActorClass, FName Name, PLevel* Level = nullptr);
     PActor* SpawnActor(const PClass* ActorClass, std::string_view Name, PLevel* Level = nullptr);
     bool DestroyActor(PActor* Actor);
+    FOnActorSpawned& OnActorSpawned();
+
+    template <typename TActor>
+    TActor* SpawnActor(const FActorSpawnParameters& SpawnParameters)
+    {
+        static_assert(std::is_base_of_v<PActor, TActor>, "SpawnActor only constructs PActor-derived types");
+        return static_cast<TActor*>(SpawnActor(TActor::StaticClass(), SpawnParameters));
+    }
 
     template <typename TActor>
     TActor* SpawnActor(FName Name, PLevel* Level = nullptr)
@@ -74,6 +94,7 @@ private:
     std::vector<FObjectHandle> PendingDestroyActorHandles;
     FObjectHandle PersistentLevelHandle;
     FObjectHandle CurrentLevelHandle;
+    FOnActorSpawned ActorSpawnedEvent;
     EWorldState State = EWorldState::Uninitialized;
     uint64 TickCount = 0;
     double TimeSeconds = 0.0;

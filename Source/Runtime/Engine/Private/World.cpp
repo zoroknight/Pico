@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
+#include <string>
 
 namespace Pico
 {
@@ -204,7 +206,7 @@ bool PWorld::SetCurrentLevel(PLevel* Level)
     return true;
 }
 
-PActor* PWorld::SpawnActor(const PClass* ActorClass, FName Name, PLevel* Level)
+PActor* PWorld::SpawnActor(const PClass* ActorClass, const FActorSpawnParameters& SpawnParameters)
 {
     if (State != EWorldState::Initialized)
     {
@@ -218,26 +220,93 @@ PActor* PWorld::SpawnActor(const PClass* ActorClass, FName Name, PLevel* Level)
         return nullptr;
     }
 
-    PLevel* TargetLevel = Level != nullptr ? Level : GetCurrentLevel();
+    if (SpawnParameters.Name.IsNone())
+    {
+        PICO_LOG(LogEngine, Error, "World '{}' requires a non-empty actor name", GetPathName());
+        return nullptr;
+    }
+
+    PLevel* TargetLevel = SpawnParameters.OverrideLevel != nullptr
+        ? SpawnParameters.OverrideLevel
+        : GetCurrentLevel();
     if (!OwnsLevel(TargetLevel))
     {
         PICO_LOG(LogEngine, Error, "World '{}' cannot spawn an actor into an unowned level", GetPathName());
         return nullptr;
     }
 
-    PObject* Object = NewObject(ActorClass, TargetLevel, Name);
+    if (SpawnParameters.Owner != nullptr
+        && (!OwnsActor(SpawnParameters.Owner)
+            || SpawnParameters.Owner->IsPendingDestroy()
+            || SpawnParameters.Owner->IsBeginningDestroy()))
+    {
+        PICO_LOG(LogEngine, Error, "World '{}' requires a live actor owner from the same World", GetPathName());
+        return nullptr;
+    }
+
+    const FObjectConstructionParams ConstructionParams {
+        ActorClass,
+        TargetLevel,
+        SpawnParameters.Name,
+        SpawnParameters.ObjectFlags,
+        nullptr
+    };
+    PObject* Object = NewObject(ConstructionParams);
     if (Object == nullptr)
     {
         return nullptr;
     }
 
     PActor* Actor = static_cast<PActor*>(Object);
+    Actor->SetOwner(SpawnParameters.Owner);
     TargetLevel->AddActor(Actor);
     if (bHasBegunPlay)
     {
         Actor->DispatchBeginPlay();
     }
-    return Actor;
+
+    const FObjectHandle SpawnedHandle = Actor->GetHandle();
+    const std::string SpawnedPath = Actor->GetPathName();
+    try
+    {
+        ActorSpawnedEvent.Broadcast(Actor);
+    }
+    catch (const std::exception& Exception)
+    {
+        PICO_LOG(
+            LogEngine,
+            Error,
+            "OnActorSpawned listener for '{}' threw an exception: {}",
+            SpawnedPath,
+            Exception.what());
+    }
+    catch (...)
+    {
+        PICO_LOG(
+            LogEngine,
+            Error,
+            "OnActorSpawned listener for '{}' threw an unknown exception",
+            SpawnedPath);
+    }
+
+    PObject* LiveObject = ResolveObject(SpawnedHandle);
+    PActor* LiveActor = LiveObject != nullptr
+            && LiveObject->IsA(PActor::StaticClass())
+        ? static_cast<PActor*>(LiveObject)
+        : nullptr;
+    return LiveActor != nullptr
+            && !LiveActor->IsPendingDestroy()
+            && OwnsActor(LiveActor)
+        ? LiveActor
+        : nullptr;
+}
+
+PActor* PWorld::SpawnActor(const PClass* ActorClass, FName Name, PLevel* Level)
+{
+    FActorSpawnParameters SpawnParameters;
+    SpawnParameters.Name = Name;
+    SpawnParameters.OverrideLevel = Level;
+    return SpawnActor(ActorClass, SpawnParameters);
 }
 
 PActor* PWorld::SpawnActor(const PClass* ActorClass, std::string_view Name, PLevel* Level)
@@ -259,6 +328,7 @@ bool PWorld::DestroyActor(PActor* Actor)
 
     Actor->MarkPendingDestroy();
     Actor->DispatchEndPlay();
+    Actor->DispatchDestroyed();
 
     if (PLevel* Level = Actor->GetLevel())
     {
@@ -274,6 +344,11 @@ bool PWorld::DestroyActor(PActor* Actor)
         DestroyActorNow(Actor);
     }
     return true;
+}
+
+FOnActorSpawned& PWorld::OnActorSpawned()
+{
+    return ActorSpawnedEvent;
 }
 
 PLevel* PWorld::GetPersistentLevel() const

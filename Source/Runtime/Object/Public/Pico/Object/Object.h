@@ -1,15 +1,18 @@
 #pragma once
 
 #include "Pico/Core/Name.h"
+#include "Pico/Object/Function.h"
 #include "Pico/Object/ObjectTypes.h"
 
 #include <cstddef>
+#include <span>
 #include <string>
 
 namespace Pico
 {
 class FArchive;
 class FObjectRegistry;
+class FObjectInitializer;
 class FWorldAssetLoader;
 class PClass;
 class PObject;
@@ -36,6 +39,7 @@ struct FObjectConstructionParams
     PObject* Outer = nullptr;
     FName Name;
     EObjectFlags Flags = EObjectFlags::None;
+    const PObject* Template = nullptr;
 };
 
 class PObject
@@ -51,6 +55,10 @@ public:
     std::string GetPathName() const;
     bool IsA(const PClass* Class) const;
     bool IsBeginningDestroy() const;
+    EFunctionInvokeResult ProcessEvent(
+        const PFunction* Function,
+        std::span<const FFunctionValue> Arguments = {},
+        FFunctionValue* OutReturnValue = nullptr);
     virtual void PostEditChangeProperty(const FPropertyChangedEvent& Event);
 
 protected:
@@ -62,6 +70,13 @@ protected:
     virtual void PostInitProperties();
     virtual void PostLoad();
     virtual void BeginDestroy();
+    virtual bool DefineDefaultSubobjects(FObjectInitializer& Initializer);
+    virtual bool OnDefaultSubobjectCreated(PObject* Subobject);
+    virtual bool OnDefaultSubobjectRelation(
+        PObject* Subobject,
+        PObject* AttachParent,
+        FName AttachSocketName,
+        bool bIsRoot);
 
 private:
     enum class ELifecycleState
@@ -74,6 +89,8 @@ private:
     static FObjectPtr ConstructInstance(const FObjectConstructionParams& Params);
 
     friend class FObjectRegistry;
+    friend class FObjectInitializer;
+    friend class PClass;
     friend class FWorldAssetLoader;
     friend struct FObjectDeleter;
     friend PObject* LoadObject(FArchive& Archive, PObject* Outer, EObjectSerializationError* OutError);

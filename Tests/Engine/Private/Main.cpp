@@ -17,6 +17,7 @@
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Object/ObjectGlobals.h"
+#include "Pico/Object/ObjectInitializer.h"
 #include "Pico/Object/ObjectRegistry.h"
 #include "Pico/Object/ObjectSystem.h"
 
@@ -39,7 +40,30 @@ public:
     int TickCount = 0;
     int EndPlayCount = 0;
     float LastDeltaSeconds = 0.0f;
+    int SpawnedEventCount = 0;
+    int DestroyedEventCount = 0;
+    bool bSpawnedActorHadBegunPlay = false;
+    bool bDestroyedActorWasPending = false;
+    bool bDestroyedActorHadEndedPlay = false;
     inline static int TotalEndPlayCount = 0;
+
+    void ObserveActorSpawned(Pico::PActor* Actor)
+    {
+        ++SpawnedEventCount;
+        bSpawnedActorHadBegunPlay = Actor != nullptr
+            && Actor->HasBegunPlay()
+            && Actor->GetWorld() != nullptr
+            && Pico::ResolveObject(Actor->GetHandle()) == Actor;
+    }
+
+    void ObserveActorDestroyed(Pico::PActor* Actor)
+    {
+        ++DestroyedEventCount;
+        bDestroyedActorWasPending = Actor != nullptr && Actor->IsPendingDestroy();
+        bDestroyedActorHadEndedPlay = Actor != nullptr
+            && Actor->IsA(PCountingActor::StaticClass())
+            && static_cast<PCountingActor*>(Actor)->EndPlayCount == 1;
+    }
 
     void BeginPlay() override
     {
@@ -173,6 +197,60 @@ protected:
 
 PICO_DEFINE_CLASS_NO_PROPERTIES(PCountingSceneComponent)
 
+class PDefaultSubobjectActor : public Pico::PActor
+{
+    PICO_DECLARE_CLASS(PDefaultSubobjectActor, Pico::PActor)
+
+protected:
+    explicit PDefaultSubobjectActor(const Pico::FObjectConstructionParams& Params)
+        : PActor(Params)
+    {
+    }
+
+    bool DefineDefaultSubobjects(Pico::FObjectInitializer& Initializer) override
+    {
+        Pico::PSceneComponent* Root =
+            Initializer.CreateDefaultSubobject<Pico::PSceneComponent>("TemplateRoot");
+        Pico::PCubeComponent* Cube =
+            Initializer.CreateDefaultSubobject<Pico::PCubeComponent>("TemplateCube");
+        return Root != nullptr
+            && Cube != nullptr
+            && Initializer.SetRootSubobject(Root)
+            && Initializer.AttachSubobject(Cube, Root);
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PDefaultSubobjectActor)
+
+class PDerivedDefaultSubobjectActor final : public PDefaultSubobjectActor
+{
+    PICO_DECLARE_CLASS(PDerivedDefaultSubobjectActor, PDefaultSubobjectActor)
+
+protected:
+    explicit PDerivedDefaultSubobjectActor(const Pico::FObjectConstructionParams& Params)
+        : PDefaultSubobjectActor(Params)
+    {
+    }
+
+    bool DefineDefaultSubobjects(Pico::FObjectInitializer& Initializer) override
+    {
+        Pico::PSceneComponent* Root =
+            Initializer.CreateDefaultSubobject<Pico::PSceneComponent>("TemplateRoot");
+        Pico::PCubeComponent* Cube =
+            Initializer.CreateDefaultSubobject<Pico::PCubeComponent>("TemplateCube");
+        Pico::PSceneComponent* Child =
+            Initializer.CreateDefaultSubobject<Pico::PSceneComponent>("DerivedChild");
+        return Root != nullptr
+            && Cube != nullptr
+            && Child != nullptr
+            && Initializer.SetRootSubobject(Root)
+            && Initializer.AttachSubobject(Cube, Root)
+            && Initializer.AttachSubobject(Child, Root);
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PDerivedDefaultSubobjectActor)
+
 bool InitializeWorldTypes(FTestRunner& Runner)
 {
     Pico::PObjectSystem::Shutdown();
@@ -199,6 +277,9 @@ bool InitializeWorldTypes(FTestRunner& Runner)
         Pico::PStaticMeshComponent::RegisterClass();
     const bool bCountingSceneComponentRegistered = PCountingSceneComponent::RegisterClass();
     const bool bActorRegistered = Pico::PActor::RegisterClass();
+    const bool bDefaultSubobjectActorRegistered = PDefaultSubobjectActor::RegisterClass();
+    const bool bDerivedDefaultSubobjectActorRegistered =
+        PDerivedDefaultSubobjectActor::RegisterClass();
     const bool bCountingActorRegistered = PCountingActor::RegisterClass();
     const bool bLoadTrackingActorRegistered = PLoadTrackingActor::RegisterClass();
     const bool bSelfDestroyActorRegistered = PSelfDestroyActor::RegisterClass();
@@ -225,6 +306,12 @@ bool InitializeWorldTypes(FTestRunner& Runner)
         "PStaticMeshComponent registers with the class registry");
     Runner.Expect(bCountingSceneComponentRegistered, "A test scene component registers with the class registry");
     Runner.Expect(bActorRegistered, "PActor registers with the class registry");
+    Runner.Expect(
+        bDefaultSubobjectActorRegistered,
+        "A default-subobject Actor registers with the class registry");
+    Runner.Expect(
+        bDerivedDefaultSubobjectActorRegistered,
+        "A derived default-subobject Actor registers with the class registry");
     Runner.Expect(bCountingActorRegistered, "A test actor registers with the class registry");
     Runner.Expect(bLoadTrackingActorRegistered, "A PostLoad test actor registers with the class registry");
     Runner.Expect(bSelfDestroyActorRegistered, "A self-destroying test actor registers with the class registry");
@@ -242,6 +329,8 @@ bool InitializeWorldTypes(FTestRunner& Runner)
         && bStaticMeshComponentRegistered
         && bCountingSceneComponentRegistered
         && bActorRegistered
+        && bDefaultSubobjectActorRegistered
+        && bDerivedDefaultSubobjectActorRegistered
         && bCountingActorRegistered
         && bLoadTrackingActorRegistered
         && bSelfDestroyActorRegistered
@@ -398,6 +487,22 @@ void TestActorSpawnLifecycleAndOwnership(FTestRunner& Runner)
         "World rejects spawning a non-actor class");
     Runner.Expect(World->SpawnActor<PCountingActor>("Hero") == nullptr, "Duplicate actor names are rejected per level");
 
+    Pico::FActorSpawnParameters OwnedSpawnParameters;
+    OwnedSpawnParameters.Name = Pico::FName("OwnedActor");
+    OwnedSpawnParameters.OverrideLevel = World->GetPersistentLevel();
+    OwnedSpawnParameters.Owner = Hero;
+    OwnedSpawnParameters.ObjectFlags = Pico::EObjectFlags::Transient;
+    PCountingActor* OwnedActor = World->SpawnActor<PCountingActor>(OwnedSpawnParameters);
+    Runner.Expect(
+        OwnedActor != nullptr
+            && OwnedActor->GetLevel() == World->GetPersistentLevel()
+            && OwnedActor->GetOwner() == Hero
+            && Pico::HasAnyFlags(OwnedActor->GetFlags(), Pico::EObjectFlags::Transient),
+        "Structured spawn parameters select Level, Owner, and object flags");
+    Runner.Expect(
+        OwnedActor != nullptr && World->DestroyActor(OwnedActor),
+        "An actor created through structured spawn parameters follows normal destruction");
+
     World->Tick(0.5f);
     Runner.Expect(Hero->BeginPlayCount == 1, "The first world tick begins play for existing actors");
     Runner.Expect(Hero->TickCount == 1, "The first world tick ticks begun actors");
@@ -425,6 +530,103 @@ void TestActorSpawnLifecycleAndOwnership(FTestRunner& Runner)
 
     Pico::DestroyObjectTree(World);
     Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Actor lifecycle leaves no registered objects");
+    Pico::PObjectSystem::Shutdown();
+}
+
+void TestActorLifecycleDelegates(FTestRunner& Runner)
+{
+    if (!InitializeWorldTypes(Runner))
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    Pico::PWorld* World = Pico::NewObject<Pico::PWorld>(nullptr, "DelegateWorld");
+    PCountingActor* Listener =
+        World != nullptr && World->Initialize()
+        ? World->SpawnActor<PCountingActor>("DelegateListener")
+        : nullptr;
+    if (World != nullptr)
+    {
+        World->Tick(0.0f);
+    }
+
+    const Pico::FDelegateHandle SpawnListenerHandle = Listener != nullptr
+        ? World->OnActorSpawned().AddObject(
+            Listener,
+            &PCountingActor::ObserveActorSpawned)
+        : Pico::FDelegateHandle {};
+    const Pico::FDelegateHandle ThrowingSpawnHandle = World != nullptr
+        ? World->OnActorSpawned().AddLambda(
+            [](Pico::PActor*)
+            {
+                throw std::runtime_error("spawn delegate test");
+            })
+        : Pico::FDelegateHandle {};
+
+    PCountingActor* Subject = World != nullptr
+        ? World->SpawnActor<PCountingActor>("DelegateSubject")
+        : nullptr;
+    Runner.Expect(
+        SpawnListenerHandle.IsValid()
+            && ThrowingSpawnHandle.IsValid()
+            && Subject != nullptr
+            && Listener != nullptr
+            && Listener->SpawnedEventCount == 1
+            && Listener->bSpawnedActorHadBegunPlay,
+        "World spawn delegates observe a complete begun-play Actor and cannot fail spawning");
+
+    if (World != nullptr)
+    {
+        World->OnActorSpawned().Remove(ThrowingSpawnHandle);
+    }
+    const Pico::FDelegateHandle DestroyListenerHandle =
+        Subject != nullptr && Listener != nullptr
+        ? Subject->OnDestroyed().AddObject(
+            Listener,
+            &PCountingActor::ObserveActorDestroyed)
+        : Pico::FDelegateHandle {};
+    const Pico::FDelegateHandle ThrowingDestroyHandle = Subject != nullptr
+        ? Subject->OnDestroyed().AddLambda(
+            [](Pico::PActor*)
+            {
+                throw std::runtime_error("destroy delegate test");
+            })
+        : Pico::FDelegateHandle {};
+    const Pico::FObjectHandle SubjectHandle = Subject != nullptr
+        ? Subject->GetHandle()
+        : Pico::FObjectHandle {};
+    Runner.Expect(
+        DestroyListenerHandle.IsValid()
+            && ThrowingDestroyHandle.IsValid()
+            && World != nullptr
+            && World->DestroyActor(Subject)
+            && Pico::ResolveObject(SubjectHandle) == nullptr
+            && Listener->DestroyedEventCount == 1
+            && Listener->bDestroyedActorWasPending
+            && Listener->bDestroyedActorHadEndedPlay,
+        "Actor destruction delegates run once after pending-destroy and EndPlay state is committed");
+
+    const Pico::FObjectHandle ListenerHandle = Listener != nullptr
+        ? Listener->GetHandle()
+        : Pico::FObjectHandle {};
+    Runner.Expect(
+        World != nullptr
+            && World->DestroyActor(Listener)
+            && Pico::ResolveObject(ListenerHandle) == nullptr,
+        "The weak lifecycle listener can be destroyed independently");
+    PCountingActor* AfterListenerDestroy = World != nullptr
+        ? World->SpawnActor<PCountingActor>("AfterListenerDestroy")
+        : nullptr;
+    Runner.Expect(
+        AfterListenerDestroy != nullptr
+            && World->OnActorSpawned().Num() == 0,
+        "World events skip and compact bindings whose object listener was destroyed");
+
+    Pico::DestroyObjectTree(World);
+    Runner.Expect(
+        Pico::FObjectRegistry::GetObjectCount() == 0,
+        "Lifecycle delegate integration leaves no registered objects");
     Pico::PObjectSystem::Shutdown();
 }
 
@@ -721,6 +923,191 @@ void TestActorComponentsAndSceneTransform(FTestRunner& Runner)
 
     Pico::DestroyObjectTree(World);
     Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Component lifecycle leaves no registered objects");
+    Pico::PObjectSystem::Shutdown();
+}
+
+void TestDefaultSubobjectTemplatesAndWorldRestore(FTestRunner& Runner)
+{
+    if (!InitializeWorldTypes(Runner))
+    {
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    const Pico::PClass* BaseClass = PDefaultSubobjectActor::StaticClass();
+    const Pico::PClass* DerivedClass = PDerivedDefaultSubobjectActor::StaticClass();
+    const std::vector<Pico::FDefaultSubobjectRecord>& BaseRecords =
+        BaseClass->GetDefaultSubobjects();
+    const std::vector<Pico::FDefaultSubobjectRecord>& DerivedRecords =
+        DerivedClass->GetDefaultSubobjects();
+    Runner.Expect(BaseRecords.size() == 2, "A base Actor class owns two default-subobject templates");
+    Runner.Expect(
+        DerivedRecords.size() == 3,
+        "A derived Actor class inherits default subobjects and adds one template");
+
+    const auto FindRecord = [](
+        const std::vector<Pico::FDefaultSubobjectRecord>& Records,
+        std::string_view Name) -> const Pico::FDefaultSubobjectRecord*
+    {
+        const Pico::FName ObjectName(Name);
+        const auto Found = std::find_if(
+            Records.begin(),
+            Records.end(),
+            [ObjectName](const Pico::FDefaultSubobjectRecord& Record)
+            {
+                return Record.Name == ObjectName;
+            });
+        return Found != Records.end() ? &*Found : nullptr;
+    };
+
+    const Pico::FDefaultSubobjectRecord* RootRecord =
+        FindRecord(DerivedRecords, "TemplateRoot");
+    const Pico::FDefaultSubobjectRecord* CubeRecord =
+        FindRecord(DerivedRecords, "TemplateCube");
+    const Pico::FDefaultSubobjectRecord* ChildRecord =
+        FindRecord(DerivedRecords, "DerivedChild");
+    Runner.Expect(
+        RootRecord != nullptr
+            && RootRecord->bIsRoot
+            && RootRecord->Template != nullptr
+            && RootRecord->Template->GetOuter() == DerivedClass->GetDefaultObject(),
+        "The derived class owns an inherited root template under its CDO");
+    Runner.Expect(
+        CubeRecord != nullptr
+            && CubeRecord->AttachParentName == Pico::FName("TemplateRoot")
+            && ChildRecord != nullptr
+            && ChildRecord->AttachParentName == Pico::FName("TemplateRoot"),
+        "Default-subobject attachment metadata belongs to the class template graph");
+    Runner.Expect(
+        CubeRecord != nullptr
+            && CubeRecord->Template != nullptr
+            && !CubeRecord->Template->GetHandle().IsValid()
+            && Pico::HasAnyFlags(
+                CubeRecord->Template->GetFlags(),
+                Pico::EObjectFlags::DefaultSubobject)
+            && Pico::HasAnyFlags(
+                CubeRecord->Template->GetFlags(),
+                Pico::EObjectFlags::Transient)
+            && Pico::HasAnyFlags(
+                CubeRecord->Template->GetFlags(),
+                Pico::EObjectFlags::RootSet),
+        "A default-subobject template is rooted class data outside the live object registry");
+
+    Pico::PCubeComponent* CubeTemplate = CubeRecord != nullptr
+        ? static_cast<Pico::PCubeComponent*>(CubeRecord->Template.get())
+        : nullptr;
+    Pico::PWorld* World = Pico::NewObject<Pico::PWorld>(nullptr, "DefaultSubobjectWorld");
+    PDerivedDefaultSubobjectActor* FirstActor =
+        World != nullptr && World->Initialize()
+        ? World->SpawnActor<PDerivedDefaultSubobjectActor>("FirstActor")
+        : nullptr;
+    Pico::PCubeComponent* FirstCube = FirstActor != nullptr
+        ? static_cast<Pico::PCubeComponent*>(
+            Pico::FindObject(FirstActor, Pico::FName("TemplateCube")))
+        : nullptr;
+    Runner.Expect(
+        FirstActor != nullptr
+            && FirstActor->GetComponents().size() == 3
+            && FirstActor->GetRootComponent() != nullptr
+            && FirstActor->GetRootComponent()->GetName() == Pico::FName("TemplateRoot")
+            && FirstCube != nullptr
+            && FirstCube->GetAttachParent() == FirstActor->GetRootComponent(),
+        "Spawning an Actor materializes its complete default-subobject graph");
+    Runner.Expect(
+        FirstCube != nullptr
+            && FirstCube->GetExtent().Equals(Pico::FVector3(50.0f))
+            && Pico::HasAnyFlags(FirstCube->GetFlags(), Pico::EObjectFlags::DefaultSubobject),
+        "A materialized default subobject copies reflected values and keeps its identity flag");
+
+    if (CubeTemplate != nullptr)
+    {
+        CubeTemplate->SetExtent(Pico::FVector3(75.0f));
+    }
+    PDerivedDefaultSubobjectActor* SecondActor = World != nullptr
+        ? World->SpawnActor<PDerivedDefaultSubobjectActor>("SecondActor")
+        : nullptr;
+    Pico::PCubeComponent* SecondCube = SecondActor != nullptr
+        ? static_cast<Pico::PCubeComponent*>(
+            Pico::FindObject(SecondActor, Pico::FName("TemplateCube")))
+        : nullptr;
+    Runner.Expect(
+        FirstCube != nullptr
+            && FirstCube->GetExtent().Equals(Pico::FVector3(50.0f))
+            && SecondCube != nullptr
+            && SecondCube->GetExtent().Equals(Pico::FVector3(75.0f)),
+        "Changing a class template affects future instances without mutating existing Actors");
+    Runner.Expect(
+        SecondActor != nullptr
+            && SecondCube != nullptr
+            && !Pico::RenameObject(SecondCube, Pico::FName("RenamedCube"))
+            && !SecondActor->DestroyComponent(SecondCube),
+        "Default subobjects cannot be renamed or deleted from an individual Actor");
+
+    if (SecondCube != nullptr)
+    {
+        SecondCube->SetExtent(Pico::FVector3(80.0f));
+    }
+    Pico::FWorldAssetData Snapshot;
+    Pico::EWorldSerializationError Error = Pico::EWorldSerializationError::None;
+    Runner.Expect(
+        World != nullptr && Pico::CaptureWorld(*World, Snapshot, &Error),
+        "World capture serializes materialized default subobjects");
+
+    const Pico::FObjectHandle FirstCubeHandle = FirstCube != nullptr
+        ? FirstCube->GetHandle()
+        : Pico::FObjectHandle {};
+    if (CubeTemplate != nullptr)
+    {
+        CubeTemplate->SetExtent(Pico::FVector3(50.0f));
+    }
+    Pico::DestroyObjectTree(World);
+    Runner.Expect(
+        Pico::ResolveObject(FirstCubeHandle) == nullptr,
+        "Destroying the World releases materialized default subobjects");
+
+    Pico::PWorld* RestoredWorld = Pico::CreateWorldFromAssetData(Snapshot, &Error);
+    PDerivedDefaultSubobjectActor* RestoredFirst = nullptr;
+    PDerivedDefaultSubobjectActor* RestoredSecond = nullptr;
+    if (RestoredWorld != nullptr)
+    {
+        for (Pico::PActor* Actor : RestoredWorld->GetPersistentLevel()->GetActors())
+        {
+            if (Actor->GetName() == Pico::FName("FirstActor"))
+            {
+                RestoredFirst = static_cast<PDerivedDefaultSubobjectActor*>(Actor);
+            }
+            else if (Actor->GetName() == Pico::FName("SecondActor"))
+            {
+                RestoredSecond = static_cast<PDerivedDefaultSubobjectActor*>(Actor);
+            }
+        }
+    }
+    Pico::PCubeComponent* RestoredFirstCube = RestoredFirst != nullptr
+        ? static_cast<Pico::PCubeComponent*>(
+            Pico::FindObject(RestoredFirst, Pico::FName("TemplateCube")))
+        : nullptr;
+    Pico::PCubeComponent* RestoredSecondCube = RestoredSecond != nullptr
+        ? static_cast<Pico::PCubeComponent*>(
+            Pico::FindObject(RestoredSecond, Pico::FName("TemplateCube")))
+        : nullptr;
+    Runner.Expect(
+        RestoredFirst != nullptr
+            && RestoredSecond != nullptr
+            && RestoredFirst->GetComponents().size() == 3
+            && RestoredSecond->GetComponents().size() == 3,
+        "World loading reuses implicit default subobjects instead of creating duplicates");
+    Runner.Expect(
+        RestoredFirstCube != nullptr
+            && RestoredFirstCube->GetExtent().Equals(Pico::FVector3(50.0f))
+            && RestoredSecondCube != nullptr
+            && RestoredSecondCube->GetExtent().Equals(Pico::FVector3(80.0f))
+            && RestoredSecondCube->GetAttachParent() == RestoredSecond->GetRootComponent(),
+        "World loading reapplies saved overrides and restores default-subobject relations");
+
+    Pico::DestroyObjectTree(RestoredWorld);
+    Runner.Expect(
+        Pico::FObjectRegistry::GetObjectCount() == 0,
+        "Default-subobject template and restore tests leave no registered objects");
     Pico::PObjectSystem::Shutdown();
 }
 
@@ -2020,9 +2407,11 @@ int main()
     TestWorldLifecycle(Runner);
     TestWorldOwnershipAndStaleHandles(Runner);
     TestActorSpawnLifecycleAndOwnership(Runner);
+    TestActorLifecycleDelegates(Runner);
     TestActorDestroyDuringTick(Runner);
     TestTickExceptionSafety(Runner);
     TestActorComponentsAndSceneTransform(Runner);
+    TestDefaultSubobjectTemplatesAndWorldRestore(Runner);
     TestSceneComponentAttachmentHierarchy(Runner);
     TestPrimitiveComponentSceneData(Runner);
     TestWorldAssetDataSerialization(Runner);

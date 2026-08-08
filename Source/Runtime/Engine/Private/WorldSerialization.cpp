@@ -320,17 +320,36 @@ public:
 
                 PActor* Actor =
                     static_cast<PActor*>(Objects.at(Record.OuterId.Value));
-                PActorComponent* Component =
-                    static_cast<PActorComponent*>(NewObject(
+                PObject* ExistingObject = FindObject(Actor, FName(Record.ObjectName));
+                PActorComponent* Component = nullptr;
+                if (ExistingObject != nullptr)
+                {
+                    if (ExistingObject->GetClass() != Class
+                        || !ExistingObject->IsA(PActorComponent::StaticClass())
+                        || !HasAnyFlags(
+                            ExistingObject->GetFlags(),
+                            EObjectFlags::DefaultSubobject))
+                    {
+                        return Fail(EWorldSerializationError::ObjectCreationFailed);
+                    }
+                    Component = static_cast<PActorComponent*>(ExistingObject);
+                }
+                else
+                {
+                    Component = static_cast<PActorComponent*>(NewObject(
                         Class,
                         Actor,
                         FName(Record.ObjectName),
                         Record.Flags));
+                }
                 if (Component == nullptr)
                 {
                     return Fail(EWorldSerializationError::ObjectCreationFailed);
                 }
-                Actor->ComponentHandles.push_back(Component->GetHandle());
+                if (ExistingObject == nullptr)
+                {
+                    Actor->ComponentHandles.push_back(Component->GetHandle());
+                }
                 Objects.emplace(Record.Id.Value, Component);
             }
         }
@@ -396,9 +415,18 @@ public:
 
         try
         {
-            for (const FSceneObjectRecord& Record : Data.Objects)
+            World->PostLoad();
+            for (PLevel* Level : World->GetLevels())
             {
-                Objects.at(Record.Id.Value)->PostLoad();
+                Level->PostLoad();
+                for (PActor* Actor : Level->GetActors())
+                {
+                    Actor->PostLoad();
+                    for (PActorComponent* Component : Actor->GetComponents())
+                    {
+                        Component->PostLoad();
+                    }
+                }
             }
         }
         catch (...)

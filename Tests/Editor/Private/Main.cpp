@@ -347,6 +347,25 @@ void TestEditorCommandService(FTestRunner& Runner)
         &Transactions,
         &Clipboard);
 
+    Pico::PActor* DefaultOwner = EngineLoop.GetWorld() != nullptr
+        ? EngineLoop.GetWorld()->SpawnActor<Pico::PActor>("DefaultOwner")
+        : nullptr;
+    Pico::PSceneComponent* DefaultComponent = DefaultOwner != nullptr
+        ? Pico::NewObject<Pico::PSceneComponent>(
+            DefaultOwner,
+            "DefaultComponent",
+            Pico::EObjectFlags::DefaultSubobject)
+        : nullptr;
+    Selection.Set(DefaultComponent);
+    Runner.Expect(
+        DefaultComponent != nullptr
+            && !Commands.RenameObject(
+                DefaultComponent->GetHandle(), "RenamedDefaultComponent").bSucceeded
+            && !Commands.DeleteSelectedObject().bSucceeded
+            && Pico::ResolveObject(DefaultComponent->GetHandle()) == DefaultComponent,
+        "Editor commands preserve the identity of default subobjects");
+    Selection.Set(EngineLoop.GetWorld());
+
     const Pico::FEditorCommandResult SpawnResult = Commands.SpawnActor(true);
     Pico::PObject* SpawnedObject = Selection.Resolve();
     const std::string SpawnedPath =

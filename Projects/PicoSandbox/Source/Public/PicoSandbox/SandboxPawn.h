@@ -21,6 +21,7 @@ public:
 
 protected:
     explicit PSandboxPawn(const Pico::FObjectConstructionParams& Params);
+    bool DefineDefaultSubobjects(Pico::FObjectInitializer& Initializer) override;
 
 private:
     Pico::FInputSystem* InputSystem = nullptr;

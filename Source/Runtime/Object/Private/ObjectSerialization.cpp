@@ -75,7 +75,10 @@ std::string_view ToString(EObjectSerializationError Error)
 bool SaveObject(FArchive& Archive, const PObject* Object, EObjectSerializationError* OutError)
 {
     ReportError(OutError, EObjectSerializationError::None);
-    if (!Archive.IsSaving() || Object == nullptr || Object->GetClass() == nullptr)
+    if (!Archive.IsSaving()
+        || Object == nullptr
+        || Object->GetClass() == nullptr
+        || HasAnyFlags(Object->GetFlags(), EObjectFlags::ClassDefaultObject))
     {
         ReportError(OutError, EObjectSerializationError::InvalidArgument);
         return false;

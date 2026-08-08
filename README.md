@@ -22,8 +22,16 @@ The current implementation can:
   native project classes before map loading and creates a project GameInstance afterward.
 - Spawn a reflected project Pawn that consumes mapped WASD input through the normal World/Actor Tick.
 - Create reflected native objects through `PClass` and `NewObject`.
-- Register classes and properties with thin C++ reflection macros.
+- Give every registered class a CDO, declare inherited default-subobject templates, and materialize
+  independent runtime object graphs through one initialization path.
+- Bind type-safe native single-cast and multicast delegates, including generation-safe weak object
+  listeners and Actor spawn/destroy lifecycle events.
+- Register classes, properties, and functions with thin C++ reflection macros.
+- Invoke reflected native functions through `PObject::ProcessEvent` with typed parameters, return
+  metadata, inherited lookup, lifecycle checks, and validated future RPC flags.
 - Inspect and edit supported properties through generic metadata-driven UI.
+- Use PicoInspector as a project-free developer sandbox: invoke reflected functions with generated
+  parameter controls and inspect Native Delegate listeners, broadcasts, expiry, and event logs.
 - Serialize reflected objects to `.pobj` files and reconstruct them with `PostLoad`.
 - Save validated World scene graphs to deterministic `.pworld` files and transactionally reconstruct runtime Worlds without persisting runtime handles.
 - Transactionally replace the `FEngineLoop` active World while preserving the old World on load or `PostLoad` failure.
@@ -117,7 +125,7 @@ PicoSandboxGame
 | `PicoInput` | Frame-based key and pointer state plus configurable Action/Axis mappings |
 | `PicoAsset` | Validated virtual asset discovery, deterministic project registry, and file metadata |
 | `PicoAssetImport` | Developer-only OBJ conversion into validated native static-mesh assets |
-| `PicoObject` | `PObject`, `PClass`, `PProperty`, reflection, registry, handles, Outer graph, serialization |
+| `PicoObject` | `PObject`, `PClass`, `PProperty`, `PFunction`, ProcessEvent, delegates, registry, handles, Outer graph, serialization |
 | `PicoEngine` | Engine loop, World, Level, Actor, components, attachment, primitive scene data |
 | `PicoRender` | GLAD-backed OpenGL, shaders, geometry, framebuffer, scene traversal and draw submission |
 | `PicoGameRuntime` | Reusable project launch, GLFW window, input polling, frame loop, and runtime rendering |
@@ -346,7 +354,7 @@ Editor panel layout is separate from scene data and persists in
 | `PicoGameRuntime` | Reusable GLFW/input/render loop linked by game targets |
 | `PicoGame` | Generic standalone runtime without project-native code |
 | `PicoSandboxGame` | Project runtime with Sandbox module, GameInstance, and controllable Pawn |
-| `PicoInspector` | Generic reflected-object inspector |
+| `PicoInspector` | Project-free developer sandbox for reflected objects, functions, and subsystem experiments |
 | `PicoReflectionDemo` | Console reflection walkthrough |
 | `PicoAssetTool` | Developer command-line OBJ to `.pmesh` importer |
 | `PicoSandboxDemo` | Complete project-side create, edit, save, destroy and load workflow |
@@ -362,6 +370,12 @@ Example commands:
 .\Build\Debug\PicoSandboxGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
 .\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
+
+PicoInspector starts in its Native Delegate experiment. Use `Runtime Browser -> Functions` for
+generic `ProcessEvent` calls, or `Experiments` to inspect listener lifetime and broadcast logs.
+See the [visual verification guide](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md) for the
+test sequence and the purpose of every step. Override its default readable scale with
+`-uiscale=1.4` when needed.
 
 ## Build and Test
 
@@ -440,6 +454,9 @@ See:
 
 - [Remaining Development Roadmap (Chinese)](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
 - [Reflection Authoring Guide](Docs/ReflectionAuthoringGuide.md)
+- [Native Delegate Authoring Guide (Chinese)](Docs/DelegateAuthoringGuide.md)
+- [PicoInspector Developer Sandbox Plan (Chinese)](Docs/PicoInspector_DeveloperSandbox_Plan.zh-CN.md)
+- [PicoInspector Visual Verification Guide (Chinese)](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)
 - [PicoSandbox Guide](Projects/PicoSandbox/README.md)
 - [Month 3 Editor Viewport](Docs/Month03_10_Editor3DViewport.md)
 - [Month 3 Editor Docking](Docs/Month03_11_EditorDocking.md)
@@ -448,14 +465,17 @@ See:
 - [Month 4 Property Transactions](Docs/Month04_10_EditorPropertyTransactions.md)
 - [Month 4 Editor Clipboard](Docs/Month04_11_EditorClipboard.md)
 - [Project Game Module and Runtime Target](Docs/Month06_2_ProjectGameModule.md)
+- [Class Default Objects and Unified Construction](Docs/Month03_13_ClassDefaultObjects.md)
+- [Default Subobject Templates](Docs/Month03_14_DefaultSubobjects.md)
+- [Native Delegates and Weak Object Binding](Docs/Month03_15_NativeDelegates.md)
+- [Reflected Functions and ProcessEvent](Docs/Month03_16_ReflectedFunctions.md)
 
 ## Roadmap
 
 The asset-driven editor, imported static meshes, materials, textures, PBR rendering, standalone Play,
 and the first project Game Module/GameInstance path are complete. The remaining learning path is:
 
-- CDOs, object initialization, and default subobjects
-- Delegates, reflected functions, PicoHeaderTool, and tracing garbage collection
+- PicoHeaderTool and tracing garbage collection
 - A UE-inspired Gameplay Framework with GameMode, GameState, PlayerController, PlayerState, Pawn,
   Character, and movement components
 - Jolt physics, character movement, and a small animation integration

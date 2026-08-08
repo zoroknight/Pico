@@ -89,6 +89,16 @@ bool PObject::IsBeginningDestroy() const
     return LifecycleState != ELifecycleState::Alive;
 }
 
+EFunctionInvokeResult PObject::ProcessEvent(
+    const PFunction* Function,
+    std::span<const FFunctionValue> Arguments,
+    FFunctionValue* OutReturnValue)
+{
+    return Function != nullptr
+        ? Function->Invoke(this, Arguments, OutReturnValue)
+        : EFunctionInvokeResult::InvalidFunction;
+}
+
 void PObject::PostEditChangeProperty(const FPropertyChangedEvent&)
 {
 }
@@ -103,5 +113,20 @@ void PObject::PostLoad()
 
 void PObject::BeginDestroy()
 {
+}
+
+bool PObject::DefineDefaultSubobjects(FObjectInitializer&)
+{
+    return true;
+}
+
+bool PObject::OnDefaultSubobjectCreated(PObject*)
+{
+    return true;
+}
+
+bool PObject::OnDefaultSubobjectRelation(PObject*, PObject*, FName, bool)
+{
+    return true;
 }
 }

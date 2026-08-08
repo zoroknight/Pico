@@ -2,6 +2,7 @@
 
 #include "Pico/Core/Math/Transform.h"
 #include "Pico/Engine/ActorComponent.h"
+#include "Pico/Object/ObjectDelegate.h"
 #include "Pico/Object/ReflectionMacros.h"
 
 #include <string_view>
@@ -10,10 +11,13 @@
 
 namespace Pico
 {
+class PActor;
 class PLevel;
 class PSceneComponent;
 class PWorld;
 class FWorldAssetLoader;
+
+using FOnActorDestroyed = TObjectMulticastDelegate<void(PActor*)>;
 
 class PActor : public PObject
 {
@@ -22,9 +26,11 @@ class PActor : public PObject
 public:
     PWorld* GetWorld() const;
     PLevel* GetLevel() const;
+    PActor* GetOwner() const;
     bool HasBegunPlay() const;
     bool IsPendingDestroy() const;
     bool Destroy();
+    FOnActorDestroyed& OnDestroyed();
 
     PActorComponent* CreateComponent(const PClass* ComponentClass, FName Name);
     PActorComponent* CreateComponent(const PClass* ComponentClass, std::string_view Name);
@@ -65,12 +71,20 @@ public:
 protected:
     explicit PActor(const FObjectConstructionParams& Params);
     void BeginDestroy() override;
+    bool OnDefaultSubobjectCreated(PObject* Subobject) override;
+    bool OnDefaultSubobjectRelation(
+        PObject* Subobject,
+        PObject* AttachParent,
+        FName AttachSocketName,
+        bool bIsRoot) override;
 
 private:
     void DispatchBeginPlay();
     void DispatchTick(float DeltaSeconds);
     void DispatchEndPlay();
+    void DispatchDestroyed();
     void MarkPendingDestroy();
+    void SetOwner(PActor* InOwner);
     PActorComponent* ResolveComponent(FObjectHandle Handle) const;
     bool OwnsComponent(const PActorComponent* Component) const;
     void RegisterAllComponents();
@@ -81,8 +95,11 @@ private:
 
     std::vector<FObjectHandle> ComponentHandles;
     FObjectHandle RootComponentHandle;
+    FObjectHandle OwnerHandle;
+    FOnActorDestroyed ActorDestroyedEvent;
     bool bHasBegunPlay = false;
     bool bHasEndedPlay = false;
     bool bPendingDestroy = false;
+    bool bDestroyedEventBroadcast = false;
 };
 }

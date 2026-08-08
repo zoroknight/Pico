@@ -10,10 +10,35 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+#include <string_view>
 
 namespace
 {
-void ApplyPicoStyle()
+float FindUiScale(int Argc, char** Argv)
+{
+    constexpr std::string_view ScalePrefix = "-uiscale=";
+    for (int Index = 1; Index < Argc; ++Index)
+    {
+        const std::string_view Argument = Argv[Index];
+        if (!Argument.starts_with(ScalePrefix))
+        {
+            continue;
+        }
+        const std::string Value(Argument.substr(ScalePrefix.size()));
+        char* End = nullptr;
+        const float Scale = std::strtof(Value.c_str(), &End);
+        if (End != Value.c_str() && End != nullptr && *End == '\0')
+        {
+            return std::clamp(Scale, 0.75f, 2.5f);
+        }
+    }
+    return 1.25f;
+}
+
+void ApplyPicoStyle(float Scale)
 {
     ImGui::StyleColorsDark();
     ImGuiStyle& Style = ImGui::GetStyle();
@@ -31,10 +56,11 @@ void ApplyPicoStyle()
     Style.Colors[ImGuiCol_FrameBg] = ImVec4(0.16f, 0.17f, 0.18f, 1.0f);
     Style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.22f, 0.25f, 0.25f, 1.0f);
     Style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.12f, 0.38f, 0.35f, 1.0f);
+    Style.ScaleAllSizes(Scale);
 }
 }
 
-int main()
+int main(int Argc, char** Argv)
 {
     if (!glfwInit())
     {
@@ -62,37 +88,55 @@ int main()
     ImGui::CreateContext();
     ImGuiIO& IO = ImGui::GetIO();
     IO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    ApplyPicoStyle();
+    const float UiScale = FindUiScale(Argc, Argv);
+    const std::filesystem::path InterfaceFont = "C:/Windows/Fonts/segoeui.ttf";
+    if (std::filesystem::is_regular_file(InterfaceFont))
+    {
+        IO.FontDefault = IO.Fonts->AddFontFromFileTTF(
+            InterfaceFont.string().c_str(),
+            16.0f * UiScale);
+    }
+    if (IO.FontDefault == nullptr)
+    {
+        ImFontConfig FontConfig;
+        FontConfig.SizePixels = 16.0f * UiScale;
+        IO.FontDefault = IO.Fonts->AddFontDefault(&FontConfig);
+    }
+    ApplyPicoStyle(UiScale);
 
     ImGui_ImplGlfw_InitForOpenGL(Window, true);
     ImGui_ImplOpenGL3_Init("#version 130");
 
     int ExitCode = 0;
-    if (!Pico::PObjectSystem::Init() || !Pico::PDemoCharacter::RegisterClass())
+    if (!Pico::PObjectSystem::Init()
+        || !Pico::PDemoCharacter::RegisterClass()
+        || !Pico::PDemoHealthObserver::RegisterClass())
     {
         ExitCode = 1;
     }
     else
     {
-        Pico::FInspectorApp App;
-        while (!glfwWindowShouldClose(Window))
         {
-            glfwPollEvents();
-            ImGui_ImplOpenGL3_NewFrame();
-            ImGui_ImplGlfw_NewFrame();
-            ImGui::NewFrame();
+            Pico::FInspectorApp App;
+            while (!glfwWindowShouldClose(Window))
+            {
+                glfwPollEvents();
+                ImGui_ImplOpenGL3_NewFrame();
+                ImGui_ImplGlfw_NewFrame();
+                ImGui::NewFrame();
 
-            App.Draw();
+                App.Draw();
 
-            ImGui::Render();
-            int FramebufferWidth = 0;
-            int FramebufferHeight = 0;
-            glfwGetFramebufferSize(Window, &FramebufferWidth, &FramebufferHeight);
-            glViewport(0, 0, FramebufferWidth, FramebufferHeight);
-            glClearColor(0.055f, 0.060f, 0.065f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
-            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-            glfwSwapBuffers(Window);
+                ImGui::Render();
+                int FramebufferWidth = 0;
+                int FramebufferHeight = 0;
+                glfwGetFramebufferSize(Window, &FramebufferWidth, &FramebufferHeight);
+                glViewport(0, 0, FramebufferWidth, FramebufferHeight);
+                glClearColor(0.055f, 0.060f, 0.065f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+                ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                glfwSwapBuffers(Window);
+            }
         }
         Pico::PObjectSystem::Shutdown();
     }

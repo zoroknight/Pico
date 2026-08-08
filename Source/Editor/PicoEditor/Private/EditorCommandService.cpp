@@ -823,6 +823,10 @@ FEditorCommandResult FEditorCommandService::DeleteSelectedObject()
         }
 
         PActorComponent* Component = static_cast<PActorComponent*>(Object);
+        if (HasAnyFlags(Component->GetFlags(), EObjectFlags::DefaultSubobject))
+        {
+            return Failure("Default subobjects cannot be deleted");
+        }
         if (Selection->Contains(Component->GetOwner()))
         {
             continue;
@@ -902,6 +906,10 @@ FEditorCommandResult FEditorCommandService::RenameObject(
     if (Object == nullptr)
     {
         return Failure("The object being renamed no longer exists");
+    }
+    if (HasAnyFlags(Object->GetFlags(), EObjectFlags::DefaultSubobject))
+    {
+        return Failure("Default subobjects cannot be renamed");
     }
     if (!IsValidObjectName(NewName))
     {

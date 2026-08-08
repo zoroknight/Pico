@@ -5,6 +5,7 @@
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectName.h"
 
+#include <algorithm>
 #include <exception>
 #include <vector>
 
@@ -75,6 +76,13 @@ void DestroyObjectTreeInternal(FObjectHandle RootHandle)
             Children.push_back(Slot.Object->GetHandle());
         }
     }
+    std::sort(
+        Children.begin(),
+        Children.end(),
+        [](FObjectHandle Left, FObjectHandle Right)
+        {
+            return Left.Serial < Right.Serial;
+        });
 
     for (FObjectHandle ChildHandle : Children)
     {
@@ -113,7 +121,7 @@ void FObjectRegistry::CallBeginDestroy(PObject* Object)
     }
 }
 
-PObject* FObjectRegistry::AddObject(FObjectPtr Object)
+PObject* FObjectRegistry::AddObject(FObjectPtr Object, bool bDeferPostInitProperties)
 {
     if (IsDestroyingAllObjects())
     {
@@ -175,17 +183,30 @@ PObject* FObjectRegistry::AddObject(FObjectPtr Object)
     PObject* RawObject = Object.get();
     Slot.Object = std::move(Object);
 
-    try
+    if (!bDeferPostInitProperties)
     {
-        RawObject->PostInitProperties();
-    }
-    catch (...)
-    {
-        DestroyObjectTreeInternal(RawObject->GetHandle());
-        throw;
+        PostInitObject(RawObject);
     }
 
     return RawObject;
+}
+
+void FObjectRegistry::PostInitObject(PObject* Object)
+{
+    if (Object == nullptr || ResolveObject(Object->GetHandle()) != Object)
+    {
+        return;
+    }
+
+    try
+    {
+        Object->PostInitProperties();
+    }
+    catch (...)
+    {
+        DestroyObjectTreeInternal(Object->GetHandle());
+        throw;
+    }
 }
 
 bool FObjectRegistry::DestroyObject(PObject* Object)
@@ -323,7 +344,8 @@ bool FObjectRegistry::RenameObject(PObject* Object, FName NewName)
     if (Object == nullptr
         || !IsValidObjectName(NewName)
         || ResolveObject(Object->GetHandle()) != Object
-        || Object->IsBeginningDestroy())
+        || Object->IsBeginningDestroy()
+        || HasAnyFlags(Object->GetFlags(), EObjectFlags::DefaultSubobject))
     {
         return false;
     }

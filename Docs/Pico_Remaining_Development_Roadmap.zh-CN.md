@@ -83,6 +83,7 @@ CDO / ObjectInitializer
  -> PFunction / Delegate
  -> PicoHeaderTool
  -> Mark-Sweep GC
+ -> Dynamic Multicast Delegate
  -> Gameplay Framework
  -> Movement / Physics / Animation
  -> Replication / RPC
@@ -104,11 +105,27 @@ CDO / ObjectInitializer
 | B | 默认子对象模板和简化 `CreateDefaultSubobject` | Character CDO 可声明 Capsule、Mesh、Movement |
 | C | 类型安全委托、DelegateHandle、弱对象绑定 | 对象销毁后回调失效，无悬空绑定 |
 | D | `PFunction`、参数/返回值描述、调用 Thunk 和函数标记 | 可通过元数据安全调用 C++ 函数 |
+| D.1 | PicoInspector Developer Sandbox：通用函数调用面板、Native Delegate 实验、Event Log 和 Reset | 无需项目即可可视化调用 `PFunction`，添加/移除/销毁监听并观察广播 |
 | E | PicoHeaderTool、生成代码和 CMake 依赖 | 项目类无需手写大部分注册模板 |
 | F | 强弱对象引用、Root Set、Stop-the-world Mark-Sweep GC | 循环引用可回收，强引用和根对象不会误回收 |
-| G | 属性变化通知和编辑器事务适配 | CDO、实例和反射属性修改均能正确通知 |
+| G | Dynamic Multicast Delegate、签名校验、反射函数绑定和失效监听清理 | 可通过对象引用与函数名绑定多个 `PFunction`，并经 `ProcessEvent` 安全广播 |
+| H | 动态委托稳定引用序列化、引用修复、属性变化通知和编辑器事务适配 | `.pworld` 加载后恢复动态绑定；CDO、实例和反射属性修改均能正确通知 |
 
-必须覆盖 CDO 继承、默认子对象、反射函数错误参数、强弱引用、循环引用、Root GC、委托销毁安全和 HeaderTool 增量生成测试。
+阶段 A、B、C、D、D.1 已完成。CDO 与统一构造链见
+[`Month03_13_ClassDefaultObjects.md`](Month03_13_ClassDefaultObjects.md)，默认子对象模板、继承、
+World 重建复用和编辑器限制见
+[`Month03_14_DefaultSubobjects.md`](Month03_14_DefaultSubobjects.md)，Native Delegate、广播变更语义和
+弱对象绑定见 [`Month03_15_NativeDelegates.md`](Month03_15_NativeDelegates.md)，函数元数据、调用 Thunk、
+`ProcessEvent` 和 RPC Flags 边界见
+[`Month03_16_ReflectedFunctions.md`](Month03_16_ReflectedFunctions.md)。PicoInspector 的通用函数调用、
+Native Delegate 实验、Event Log、Reset 和可调 UI Scale 见
+[`PicoInspector Developer Sandbox`](PicoInspector_DeveloperSandbox_Plan.zh-CN.md)。下一阶段为 E：PicoHeaderTool。
+
+动态多播委托安排在 HeaderTool 与 GC 之后：运行时绑定保存“弱对象引用 + 函数名”，广播时通过
+`PClass::FindFunction` 和 `PObject::ProcessEvent` 调用；持久化不得保存本次运行的 `FObjectHandle`，
+而应在对象图重建后通过 SceneId/ObjectPath 修复稳定引用。第一版不要求 Dynamic Single-cast。
+
+必须覆盖 CDO 继承、默认子对象、反射函数错误参数、强弱引用、循环引用、Root GC、Native/动态委托销毁安全、动态绑定签名不匹配、序列化引用修复和 HeaderTool 增量生成测试。
 
 ## 第 4 月：Gameplay Framework
 

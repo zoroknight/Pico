@@ -1,6 +1,5 @@
 #include "PicoSandbox/SandboxGameInstance.h"
 
-#include "Pico/Core/AssetPath.h"
 #include "Pico/Engine/GameEngine.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
@@ -23,23 +22,10 @@ bool FSandboxGameInstance::Init(Pico::FGameEngine& GameEngine)
         return false;
     }
 
-    Pico::PStaticMeshComponent* Mesh =
-        Pawn->CreateComponent<Pico::PStaticMeshComponent>("SandboxPlayerMesh");
-    Pico::FAssetPath MeshAsset;
-    Pico::FAssetPath MaterialAsset;
-    if (Mesh == nullptr
-        || !Pico::FAssetPath::TryParse(
-            "/Game/Meshes/spot_triangulated_good.pmesh", MeshAsset)
-        || !Pico::FAssetPath::TryParse(
-            "/Game/Materials/cow_1.pmat", MaterialAsset))
-    {
-        Pawn->Destroy();
-        return false;
-    }
-
-    Mesh->SetStaticMeshAsset(MeshAsset);
-    Mesh->SetMaterialAsset(MaterialAsset);
-    if (!Pawn->SetRootComponent(Mesh))
+    Pico::PObject* MeshObject =
+        Pico::FindObject(Pawn, Pico::FName("SandboxPlayerMesh"));
+    if (MeshObject == nullptr
+        || !MeshObject->IsA(Pico::PStaticMeshComponent::StaticClass()))
     {
         Pawn->Destroy();
         return false;

@@ -18,8 +18,14 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 构建项目专属的 `PicoSandboxGame` Runtime：静态链接的 Game Module 在地图加载前注册项目原生类型，随后创建项目 GameInstance。
 - 生成可反射的项目 Pawn，通过正常的 World/Actor Tick 消费 WASD 映射输入。
 - 通过 `PClass` 和 `NewObject` 创建具有反射信息的原生 C++ 对象。
-- 使用薄反射宏注册类和属性。
+- 为每个已注册类创建 CDO，通过继承的默认子对象模板声明固定对象图，并由统一构造链生成彼此独立的运行时实例。
+- 使用类型安全的 Native 单播与多播委托，通过带代数 Handle 弱绑定对象，并广播 Actor 生成和销毁事件。
+- 使用薄反射宏注册类、属性和函数。
+- 通过 `PObject::ProcessEvent` 调用反射 Native 函数，支持类型化参数/返回值元数据、继承查找、
+  生命周期校验以及供未来 RPC 使用的合法 Flags。
 - 通过通用的元数据驱动界面查看和修改属性。
+- 使用无需项目的 PicoInspector Developer Sandbox，通过自动生成的参数控件调用反射函数，并观察
+  Native Delegate 的监听、广播、失效和事件日志。
 - 将反射对象序列化为 `.pobj`，并通过 `PostLoad` 完成加载后的处理。
 - 将经过校验的 World 场景图原子保存为确定性的 `.pworld` 文件，并在不持久化运行时 Handle 的前提下事务式重建运行时 World。
 - 事务式替换 `FEngineLoop` 的当前 World，并在文件加载或 `PostLoad` 失败时完整保留旧 World。
@@ -106,7 +112,7 @@ PicoSandboxGame
 | `PicoInput` | 逐帧按键与指针状态，以及可配置的 Action/Axis 映射 |
 | `PicoAsset` | 经过校验的虚拟资产发现、确定性项目注册表和文件元数据 |
 | `PicoAssetImport` | 仅供开发阶段使用的 OBJ 到原生 Static Mesh 转换 |
-| `PicoObject` | `PObject`、`PClass`、`PProperty`、反射、注册表、Handle、Outer和序列化 |
+| `PicoObject` | `PObject`、`PClass`、`PProperty`、`PFunction`、ProcessEvent、委托、注册表、Handle、Outer 和序列化 |
 | `PicoEngine` | EngineLoop、World、Level、Actor、Component、挂接和可渲染场景数据 |
 | `PicoRender` | 基于GLAD的OpenGL、Shader、几何体、Framebuffer、场景遍历和绘制提交 |
 | `PicoGameRuntime` | 可复用的项目启动、GLFW 窗口、输入轮询、逐帧循环和运行时渲染 |
@@ -312,7 +318,7 @@ GameWorld
 | `PicoGameRuntime` | 可供项目 Target 复用的 GLFW、输入和渲染主循环 |
 | `PicoGame` | 不包含项目原生代码的通用独立 Runtime |
 | `PicoSandboxGame` | 包含 Sandbox Module、GameInstance 和可控 Pawn 的项目 Runtime |
-| `PicoInspector` | 通用反射对象检查器 |
+| `PicoInspector` | 无需项目即可检验反射对象、函数和子系统实验的 Developer Sandbox |
 | `PicoReflectionDemo` | 控制台反射流程演示 |
 | `PicoAssetTool` | 开发阶段使用的 OBJ 到 `.pmesh` 命令行导入器 |
 | `PicoSandboxDemo` | 项目侧创建、修改、保存、销毁和加载完整流程 |
@@ -328,6 +334,12 @@ GameWorld
 .\Build\Debug\PicoSandboxGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
 .\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
+
+PicoInspector 默认进入 Native Delegate 实验；`Runtime Browser -> Functions` 用于通用
+`ProcessEvent` 调用，`Experiments` 用于观察监听生命周期和广播日志。完整操作步骤、每一步验证目的、
+Lambda 与 Weak PObject 的区别见
+[PicoInspector 可视化验收指南](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)。需要时可通过
+`-uiscale=1.4` 覆盖默认字号。
 
 ## 构建与测试
 
@@ -405,6 +417,9 @@ Pico 目前还没有类似 UHT 的头文件工具。未来的 PicoHeaderTool 可
 
 - [Pico 剩余开发路线](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
 - [反射类编写指南](Docs/ReflectionAuthoringGuide.md)
+- [Native 委托编写指南](Docs/DelegateAuthoringGuide.md)
+- [PicoInspector Developer Sandbox 计划](Docs/PicoInspector_DeveloperSandbox_Plan.zh-CN.md)
+- [PicoInspector 可视化验收指南](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)
 - [PicoSandbox指南](Projects/PicoSandbox/README.md)
 - [第三个月编辑器视口](Docs/Month03_10_Editor3DViewport.md)
 - [第三个月编辑器停靠布局](Docs/Month03_11_EditorDocking.md)
@@ -413,14 +428,17 @@ Pico 目前还没有类似 UHT 的头文件工具。未来的 PicoHeaderTool 可
 - [第四个月属性事务](Docs/Month04_10_EditorPropertyTransactions.md)
 - [第四个月编辑器剪贴板](Docs/Month04_11_EditorClipboard.md)
 - [项目 Game Module 与 Runtime Target](Docs/Month06_2_ProjectGameModule.md)
+- [CDO 与统一对象构造链](Docs/Month03_13_ClassDefaultObjects.md)
+- [默认子对象模板](Docs/Month03_14_DefaultSubobjects.md)
+- [Native 委托与弱对象绑定](Docs/Month03_15_NativeDelegates.md)
+- [函数反射与 ProcessEvent](Docs/Month03_16_ReflectedFunctions.md)
 
 ## 路线图
 
 资产驱动编辑器、Static Mesh 导入、材质、贴图、PBR 渲染、独立 Play，以及第一版项目 Game Module/
 GameInstance 链路已经完成。后续学习路线为：
 
-- CDO、对象初始化和默认子对象
-- 委托、函数反射、PicoHeaderTool 和追踪式垃圾回收
+- PicoHeaderTool 和追踪式垃圾回收
 - 参考 UE 的 Gameplay Framework：GameMode、GameState、PlayerController、PlayerState、Pawn、Character
   和 MovementComponent
 - Jolt 物理、角色移动和精简动画接入

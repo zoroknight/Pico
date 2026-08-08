@@ -19,7 +19,10 @@ using FObjectPtr = std::unique_ptr<PObject, FObjectDeleter>;
 enum class EObjectFlags : uint32
 {
     None = 0,
-    Transient = 1 << 0
+    Transient = 1 << 0,
+    ClassDefaultObject = 1 << 1,
+    DefaultSubobject = 1 << 2,
+    RootSet = 1 << 3
 };
 
 constexpr EObjectFlags operator|(EObjectFlags Left, EObjectFlags Right)

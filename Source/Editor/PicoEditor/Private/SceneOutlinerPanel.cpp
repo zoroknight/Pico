@@ -357,8 +357,12 @@ void FSceneOutlinerPanel::DrawComponentContextMenu(PActorComponent* Component)
     }
     ImGui::EndDisabled();
     ImGui::Separator();
+    const bool bIsDefaultSubobject =
+        HasAnyFlags(Component->GetFlags(), EObjectFlags::DefaultSubobject);
+    ImGui::BeginDisabled(bIsDefaultSubobject);
     if (ImGui::MenuItem("Rename", "F2")) BeginRenameObject(Component);
     if (ImGui::MenuItem("Delete", "Delete")) QueueDestroy(Component);
+    ImGui::EndDisabled();
     ImGui::EndPopup();
 }
 

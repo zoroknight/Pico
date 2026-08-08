@@ -1,6 +1,7 @@
 #include "Pico/Developer/ReflectionDebug.h"
 
 #include "Pico/Object/Class.h"
+#include "Pico/Object/Function.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/Property.h"
 
@@ -21,6 +22,19 @@ void GatherProperties(const PClass* Class, std::vector<const PProperty*>& OutPro
     for (const PProperty& Property : Class->GetProperties())
     {
         OutProperties.push_back(&Property);
+    }
+}
+
+void GatherFunctions(const PClass* Class, std::vector<const PFunction*>& OutFunctions)
+{
+    if (Class == nullptr)
+    {
+        return;
+    }
+    GatherFunctions(Class->GetSuperClass(), OutFunctions);
+    for (const PFunction& Function : Class->GetFunctions())
+    {
+        OutFunctions.push_back(&Function);
     }
 }
 
@@ -131,10 +145,36 @@ std::string_view GetPropertyTypeName(EPropertyType Type)
     return "Unknown";
 }
 
+std::string_view GetFunctionValueTypeName(EFunctionValueType Type)
+{
+    switch (Type)
+    {
+    case EFunctionValueType::Void: return "Void";
+    case EFunctionValueType::Int32: return "Int32";
+    case EFunctionValueType::Float: return "Float";
+    case EFunctionValueType::Bool: return "Bool";
+    case EFunctionValueType::Name: return "Name";
+    case EFunctionValueType::String: return "String";
+    case EFunctionValueType::Vector3: return "Vector3";
+    case EFunctionValueType::Rotator: return "Rotator";
+    case EFunctionValueType::Transform: return "Transform";
+    case EFunctionValueType::AssetPath: return "AssetPath";
+    case EFunctionValueType::Object: return "Object";
+    }
+    return "Unknown";
+}
+
 std::vector<const PProperty*> GetAllProperties(const PClass* Class)
 {
     std::vector<const PProperty*> Result;
     GatherProperties(Class, Result);
+    return Result;
+}
+
+std::vector<const PFunction*> GetAllFunctions(const PClass* Class)
+{
+    std::vector<const PFunction*> Result;
+    GatherFunctions(Class, Result);
     return Result;
 }
 
@@ -161,6 +201,23 @@ std::string DumpClass(const PClass* Class)
                << "  Access=MemberPointer"
                << "  DeclaredBy=" << Property->GetOwnerClass()->GetName().ToString()
                << '\n';
+    }
+    Stream << "Functions:\n";
+    for (const PFunction* Function : GetAllFunctions(Class))
+    {
+        Stream << "  " << GetFunctionValueTypeName(Function->GetReturnValue().Type)
+               << ' ' << Function->GetName().ToString() << '(';
+        for (std::size_t Index = 0; Index < Function->GetParameters().size(); ++Index)
+        {
+            if (Index > 0)
+            {
+                Stream << ", ";
+            }
+            const FFunctionParameter& Parameter = Function->GetParameters()[Index];
+            Stream << GetFunctionValueTypeName(Parameter.Value.Type)
+                   << ' ' << Parameter.Name.ToString();
+        }
+        Stream << ")  DeclaredBy=" << Function->GetOwnerClass()->GetName().ToString() << '\n';
     }
     return Stream.str();
 }

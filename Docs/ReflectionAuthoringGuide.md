@@ -1,6 +1,6 @@
 # Pico 反射类型编写指南
 
-这份指南只回答一个问题：如何新增一个能够被 Pico 创建、观察、编辑和保存的类型。
+这份指南只回答一个问题：如何新增一个能够被 Pico 创建、观察、编辑、调用和保存的类型。
 
 完整示例位于：
 
@@ -23,6 +23,7 @@ class PDemoCharacter final : public PObject
 
 public:
     int32 GetHealth() const;
+    int32 ApplyDamage(int32 Damage);
 
 private:
     int32 Health = 100;
@@ -33,7 +34,7 @@ private:
 
 该宏声明 `ThisClass`、`Super`、`StaticClass`、`RegisterClass`、动态构造入口和属性注册入口。宏结尾会将访问级别切换为 `private`，所以后续成员应显式写出 `public`、`protected`或 `private`。
 
-这些字段此时仍然只有 C++ 含义，只有加入属性批次的成员才会反射。
+这些成员此时仍然只有 C++ 含义，只有加入属性或函数批次的成员才会反射。
 
 ## 2. 定义类元数据和构造入口
 
@@ -75,7 +76,18 @@ bool PDemoCharacter::RegisterProperties(PClass& Class)
     PICO_ADD_PROPERTY(Properties, Health);
     PICO_ADD_PROPERTY(Properties, MoveSpeed);
     PICO_ADD_PROPERTY(Properties, bAlive);
-    return Class.AddProperties(std::move(Properties));
+    if (!Class.AddProperties(std::move(Properties)))
+    {
+        return false;
+    }
+
+    std::vector<PFunction> Functions;
+    PICO_ADD_FUNCTION(
+        Functions,
+        ApplyDamage,
+        EFunctionFlags::Callable,
+        FName("Damage"));
+    return Class.AddFunctions(std::move(Functions));
 }
 ```
 
@@ -89,6 +101,11 @@ Properties.push_back(
 属性仍然组成一个事务批次。任一属性无效时，整个批次不会写入 `PClass`；类注册成功后元数据会被封存。
 
 宏没有改变成员指针访问、原生类型令牌验证、序列化或 Inspector。它只减少重复代码。
+
+`PICO_ADD_FUNCTION` 同样从成员函数指针生成参数、返回值、const 状态和类型安全调用 Thunk。
+参数名仍需显式提供；调用方可通过 `PClass::FindFunction` 查找，并交给
+`PObject::ProcessEvent` 调用。网络相关 Flags 当前只作为未来 RPC 的声明元数据，本地
+`ProcessEvent` 不会发送网络消息。
 
 ## 4. 注册类型
 
@@ -141,7 +158,43 @@ HealthProperty->SetValue(Player, int32 { 75 });
 
 Inspector 的属性控件也走同一条链路。它不知道当前对象是 `PDemoCharacter`，只读取 `PClass`和 `PProperty`。
 
-## 7. 保存并重新加载
+## 7. 通过 PFunction 调用函数
+
+注册阶段的 `PICO_ADD_FUNCTION` 会生成函数名、参数、返回值、Flags 和类型化调用 Thunk。运行时先从
+实际对象的类查找函数，因此也能找到父类声明的函数：
+
+```cpp
+const PFunction* Function =
+    Player->GetClass()->FindFunction(FName("ApplyDamage"));
+
+const std::array<FFunctionValue, 1> Arguments { int32 { 25 } };
+FFunctionValue ReturnValue;
+const EFunctionInvokeResult Result =
+    Player->ProcessEvent(Function, Arguments, &ReturnValue);
+
+if (Result == EFunctionInvokeResult::Success)
+{
+    const int32 NewHealth = std::get<int32>(ReturnValue);
+}
+```
+
+调用链为：
+
+```text
+PClass::FindFunction("ApplyDamage")
+→ PObject::ProcessEvent
+→ 校验目标对象、参数数量、参数类型和对象生命周期
+→ PFunction 的类型化 Native Thunk
+→ PDemoCharacter::ApplyDamage
+```
+
+类型不会隐式转换。例如把 `float { 25.0f }` 传给 `int32 Damage` 会返回
+`EFunctionInvokeResult::ArgumentTypeMismatch`，函数不会执行。非 `void` 函数必须提供返回值存储。
+
+`Server`、`Client`、`NetMulticast` 和 `Reliable` 当前只是经过合法性校验的元数据；本地
+`ProcessEvent` 不会发送 RPC。
+
+## 8. 保存并重新加载
 
 ```cpp
 SaveObjectToFile("Player.pobj", Player);
@@ -162,7 +215,7 @@ PObject* LoadedPlayer =
 → PostLoad
 ```
 
-## 使用 ReflectionDemo
+## 9. 使用 ReflectionDemo
 
 在 Pico 根目录执行：
 
@@ -170,6 +223,13 @@ PObject* LoadedPlayer =
 cmake --build Build --config Debug --target PicoReflectionDemo
 .\Build\Debug\PicoReflectionDemo.exe
 ```
+
+程序包含两个彼此独立的验收部分：
+
+1. 反射属性写入 `.pobj`，销毁原对象，再加载并验证 `PostLoad`。
+2. 通过 `PFunction` 调用 `ApplyDamage`，触发 Native Delegate，并验证弱对象监听自动失效。
+
+委托的完整编写方式见 [`DelegateAuthoringGuide.md`](DelegateAuthoringGuide.md)。
 
 程序会打印每一步的类元数据、对象身份和属性值。
 

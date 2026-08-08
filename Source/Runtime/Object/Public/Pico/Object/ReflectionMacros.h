@@ -2,6 +2,7 @@
 
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ClassRegistry.h"
+#include "Pico/Object/Function.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/Property.h"
 
@@ -66,3 +67,10 @@ private: \
         ::Pico::PProperty::CreateAssetReference<&ThisClass::Member>( \
             ::Pico::FName(#Member), \
             ::Pico::EAssetReferenceType::AssetType))
+
+#define PICO_ADD_FUNCTION(FunctionList, Method, Flags, ...) \
+    (FunctionList).push_back( \
+        ::Pico::PFunction::Create<&ThisClass::Method>( \
+            ::Pico::FName(#Method), \
+            Flags, \
+            std::vector<::Pico::FName> { __VA_ARGS__ }))

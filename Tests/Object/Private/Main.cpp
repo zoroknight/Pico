@@ -3,8 +3,10 @@
 #include "Pico/Developer/ReflectionDebug.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ClassRegistry.h"
+#include "Pico/Object/Function.h"
 #include "Pico/Object/Archive.h"
 #include "Pico/Object/Object.h"
+#include "Pico/Object/ObjectDelegate.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectRegistry.h"
 #include "Pico/Object/ObjectSerialization.h"
@@ -13,6 +15,7 @@
 #include "Pico/Object/ReflectionMacros.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -33,6 +36,11 @@ public:
         return MacroValue;
     }
 
+    Pico::int32 AddToMacroValue(Pico::int32 Delta) const
+    {
+        return MacroValue + Delta;
+    }
+
 protected:
     explicit PMacroObject(const Pico::FObjectConstructionParams& Params)
         : PObject(Params)
@@ -49,7 +57,17 @@ bool PMacroObject::RegisterProperties(Pico::PClass& Class)
 {
     std::vector<Pico::PProperty> Properties;
     PICO_ADD_PROPERTY(Properties, MacroValue);
-    return Class.AddProperties(std::move(Properties));
+    if (!Class.AddProperties(std::move(Properties)))
+    {
+        return false;
+    }
+    std::vector<Pico::PFunction> Functions;
+    PICO_ADD_FUNCTION(
+        Functions,
+        AddToMacroValue,
+        Pico::EFunctionFlags::Callable | Pico::EFunctionFlags::Pure,
+        Pico::FName("Delta"));
+    return Class.AddFunctions(std::move(Functions));
 }
 
 class PMacroDerivedObject final : public PMacroObject
@@ -64,6 +82,38 @@ protected:
 };
 
 PICO_DEFINE_CLASS_NO_PROPERTIES(PMacroDerivedObject)
+
+class PDelegateListener final : public Pico::PObject
+{
+    PICO_DECLARE_CLASS(PDelegateListener, Pico::PObject)
+
+public:
+    void OnValue(Pico::int32 Value)
+    {
+        Total += Value;
+    }
+
+    Pico::int32 AddTotal(Pico::int32 Value) const
+    {
+        return Total + Value;
+    }
+
+    Pico::int32 GetTotal() const
+    {
+        return Total;
+    }
+
+protected:
+    explicit PDelegateListener(const Pico::FObjectConstructionParams& Params)
+        : PObject(Params)
+    {
+    }
+
+private:
+    Pico::int32 Total = 0;
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PDelegateListener)
 
 class PAssetReferenceObject final : public Pico::PObject
 {
@@ -149,8 +199,8 @@ public:
             Pico::PObject::StaticClass(),
             sizeof(PTestObject),
             &PTestObject::ConstructInstance);
-        static const bool bPropertiesAdded = AddProperties(Class);
-        if (!bPropertiesAdded)
+        static const bool bMetadataAdded = AddMetadata(Class);
+        if (!bMetadataAdded)
         {
             return &Class;
         }
@@ -204,6 +254,36 @@ public:
         return HealthSeenInPostLoad;
     }
 
+    Pico::int32 AddHealth(Pico::int32 Delta)
+    {
+        Health += Delta;
+        return Health;
+    }
+
+    bool IsHealthAtLeast(Pico::int32 Minimum) const
+    {
+        return Health >= Minimum;
+    }
+
+    void SetAlive(bool bInAlive)
+    {
+        bAlive = bInAlive;
+    }
+
+    PMacroObject* EchoMacroObject(PMacroObject* Object) const
+    {
+        return Object;
+    }
+
+    void ThrowFromFunction()
+    {
+        throw std::runtime_error("Expected reflected function failure");
+    }
+
+    void ServerNotify(Pico::int32)
+    {
+    }
+
 protected:
     explicit PTestObject(const Pico::FObjectConstructionParams& Params)
         : PObject(Params)
@@ -226,7 +306,7 @@ protected:
     }
 
 private:
-    static bool AddProperties(Pico::PClass& Class)
+    static bool AddMetadata(Pico::PClass& Class)
     {
         std::vector<Pico::PProperty> Properties;
         Properties.push_back(
@@ -235,7 +315,35 @@ private:
             Pico::PProperty::Create<&PTestObject::Speed>(Pico::FName("Speed")));
         Properties.push_back(
             Pico::PProperty::Create<&PTestObject::bAlive>(Pico::FName("bAlive")));
-        return Class.AddProperties(std::move(Properties));
+        if (!Class.AddProperties(std::move(Properties)))
+        {
+            return false;
+        }
+
+        std::vector<Pico::PFunction> Functions;
+        Functions.push_back(Pico::PFunction::Create<&PTestObject::AddHealth>(
+            Pico::FName("AddHealth"),
+            Pico::EFunctionFlags::Callable,
+            { Pico::FName("Delta") }));
+        Functions.push_back(Pico::PFunction::Create<&PTestObject::IsHealthAtLeast>(
+            Pico::FName("IsHealthAtLeast"),
+            Pico::EFunctionFlags::Callable | Pico::EFunctionFlags::Pure,
+            { Pico::FName("Minimum") }));
+        Functions.push_back(Pico::PFunction::Create<&PTestObject::SetAlive>(
+            Pico::FName("SetAlive"),
+            Pico::EFunctionFlags::Callable,
+            { Pico::FName("bAlive") }));
+        Functions.push_back(Pico::PFunction::Create<&PTestObject::EchoMacroObject>(
+            Pico::FName("EchoMacroObject"),
+            Pico::EFunctionFlags::Callable,
+            { Pico::FName("Object") }));
+        Functions.push_back(Pico::PFunction::Create<&PTestObject::ThrowFromFunction>(
+            Pico::FName("ThrowFromFunction")));
+        Functions.push_back(Pico::PFunction::Create<&PTestObject::ServerNotify>(
+            Pico::FName("ServerNotify"),
+            Pico::EFunctionFlags::Server | Pico::EFunctionFlags::Reliable,
+            { Pico::FName("Value") }));
+        return Class.AddFunctions(std::move(Functions));
     }
 
     static Pico::FObjectPtr ConstructInstance(const Pico::FObjectConstructionParams& Params)
@@ -262,9 +370,8 @@ public:
             PTestObject::StaticClass(),
             sizeof(PTestDerivedObject),
             &PTestDerivedObject::ConstructInstance);
-        static const bool bPropertiesAdded = Class.AddProperty(
-            Pico::PProperty::Create<&PTestDerivedObject::Score>(Pico::FName("Score")));
-        if (!bPropertiesAdded)
+        static const bool bMetadataAdded = AddMetadata(Class);
+        if (!bMetadataAdded)
         {
             return &Class;
         }
@@ -273,6 +380,12 @@ public:
 
     Pico::int32 GetScore() const
     {
+        return Score;
+    }
+
+    Pico::int32 MultiplyScore(Pico::int32 Factor)
+    {
+        Score *= Factor;
         return Score;
     }
 
@@ -285,6 +398,19 @@ private:
     static Pico::FObjectPtr ConstructInstance(const Pico::FObjectConstructionParams& Params)
     {
         return Pico::FObjectPtr(new PTestDerivedObject(Params));
+    }
+
+    static bool AddMetadata(Pico::PClass& Class)
+    {
+        if (!Class.AddProperty(
+                Pico::PProperty::Create<&PTestDerivedObject::Score>(Pico::FName("Score"))))
+        {
+            return false;
+        }
+        return Class.AddFunction(Pico::PFunction::Create<&PTestDerivedObject::MultiplyScore>(
+            Pico::FName("MultiplyScore"),
+            Pico::EFunctionFlags::Callable,
+            { Pico::FName("Factor") }));
     }
 
     Pico::int32 Score = 10;
@@ -507,6 +633,7 @@ void TestClassRegistry(FTestRunner& Runner)
         "BeginDestroy test class registers");
     Runner.Expect(PMacroObject::RegisterClass(), "Macro-declared class registers");
     Runner.Expect(PMacroDerivedObject::RegisterClass(), "Macro-declared no-property class registers");
+    Runner.Expect(PDelegateListener::RegisterClass(), "Delegate listener class registers");
     Runner.Expect(Pico::FClassRegistry::FindClass(Pico::FName("PTestObject")) == PTestObject::StaticClass(),
         "Class registry finds a class by name");
     Runner.Expect(PTestDerivedObject::StaticClass()->IsChildOf(PTestObject::StaticClass()),
@@ -550,6 +677,200 @@ void TestClassRegistry(FTestRunner& Runner)
         "Finalized class metadata rejects later mutation");
     Runner.Expect(PTestObject::StaticClass()->IsMetadataValid(),
         "Rejected late mutation does not corrupt finalized metadata");
+}
+
+void TestObjectDelegates(FTestRunner& Runner)
+{
+    Pico::TObjectMulticastDelegate<void(Pico::int32)> MulticastDelegate;
+    Pico::TObjectDelegate<Pico::int32(Pico::int32)> SingleDelegate;
+    PDelegateListener* Listener =
+        Pico::NewObject<PDelegateListener>(nullptr, "DelegateListener");
+    const Pico::FDelegateHandle InvalidHandle =
+        MulticastDelegate.AddObject(
+            static_cast<PDelegateListener*>(nullptr),
+            &PDelegateListener::OnValue);
+    const Pico::FDelegateHandle ListenerHandle = Listener != nullptr
+        ? MulticastDelegate.AddObject(Listener, &PDelegateListener::OnValue)
+        : Pico::FDelegateHandle {};
+    const bool bSingleBound = Listener != nullptr
+        && SingleDelegate.BindObject(Listener, &PDelegateListener::AddTotal);
+    MulticastDelegate.Broadcast(4);
+    Runner.Expect(
+        !InvalidHandle.IsValid()
+            && ListenerHandle.IsValid()
+            && bSingleBound
+            && Listener != nullptr
+            && Listener->GetTotal() == 4
+            && MulticastDelegate.IsBoundTo(Listener)
+            && SingleDelegate.IsBoundTo(Listener)
+            && SingleDelegate.Execute(6) == 10,
+        "Object delegates invoke type-safe mutable and const member functions");
+
+    const Pico::FObjectHandle OldObjectHandle = Listener != nullptr
+        ? Listener->GetHandle()
+        : Pico::FObjectHandle {};
+    Runner.Expect(
+        Listener != nullptr && Pico::DestroyObject(Listener),
+        "A delegate listener can be destroyed while bindings still exist");
+    Runner.Expect(
+        Pico::ResolveObject(OldObjectHandle) == nullptr
+            && !MulticastDelegate.IsBound()
+            && !SingleDelegate.IsBound()
+            && !SingleDelegate.ExecuteIfBound(2).has_value(),
+        "Object delegate guards expire as soon as the target object is destroyed");
+
+    PDelegateListener* Replacement =
+        Pico::NewObject<PDelegateListener>(nullptr, "DelegateListener");
+    MulticastDelegate.Broadcast(7);
+    Runner.Expect(
+        Replacement != nullptr
+            && Replacement->GetHandle() != OldObjectHandle
+            && Replacement->GetTotal() == 0
+            && MulticastDelegate.Num() == 0,
+        "A reused object slot cannot revive a stale weak delegate binding");
+
+    if (Replacement != nullptr)
+    {
+        MulticastDelegate.AddObject(Replacement, &PDelegateListener::OnValue);
+        MulticastDelegate.AddObject(Replacement, &PDelegateListener::OnValue);
+    }
+    Runner.Expect(
+        Replacement != nullptr
+            && MulticastDelegate.RemoveAll(Replacement) == 2
+            && !MulticastDelegate.IsBoundTo(Replacement),
+        "RemoveAll removes every binding owned by one object");
+
+    if (Replacement != nullptr)
+    {
+        Pico::DestroyObject(Replacement);
+    }
+}
+
+void TestClassDefaultObjects(FTestRunner& Runner)
+{
+    const Pico::PClass* BaseClass = PTestObject::StaticClass();
+    const Pico::PClass* DerivedClass = PTestDerivedObject::StaticClass();
+    const PTestObject* BaseDefault = Pico::GetDefault<PTestObject>();
+    PTestDerivedObject* DerivedDefault = Pico::GetMutableDefault<PTestDerivedObject>();
+    const std::size_t ObjectCountBeforeDefaults = Pico::FObjectRegistry::GetObjectCount();
+
+    Runner.Expect(
+        BaseDefault != nullptr
+            && BaseDefault == BaseClass->GetDefaultObject()
+            && BaseDefault == Pico::GetDefault<PTestObject>(),
+        "Each registered class exposes one stable class default object");
+    Runner.Expect(
+        BaseDefault != nullptr
+            && Pico::HasAnyFlags(BaseDefault->GetFlags(), Pico::EObjectFlags::ClassDefaultObject)
+            && Pico::HasAnyFlags(BaseDefault->GetFlags(), Pico::EObjectFlags::RootSet)
+            && Pico::HasAnyFlags(BaseDefault->GetFlags(), Pico::EObjectFlags::Transient)
+            && !BaseDefault->GetHandle().IsValid()
+            && !BaseDefault->DidPostInitProperties(),
+        "A CDO is a rooted transient template outside runtime registration and PostInit");
+    Runner.Expect(
+        DerivedDefault != nullptr
+            && DerivedDefault->GetClass() == DerivedClass
+            && DerivedDefault->GetHealth() == 100
+            && DerivedDefault->GetScore() == 10,
+        "A derived CDO contains inherited and directly declared native defaults");
+    Runner.Expect(
+        Pico::FObjectRegistry::GetObjectCount() == ObjectCountBeforeDefaults,
+        "Querying CDOs does not add runtime objects to the object registry");
+
+    const Pico::PProperty* HealthProperty = DerivedClass->FindProperty(Pico::FName("Health"));
+    const Pico::PProperty* ScoreProperty = DerivedClass->FindProperty(Pico::FName("Score"));
+    const bool bDefaultsChanged =
+        HealthProperty != nullptr && HealthProperty->SetValue(DerivedDefault, Pico::int32 { 175 })
+        && ScoreProperty != nullptr && ScoreProperty->SetValue(DerivedDefault, Pico::int32 { 25 });
+    Runner.Expect(bDefaultsChanged, "Reflected class defaults can be changed through metadata");
+
+    PTestDerivedObject* First = Pico::NewObject<PTestDerivedObject>(nullptr, "CdoFirst");
+    PTestDerivedObject* Second = Pico::NewObject<PTestDerivedObject>(nullptr, "CdoSecond");
+    Runner.Expect(
+        First != nullptr && Second != nullptr
+            && First->GetHealth() == 175 && First->GetScore() == 25
+            && Second->GetHealth() == 175 && Second->GetScore() == 25,
+        "NewObject initializes inherited and local reflected properties from the exact class CDO");
+    if (First != nullptr && HealthProperty != nullptr)
+    {
+        HealthProperty->SetValue(First, Pico::int32 { 5 });
+    }
+    Runner.Expect(
+        First != nullptr && Second != nullptr
+            && First->GetHealth() == 5
+            && Second->GetHealth() == 175
+            && DerivedDefault->GetHealth() == 175,
+        "Changing one instance does not mutate its CDO or sibling instances");
+
+    PTestDerivedObject* CustomTemplate = Pico::NewObject<PTestDerivedObject>(nullptr, "CustomTemplate");
+    if (CustomTemplate != nullptr && ScoreProperty != nullptr)
+    {
+        ScoreProperty->SetValue(CustomTemplate, Pico::int32 { 80 });
+    }
+    const Pico::FObjectConstructionParams CustomParams {
+        DerivedClass,
+        nullptr,
+        Pico::FName("CustomTemplateInstance"),
+        Pico::EObjectFlags::None,
+        CustomTemplate
+    };
+    auto* CustomInstance = static_cast<PTestDerivedObject*>(Pico::NewObject(CustomParams));
+    Runner.Expect(
+        CustomInstance != nullptr && CustomInstance->GetScore() == 80,
+        "The unified construction path accepts a compatible explicit template");
+
+    Pico::FMemoryWriter MissingPropertyWriter;
+    Pico::uint32 Magic = 0x4a424f50;
+    Pico::uint32 Version = 3;
+    std::string ClassName = "PTestDerivedObject";
+    std::string ObjectName = "CdoMissingProperties";
+    Pico::uint32 Flags = 0;
+    Pico::uint32 PropertyCount = 0;
+    MissingPropertyWriter.SerializeUInt32(Magic);
+    MissingPropertyWriter.SerializeUInt32(Version);
+    MissingPropertyWriter.SerializeString(ClassName);
+    MissingPropertyWriter.SerializeString(ObjectName);
+    MissingPropertyWriter.SerializeUInt32(Flags);
+    MissingPropertyWriter.SerializeUInt32(PropertyCount);
+
+    Pico::FMemoryReader MissingPropertyReader(MissingPropertyWriter.GetData());
+    Pico::EObjectSerializationError LoadError = Pico::EObjectSerializationError::InvalidArchive;
+    PTestDerivedObject* Loaded = static_cast<PTestDerivedObject*>(
+        Pico::LoadObject(MissingPropertyReader, nullptr, &LoadError));
+    Runner.Expect(
+        Loaded != nullptr
+            && LoadError == Pico::EObjectSerializationError::None
+            && Loaded->GetHealth() == 175
+            && Loaded->GetScore() == 25
+            && Loaded->DidPostLoad()
+            && Loaded->GetHealthSeenInPostLoad() == 175,
+        "Missing serialized properties retain CDO defaults before PostLoad runs");
+
+    Pico::FMemoryWriter DefaultObjectWriter;
+    Runner.Expect(
+        !Pico::SaveObject(DefaultObjectWriter, DerivedDefault),
+        "Class default objects cannot be serialized as runtime object instances");
+
+    for (Pico::PObject* Object : std::vector<Pico::PObject*> {
+             First, Second, CustomTemplate, CustomInstance, Loaded })
+    {
+        if (Object != nullptr)
+        {
+            Pico::DestroyObject(Object);
+        }
+    }
+
+    if (HealthProperty != nullptr)
+    {
+        HealthProperty->SetValue(DerivedDefault, Pico::int32 { 100 });
+    }
+    if (ScoreProperty != nullptr)
+    {
+        ScoreProperty->SetValue(DerivedDefault, Pico::int32 { 10 });
+    }
+    Runner.Expect(
+        Pico::FObjectRegistry::GetObjectCount() == ObjectCountBeforeDefaults,
+        "CDO construction tests release every runtime instance");
 }
 
 void TestReflectionMacros(FTestRunner& Runner)
@@ -608,6 +929,16 @@ void TestReflectionMacros(FTestRunner& Runner)
             && MacroValueProperty->SetValue(DynamicObject, Pico::int32 { 99 })
             && static_cast<PMacroDerivedObject*>(DynamicObject)->GetMacroValue() == 99,
         "Property macro preserves type-checked writes");
+    const Pico::PFunction* MacroFunction =
+        DerivedClass->FindFunction(Pico::FName("AddToMacroValue"));
+    const std::array<Pico::FFunctionValue, 1> MacroArguments { Pico::int32 { 1 } };
+    Pico::FFunctionValue MacroReturn;
+    Runner.Expect(
+        MacroFunction != nullptr
+            && DynamicObject->ProcessEvent(MacroFunction, MacroArguments, &MacroReturn)
+                == Pico::EFunctionInvokeResult::Success
+            && std::get<Pico::int32>(MacroReturn) == 100,
+        "Function macro registers a private-owner-compatible invocation thunk");
 
     if (DynamicObject != nullptr)
     {
@@ -758,6 +1089,175 @@ void TestPropertyReflection(FTestRunner& Runner)
     Pico::DestroyObject(Object);
 }
 
+void TestFunctionReflection(FTestRunner& Runner)
+{
+    const Pico::PClass* TestClass = PTestObject::StaticClass();
+    const Pico::PFunction* AddHealth = TestClass->FindFunction(Pico::FName("AddHealth"));
+    const Pico::PFunction* IsHealthAtLeast =
+        TestClass->FindFunction(Pico::FName("IsHealthAtLeast"));
+    const Pico::PFunction* SetAlive = TestClass->FindFunction(Pico::FName("SetAlive"));
+    const Pico::PFunction* EchoMacroObject =
+        TestClass->FindFunction(Pico::FName("EchoMacroObject"));
+    const Pico::PFunction* ThrowFromFunction =
+        TestClass->FindFunction(Pico::FName("ThrowFromFunction"));
+    const Pico::PFunction* ServerNotify =
+        TestClass->FindFunction(Pico::FName("ServerNotify"));
+
+    Runner.Expect(
+        TestClass->GetFunctions().size() == 6
+            && AddHealth != nullptr
+            && AddHealth->GetOwnerClass() == TestClass
+            && AddHealth->GetParameters().size() == 1
+            && AddHealth->GetParameters()[0].Name == Pico::FName("Delta")
+            && AddHealth->GetParameters()[0].Value.Type == Pico::EFunctionValueType::Int32
+            && AddHealth->GetReturnValue().Type == Pico::EFunctionValueType::Int32,
+        "Function metadata exposes owner, parameter, and return descriptors");
+    Runner.Expect(
+        IsHealthAtLeast != nullptr
+            && IsHealthAtLeast->HasAnyFlags(Pico::EFunctionFlags::Const)
+            && IsHealthAtLeast->HasAnyFlags(Pico::EFunctionFlags::Pure)
+            && ServerNotify != nullptr
+            && ServerNotify->HasAnyFlags(Pico::EFunctionFlags::Server)
+            && ServerNotify->HasAnyFlags(Pico::EFunctionFlags::Reliable),
+        "Function metadata records const, pure, and future RPC policy flags");
+    Runner.Expect(
+        PTestDerivedObject::StaticClass()->FindFunction(Pico::FName("AddHealth")) == AddHealth
+            && PTestDerivedObject::StaticClass()->FindFunction(Pico::FName("MultiplyScore")) != nullptr,
+        "Derived classes find inherited and directly declared reflected functions");
+
+    PTestDerivedObject* Object = Pico::NewObject<PTestDerivedObject>(nullptr, "FunctionObject");
+    PMacroObject* MacroObject = Pico::NewObject<PMacroObject>(nullptr, "FunctionMacroObject");
+    PDelegateListener* WrongObject = Pico::NewObject<PDelegateListener>(nullptr, "WrongFunctionObject");
+    Runner.Expect(Object != nullptr && MacroObject != nullptr && WrongObject != nullptr,
+        "Function reflection test objects are created");
+    if (Object == nullptr || MacroObject == nullptr || WrongObject == nullptr)
+    {
+        Pico::DestroyObject(Object);
+        Pico::DestroyObject(MacroObject);
+        Pico::DestroyObject(WrongObject);
+        return;
+    }
+
+    Pico::FFunctionValue ReturnValue;
+    const std::array<Pico::FFunctionValue, 1> AddArguments { Pico::int32 { 25 } };
+    Runner.Expect(
+        Object->ProcessEvent(AddHealth, AddArguments, &ReturnValue)
+                == Pico::EFunctionInvokeResult::Success
+            && std::get<Pico::int32>(ReturnValue) == 125
+            && Object->GetHealth() == 125,
+        "ProcessEvent invokes an inherited mutable function and returns its value");
+
+    const std::array<Pico::FFunctionValue, 1> QueryArguments { Pico::int32 { 120 } };
+    Runner.Expect(
+        Object->ProcessEvent(IsHealthAtLeast, QueryArguments, &ReturnValue)
+                == Pico::EFunctionInvokeResult::Success
+            && std::get<bool>(ReturnValue),
+        "ProcessEvent invokes a const pure function");
+
+    const std::array<Pico::FFunctionValue, 1> SetAliveArguments { false };
+    ReturnValue = Pico::int32 { 9 };
+    Runner.Expect(
+        Object->ProcessEvent(SetAlive, SetAliveArguments, &ReturnValue)
+                == Pico::EFunctionInvokeResult::Success
+            && std::holds_alternative<std::monostate>(ReturnValue)
+            && !Object->IsAlive(),
+        "Void reflected functions write an explicit empty return value");
+
+    const std::array<Pico::FFunctionValue, 1> ObjectArguments {
+        static_cast<Pico::PObject*>(MacroObject)
+    };
+    Runner.Expect(
+        Object->ProcessEvent(EchoMacroObject, ObjectArguments, &ReturnValue)
+                == Pico::EFunctionInvokeResult::Success
+            && std::get<Pico::PObject*>(ReturnValue) == MacroObject,
+        "Object parameters preserve their declared reflected class constraint");
+    const std::array<Pico::FFunctionValue, 1> NullObjectArguments {
+        static_cast<Pico::PObject*>(nullptr)
+    };
+    Runner.Expect(
+        Object->ProcessEvent(EchoMacroObject, NullObjectArguments, &ReturnValue)
+                == Pico::EFunctionInvokeResult::Success
+            && std::get<Pico::PObject*>(ReturnValue) == nullptr,
+        "Null is a valid reflected object argument");
+
+    Runner.Expect(
+        Object->ProcessEvent(AddHealth, {}, &ReturnValue)
+                == Pico::EFunctionInvokeResult::ArgumentCountMismatch,
+        "ProcessEvent rejects the wrong parameter count");
+    const std::array<Pico::FFunctionValue, 1> WrongTypeArguments { 25.0f };
+    Runner.Expect(
+        Object->ProcessEvent(AddHealth, WrongTypeArguments, &ReturnValue)
+                == Pico::EFunctionInvokeResult::ArgumentTypeMismatch,
+        "ProcessEvent rejects a mismatched value type without coercion");
+    const std::array<Pico::FFunctionValue, 1> WrongObjectArguments {
+        static_cast<Pico::PObject*>(WrongObject)
+    };
+    Runner.Expect(
+        Object->ProcessEvent(EchoMacroObject, WrongObjectArguments, &ReturnValue)
+                == Pico::EFunctionInvokeResult::InvalidObjectArgument,
+        "ProcessEvent rejects an object outside the parameter class hierarchy");
+    Runner.Expect(
+        Object->ProcessEvent(AddHealth, AddArguments, nullptr)
+                == Pico::EFunctionInvokeResult::MissingReturnStorage,
+        "Non-void reflected functions require return storage");
+    Runner.Expect(
+        MacroObject->ProcessEvent(AddHealth, AddArguments, &ReturnValue)
+                == Pico::EFunctionInvokeResult::InvalidTarget
+            && Object->ProcessEvent(nullptr) == Pico::EFunctionInvokeResult::InvalidFunction
+            && const_cast<PTestObject*>(Pico::GetDefault<PTestObject>())->ProcessEvent(
+                    AddHealth, AddArguments, &ReturnValue)
+                == Pico::EFunctionInvokeResult::InvalidTarget,
+        "ProcessEvent rejects wrong-class, null-function, and template targets");
+    Runner.Expect(
+        Object->ProcessEvent(ThrowFromFunction) == Pico::EFunctionInvokeResult::InvocationFailed
+            && Pico::ResolveObject(Object->GetHandle()) == Object,
+        "Function exceptions stop at the ProcessEvent boundary and leave the target alive");
+
+    Pico::PFunction InvalidReliable = Pico::PFunction::Create<&PTestObject::AddHealth>(
+        Pico::FName("InvalidReliable"),
+        Pico::EFunctionFlags::Reliable,
+        { Pico::FName("Delta") });
+    Pico::PClass InvalidFunctionClass = Pico::PClass::Create<PTestObject>(
+        Pico::FName("InvalidFunctionClass"),
+        Pico::PObject::StaticClass(),
+        sizeof(PTestObject),
+        nullptr);
+    Runner.Expect(
+        !InvalidReliable.IsMetadataValid()
+            && !InvalidFunctionClass.AddFunction(std::move(InvalidReliable))
+            && InvalidFunctionClass.GetMetadataError() == Pico::EClassMetadataError::InvalidFunction,
+        "Invalid RPC flags poison class metadata before registration");
+
+    Pico::PClass WrongOwnerClass = Pico::PClass::Create<PDelegateListener>(
+        Pico::FName("WrongFunctionOwner"),
+        Pico::PObject::StaticClass(),
+        sizeof(PDelegateListener),
+        nullptr);
+    Runner.Expect(
+        !WrongOwnerClass.AddFunction(Pico::PFunction::Create<&PTestObject::SetAlive>(
+            Pico::FName("ForeignFunction"),
+            Pico::EFunctionFlags::Callable,
+            { Pico::FName("bAlive") }))
+            && WrongOwnerClass.GetMetadataError() == Pico::EClassMetadataError::InvalidFunction,
+        "A class rejects function metadata created for another native owner");
+
+    Pico::PClass ShadowingClass = Pico::PClass::Create<PTestDerivedObject>(
+        Pico::FName("ShadowingFunctionClass"),
+        PTestObject::StaticClass(),
+        sizeof(PTestDerivedObject),
+        nullptr);
+    Runner.Expect(
+        !ShadowingClass.AddFunction(Pico::PFunction::Create<&PTestDerivedObject::MultiplyScore>(
+            Pico::FName("AddHealth"),
+            Pico::EFunctionFlags::Callable,
+            { Pico::FName("Factor") })),
+        "The first function-reflection version rejects ambiguous inherited name shadowing");
+
+    Pico::DestroyObject(WrongObject);
+    Pico::DestroyObject(MacroObject);
+    Pico::DestroyObject(Object);
+}
+
 void TestBeginDestroy(FTestRunner& Runner)
 {
     GBeginDestroyOrder.clear();
@@ -863,11 +1363,20 @@ void TestReflectionObservation(FTestRunner& Runner)
         "Object registry snapshot includes live root and child objects");
 
     const std::string ClassDump = Pico::DumpClass(PTestDerivedObject::StaticClass());
+    const std::vector<const Pico::PFunction*> ReflectedFunctions =
+        Pico::GetAllFunctions(PTestDerivedObject::StaticClass());
+    Runner.Expect(
+        ReflectedFunctions.size() == 7
+            && ReflectedFunctions.front()->GetName() == Pico::FName("AddHealth")
+            && ReflectedFunctions.back()->GetName() == Pico::FName("MultiplyScore"),
+        "Function observation returns inherited metadata in deterministic base-first order");
     Runner.Expect(
         ClassDump.find("Class: PTestDerivedObject") != std::string::npos
             && ClassDump.find("Health") != std::string::npos
-            && ClassDump.find("Score") != std::string::npos,
-        "Class dump includes inherited and directly declared properties");
+            && ClassDump.find("Score") != std::string::npos
+            && ClassDump.find("Int32 AddHealth(Int32 Delta)") != std::string::npos
+            && ClassDump.find("Int32 MultiplyScore(Int32 Factor)") != std::string::npos,
+        "Class dump includes inherited properties and reflected function signatures");
 
     const std::string ObjectDump = Pico::DumpObject(Child);
     Runner.Expect(
@@ -1142,6 +1651,15 @@ void TestAssetPathSerialization(FTestRunner& Runner)
     Runner.Expect(
         PAssetReferenceObject::RegisterClass(),
         "An object class can register a reflected AssetPath property");
+    const Pico::PClass* AssetReferenceClass = PAssetReferenceObject::StaticClass();
+    const Pico::PProperty* TransientDefaultProperty =
+        AssetReferenceClass->FindProperty(Pico::FName("TransientValue"));
+    PAssetReferenceObject* AssetReferenceDefault =
+        Pico::GetMutableDefault<PAssetReferenceObject>();
+    if (TransientDefaultProperty != nullptr && AssetReferenceDefault != nullptr)
+    {
+        TransientDefaultProperty->SetValue(AssetReferenceDefault, Pico::int32 { 99 });
+    }
     PAssetReferenceObject* Source =
         Pico::NewObject<PAssetReferenceObject>(nullptr, "AssetReference");
     const Pico::PProperty* Property = Source != nullptr
@@ -1165,10 +1683,15 @@ void TestAssetPathSerialization(FTestRunner& Runner)
             && TransientProperty != nullptr
             && TransientProperty->HasAnyFlags(Pico::EPropertyFlags::Transient)
             && !TransientProperty->HasAnyFlags(Pico::EPropertyFlags::Serializable)
+            && Source->GetTransientValue() == 7
             && bPathCreated
             && Property->SetValue(Source, AssetPath)
             && TransientProperty->SetValue(Source, Pico::int32 {99}),
         "Reflection exposes typed flags and asset-reference metadata");
+    if (TransientDefaultProperty != nullptr && AssetReferenceDefault != nullptr)
+    {
+        TransientDefaultProperty->SetValue(AssetReferenceDefault, Pico::int32 { 7 });
+    }
     if (Source == nullptr || Property == nullptr || !bPathCreated)
     {
         if (Source != nullptr)
@@ -1256,9 +1779,12 @@ int main()
     if (Pico::PObjectSystem::IsInitialized())
     {
         TestClassRegistry(Runner);
+        TestClassDefaultObjects(Runner);
+        TestObjectDelegates(Runner);
         TestReflectionMacros(Runner);
         TestObjectCreationAndIdentity(Runner);
         TestPropertyReflection(Runner);
+        TestFunctionReflection(Runner);
         TestBeginDestroy(Runner);
         TestReflectionObservation(Runner);
         TestAssetPathSerialization(Runner);

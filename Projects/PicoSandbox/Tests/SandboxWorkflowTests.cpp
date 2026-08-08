@@ -5,7 +5,9 @@
 #include "Pico/Object/Property.h"
 #include "Pico/Engine/GameEngine.h"
 #include "Pico/Engine/GameModule.h"
+#include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Input/InputSystem.h"
+#include "Pico/Object/ObjectGlobals.h"
 #include "PicoSandbox/SandboxCharacter.h"
 #include "PicoSandbox/SandboxEntity.h"
 #include "PicoSandbox/SandboxGameInstance.h"
@@ -112,6 +114,26 @@ int main()
         Runner.Expect(
             Pawn != nullptr && Pawn->GetRootComponent() != nullptr,
             "Sandbox GameInstance spawns a visible project Pawn");
+
+        Pico::PObject* MeshObject = Pawn != nullptr
+            ? Pico::FindObject(Pawn, Pico::FName("SandboxPlayerMesh"))
+            : nullptr;
+        auto* Mesh = MeshObject != nullptr
+                && MeshObject->IsA(Pico::PStaticMeshComponent::StaticClass())
+            ? static_cast<Pico::PStaticMeshComponent*>(MeshObject)
+            : nullptr;
+        Runner.Expect(
+            PicoSandbox::PSandboxPawn::StaticClass()->GetDefaultSubobjects().size() == 2
+                && Pawn != nullptr
+                && Pawn->GetComponents().size() == 2
+                && Pawn->GetRootComponent() != nullptr
+                && Pawn->GetRootComponent()->GetName()
+                    == Pico::FName("DefaultSceneRoot")
+                && Mesh != nullptr
+                && Mesh->GetAttachParent() == Pawn->GetRootComponent()
+                && Pico::HasAnyFlags(
+                    Mesh->GetFlags(), Pico::EObjectFlags::DefaultSubobject),
+            "Sandbox Pawn materializes its root and mesh from class default-subobject templates");
 
         if (Pawn != nullptr)
         {

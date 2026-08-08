@@ -23,6 +23,7 @@ add_library(PicoCore STATIC
     Source/Runtime/Core/Private/App.cpp
     Source/Runtime/Core/Private/CommandLine.cpp
     Source/Runtime/Core/Private/Config.cpp
+    Source/Runtime/Core/Private/Delegate.cpp
     Source/Runtime/Core/Private/Log.cpp
     Source/Runtime/Core/Private/Math/Math.cpp
     Source/Runtime/Core/Private/Name.cpp
@@ -139,8 +140,10 @@ add_library(PicoObject STATIC
     Source/Runtime/Object/Private/Archive.cpp
     Source/Runtime/Object/Private/Class.cpp
     Source/Runtime/Object/Private/ClassRegistry.cpp
+    Source/Runtime/Object/Private/Function.cpp
     Source/Runtime/Object/Private/Object.cpp
     Source/Runtime/Object/Private/ObjectGlobals.cpp
+    Source/Runtime/Object/Private/ObjectInitializer.cpp
     Source/Runtime/Object/Private/ObjectRegistry.cpp
     Source/Runtime/Object/Private/ObjectSerialization.cpp
     Source/Runtime/Object/Private/ObjectSystem.cpp
@@ -431,9 +434,12 @@ if(PICO_BUILD_INSPECTOR)
     endif()
 
     add_executable(PicoInspector
+        Source/Editor/PicoInspector/Private/InspectorExperiment.h
         Source/Editor/PicoInspector/Private/InspectorApp.cpp
         Source/Editor/PicoInspector/Private/InspectorApp.h
         Source/Editor/PicoInspector/Private/Main.cpp
+        Source/Editor/PicoInspector/Private/NativeDelegateExperiment.cpp
+        Source/Editor/PicoInspector/Private/NativeDelegateExperiment.h
     )
 
     target_link_libraries(PicoInspector
