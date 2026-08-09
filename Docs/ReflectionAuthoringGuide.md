@@ -12,39 +12,44 @@ Source/Programs/ReflectionDemo/Private/Main.cpp
 
 ## 1. 声明反射类
 
-包含 `ReflectionMacros.h`，并在 `PObject`派生类中使用 `PICO_DECLARE_CLASS`：
+包含 `ReflectionMacros.h`，再把同名 `.generated.h` 放在所有普通 include 的最后。使用
+`PCLASS()` 标记类，并在类体第一处写 `GENERATED_BODY()`：
 
 ```cpp
 #include "Pico/Object/ReflectionMacros.h"
+#include "Pico/Samples/DemoCharacter.generated.h"
 
+PCLASS()
 class PDemoCharacter final : public PObject
 {
-    PICO_DECLARE_CLASS(PDemoCharacter, PObject)
+    GENERATED_BODY()
 
 public:
     int32 GetHealth() const;
+
+    PFUNCTION(Callable)
     int32 ApplyDamage(int32 Damage);
 
 private:
+    PPROPERTY()
     int32 Health = 100;
+    PPROPERTY()
     float MoveSpeed = 600.0f;
+    PPROPERTY()
     bool bAlive = true;
 };
 ```
 
-该宏声明 `ThisClass`、`Super`、`StaticClass`、`RegisterClass`、动态构造入口和属性注册入口。宏结尾会将访问级别切换为 `private`，所以后续成员应显式写出 `public`、`protected`或 `private`。
+`PCLASS/PPROPERTY/PFUNCTION` 在 C++ 编译器看来是空注解；构建前，`PicoHeaderTool` 会读取
+Token，生成 `Build/Generated` 下的 `.generated.h` 与 `.gen.cpp`。`GENERATED_BODY()` 最终展开为
+`ThisClass`、`Super`、`StaticClass`、`RegisterClass`、动态构造入口和元数据注册入口。它会将访问级别
+切换为 `private`，所以后续成员应显式写出 `public`、`protected` 或 `private`。
 
-这些成员此时仍然只有 C++ 含义，只有加入属性或函数批次的成员才会反射。
+没有 `PPROPERTY` 或 `PFUNCTION` 的普通成员仍然只有 C++ 含义，不会进入反射、序列化或 Inspector。
 
 ## 2. 定义类元数据和构造入口
 
-在 CPP 中使用：
-
-```cpp
-PICO_DEFINE_CLASS(PDemoCharacter)
-```
-
-宏会从 C++ 类型本身推导并连接：
+不再需要在 CPP 中手写 `PICO_DEFINE_CLASS` 或 `RegisterProperties`。生成的 `.gen.cpp` 会连接：
 
 ```text
 PDemoCharacter
@@ -57,55 +62,53 @@ PDemoCharacter
 
 因此重命名或复制类时，不需要在多个手写位置同步类型名、父类、大小和构造入口。
 
-没有属性的类型使用：
-
-```cpp
-PICO_DEFINE_CLASS_NO_PROPERTIES(PEmptyObject)
-```
-
-宏只生成当前手写反射流程的 C++，没有全局静态自动注册，也没有额外运行时开销。
+没有属性或函数的类仍然使用同一套 `PCLASS + GENERATED_BODY` 写法。PHT 只生成 C++ 注册模板，
+没有复制第二套运行时反射系统，也没有全局静态自动注册或额外的对象实例开销。
 
 ## 3. 注册属性元数据
 
-实现宏声明的 `RegisterProperties`：
+属性与函数元数据直接写在声明旁：
 
 ```cpp
-bool PDemoCharacter::RegisterProperties(PClass& Class)
-{
-    std::vector<PProperty> Properties;
-    PICO_ADD_PROPERTY(Properties, Health);
-    PICO_ADD_PROPERTY(Properties, MoveSpeed);
-    PICO_ADD_PROPERTY(Properties, bAlive);
-    if (!Class.AddProperties(std::move(Properties)))
-    {
-        return false;
-    }
+PPROPERTY(Replicated, ReadOnly)
+int32 Health = 100;
 
-    std::vector<PFunction> Functions;
-    PICO_ADD_FUNCTION(
-        Functions,
-        ApplyDamage,
-        EFunctionFlags::Callable,
-        FName("Damage"));
-    return Class.AddFunctions(std::move(Functions));
-}
+PFUNCTION(Pure)
+int32 GetHealth() const;
 ```
 
-`PICO_ADD_PROPERTY`把成员名同时用于 C++ 成员指针和反射名称，等价于：
+第一版支持的属性标记为：`Transient`、`ReadOnly`、`Replicated`、`NotEditable`、
+`NotSerializable`。空 `PPROPERTY()` 默认为 `Editable | Serializable`。
+
+对象引用使用代次安全包装器。当前稳定对象引用序列化尚未接入，因此必须标记为临时且不可序列化：
+
+```cpp
+PPROPERTY(Transient, NotSerializable)
+TObjectPtr<PTarget> StrongTarget;
+
+PPROPERTY(Transient, NotSerializable)
+TWeakObjectPtr<PTarget> WeakTarget;
+```
+
+强引用属性会被 GC 遍历，弱引用不会阻止目标回收。仅声明 `TObjectPtr` 而不使用 `PPROPERTY`，
+也不通过 `AddReferencedObjects` 上报时，GC 无法发现该引用。
+
+第一版支持的函数标记为：`Callable`、`Pure`、`Server`、`Client`、`NetMulticast`、`Reliable`。
+空 `PFUNCTION()` 默认为 `Callable`，`Pure` 自动包含 `Callable`。网络标记目前只保存为未来 RPC 使用的
+元数据，本地 `ProcessEvent` 不会发送网络消息。
+
+生成代码仍然使用成员指针，例如 `Health` 最终等价于：
 
 ```cpp
 Properties.push_back(
     PProperty::Create<&PDemoCharacter::Health>(FName("Health")));
 ```
 
-属性仍然组成一个事务批次。任一属性无效时，整个批次不会写入 `PClass`；类注册成功后元数据会被封存。
+PHT 从函数声明提取参数名；参数类型、返回值、`const` 状态和调用 Thunk 仍由现有 `PFunction::Create`
+在 C++ 编译期校验。属性和函数继续以事务批次写入 `PClass`，因此生成工具没有绕过原有安全检查。
 
-宏没有改变成员指针访问、原生类型令牌验证、序列化或 Inspector。它只减少重复代码。
-
-`PICO_ADD_FUNCTION` 同样从成员函数指针生成参数、返回值、const 状态和类型安全调用 Thunk。
-参数名仍需显式提供；调用方可通过 `PClass::FindFunction` 查找，并交给
-`PObject::ProcessEvent` 调用。网络相关 Flags 当前只作为未来 RPC 的声明元数据，本地
-`ProcessEvent` 不会发送网络消息。
+若标记拼错、缺少 `GENERATED_BODY()` 或类没有父类，PHT 会用
+`文件(行,列): error PHTxxxx: 原因` 的格式令构建失败。
 
 ## 4. 注册类型
 

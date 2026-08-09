@@ -8,6 +8,7 @@
 namespace Pico
 {
 class PObject;
+PObject* ResolveObject(struct FObjectHandle Handle);
 
 struct FObjectDeleter
 {

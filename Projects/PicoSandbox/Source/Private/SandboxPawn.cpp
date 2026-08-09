@@ -6,20 +6,8 @@
 #include "Pico/Input/InputSystem.h"
 #include "Pico/Object/ObjectInitializer.h"
 
-#include <utility>
-#include <vector>
-
 namespace PicoSandbox
 {
-PICO_DEFINE_CLASS(PSandboxPawn)
-
-bool PSandboxPawn::RegisterProperties(Pico::PClass& Class)
-{
-    std::vector<Pico::PProperty> Properties;
-    PICO_ADD_PROPERTY(Properties, MoveSpeed);
-    return Class.AddProperties(std::move(Properties));
-}
-
 PSandboxPawn::PSandboxPawn(const Pico::FObjectConstructionParams& Params)
     : PActor(Params)
 {

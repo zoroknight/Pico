@@ -8,6 +8,7 @@ namespace Pico
 {
 class PActor;
 class FWorldAssetLoader;
+class FReferenceCollector;
 class PWorld;
 
 class PLevel final : public PObject
@@ -20,6 +21,7 @@ public:
 
 protected:
     explicit PLevel(const FObjectConstructionParams& Params);
+    void AddReferencedObjects(FReferenceCollector& Collector) const override;
 
 private:
     void AddActor(PActor* Actor);

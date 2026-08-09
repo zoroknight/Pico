@@ -4,6 +4,7 @@
 #include "Pico/Core/Name.h"
 #include "Pico/Core/Math/Transform.h"
 #include "Pico/Core/Types.h"
+#include "Pico/Object/ObjectPtr.h"
 
 #include <cstddef>
 #include <memory>
@@ -42,7 +43,8 @@ enum class EPropertyType : uint8
     Vector3,
     Rotator,
     Transform,
-    AssetPath
+    AssetPath,
+    Object
 };
 
 enum class EAssetReferenceType : uint8
@@ -51,6 +53,13 @@ enum class EAssetReferenceType : uint8
     StaticMesh,
     Texture,
     Material
+};
+
+enum class EObjectReferenceKind : uint8
+{
+    None,
+    Strong,
+    Weak
 };
 
 enum class EPropertyFlags : uint32
@@ -107,6 +116,8 @@ constexpr std::size_t GetPropertyTypeSize(EPropertyType Type)
         return sizeof(FTransform);
     case EPropertyType::AssetPath:
         return sizeof(FAssetPath);
+    case EPropertyType::Object:
+        return sizeof(FObjectHandle);
     }
 
     return 0;
@@ -120,14 +131,19 @@ inline constexpr bool TIsSupportedPropertyType =
     || std::is_same_v<TValue, FVector3>
     || std::is_same_v<TValue, FRotator>
     || std::is_same_v<TValue, FTransform>
-    || std::is_same_v<TValue, FAssetPath>;
+    || std::is_same_v<TValue, FAssetPath>
+    || TObjectPointerTraits<TValue>::IsObjectPointer;
 
 template <typename TValue>
 constexpr EPropertyType GetPropertyType()
 {
     static_assert(TIsSupportedPropertyType<TValue>, "Unsupported reflected property type");
 
-    if constexpr (std::is_same_v<TValue, int32>)
+    if constexpr (TObjectPointerTraits<TValue>::IsObjectPointer)
+    {
+        return EPropertyType::Object;
+    }
+    else if constexpr (std::is_same_v<TValue, int32>)
     {
         return EPropertyType::Int32;
     }
@@ -187,7 +203,32 @@ public:
             {
                 return std::addressof(static_cast<const TObject*>(Object)->*Member);
             },
-            InMetadata);
+            InMetadata,
+            []() constexpr
+            {
+                if constexpr (TObjectPointerTraits<TValue>::IsObjectPointer)
+                {
+                    return TObjectPointerTraits<TValue>::IsStrong
+                        ? EObjectReferenceKind::Strong
+                        : EObjectReferenceKind::Weak;
+                }
+                else
+                {
+                    return EObjectReferenceKind::None;
+                }
+            }(),
+            [](const PObject* Object) -> FObjectHandle
+            {
+                if constexpr (TObjectPointerTraits<TValue>::IsObjectPointer)
+                {
+                    return (static_cast<const TObject*>(Object)->*Member).GetHandle();
+                }
+                else
+                {
+                    (void)Object;
+                    return {};
+                }
+            });
     }
 
     template <auto Member>
@@ -212,6 +253,8 @@ public:
     EPropertyFlags GetFlags() const;
     bool HasAnyFlags(EPropertyFlags Flags) const;
     EAssetReferenceType GetAssetReferenceType() const;
+    EObjectReferenceKind GetObjectReferenceKind() const;
+    PObject* GetReferencedObject(const PObject* Object) const;
     std::size_t GetSize() const;
     const PClass* GetOwnerClass() const;
 
@@ -258,6 +301,7 @@ public:
 private:
     using FMutableAccessor = void* (*)(PObject*);
     using FConstAccessor = const void* (*)(const PObject*);
+    using FReferenceAccessor = FObjectHandle (*)(const PObject*);
 
     PProperty(
         FName InName,
@@ -266,7 +310,9 @@ private:
         const void* InOwnerTypeToken,
         FMutableAccessor InMutableAccessor,
         FConstAccessor InConstAccessor,
-        FPropertyMetadata InMetadata);
+        FPropertyMetadata InMetadata,
+        EObjectReferenceKind InObjectReferenceKind,
+        FReferenceAccessor InReferenceAccessor);
 
     bool HasValidAccessors() const;
     const void* GetOwnerTypeToken() const;
@@ -285,6 +331,8 @@ private:
     const void* OwnerTypeToken = nullptr;
     FMutableAccessor MutableAccessor = nullptr;
     FConstAccessor ConstAccessor = nullptr;
+    EObjectReferenceKind ObjectReferenceKind = EObjectReferenceKind::None;
+    FReferenceAccessor ReferenceAccessor = nullptr;
     const PClass* OwnerClass = nullptr;
 };
 }

@@ -35,7 +35,7 @@ float FindUiScale(int Argc, char** Argv)
             return std::clamp(Scale, 0.75f, 2.5f);
         }
     }
-    return 1.25f;
+    return 1.4f;
 }
 
 void ApplyPicoStyle(float Scale)

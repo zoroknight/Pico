@@ -12,7 +12,9 @@ PProperty::PProperty(
     const void* InOwnerTypeToken,
     FMutableAccessor InMutableAccessor,
     FConstAccessor InConstAccessor,
-    FPropertyMetadata InMetadata)
+    FPropertyMetadata InMetadata,
+    EObjectReferenceKind InObjectReferenceKind,
+    FReferenceAccessor InReferenceAccessor)
     : Name(InName)
     , Type(InType)
     , Metadata(InMetadata)
@@ -20,6 +22,8 @@ PProperty::PProperty(
     , OwnerTypeToken(InOwnerTypeToken)
     , MutableAccessor(InMutableAccessor)
     , ConstAccessor(InConstAccessor)
+    , ObjectReferenceKind(InObjectReferenceKind)
+    , ReferenceAccessor(InReferenceAccessor)
 {
 }
 
@@ -51,6 +55,20 @@ bool PProperty::HasAnyFlags(EPropertyFlags Flags) const
 EAssetReferenceType PProperty::GetAssetReferenceType() const
 {
     return Metadata.AssetReferenceType;
+}
+
+EObjectReferenceKind PProperty::GetObjectReferenceKind() const
+{
+    return ObjectReferenceKind;
+}
+
+PObject* PProperty::GetReferencedObject(const PObject* Object) const
+{
+    return Object != nullptr
+        && Type == EPropertyType::Object
+        && ReferenceAccessor != nullptr
+        ? ResolveObject(ReferenceAccessor(Object))
+        : nullptr;
 }
 
 std::size_t PProperty::GetSize() const

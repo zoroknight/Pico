@@ -185,13 +185,20 @@ bool PClass::ValidateProperty(
     const bool bValidAssetMetadata =
         Property.GetAssetReferenceType() == EAssetReferenceType::None
         || Property.GetType() == EPropertyType::AssetPath;
+    const bool bIsObjectReference = Property.GetType() == EPropertyType::Object;
+    const bool bValidObjectReference = bIsObjectReference
+        ? Property.GetObjectReferenceKind() != EObjectReferenceKind::None
+            && bTransient
+            && !bSerializable
+        : Property.GetObjectReferenceKind() == EObjectReferenceKind::None;
     if (Property.GetName().IsNone()
         || TypeSize == 0
         || Property.GetSize() != TypeSize
         || Property.GetOwnerTypeToken() != NativeTypeToken
         || !Property.HasValidAccessors()
         || (bSerializable && bTransient)
-        || !bValidAssetMetadata)
+        || !bValidAssetMetadata
+        || !bValidObjectReference)
     {
         return false;
     }

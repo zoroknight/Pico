@@ -7,6 +7,7 @@
 #include "Pico/Engine/Level.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ObjectGlobals.h"
+#include "Pico/Object/ReferenceCollector.h"
 
 #include <algorithm>
 #include <cmath>
@@ -20,6 +21,13 @@ PICO_DEFINE_CLASS_NO_PROPERTIES(PWorld)
 PWorld::PWorld(const FObjectConstructionParams& Params)
     : PObject(Params)
 {
+}
+
+void PWorld::AddReferencedObjects(FReferenceCollector& Collector) const
+{
+    PObject::AddReferencedObjects(Collector);
+    Collector.AddReferencedHandles(LevelHandles);
+    Collector.AddReferencedHandles(PendingDestroyActorHandles);
 }
 
 bool PWorld::Initialize()

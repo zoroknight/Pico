@@ -10,6 +10,14 @@
 #include <utility>
 #include <vector>
 
+#define PCLASS(...)
+#define PPROPERTY(...)
+#define PFUNCTION(...)
+
+#define PICO_GENERATED_BODY_INNER(FileId, Line) FileId##_##Line##_GENERATED_BODY
+#define PICO_GENERATED_BODY(FileId, Line) PICO_GENERATED_BODY_INNER(FileId, Line)
+#define GENERATED_BODY() PICO_GENERATED_BODY(PICO_CURRENT_FILE_ID, __LINE__)
+
 #define PICO_DECLARE_CLASS(Type, SuperType) \
 public: \
     using ThisClass = Type; \

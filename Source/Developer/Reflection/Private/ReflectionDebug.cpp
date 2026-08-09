@@ -118,6 +118,14 @@ void AppendPropertyValue(std::ostringstream& Stream, const PProperty& Property, 
             ? std::string(Value.ToString()) : "<unavailable>");
         break;
     }
+    case EPropertyType::Object:
+    {
+        PObject* Value = Property.GetReferencedObject(&Object);
+        Stream << (Value != nullptr ? Value->GetPathName() : "None")
+               << (Property.GetObjectReferenceKind() == EObjectReferenceKind::Strong
+                    ? " [Strong]" : " [Weak]");
+        break;
+    }
     }
 }
 }
@@ -140,6 +148,8 @@ std::string_view GetPropertyTypeName(EPropertyType Type)
         return "Transform";
     case EPropertyType::AssetPath:
         return "AssetPath";
+    case EPropertyType::Object:
+        return "Object";
     }
 
     return "Unknown";

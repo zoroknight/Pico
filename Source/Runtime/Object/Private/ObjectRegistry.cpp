@@ -3,10 +3,14 @@
 #include "Pico/Core/Log.h"
 #include "Pico/Core/ScopeExit.h"
 #include "Pico/Object/Object.h"
+#include "Pico/Object/Class.h"
+#include "Pico/Object/GarbageCollection.h"
 #include "Pico/Object/ObjectName.h"
+#include "Pico/Object/ReferenceCollector.h"
 
 #include <algorithm>
 #include <exception>
+#include <numeric>
 #include <vector>
 
 namespace Pico
@@ -35,6 +39,12 @@ bool& IsDestroyingAllObjects()
 {
     static bool bDestroyingAllObjects = false;
     return bDestroyingAllObjects;
+}
+
+bool& IsCollectingGarbage()
+{
+    static bool bCollectingGarbage = false;
+    return bCollectingGarbage;
 }
 
 uint32 AllocateObjectSerial()
@@ -123,7 +133,7 @@ void FObjectRegistry::CallBeginDestroy(PObject* Object)
 
 PObject* FObjectRegistry::AddObject(FObjectPtr Object, bool bDeferPostInitProperties)
 {
-    if (IsDestroyingAllObjects())
+    if (IsDestroyingAllObjects() || IsCollectingGarbage())
     {
         PICO_LOG(LogObject, Error, "Cannot register objects while the registry is shutting down");
         return nullptr;
@@ -211,7 +221,8 @@ void FObjectRegistry::PostInitObject(PObject* Object)
 
 bool FObjectRegistry::DestroyObject(PObject* Object)
 {
-    if (Object == nullptr
+    if (IsCollectingGarbage()
+        || Object == nullptr
         || Object->LifecycleState != PObject::ELifecycleState::Alive)
     {
         return false;
@@ -341,7 +352,8 @@ PObject* FObjectRegistry::FindObject(PObject* Outer, FName Name)
 
 bool FObjectRegistry::RenameObject(PObject* Object, FName NewName)
 {
-    if (Object == nullptr
+    if (IsCollectingGarbage()
+        || Object == nullptr
         || !IsValidObjectName(NewName)
         || ResolveObject(Object->GetHandle()) != Object
         || Object->IsBeginningDestroy()
@@ -384,5 +396,162 @@ std::size_t FObjectRegistry::GetObjectCount()
         Count += Slot.Object != nullptr ? 1 : 0;
     }
     return Count;
+}
+
+bool FObjectRegistry::AddToRoot(PObject* Object)
+{
+    if (IsCollectingGarbage()
+        || Object == nullptr
+        || ResolveObject(Object->GetHandle()) != Object
+        || Object->IsBeginningDestroy())
+    {
+        return false;
+    }
+    Object->FlagsPrivate = static_cast<EObjectFlags>(
+        static_cast<uint32>(Object->FlagsPrivate)
+        | static_cast<uint32>(EObjectFlags::RootSet));
+    return true;
+}
+
+bool FObjectRegistry::RemoveFromRoot(PObject* Object)
+{
+    if (IsCollectingGarbage()
+        || Object == nullptr
+        || ResolveObject(Object->GetHandle()) != Object
+        || Object->IsBeginningDestroy())
+    {
+        return false;
+    }
+    Object->FlagsPrivate = static_cast<EObjectFlags>(
+        static_cast<uint32>(Object->FlagsPrivate)
+        & ~static_cast<uint32>(EObjectFlags::RootSet));
+    return true;
+}
+
+bool FObjectRegistry::IsRooted(const PObject* Object)
+{
+    return Object != nullptr
+        && ResolveObject(Object->GetHandle()) == Object
+        && HasAnyFlags(Object->GetFlags(), EObjectFlags::RootSet);
+}
+
+bool FObjectRegistry::IsGarbageCollecting()
+{
+    return IsCollectingGarbage();
+}
+
+FGarbageCollectionResult FObjectRegistry::CollectGarbage()
+{
+    FGarbageCollectionResult Result;
+    Result.ObjectCountBefore = GetObjectCount();
+    Result.ObjectCountAfter = Result.ObjectCountBefore;
+    if (IsDestroyingAllObjects() || IsCollectingGarbage())
+    {
+        return Result;
+    }
+
+    IsCollectingGarbage() = true;
+    const auto ResetCollecting = MakeScopeExit([]() { IsCollectingGarbage() = false; });
+    std::vector<FObjectSlot>& Slots = GetObjectSlots();
+    std::vector<bool> Marked(Slots.size(), false);
+    std::vector<FObjectHandle> WorkStack;
+
+    for (const FObjectSlot& Slot : Slots)
+    {
+        if (Slot.Object != nullptr
+            && HasAnyFlags(Slot.Object->GetFlags(), EObjectFlags::RootSet))
+        {
+            WorkStack.push_back(Slot.Object->GetHandle());
+            ++Result.RootCount;
+        }
+    }
+
+    while (!WorkStack.empty())
+    {
+        const FObjectHandle Handle = WorkStack.back();
+        WorkStack.pop_back();
+        PObject* Object = ResolveObject(Handle);
+        if (Object == nullptr || Marked[Handle.Index])
+        {
+            continue;
+        }
+
+        Marked[Handle.Index] = true;
+        ++Result.ReachableObjectCount;
+
+        FReferenceCollector Collector;
+        Object->AddReferencedObjects(Collector);
+        for (const FObjectHandle Reference : Collector.GetReferences())
+        {
+            WorkStack.push_back(Reference);
+        }
+
+        for (const PClass* Class = Object->GetClass(); Class != nullptr; Class = Class->GetSuperClass())
+        {
+            for (const PProperty& Property : Class->GetProperties())
+            {
+                if (Property.GetObjectReferenceKind() == EObjectReferenceKind::Strong)
+                {
+                    if (PObject* Referenced = Property.GetReferencedObject(Object))
+                    {
+                        WorkStack.push_back(Referenced->GetHandle());
+                    }
+                }
+            }
+        }
+    }
+
+    struct FUnreachableObject
+    {
+        FObjectHandle Handle;
+        std::size_t OuterDepth = 0;
+    };
+    std::vector<FUnreachableObject> Unreachable;
+    for (std::size_t Index = 0; Index < Slots.size(); ++Index)
+    {
+        PObject* Object = Slots[Index].Object.get();
+        if (Object == nullptr || Marked[Index])
+        {
+            continue;
+        }
+        std::size_t Depth = 0;
+        for (const PObject* Outer = Object->GetOuter(); Outer != nullptr; Outer = Outer->GetOuter())
+        {
+            ++Depth;
+        }
+        Unreachable.push_back({Object->GetHandle(), Depth});
+    }
+    std::sort(
+        Unreachable.begin(),
+        Unreachable.end(),
+        [](const FUnreachableObject& Left, const FUnreachableObject& Right)
+        {
+            return Left.OuterDepth > Right.OuterDepth;
+        });
+
+    for (const FUnreachableObject& Entry : Unreachable)
+    {
+        CallBeginDestroy(ResolveObject(Entry.Handle));
+    }
+    for (const FUnreachableObject& Entry : Unreachable)
+    {
+        PObject* Object = ResolveObject(Entry.Handle);
+        if (Object == nullptr)
+        {
+            continue;
+        }
+        FObjectSlot& Slot = Slots[Entry.Handle.Index];
+        Object->LifecycleState = PObject::ELifecycleState::Destroying;
+        FObjectPtr OwnedObject = std::move(Slot.Object);
+        OwnedObject->HandlePrivate = {};
+        Slot.Serial = 0;
+        OwnedObject.reset();
+        GetFreeObjectIndices().push_back(Entry.Handle.Index);
+        ++Result.CollectedObjectCount;
+    }
+
+    Result.ObjectCountAfter = GetObjectCount();
+    Result.bSucceeded = true;
+    return Result;
 }
 }

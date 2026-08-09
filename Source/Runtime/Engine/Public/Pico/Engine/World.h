@@ -12,6 +12,7 @@ namespace Pico
 {
 class PActor;
 class FWorldAssetLoader;
+class FReferenceCollector;
 class PLevel;
 
 using FOnActorSpawned = TObjectMulticastDelegate<void(PActor*)>;
@@ -81,6 +82,7 @@ public:
 protected:
     explicit PWorld(const FObjectConstructionParams& Params);
     void BeginDestroy() override;
+    void AddReferencedObjects(FReferenceCollector& Collector) const override;
 
 private:
     PLevel* ResolveLevel(FObjectHandle Handle) const;

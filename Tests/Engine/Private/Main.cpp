@@ -16,6 +16,7 @@
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
+#include "Pico/Object/GarbageCollection.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectInitializer.h"
 #include "Pico/Object/ObjectRegistry.h"
@@ -2258,7 +2259,23 @@ void TestEngineLoopWorldLifecycle(FTestRunner& Runner)
         World != nullptr && World->GetPersistentLevel() != nullptr,
         "The engine world has a persistent level");
 
+    Pico::PActor* ScheduledGarbage =
+        Pico::NewObject<Pico::PActor>(nullptr, "ScheduledGarbage");
+    const Pico::FObjectHandle ScheduledGarbageHandle =
+        ScheduledGarbage != nullptr
+            ? ScheduledGarbage->GetHandle()
+            : Pico::FObjectHandle {};
+    Pico::RequestGarbageCollection();
+    Runner.Expect(
+        ScheduledGarbage != nullptr
+            && Pico::ResolveObject(ScheduledGarbageHandle) == ScheduledGarbage,
+        "Engine GC requests remain deferred until a frame safe point");
+
     EngineLoop.Tick();
+    Runner.Expect(
+        Pico::ResolveObject(ScheduledGarbageHandle) == nullptr
+            && !Pico::IsGarbageCollectionRequested(),
+        "EngineLoop performs pending GC after the World tick");
     EngineLoop.Tick();
     Runner.Expect(World != nullptr && World->GetTickCount() == 2, "Engine ticks are forwarded to the world");
     Runner.Expect(Pico::FApp::GetFrameCounter() == 2, "Engine frame and world tick counts advance together");

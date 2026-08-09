@@ -6,6 +6,7 @@
 #include "Pico/Engine/World.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ObjectGlobals.h"
+#include "Pico/Object/ReferenceCollector.h"
 
 #include <algorithm>
 #include <exception>
@@ -18,6 +19,14 @@ PICO_DEFINE_CLASS_NO_PROPERTIES(PActor)
 PActor::PActor(const FObjectConstructionParams& Params)
     : PObject(Params)
 {
+}
+
+void PActor::AddReferencedObjects(FReferenceCollector& Collector) const
+{
+    PObject::AddReferencedObjects(Collector);
+    Collector.AddReferencedHandles(ComponentHandles);
+    Collector.AddReferencedHandle(RootComponentHandle);
+    Collector.AddReferencedHandle(OwnerHandle);
 }
 
 PWorld* PActor::GetWorld() const

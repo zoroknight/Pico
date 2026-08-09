@@ -13,6 +13,7 @@ namespace Pico
 class FArchive;
 class FObjectRegistry;
 class FObjectInitializer;
+class FReferenceCollector;
 class FWorldAssetLoader;
 class PClass;
 class PObject;
@@ -70,6 +71,7 @@ protected:
     virtual void PostInitProperties();
     virtual void PostLoad();
     virtual void BeginDestroy();
+    virtual void AddReferencedObjects(FReferenceCollector& Collector) const;
     virtual bool DefineDefaultSubobjects(FObjectInitializer& Initializer);
     virtual bool OnDefaultSubobjectCreated(PObject* Subobject);
     virtual bool OnDefaultSubobjectRelation(

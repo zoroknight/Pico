@@ -23,6 +23,7 @@
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
+#include "Pico/Object/GarbageCollection.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectSystem.h"
 
@@ -131,6 +132,8 @@ int FEngineLoop::PreInit(
 
     MaxFrameCount = Config.GetInt("Engine", "MaxFrameCount", -1);
     MaxFPS = Config.GetDouble("Engine", "MaxFPS", 60.0);
+    GarbageCollectionIntervalSeconds = Config.GetDouble(
+        "Engine", "GarbageCollectionIntervalSeconds", 60.0);
 
     if (const std::optional<int> CommandLineFrames = FCommandLine::GetInt("frames"))
     {
@@ -154,6 +157,17 @@ int FEngineLoop::PreInit(
         return 1;
     }
 
+    if (!std::isfinite(GarbageCollectionIntervalSeconds)
+        || GarbageCollectionIntervalSeconds < 0.0)
+    {
+        PICO_LOG(
+            LogEngine,
+            Error,
+            "PreInit: GC interval must be finite and non-negative, got {}",
+            GarbageCollectionIntervalSeconds);
+        return 1;
+    }
+
     PICO_LOG(LogEngine, Info, "PreInit: project={} version={}", FApp::GetProjectName(), PICO_VERSION);
     PICO_LOG(LogPaths, Info, "PreInit: engine root={}", FPaths::GetEngineRootDir().string());
     if (FPaths::HasProject())
@@ -163,6 +177,11 @@ int FEngineLoop::PreInit(
     }
     PICO_LOG(LogEngine, Info, "PreInit: max frames={}", MaxFrameCount);
     PICO_LOG(LogEngine, Info, "PreInit: max fps={}", MaxFPS);
+    PICO_LOG(
+        LogEngine,
+        Info,
+        "PreInit: GC interval={}s (0 disables timed requests)",
+        GarbageCollectionIntervalSeconds);
 
     return 0;
 }
@@ -221,7 +240,7 @@ int FEngineLoop::Init()
         return 1;
     }
 
-    PWorld* World = NewObject<PWorld>(nullptr, "GameWorld");
+    PWorld* World = NewObject<PWorld>(nullptr, "GameWorld", EObjectFlags::RootSet);
     if (World == nullptr)
     {
         PICO_LOG(LogEngine, Error, "Init: world creation failed");
@@ -238,6 +257,7 @@ int FEngineLoop::Init()
     }
 
     FrameTimer.Reset();
+    GarbageCollectionElapsedSeconds = 0.0;
     bInitialized = true;
 
     if (MaxFrameCount == 0)
@@ -280,6 +300,14 @@ void FEngineLoop::Tick()
     ResetTickingWorld.Release();
     bTickingWorld = false;
 
+    GarbageCollectionElapsedSeconds += FrameTimer.GetDeltaSeconds();
+    if (GarbageCollectionIntervalSeconds > 0.0
+        && GarbageCollectionElapsedSeconds >= GarbageCollectionIntervalSeconds)
+    {
+        RequestGarbageCollection(EGarbageCollectionReason::TimeLimit);
+    }
+    RunGarbageCollectionSafePoint();
+
     PICO_LOG(
         LogEngine,
         Trace,
@@ -318,6 +346,8 @@ void FEngineLoop::Exit()
         DestroyObjectTree(World);
     }
     WorldHandle = {};
+    RequestGarbageCollection(EGarbageCollectionReason::EngineExit);
+    RunGarbageCollectionSafePoint();
     AssetManager.Clear();
     AssetRegistry.Clear();
 
@@ -436,10 +466,54 @@ bool FEngineLoop::ReplaceWorld(
         return false;
     }
 
+    if (!AddToRoot(NewWorld))
+    {
+        DestroyObjectTree(NewWorld);
+        if (bRenamedOldWorld)
+        {
+            RenameObject(OldWorld, OldName);
+        }
+        if (OutError != nullptr)
+        {
+            *OutError = EWorldSerializationError::WorldReplacementFailed;
+        }
+        return false;
+    }
+
     WorldHandle = NewWorld->GetHandle();
     OldWorld->TearDown();
     DestroyObjectTree(OldWorld);
+    RequestGarbageCollection(EGarbageCollectionReason::WorldTransition);
+    RunGarbageCollectionSafePoint();
     return true;
+}
+
+void FEngineLoop::RunGarbageCollectionSafePoint()
+{
+    if (!bObjectSystemInitialized || bTickingWorld || !IsGarbageCollectionRequested())
+    {
+        return;
+    }
+
+    const EGarbageCollectionReason Reasons = GetPendingGarbageCollectionReasons();
+    FGarbageCollectionResult Result;
+    if (!CollectGarbageIfRequested(&Result))
+    {
+        PICO_LOG(LogObject, Warning, "GC safe point rejected a pending collection");
+        return;
+    }
+
+    GarbageCollectionElapsedSeconds = 0.0;
+    PICO_LOG(
+        LogObject,
+        Info,
+        "GC safe point: reasons={} before={} roots={} reachable={} collected={} after={}",
+        static_cast<std::uint32_t>(Reasons),
+        Result.ObjectCountBefore,
+        Result.RootCount,
+        Result.ReachableObjectCount,
+        Result.CollectedObjectCount,
+        Result.ObjectCountAfter);
 }
 
 bool FEngineLoop::ShouldExit() const

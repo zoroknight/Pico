@@ -26,18 +26,22 @@ The current implementation can:
   independent runtime object graphs through one initialization path.
 - Bind type-safe native single-cast and multicast delegates, including generation-safe weak object
   listeners and Actor spawn/destroy lifecycle events.
-- Register classes, properties, and functions with thin C++ reflection macros.
+- Declare classes, properties, and functions beside native C++ members with `PCLASS`, `PPROPERTY`,
+  and `PFUNCTION`; PicoHeaderTool generates the repetitive registration code before compilation.
 - Invoke reflected native functions through `PObject::ProcessEvent` with typed parameters, return
   metadata, inherited lookup, lifecycle checks, and validated future RPC flags.
 - Inspect and edit supported properties through generic metadata-driven UI.
 - Use PicoInspector as a project-free developer sandbox: invoke reflected functions with generated
-  parameter controls and inspect Native Delegate listeners, broadcasts, expiry, and event logs.
+  parameter controls and visualize Native Delegate lifetime, GC reachability, merged requests,
+  safe-point scheduling, and object-handle expiry.
 - Serialize reflected objects to `.pobj` files and reconstruct them with `PostLoad`.
 - Save validated World scene graphs to deterministic `.pworld` files and transactionally reconstruct runtime Worlds without persisting runtime handles.
 - Transactionally replace the `FEngineLoop` active World while preserving the old World on load or `PostLoad` failure.
 - Treat the editor World as a document with New, Open, Save, and Save As workflows, a stable
   `/Game/...` identity, dirty-state tracking, and save/discard/cancel protection.
 - Manage object memory centrally through `FObjectRegistry`, `Outer`, and generation-safe handles.
+- Collect unreachable runtime object graphs with a stop-the-world mark-sweep collector driven by
+  Root Set, reflected strong/weak object references, `Outer`, and native `AddReferencedObjects` hooks.
 - Create `PWorld`, `PLevel`, `PActor`, and component instances with explicit lifecycles.
 - Use a root scene component as the Actor transform provider.
 - Build parent-child scene-component attachment trees with relative and world transforms.
@@ -90,7 +94,7 @@ The current implementation can:
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-Debug and Release configurations build successfully, and all nine CTest targets pass.
+Debug and Release configurations build successfully, and all eleven CTest targets pass.
 
 ## Architecture
 
@@ -110,6 +114,7 @@ Supporting tools and samples depend on public runtime interfaces:
 
 ```text
 PicoReflectionTools -> PicoObject
+PicoHeaderTool      -> generated reflection C++
 PicoAssetImport     -> PicoAsset / TinyObjLoader
 PicoInspector       -> PicoReflectionTools
 
@@ -125,13 +130,14 @@ PicoSandboxGame
 | `PicoInput` | Frame-based key and pointer state plus configurable Action/Axis mappings |
 | `PicoAsset` | Validated virtual asset discovery, deterministic project registry, and file metadata |
 | `PicoAssetImport` | Developer-only OBJ conversion into validated native static-mesh assets |
-| `PicoObject` | `PObject`, `PClass`, `PProperty`, `PFunction`, ProcessEvent, delegates, registry, handles, Outer graph, serialization |
+| `PicoObject` | Object model, reflection, delegates, strong/weak references, Root Set, mark-sweep GC, registry, handles, Outer graph, serialization |
 | `PicoEngine` | Engine loop, World, Level, Actor, components, attachment, primitive scene data |
 | `PicoRender` | GLAD-backed OpenGL, shaders, geometry, framebuffer, scene traversal and draw submission |
 | `PicoGameRuntime` | Reusable project launch, GLFW window, input polling, frame loop, and runtime rendering |
 | `PicoEditorCore` | UI-independent World documents, object/asset selection, asset operations, commands, clipboard, transactions, and transforms |
 | `PicoEditor` | World file dialogs, Content Browser, asset workflow controller, Outliner, Details, editor camera, viewport picking, tool state, and transform gizmo UI |
 | `PicoReflectionTools` | Generic metadata inspection and reflected-property helpers |
+| `PicoHeaderTool` | Token-based parser and build-time generator for constrained native reflection annotations |
 | `PicoSandboxModule` | Project classes, Game Module startup, GameInstance creation, reflection, serialization, and tests |
 
 The runtime modules do not depend on ImGui. `PicoCore`, `PicoAsset`, `PicoObject`, and `PicoEngine` also remain
@@ -167,8 +173,10 @@ PWorld
 ```
 
 `FObjectRegistry` owns object memory. Handles do not extend lifetime, and stale handles resolve to
-`nullptr`. Outer defines naming and deterministic destruction order. This is the foundation for a
-future tracing garbage collector, not a tracing GC implementation itself.
+`nullptr`. Outer defines naming and deterministic destruction order and forms a child-to-parent GC
+reference. Root Set, reflected strong references, and native reference hooks drive stop-the-world
+mark-sweep collection; weak references never keep their targets alive. EngineLoop consumes deferred
+GC requests at a post-World-tick safe point, with timed, World-transition, and engine-exit triggers.
 
 ## Project Boundary
 
@@ -372,10 +380,11 @@ Example commands:
 ```
 
 PicoInspector starts in its Native Delegate experiment. Use `Runtime Browser -> Functions` for
-generic `ProcessEvent` calls, or `Experiments` to inspect listener lifetime and broadcast logs.
-See the [visual verification guide](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md) for the
-test sequence and the purpose of every step. Override its default readable scale with
-`-uiscale=1.4` when needed.
+generic `ProcessEvent` calls, or `Experiments` to inspect listener lifetime, broadcast logs, GC object
+graphs, and deferred requests consumed at a safe point. See the
+[visual verification guide](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md) for the test sequence
+and the purpose of every step. Its default UI scale is `1.4`; override it with values such as
+`-uiscale=1.6` when needed.
 
 ## Build and Test
 
@@ -422,38 +431,29 @@ Pico/
 
 ## Reflection Authoring
 
-Pico currently uses thin native C++ macros:
+PicoHeaderTool parses constrained native annotations before C++ compilation:
 
 ```cpp
+PCLASS()
 class PExample final : public Pico::PObject
 {
-    PICO_DECLARE_CLASS(PExample, Pico::PObject)
+    GENERATED_BODY()
 
 private:
+    PPROPERTY()
     Pico::int32 Health = 100;
 };
 ```
 
-The `.cpp` explicitly defines the class and reflected properties:
-
-```cpp
-PICO_DEFINE_CLASS(PExample)
-
-bool PExample::RegisterProperties(Pico::PClass& Class)
-{
-    std::vector<Pico::PProperty> Properties;
-    PICO_ADD_PROPERTY(Properties, Health);
-    return Class.AddProperties(std::move(Properties));
-}
-```
-
-There is no UHT-like header tool yet. A future PicoHeaderTool may generate this boilerplate while
-continuing to use the same runtime metadata system.
+The generated header supplies class declarations and the generated source registers metadata through
+the existing `PClass`, `PProperty`, and `PFunction` runtime. Generated files live under `Build/Generated`.
 
 See:
 
 - [Remaining Development Roadmap (Chinese)](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
 - [Reflection Authoring Guide](Docs/ReflectionAuthoringGuide.md)
+- [PicoHeaderTool](Docs/Month03_17_PicoHeaderTool.md)
+- [Mark-Sweep Garbage Collection](Docs/Month03_18_GarbageCollection.md)
 - [Native Delegate Authoring Guide (Chinese)](Docs/DelegateAuthoringGuide.md)
 - [PicoInspector Developer Sandbox Plan (Chinese)](Docs/PicoInspector_DeveloperSandbox_Plan.zh-CN.md)
 - [PicoInspector Visual Verification Guide (Chinese)](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)
@@ -475,7 +475,6 @@ See:
 The asset-driven editor, imported static meshes, materials, textures, PBR rendering, standalone Play,
 and the first project Game Module/GameInstance path are complete. The remaining learning path is:
 
-- PicoHeaderTool and tracing garbage collection
 - A UE-inspired Gameplay Framework with GameMode, GameState, PlayerController, PlayerState, Pawn,
   Character, and movement components
 - Jolt physics, character movement, and a small animation integration

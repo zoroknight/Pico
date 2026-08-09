@@ -16,6 +16,7 @@ class PLevel;
 class PSceneComponent;
 class PWorld;
 class FWorldAssetLoader;
+class FReferenceCollector;
 
 using FOnActorDestroyed = TObjectMulticastDelegate<void(PActor*)>;
 
@@ -71,6 +72,7 @@ public:
 protected:
     explicit PActor(const FObjectConstructionParams& Params);
     void BeginDestroy() override;
+    void AddReferencedObjects(FReferenceCollector& Collector) const override;
     bool OnDefaultSubobjectCreated(PObject* Subobject) override;
     bool OnDefaultSubobjectRelation(
         PObject* Subobject,

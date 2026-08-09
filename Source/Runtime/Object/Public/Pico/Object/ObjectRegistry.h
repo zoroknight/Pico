@@ -9,6 +9,7 @@
 namespace Pico
 {
 class PObject;
+struct FGarbageCollectionResult;
 
 class FObjectRegistry
 {
@@ -24,6 +25,11 @@ public:
     static bool RenameObject(PObject* Object, FName NewName);
     static std::vector<PObject*> GetObjects();
     static std::size_t GetObjectCount();
+    static bool AddToRoot(PObject* Object);
+    static bool RemoveFromRoot(PObject* Object);
+    static bool IsRooted(const PObject* Object);
+    static bool IsGarbageCollecting();
+    static FGarbageCollectionResult CollectGarbage();
 
 private:
     static void CallBeginDestroy(PObject* Object);

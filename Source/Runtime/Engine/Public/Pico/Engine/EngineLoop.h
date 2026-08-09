@@ -39,12 +39,16 @@ public:
     const FAssetManager& GetAssetManager() const;
 
 private:
+    void RunGarbageCollectionSafePoint();
+
     FAssetRegistry AssetRegistry;
     FAssetManager AssetManager;
     FFrameTimer FrameTimer;
     FObjectHandle WorldHandle;
     int MaxFrameCount = -1;
     double MaxFPS = 60.0;
+    double GarbageCollectionIntervalSeconds = 60.0;
+    double GarbageCollectionElapsedSeconds = 0.0;
     bool bPreInitialized = false;
     bool bObjectSystemInitialized = false;
     bool bInitialized = false;

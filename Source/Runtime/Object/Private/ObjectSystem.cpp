@@ -2,6 +2,7 @@
 
 #include "Pico/Core/Log.h"
 #include "Pico/Object/ClassRegistry.h"
+#include "Pico/Object/GarbageCollection.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectRegistry.h"
 
@@ -19,6 +20,7 @@ bool PObjectSystem::Init()
         return true;
     }
 
+    ResetGarbageCollectionRequests();
     FClassRegistry::Clear();
     if (!FClassRegistry::RegisterClass(PObject::StaticClass()))
     {
@@ -39,6 +41,7 @@ void PObjectSystem::Shutdown()
     }
 
     FObjectRegistry::DestroyAllObjects();
+    ResetGarbageCollectionRequests();
     FClassRegistry::Clear();
     GObjectSystemInitialized = false;
     PICO_LOG(LogObject, Info, "Object system shut down");

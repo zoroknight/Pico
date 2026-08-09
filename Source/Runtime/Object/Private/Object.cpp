@@ -1,6 +1,7 @@
 #include "Pico/Object/Object.h"
 
 #include "Pico/Object/Class.h"
+#include "Pico/Object/ReferenceCollector.h"
 
 namespace Pico
 {
@@ -113,6 +114,11 @@ void PObject::PostLoad()
 
 void PObject::BeginDestroy()
 {
+}
+
+void PObject::AddReferencedObjects(FReferenceCollector& Collector) const
+{
+    Collector.AddReferencedObject(OuterPrivate);
 }
 
 bool PObject::DefineDefaultSubobjects(FObjectInitializer&)

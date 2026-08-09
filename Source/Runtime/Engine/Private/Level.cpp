@@ -3,6 +3,7 @@
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/ObjectGlobals.h"
+#include "Pico/Object/ReferenceCollector.h"
 
 #include <algorithm>
 
@@ -13,6 +14,12 @@ PICO_DEFINE_CLASS_NO_PROPERTIES(PLevel)
 PLevel::PLevel(const FObjectConstructionParams& Params)
     : PObject(Params)
 {
+}
+
+void PLevel::AddReferencedObjects(FReferenceCollector& Collector) const
+{
+    PObject::AddReferencedObjects(Collector);
+    Collector.AddReferencedHandles(ActorHandles);
 }
 
 PWorld* PLevel::GetWorld() const

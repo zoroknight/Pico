@@ -2,18 +2,21 @@
 
 #include "Pico/Object/ObjectDelegate.h"
 #include "Pico/Object/ReflectionMacros.h"
+#include "Pico/Samples/DemoCharacter.generated.h"
 
 namespace Pico
 {
+PCLASS()
 class PDemoCharacter final : public PObject
 {
-    PICO_DECLARE_CLASS(PDemoCharacter, PObject)
+    GENERATED_BODY()
 
 public:
     int32 GetHealth() const;
     float GetMoveSpeed() const;
     bool IsAlive() const;
     int32 GetHealthSeenInPostLoad() const;
+    PFUNCTION(Callable)
     int32 ApplyDamage(int32 Damage);
 
     TObjectMulticastDelegate<void(int32, int32)> OnHealthChanged;
@@ -23,15 +26,19 @@ protected:
     void PostLoad() override;
 
 private:
+    PPROPERTY()
     int32 Health = 100;
+    PPROPERTY()
     float MoveSpeed = 600.0f;
+    PPROPERTY()
     bool bAlive = true;
     int32 HealthSeenInPostLoad = 0;
 };
 
+PCLASS()
 class PDemoHealthObserver final : public PObject
 {
-    PICO_DECLARE_CLASS(PDemoHealthObserver, PObject)
+    GENERATED_BODY()
 
 public:
     void HandleHealthChanged(int32 OldHealth, int32 NewHealth);

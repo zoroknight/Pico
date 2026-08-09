@@ -1,4 +1,5 @@
 #include "InspectorApp.h"
+#include "GarbageCollectionExperiment.h"
 #include "NativeDelegateExperiment.h"
 
 #include "Pico/Developer/ReflectionDebug.h"
@@ -223,6 +224,7 @@ FInspectorApp::FInspectorApp()
     }
 
     Experiments.push_back(std::make_unique<FNativeDelegateExperiment>());
+    Experiments.push_back(std::make_unique<FGarbageCollectionExperiment>());
     for (const std::unique_ptr<IInspectorExperiment>& Experiment : Experiments)
     {
         if (!Experiment->SetUp())
@@ -812,6 +814,15 @@ void FInspectorApp::DrawPropertyEditor(PObject* Object, const PProperty* Propert
         {
             ImGui::TextUnformatted(std::string(Value.ToString()).c_str());
         }
+        break;
+    }
+    case EPropertyType::Object:
+    {
+        PObject* Referenced = Property->GetReferencedObject(Object);
+        ImGui::Text(
+            "%s (%s)",
+            Referenced != nullptr ? Referenced->GetPathName().c_str() : "None",
+            Property->GetObjectReferenceKind() == EObjectReferenceKind::Strong ? "Strong" : "Weak");
         break;
     }
     }

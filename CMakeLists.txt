@@ -12,6 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(PICO_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(PICO_SOURCE_DIR ${PICO_ROOT_DIR}/Source)
+set(PICO_GENERATED_DIR ${CMAKE_BINARY_DIR}/Generated)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMake")
@@ -141,6 +142,7 @@ add_library(PicoObject STATIC
     Source/Runtime/Object/Private/Class.cpp
     Source/Runtime/Object/Private/ClassRegistry.cpp
     Source/Runtime/Object/Private/Function.cpp
+    Source/Runtime/Object/Private/GarbageCollection.cpp
     Source/Runtime/Object/Private/Object.cpp
     Source/Runtime/Object/Private/ObjectGlobals.cpp
     Source/Runtime/Object/Private/ObjectInitializer.cpp
@@ -148,6 +150,7 @@ add_library(PicoObject STATIC
     Source/Runtime/Object/Private/ObjectSerialization.cpp
     Source/Runtime/Object/Private/ObjectSystem.cpp
     Source/Runtime/Object/Private/Property.cpp
+    Source/Runtime/Object/Private/ReferenceCollector.cpp
     Source/Runtime/Object/Private/SerializationFile.cpp
     Source/Runtime/Object/Private/SerializedProperty.cpp
 )
@@ -186,13 +189,54 @@ target_link_libraries(PicoReflectionTools
 
 set_target_properties(PicoReflectionTools PROPERTIES FOLDER "Pico/Developer")
 
+add_executable(PicoHeaderTool
+    Source/Programs/PicoHeaderTool/Private/Main.cpp
+)
+
+set_target_properties(PicoHeaderTool PROPERTIES FOLDER "Programs")
+
+if(MSVC)
+    target_compile_options(PicoHeaderTool PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoHeaderTool PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+function(pico_generate_reflection OutSources Header IncludePath GeneratedHeader FileId)
+    set(HeaderOutput "${PICO_GENERATED_DIR}/${GeneratedHeader}")
+    set(SourceOutput "${PICO_GENERATED_DIR}/${FileId}.gen.cpp")
+    add_custom_command(
+        OUTPUT "${HeaderOutput}" "${SourceOutput}"
+        COMMAND $<TARGET_FILE:PicoHeaderTool>
+            --input "${Header}"
+            --header-output "${HeaderOutput}"
+            --source-output "${SourceOutput}"
+            --include "${IncludePath}"
+            --file-id "${FileId}"
+        DEPENDS PicoHeaderTool "${Header}"
+        COMMENT "Generating reflection metadata for ${IncludePath}"
+        VERBATIM
+    )
+    set_source_files_properties("${HeaderOutput}" "${SourceOutput}" PROPERTIES GENERATED TRUE)
+    set(${OutSources} "${SourceOutput}" PARENT_SCOPE)
+endfunction()
+
+pico_generate_reflection(
+    PICO_REFLECTION_SAMPLE_GENERATED
+    "${PICO_ROOT_DIR}/Source/Samples/Reflection/Public/Pico/Samples/DemoCharacter.h"
+    "Pico/Samples/DemoCharacter.h"
+    "Pico/Samples/DemoCharacter.generated.h"
+    "Pico_Samples_DemoCharacter_h"
+)
+
 add_library(PicoReflectionSample STATIC
     Source/Samples/Reflection/Private/DemoCharacter.cpp
+    ${PICO_REFLECTION_SAMPLE_GENERATED}
 )
 
 target_include_directories(PicoReflectionSample
     PUBLIC
         Source/Samples/Reflection/Public
+        ${PICO_GENERATED_DIR}
 )
 
 target_link_libraries(PicoReflectionSample
@@ -435,6 +479,8 @@ if(PICO_BUILD_INSPECTOR)
 
     add_executable(PicoInspector
         Source/Editor/PicoInspector/Private/InspectorExperiment.h
+        Source/Editor/PicoInspector/Private/GarbageCollectionExperiment.cpp
+        Source/Editor/PicoInspector/Private/GarbageCollectionExperiment.h
         Source/Editor/PicoInspector/Private/InspectorApp.cpp
         Source/Editor/PicoInspector/Private/InspectorApp.h
         Source/Editor/PicoInspector/Private/Main.cpp
@@ -596,6 +642,35 @@ target_link_libraries(PicoObjectTests
 
 set_target_properties(PicoObjectTests PROPERTIES FOLDER "Tests/Object")
 
+pico_generate_reflection(
+    PICO_GC_TEST_GENERATED
+    "${PICO_ROOT_DIR}/Tests/GarbageCollection/Public/Pico/Tests/GCNode.h"
+    "Pico/Tests/GCNode.h"
+    "Pico/Tests/GCNode.generated.h"
+    "Pico_Tests_GCNode_h"
+)
+
+add_executable(PicoGarbageCollectionTests
+    Tests/GarbageCollection/Private/GCNode.cpp
+    Tests/GarbageCollection/Private/Main.cpp
+    ${PICO_GC_TEST_GENERATED}
+)
+
+target_include_directories(PicoGarbageCollectionTests
+    PRIVATE
+        Tests/Common
+        Tests/GarbageCollection/Public
+        ${PICO_GENERATED_DIR}
+)
+target_link_libraries(PicoGarbageCollectionTests PRIVATE PicoEngine)
+set_target_properties(PicoGarbageCollectionTests PROPERTIES FOLDER "Tests/Object")
+
+if(MSVC)
+    target_compile_options(PicoGarbageCollectionTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoGarbageCollectionTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
     target_compile_options(PicoObjectTests PRIVATE /W4 /permissive-)
 else()
@@ -654,10 +729,19 @@ include(CTest)
 add_subdirectory(Projects/PicoSandbox)
 
 if(BUILD_TESTING)
+    add_test(
+        NAME PicoHeaderToolTests
+        COMMAND ${CMAKE_COMMAND}
+            -DPHT=$<TARGET_FILE:PicoHeaderTool>
+            -DFIXTURE_DIR=${PICO_ROOT_DIR}/Tests/HeaderTool/Fixtures
+            -DOUTPUT_DIR=${CMAKE_BINARY_DIR}/HeaderToolTests
+            -P ${PICO_ROOT_DIR}/Tests/HeaderTool/RunHeaderToolTests.cmake
+    )
     add_test(NAME PicoCoreTests COMMAND PicoCoreTests)
     add_test(NAME PicoAssetTests COMMAND PicoAssetTests)
     add_test(NAME PicoAssetImportTests COMMAND PicoAssetImportTests)
     add_test(NAME PicoObjectTests COMMAND PicoObjectTests)
+    add_test(NAME PicoGarbageCollectionTests COMMAND PicoGarbageCollectionTests)
     add_test(NAME PicoEngineTests COMMAND PicoEngineTests)
     add_test(NAME PicoGameTests COMMAND PicoGameTests)
     if(PICO_BUILD_INSPECTOR)
@@ -674,6 +758,9 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoObjectTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoGarbageCollectionTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoEngineTests PROPERTIES

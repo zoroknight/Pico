@@ -20,17 +20,20 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 通过 `PClass` 和 `NewObject` 创建具有反射信息的原生 C++ 对象。
 - 为每个已注册类创建 CDO，通过继承的默认子对象模板声明固定对象图，并由统一构造链生成彼此独立的运行时实例。
 - 使用类型安全的 Native 单播与多播委托，通过带代数 Handle 弱绑定对象，并广播 Actor 生成和销毁事件。
-- 使用薄反射宏注册类、属性和函数。
+- 使用 `PCLASS`、`PPROPERTY` 和 `PFUNCTION` 在原生 C++ 声明旁标记反射内容，并由
+  PicoHeaderTool 在编译前生成重复的注册代码。
 - 通过 `PObject::ProcessEvent` 调用反射 Native 函数，支持类型化参数/返回值元数据、继承查找、
   生命周期校验以及供未来 RPC 使用的合法 Flags。
 - 通过通用的元数据驱动界面查看和修改属性。
-- 使用无需项目的 PicoInspector Developer Sandbox，通过自动生成的参数控件调用反射函数，并观察
-  Native Delegate 的监听、广播、失效和事件日志。
+- 使用无需项目的 PicoInspector Developer Sandbox，通过自动生成的参数控件调用反射函数，并可视化
+  验证 Native Delegate、GC 可达性、请求合并、安全点调度和对象 Handle 失效。
 - 将反射对象序列化为 `.pobj`，并通过 `PostLoad` 完成加载后的处理。
 - 将经过校验的 World 场景图原子保存为确定性的 `.pworld` 文件，并在不持久化运行时 Handle 的前提下事务式重建运行时 World。
 - 事务式替换 `FEngineLoop` 的当前 World，并在文件加载或 `PostLoad` 失败时完整保留旧 World。
 - 将编辑器 World 作为文档管理，支持 New、Open、Save、Save As、稳定的 `/Game/...` 身份、Dirty 状态以及保存/放弃/取消保护。
 - 使用 `FObjectRegistry`、Outer 和带代数的 Handle 集中管理对象。
+- 通过 Root Set、反射强弱对象引用、Outer 和原生 `AddReferencedObjects` 执行 Stop-the-world
+  Mark-Sweep，回收不可达的运行时对象图。
 - 创建具有明确生命周期的 `PWorld`、`PLevel`、`PActor` 和 Component。
 - 使用 RootComponent 为 Actor 提供 Transform。
 - 建立 SceneComponent 父子挂接树并计算 Relative/World Transform。
@@ -77,7 +80,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
-Debug 和 Release 均可完整构建，九个 CTest 目标全部通过。
+Debug 和 Release 均可完整构建，十一个 CTest 目标全部通过。
 
 ## 架构
 
@@ -97,6 +100,7 @@ PicoEditor
 
 ```text
 PicoReflectionTools -> PicoObject
+PicoHeaderTool      -> 生成的反射 C++
 PicoAssetImport     -> PicoAsset / TinyObjLoader
 PicoInspector       -> PicoReflectionTools
 
@@ -112,13 +116,14 @@ PicoSandboxGame
 | `PicoInput` | 逐帧按键与指针状态，以及可配置的 Action/Axis 映射 |
 | `PicoAsset` | 经过校验的虚拟资产发现、确定性项目注册表和文件元数据 |
 | `PicoAssetImport` | 仅供开发阶段使用的 OBJ 到原生 Static Mesh 转换 |
-| `PicoObject` | `PObject`、`PClass`、`PProperty`、`PFunction`、ProcessEvent、委托、注册表、Handle、Outer 和序列化 |
+| `PicoObject` | 对象模型、反射、委托、强弱引用、Root Set、Mark-Sweep GC、注册表、Handle、Outer 和序列化 |
 | `PicoEngine` | EngineLoop、World、Level、Actor、Component、挂接和可渲染场景数据 |
 | `PicoRender` | 基于GLAD的OpenGL、Shader、几何体、Framebuffer、场景遍历和绘制提交 |
 | `PicoGameRuntime` | 可复用的项目启动、GLFW 窗口、输入轮询、逐帧循环和运行时渲染 |
 | `PicoEditorCore` | 不依赖 UI 的 World 文档、对象/资产选择、资产操作、命令、剪贴板、事务和 Transform 操作 |
 | `PicoEditor` | World 文件对话框、Content Browser、资产工作流控制器、Outliner、Details、编辑器相机、Viewport 拾取、工具状态和 Transform Gizmo UI |
 | `PicoReflectionTools` | 通用元数据检查和反射属性工具 |
+| `PicoHeaderTool` | 解析受约束原生反射标记并在构建期生成注册代码的 Token 工具 |
 | `PicoSandboxModule` | 项目类、Game Module 启动、GameInstance 创建、反射、序列化和自动化测试 |
 
 运行时模块不依赖 ImGui。`PicoCore`、`PicoAsset`、`PicoObject` 和 `PicoEngine` 也不依赖 GLFW 或 OpenGL。
@@ -153,7 +158,9 @@ PWorld
 ```
 
 对象内存由 `FObjectRegistry` 实际持有。Handle 不延长生命周期，失效 Handle 会解析为 `nullptr`。
-Outer 负责命名关系和确定性的销毁顺序。这是未来追踪式垃圾回收的基础，但当前并不是追踪式 GC。
+Outer 负责命名关系、确定性销毁顺序和子对象到父对象的 GC 引用。Root Set、反射强引用和原生引用
+上报共同驱动 Stop-the-world Mark-Sweep；弱引用不会阻止目标回收。GC 请求由 EngineLoop 在 World Tick
+之后的安全点消费，并支持定时、World 切换和引擎退出触发。
 
 ## 项目边界
 
@@ -336,10 +343,10 @@ GameWorld
 ```
 
 PicoInspector 默认进入 Native Delegate 实验；`Runtime Browser -> Functions` 用于通用
-`ProcessEvent` 调用，`Experiments` 用于观察监听生命周期和广播日志。完整操作步骤、每一步验证目的、
-Lambda 与 Weak PObject 的区别见
-[PicoInspector 可视化验收指南](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)。需要时可通过
-`-uiscale=1.4` 覆盖默认字号。
+`ProcessEvent` 调用，`Experiments` 用于观察监听生命周期、广播日志、GC 对象图和延迟请求在安全点
+的消费过程。完整操作步骤、每一步验证目的、Lambda 与 Weak PObject 的区别见
+[PicoInspector 可视化验收指南](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)。默认 UI Scale
+为 `1.4`，需要时可通过 `-uiscale=1.6` 等参数覆盖。
 
 ## 构建与测试
 
@@ -386,32 +393,22 @@ Pico/
 
 ## 编写反射类
 
-Pico 当前使用薄原生 C++ 宏：
+PicoHeaderTool 会在 C++ 编译前解析受约束的原生反射标记：
 
 ```cpp
+PCLASS()
 class PExample final : public Pico::PObject
 {
-    PICO_DECLARE_CLASS(PExample, Pico::PObject)
+    GENERATED_BODY()
 
 private:
+    PPROPERTY()
     Pico::int32 Health = 100;
 };
 ```
 
-在 `.cpp` 中显式定义类和反射属性：
-
-```cpp
-PICO_DEFINE_CLASS(PExample)
-
-bool PExample::RegisterProperties(Pico::PClass& Class)
-{
-    std::vector<Pico::PProperty> Properties;
-    PICO_ADD_PROPERTY(Properties, Health);
-    return Class.AddProperties(std::move(Properties));
-}
-```
-
-Pico 目前还没有类似 UHT 的头文件工具。未来的 PicoHeaderTool 可以生成这些样板代码，同时继续使用同一套运行时元数据系统。
+生成头负责类声明，生成源文件继续通过现有 `PClass`、`PProperty` 和 `PFunction` 注册元数据；
+所有生成物都位于 `Build/Generated`。
 
 相关文档：
 
@@ -424,6 +421,8 @@ Pico 目前还没有类似 UHT 的头文件工具。未来的 PicoHeaderTool 可
 - [第三个月编辑器视口](Docs/Month03_10_Editor3DViewport.md)
 - [第三个月编辑器停靠布局](Docs/Month03_11_EditorDocking.md)
 - [第三个月GLAD集成](Docs/Month03_12_GLADIntegration.md)
+- [第三个月 PicoHeaderTool](Docs/Month03_17_PicoHeaderTool.md)
+- [第三个月 Mark-Sweep GC](Docs/Month03_18_GarbageCollection.md)
 - [第四个月编辑器事务](Docs/Month04_9_EditorTransactions.md)
 - [第四个月属性事务](Docs/Month04_10_EditorPropertyTransactions.md)
 - [第四个月编辑器剪贴板](Docs/Month04_11_EditorClipboard.md)
@@ -438,7 +437,6 @@ Pico 目前还没有类似 UHT 的头文件工具。未来的 PicoHeaderTool 可
 资产驱动编辑器、Static Mesh 导入、材质、贴图、PBR 渲染、独立 Play，以及第一版项目 Game Module/
 GameInstance 链路已经完成。后续学习路线为：
 
-- PicoHeaderTool 和追踪式垃圾回收
 - 参考 UE 的 Gameplay Framework：GameMode、GameState、PlayerController、PlayerState、Pawn、Character
   和 MovementComponent
 - Jolt 物理、角色移动和精简动画接入

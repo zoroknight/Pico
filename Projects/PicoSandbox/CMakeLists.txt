@@ -1,5 +1,13 @@
 set(PICO_SANDBOX_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
+pico_generate_reflection(
+    PICO_SANDBOX_PAWN_GENERATED
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source/Public/PicoSandbox/SandboxPawn.h"
+    "PicoSandbox/SandboxPawn.h"
+    "PicoSandbox/SandboxPawn.generated.h"
+    "PicoSandbox_SandboxPawn_h"
+)
+
 add_library(PicoSandboxModule STATIC
     Source/Private/SandboxCharacter.cpp
     Source/Private/SandboxEntity.cpp
@@ -7,11 +15,13 @@ add_library(PicoSandboxModule STATIC
     Source/Private/SandboxModule.cpp
     Source/Private/SandboxPawn.cpp
     Source/Private/SandboxSession.cpp
+    ${PICO_SANDBOX_PAWN_GENERATED}
 )
 
 target_include_directories(PicoSandboxModule
     PUBLIC
         Source/Public
+        ${PICO_GENERATED_DIR}
 )
 
 target_compile_definitions(PicoSandboxModule

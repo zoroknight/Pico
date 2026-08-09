@@ -15,7 +15,7 @@ cmake --build Build --config Debug --target PicoInspector
 .\Build\Debug\PicoInspector.exe
 ```
 
-默认 UI Scale 为 `1.25`，也可以覆盖：
+默认 UI Scale 为 `1.4`，直接启动 Debug 或 Release `.exe` 都会使用较大的字体和控件，也可以覆盖：
 
 ```powershell
 .\Build\Debug\PicoInspector.exe -uiscale=1.4
@@ -228,7 +228,54 @@ Saved/Inspector/SelectedObject.pobj
 这一步证明增加 `PFunction` 和 Native Delegate 没有破坏 `PProperty` 序列化。当前 Delegate 是运行时
 状态，不会把 Lambda、成员函数地址、DelegateHandle 或本次运行的 ObjectHandle 写入 `.pobj`。
 
-## 12. 完整通过标准
+## 12. Garbage Collection与调度实验
+
+打开 `Experiments -> Garbage Collection`。初始表格包含 Root、Strong target、Weak target、Cycle A
+和 Cycle B，只有 Root 显示 Rooted。`Scheduler State` 初始应为 `Idle`，事件时间线记录 Fixture 创建。
+
+### 12.1 请求不会立即回收
+
+点击 `Request Explicit`，预期：
+
+- Scheduler State 变为 `Pending`。
+- Pending reasons 显示 `Explicit`。
+- 五个对象仍全部为 `Alive`。
+- Event Timeline 只记录请求，没有 `Collected` 事件。
+
+继续点击 `Request Time Limit` 和 `Request World Transition`。Pending reasons 应合并显示三个原因，
+而不是由后一个覆盖前一个。这一步验证 `RequestGarbageCollection` 只调度工作，不在任意调用位置开始
+Stop-the-world。
+
+### 12.2 安全点消费请求
+
+点击 `Run Safe Point`，它模拟 `EngineLoop` 完成 World Tick 后调用
+`CollectGarbageIfRequested`。预期：
+
+- Root 与 Strong target 保持存活。
+- Weak target 变为 `Collected`。
+- 互相强引用但没有 Root 的 Cycle A/B 都变为 `Collected`。
+- 统计中 Collected 应为 3；Inspector 的其他实验对象由临时 Root 隔离，不会被这次实验误回收。
+- Scheduler State 恢复 `Idle`，Consumed reasons 保留本次合并原因用于检查。
+- Event Timeline 先记录安全点执行，再分别记录两个 Survived 和三个 Collected。
+
+点击 `Remove Root`，再执行 `Request Explicit -> Run Safe Point`，Root 与 Strong target 都应被回收。
+点击 `Reset` 会清除Pending请求、统计与日志，并重新创建确定性的五对象图。切到 Runtime Browser
+选择GC节点时，对象引用属性会显示目标路径及 `Strong/Weak` 类型。
+
+### 12.3 对比立即收集
+
+Reset后不提交任何请求，直接点击 `Collect Now`。它调用 `CollectGarbage`，不经过请求检查：对象结果
+与第一次安全点收集相同，但 Trigger 显示 `Collect Now`、Consumed reasons 显示 `None`。这用于区分：
+
+```text
+Request GC + Run Safe Point = 调度层决定何时执行
+Collect Now                 = 执行层立即开始Mark-Sweep
+```
+
+这组操作验证：Root 是遍历起点；反射 `TObjectPtr` 形成强边；`TWeakObjectPtr` 不保持目标存活；
+Mark-Sweep 可以回收引用计数无法处理的无 Root 循环；GC请求与真正收集是两个独立阶段。
+
+## 13. 完整通过标准
 
 - 正确的 PFunction 调用返回结果并触发两个监听者。
 - Float 参数和缺失返回存储在执行前被拒绝且零副作用。
@@ -238,6 +285,9 @@ Saved/Inspector/SelectedObject.pobj
 - Runtime Browser 和 Experiment 操作同一个对象。
 - Reset 恢复确定性初始状态。
 - 原有属性保存、销毁和加载仍然工作。
+- GC 实验按 Root、强引用、弱引用和无 Root 循环规则回收对象。
+- GC请求保持对象Alive，多个请求原因正确合并，并只在Run Safe Point后被消费。
+- Collect Now可以和延迟调度形成明确对照，事件时间线与对象Handle状态一致。
 
-当前不测试动态委托配置。Dynamic Multicast Delegate 将在 PicoHeaderTool、GC 和稳定对象引用完成后
-实现，届时绑定才会表示为“目标对象稳定身份 + PFunction 名称”，并支持保存与加载后的引用修复。
+当前不测试动态委托配置。下一阶段先实现运行时 Dynamic Multicast Delegate，用“弱对象引用 +
+PFunction 名称”广播；稳定身份序列化与加载后的引用修复在随后阶段接入。
