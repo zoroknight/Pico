@@ -100,8 +100,44 @@ EFunctionInvokeResult PObject::ProcessEvent(
         : EFunctionInvokeResult::InvalidFunction;
 }
 
+FObjectPropertyChangingDelegate& PObject::OnPropertyChanging()
+{
+    return PropertyChangingDelegate;
+}
+
+FObjectPropertyChangedDelegate& PObject::OnPropertyChanged()
+{
+    return PropertyChangedDelegate;
+}
+
+const FObjectPropertyChangingDelegate& PObject::OnPropertyChanging() const
+{
+    return PropertyChangingDelegate;
+}
+
+const FObjectPropertyChangedDelegate& PObject::OnPropertyChanged() const
+{
+    return PropertyChangedDelegate;
+}
+
+void PObject::PreEditChange(const PProperty*)
+{
+}
+
 void PObject::PostEditChangeProperty(const FPropertyChangedEvent&)
 {
+}
+
+void PObject::NotifyPrePropertyChange(const FPropertyChangedEvent& Event)
+{
+    PreEditChange(Event.Property);
+    PropertyChangingDelegate.Broadcast(this, Event);
+}
+
+void PObject::NotifyPostPropertyChange(const FPropertyChangedEvent& Event)
+{
+    PostEditChangeProperty(Event);
+    PropertyChangedDelegate.Broadcast(this, Event);
 }
 
 void PObject::PostInitProperties()

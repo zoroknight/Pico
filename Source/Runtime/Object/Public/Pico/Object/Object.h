@@ -1,8 +1,10 @@
 #pragma once
 
+#include "Pico/Core/Delegate.h"
 #include "Pico/Core/Name.h"
 #include "Pico/Object/Function.h"
 #include "Pico/Object/ObjectTypes.h"
+#include "Pico/Object/PropertyChange.h"
 
 #include <cstddef>
 #include <span>
@@ -20,17 +22,10 @@ class PObject;
 class PProperty;
 enum class EObjectSerializationError;
 
-enum class EPropertyChangeType
-{
-    ValueSet,
-    Interactive
-};
-
-struct FPropertyChangedEvent
-{
-    const PProperty* Property = nullptr;
-    EPropertyChangeType ChangeType = EPropertyChangeType::ValueSet;
-};
+using FObjectPropertyChangingDelegate =
+    TMulticastDelegate<void(PObject*, const FPropertyChangedEvent&)>;
+using FObjectPropertyChangedDelegate =
+    TMulticastDelegate<void(PObject*, const FPropertyChangedEvent&)>;
 
 PObject* LoadObject(FArchive& Archive, PObject* Outer, EObjectSerializationError* OutError);
 
@@ -60,6 +55,11 @@ public:
         const PFunction* Function,
         std::span<const FFunctionValue> Arguments = {},
         FFunctionValue* OutReturnValue = nullptr);
+    FObjectPropertyChangingDelegate& OnPropertyChanging();
+    FObjectPropertyChangedDelegate& OnPropertyChanged();
+    const FObjectPropertyChangingDelegate& OnPropertyChanging() const;
+    const FObjectPropertyChangedDelegate& OnPropertyChanged() const;
+    virtual void PreEditChange(const PProperty* Property);
     virtual void PostEditChangeProperty(const FPropertyChangedEvent& Event);
 
 protected:
@@ -93,9 +93,13 @@ private:
     friend class FObjectRegistry;
     friend class FObjectInitializer;
     friend class PClass;
+    friend class PProperty;
     friend class FWorldAssetLoader;
     friend struct FObjectDeleter;
     friend PObject* LoadObject(FArchive& Archive, PObject* Outer, EObjectSerializationError* OutError);
+
+    void NotifyPrePropertyChange(const FPropertyChangedEvent& Event);
+    void NotifyPostPropertyChange(const FPropertyChangedEvent& Event);
 
     const PClass* ClassPrivate = nullptr;
     PObject* OuterPrivate = nullptr;
@@ -103,5 +107,7 @@ private:
     EObjectFlags FlagsPrivate = EObjectFlags::None;
     FObjectHandle HandlePrivate;
     ELifecycleState LifecycleState = ELifecycleState::Alive;
+    FObjectPropertyChangingDelegate PropertyChangingDelegate;
+    FObjectPropertyChangedDelegate PropertyChangedDelegate;
 };
 }

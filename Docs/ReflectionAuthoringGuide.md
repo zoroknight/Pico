@@ -294,3 +294,18 @@ FDynamicDelegateBroadcastReport Report =
 广播时经 `FindFunction` 和 `ProcessEvent` 调用。监听对象被显式销毁或GC回收后，下一次广播会跳过并
 清理失效绑定。详细契约见
 [`Month03_19_DynamicMulticastDelegates.md`](Month03_19_DynamicMulticastDelegates.md)。
+
+需要随 `.pworld` 保存的动态委托必须声明为反射属性：
+
+```cpp
+PPROPERTY(NotEditable)
+TDynamicMulticastDelegate<void(int32, int32)> OnHealthChanged;
+```
+
+PHT会将它注册为 `DynamicMulticastDelegate` 属性。磁盘保存目标SceneId/ObjectPath和函数名，不保存
+`FObjectHandle`。目标函数仍必须是 `PFUNCTION(Callable)`。
+
+通过 `PProperty::SetValue` 修改普通反射属性时，会自动执行Pre/Post虚函数并广播
+`OnPropertyChanging/OnPropertyChanged`。不要再手动调用 `PostEditChangeProperty`，否则监听者会收到两次。
+需要复制构造模板且不产生编辑事件时使用 `SetValueSilently`；它只供构造和恢复基础设施使用，不应作为
+普通玩法代码的默认写入方式。

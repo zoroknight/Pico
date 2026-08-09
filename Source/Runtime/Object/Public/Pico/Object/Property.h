@@ -5,6 +5,7 @@
 #include "Pico/Core/Math/Transform.h"
 #include "Pico/Core/Types.h"
 #include "Pico/Object/ObjectPtr.h"
+#include "Pico/Object/PropertyChange.h"
 
 #include <cstddef>
 #include <memory>
@@ -14,6 +15,9 @@ namespace Pico
 {
 class PClass;
 class PObject;
+class FDynamicMulticastDelegate;
+template <typename TSignature>
+class TDynamicMulticastDelegate;
 
 namespace Detail
 {
@@ -44,7 +48,8 @@ enum class EPropertyType : uint8
     Rotator,
     Transform,
     AssetPath,
-    Object
+    Object,
+    DynamicMulticastDelegate
 };
 
 enum class EAssetReferenceType : uint8
@@ -118,10 +123,27 @@ constexpr std::size_t GetPropertyTypeSize(EPropertyType Type)
         return sizeof(FAssetPath);
     case EPropertyType::Object:
         return sizeof(FObjectHandle);
+    case EPropertyType::DynamicMulticastDelegate:
+        return 0;
     }
 
     return 0;
 }
+
+template <typename TValue>
+struct TIsDynamicMulticastDelegate : std::false_type
+{
+};
+
+template <typename TSignature>
+struct TIsDynamicMulticastDelegate<TDynamicMulticastDelegate<TSignature>>
+    : std::true_type
+{
+};
+
+template <typename TValue>
+inline constexpr bool TIsDynamicMulticastDelegateValue =
+    TIsDynamicMulticastDelegate<std::remove_cv_t<TValue>>::value;
 
 template <typename TValue>
 inline constexpr bool TIsSupportedPropertyType =
@@ -132,14 +154,19 @@ inline constexpr bool TIsSupportedPropertyType =
     || std::is_same_v<TValue, FRotator>
     || std::is_same_v<TValue, FTransform>
     || std::is_same_v<TValue, FAssetPath>
-    || TObjectPointerTraits<TValue>::IsObjectPointer;
+    || TObjectPointerTraits<TValue>::IsObjectPointer
+    || TIsDynamicMulticastDelegateValue<TValue>;
 
 template <typename TValue>
 constexpr EPropertyType GetPropertyType()
 {
     static_assert(TIsSupportedPropertyType<TValue>, "Unsupported reflected property type");
 
-    if constexpr (TObjectPointerTraits<TValue>::IsObjectPointer)
+    if constexpr (TIsDynamicMulticastDelegateValue<TValue>)
+    {
+        return EPropertyType::DynamicMulticastDelegate;
+    }
+    else if constexpr (TObjectPointerTraits<TValue>::IsObjectPointer)
     {
         return EPropertyType::Object;
     }
@@ -228,6 +255,30 @@ public:
                     (void)Object;
                     return {};
                 }
+            },
+            [](PObject* Object) -> FDynamicMulticastDelegate*
+            {
+                if constexpr (TIsDynamicMulticastDelegateValue<TValue>)
+                {
+                    return &(static_cast<TObject*>(Object)->*Member).GetRuntimeDelegate();
+                }
+                else
+                {
+                    (void)Object;
+                    return nullptr;
+                }
+            },
+            [](const PObject* Object) -> const FDynamicMulticastDelegate*
+            {
+                if constexpr (TIsDynamicMulticastDelegateValue<TValue>)
+                {
+                    return &(static_cast<const TObject*>(Object)->*Member).GetRuntimeDelegate();
+                }
+                else
+                {
+                    (void)Object;
+                    return nullptr;
+                }
             });
     }
 
@@ -255,6 +306,14 @@ public:
     EAssetReferenceType GetAssetReferenceType() const;
     EObjectReferenceKind GetObjectReferenceKind() const;
     PObject* GetReferencedObject(const PObject* Object) const;
+    FDynamicMulticastDelegate* GetDynamicMulticastDelegate(PObject* Object) const;
+    const FDynamicMulticastDelegate* GetDynamicMulticastDelegate(const PObject* Object) const;
+    bool NotifyPreChange(
+        PObject* Object,
+        EPropertyChangeType ChangeType = EPropertyChangeType::ValueSet) const;
+    bool NotifyPostChange(
+        PObject* Object,
+        EPropertyChangeType ChangeType = EPropertyChangeType::ValueSet) const;
     std::size_t GetSize() const;
     const PClass* GetOwnerClass() const;
 
@@ -286,22 +345,63 @@ public:
     }
 
     template <typename TValue>
-    bool SetValue(PObject* Object, const TValue& Value) const
+    bool SetValue(
+        PObject* Object,
+        const TValue& Value,
+        EPropertyChangeType ChangeType = EPropertyChangeType::ValueSet) const
     {
-        TValue* Destination = GetValuePtr<TValue>(Object);
-        if (Destination == nullptr)
+        if constexpr (TIsDynamicMulticastDelegateValue<TValue>)
         {
             return false;
         }
+        else
+        {
+            return SetValueAddress(
+                Object,
+                GetPropertyType<TValue>(),
+                sizeof(TValue),
+                &Value,
+                [](void* Destination, const void* Source)
+                {
+                    *static_cast<TValue*>(Destination) =
+                        *static_cast<const TValue*>(Source);
+                },
+                ChangeType,
+                true);
+        }
+    }
 
-        *Destination = Value;
-        return true;
+    template <typename TValue>
+    bool SetValueSilently(PObject* Object, const TValue& Value) const
+    {
+        if constexpr (TIsDynamicMulticastDelegateValue<TValue>)
+        {
+            return false;
+        }
+        else
+        {
+            return SetValueAddress(
+                Object,
+                GetPropertyType<TValue>(),
+                sizeof(TValue),
+                &Value,
+                [](void* Destination, const void* Source)
+                {
+                    *static_cast<TValue*>(Destination) =
+                        *static_cast<const TValue*>(Source);
+                },
+                EPropertyChangeType::ValueSet,
+                false);
+        }
     }
 
 private:
     using FMutableAccessor = void* (*)(PObject*);
     using FConstAccessor = const void* (*)(const PObject*);
     using FReferenceAccessor = FObjectHandle (*)(const PObject*);
+    using FDynamicMutableAccessor = FDynamicMulticastDelegate* (*)(PObject*);
+    using FDynamicConstAccessor = const FDynamicMulticastDelegate* (*)(const PObject*);
+    using FValueCopier = void (*)(void*, const void*);
 
     PProperty(
         FName InName,
@@ -312,7 +412,9 @@ private:
         FConstAccessor InConstAccessor,
         FPropertyMetadata InMetadata,
         EObjectReferenceKind InObjectReferenceKind,
-        FReferenceAccessor InReferenceAccessor);
+        FReferenceAccessor InReferenceAccessor,
+        FDynamicMutableAccessor InDynamicMutableAccessor,
+        FDynamicConstAccessor InDynamicConstAccessor);
 
     bool HasValidAccessors() const;
     const void* GetOwnerTypeToken() const;
@@ -321,6 +423,14 @@ private:
         const PObject* Object,
         EPropertyType ExpectedType,
         std::size_t ExpectedSize) const;
+    bool SetValueAddress(
+        PObject* Object,
+        EPropertyType ExpectedType,
+        std::size_t ExpectedSize,
+        const void* Source,
+        FValueCopier Copier,
+        EPropertyChangeType ChangeType,
+        bool bNotify) const;
 
     friend class PClass;
 
@@ -333,6 +443,8 @@ private:
     FConstAccessor ConstAccessor = nullptr;
     EObjectReferenceKind ObjectReferenceKind = EObjectReferenceKind::None;
     FReferenceAccessor ReferenceAccessor = nullptr;
+    FDynamicMutableAccessor DynamicMutableAccessor = nullptr;
+    FDynamicConstAccessor DynamicConstAccessor = nullptr;
     const PClass* OwnerClass = nullptr;
 };
 }

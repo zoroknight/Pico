@@ -28,6 +28,12 @@ The current implementation can:
   listeners and Actor spawn/destroy lifecycle events.
 - Bind Callable reflected functions by weak object handle and function name through a signature-checked
   dynamic multicast delegate, then broadcast through `ProcessEvent`.
+- Persist reflected dynamic multicast properties in `.pworld` files through scene IDs, object paths,
+  and function names, then restore them after the new runtime object graph exists.
+- Route reflected writes through pre/post property notifications with explicit ValueSet, Interactive,
+  Load, and UndoRedo sources; CDO edits affect future instances without overwriting live objects.
+- Complete the third project-month object-system milestone with full Debug and Release test coverage;
+  the next milestone is the UE-inspired Gameplay Framework.
 - Declare classes, properties, and functions beside native C++ members with `PCLASS`, `PPROPERTY`,
   and `PFUNCTION`; PicoHeaderTool generates the repetitive registration code before compilation.
 - Invoke reflected native functions through `PObject::ProcessEvent` with typed parameters, return
@@ -383,7 +389,7 @@ Example commands:
 
 PicoInspector starts in its Native Delegate experiment. Use `Runtime Browser -> Functions` for
 generic `ProcessEvent` calls, or `Experiments` to inspect native listener lifetime, dynamic PFunction
-bindings, broadcast logs, GC object graphs, and deferred requests consumed at a safe point. See the
+bindings, property notifications and CDO inheritance, GC object graphs, and deferred requests consumed at a safe point. See the
 [visual verification guide](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md) for the test sequence
 and the purpose of every step. In the Dynamic Multicast experiment, `Remove Selected` removes one
 delegate handle, `Remove Target Bindings` removes every binding owned by the selected target, and
@@ -459,6 +465,7 @@ See:
 - [PicoHeaderTool](Docs/Month03_17_PicoHeaderTool.md)
 - [Mark-Sweep Garbage Collection](Docs/Month03_18_GarbageCollection.md)
 - [Dynamic Multicast Delegates](Docs/Month03_19_DynamicMulticastDelegates.md)
+- [Stable References and Property Notifications](Docs/Month03_20_StableReferencesAndPropertyNotifications.md)
 - [Native Delegate Authoring Guide (Chinese)](Docs/DelegateAuthoringGuide.md)
 - [PicoInspector Developer Sandbox Plan (Chinese)](Docs/PicoInspector_DeveloperSandbox_Plan.zh-CN.md)
 - [PicoInspector Visual Verification Guide (Chinese)](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)
@@ -485,6 +492,8 @@ and the first project Game Module/GameInstance path are complete. The remaining 
 - Jolt physics, character movement, and a small animation integration
 - Replication, RPC, transform synchronization, client prediction, and correction
 - Dedicated-server/WAN validation, Cook, Package, and a standalone Windows build
+- A compact `PicoTask` worker pool and game-thread dispatcher for asynchronous Cook, build, and AI
+  work while runtime objects remain game-thread-owned
 - A compact Gameplay Ability System with AbilityTask, followed by AI tools and an Agent workflow
 
 The maintained schedule and acceptance criteria are in the

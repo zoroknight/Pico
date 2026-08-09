@@ -26,6 +26,24 @@ struct FSceneObjectId
     uint64 Value = 0;
 };
 
+struct FSerializedObjectReference
+{
+    FSceneObjectId SceneId;
+    std::string ObjectPath;
+};
+
+struct FSerializedDynamicDelegateBinding
+{
+    FSerializedObjectReference Target;
+    std::string FunctionName;
+};
+
+struct FSerializedDynamicDelegateRecord
+{
+    std::string PropertyName;
+    std::vector<FSerializedDynamicDelegateBinding> Bindings;
+};
+
 struct FSceneObjectRecord
 {
     FSceneObjectId Id;
@@ -34,6 +52,7 @@ struct FSceneObjectRecord
     std::string ObjectName;
     EObjectFlags Flags = EObjectFlags::None;
     std::vector<FSerializedPropertyRecord> Properties;
+    std::vector<FSerializedDynamicDelegateRecord> DynamicDelegates;
 };
 
 struct FSceneRelationRecord
@@ -51,6 +70,11 @@ struct FWorldAssetData
     FSceneObjectId CurrentLevelId;
     std::vector<FSceneObjectRecord> Objects;
     std::vector<FSceneRelationRecord> Relations;
+};
+
+struct FWorldLoadOptions
+{
+    EPropertyChangeType PropertyChangeType = EPropertyChangeType::Load;
 };
 
 enum class EWorldSerializationError
@@ -96,7 +120,8 @@ bool DeserializeWorldAsset(
     EWorldSerializationError* OutError = nullptr);
 PWorld* CreateWorldFromAssetData(
     const FWorldAssetData& Data,
-    EWorldSerializationError* OutError = nullptr);
+    EWorldSerializationError* OutError = nullptr,
+    FWorldLoadOptions Options = {});
 bool SaveWorldToFile(
     const std::filesystem::path& FilePath,
     const PWorld& World,

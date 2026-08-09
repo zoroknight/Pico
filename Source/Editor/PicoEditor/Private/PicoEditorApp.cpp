@@ -1721,7 +1721,10 @@ bool FPicoEditorApp::RestoreEditorSnapshot(
     EWorldSerializationError* OutError)
 {
     if (EngineLoop == nullptr
-        || !EngineLoop->ReplaceWorld(Snapshot.WorldData, OutError))
+        || !EngineLoop->ReplaceWorld(
+            Snapshot.WorldData,
+            OutError,
+            {EPropertyChangeType::UndoRedo}))
     {
         return false;
     }

@@ -41,5 +41,6 @@ bool CaptureSerializedProperties(
 bool SerializePropertyRecord(FArchive& Archive, FSerializedPropertyRecord& Property);
 ESerializedPropertyApplyResult ApplySerializedProperty(
     PObject* Object,
-    const FSerializedPropertyRecord& Property);
+    const FSerializedPropertyRecord& Property,
+    EPropertyChangeType ChangeType = EPropertyChangeType::Load);
 }

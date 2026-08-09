@@ -148,7 +148,8 @@ bool CaptureSerializedProperties(
     {
         if (Property != nullptr
             && (!Property->HasAnyFlags(EPropertyFlags::Serializable)
-                || Property->HasAnyFlags(EPropertyFlags::Transient)))
+                || Property->HasAnyFlags(EPropertyFlags::Transient)
+                || Property->GetType() == EPropertyType::DynamicMulticastDelegate))
         {
             continue;
         }
@@ -187,7 +188,8 @@ bool SerializePropertyRecord(FArchive& Archive, FSerializedPropertyRecord& Prope
 
 ESerializedPropertyApplyResult ApplySerializedProperty(
     PObject* Object,
-    const FSerializedPropertyRecord& SerializedProperty)
+    const FSerializedPropertyRecord& SerializedProperty,
+    EPropertyChangeType ChangeType)
 {
     if (Object == nullptr || Object->GetClass() == nullptr)
     {
@@ -214,25 +216,25 @@ ESerializedPropertyApplyResult ApplySerializedProperty(
     switch (SerializedProperty.Type)
     {
     case EPropertyType::Int32:
-        bApplied = Property->SetValue(Object, SerializedProperty.Int32Value);
+        bApplied = Property->SetValue(Object, SerializedProperty.Int32Value, ChangeType);
         break;
     case EPropertyType::Float:
-        bApplied = Property->SetValue(Object, SerializedProperty.FloatValue);
+        bApplied = Property->SetValue(Object, SerializedProperty.FloatValue, ChangeType);
         break;
     case EPropertyType::Bool:
-        bApplied = Property->SetValue(Object, SerializedProperty.BoolValue);
+        bApplied = Property->SetValue(Object, SerializedProperty.BoolValue, ChangeType);
         break;
     case EPropertyType::Vector3:
-        bApplied = Property->SetValue(Object, SerializedProperty.Vector3Value);
+        bApplied = Property->SetValue(Object, SerializedProperty.Vector3Value, ChangeType);
         break;
     case EPropertyType::Rotator:
-        bApplied = Property->SetValue(Object, SerializedProperty.RotatorValue);
+        bApplied = Property->SetValue(Object, SerializedProperty.RotatorValue, ChangeType);
         break;
     case EPropertyType::Transform:
-        bApplied = Property->SetValue(Object, SerializedProperty.TransformValue);
+        bApplied = Property->SetValue(Object, SerializedProperty.TransformValue, ChangeType);
         break;
     case EPropertyType::AssetPath:
-        bApplied = Property->SetValue(Object, SerializedProperty.AssetPathValue);
+        bApplied = Property->SetValue(Object, SerializedProperty.AssetPathValue, ChangeType);
         break;
     default:
         return ESerializedPropertyApplyResult::TypeMismatch;

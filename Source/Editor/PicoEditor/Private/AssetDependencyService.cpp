@@ -116,8 +116,6 @@ std::size_t FAssetDependencyService::ReplaceWorldReferences(
             ? Object->GetClass()->FindProperty(Reference.PropertyName) : nullptr;
         if (Property != nullptr && Property->SetValue(Object, NewAssetPath))
         {
-            Object->PostEditChangeProperty(
-                {Property, EPropertyChangeType::ValueSet});
             ++UpdatedCount;
         }
     }

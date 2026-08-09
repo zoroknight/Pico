@@ -36,37 +36,41 @@ bool CopyProperty(const PProperty& Property, const PObject* Source, PObject* Des
     case EPropertyType::Int32:
     {
         int32 Value = 0;
-        return Property.GetValue(Source, Value) && Property.SetValue(Destination, Value);
+        return Property.GetValue(Source, Value) && Property.SetValueSilently(Destination, Value);
     }
     case EPropertyType::Float:
     {
         float Value = 0.0f;
-        return Property.GetValue(Source, Value) && Property.SetValue(Destination, Value);
+        return Property.GetValue(Source, Value) && Property.SetValueSilently(Destination, Value);
     }
     case EPropertyType::Bool:
     {
         bool Value = false;
-        return Property.GetValue(Source, Value) && Property.SetValue(Destination, Value);
+        return Property.GetValue(Source, Value) && Property.SetValueSilently(Destination, Value);
     }
     case EPropertyType::Vector3:
     {
         FVector3 Value;
-        return Property.GetValue(Source, Value) && Property.SetValue(Destination, Value);
+        return Property.GetValue(Source, Value) && Property.SetValueSilently(Destination, Value);
     }
     case EPropertyType::Rotator:
     {
         FRotator Value;
-        return Property.GetValue(Source, Value) && Property.SetValue(Destination, Value);
+        return Property.GetValue(Source, Value) && Property.SetValueSilently(Destination, Value);
     }
     case EPropertyType::Transform:
     {
         FTransform Value;
-        return Property.GetValue(Source, Value) && Property.SetValue(Destination, Value);
+        return Property.GetValue(Source, Value) && Property.SetValueSilently(Destination, Value);
     }
     case EPropertyType::AssetPath:
     {
         FAssetPath Value;
-        return Property.GetValue(Source, Value) && Property.SetValue(Destination, Value);
+        return Property.GetValue(Source, Value) && Property.SetValueSilently(Destination, Value);
+    }
+    case EPropertyType::DynamicMulticastDelegate:
+    {
+        return true;
     }
     }
 

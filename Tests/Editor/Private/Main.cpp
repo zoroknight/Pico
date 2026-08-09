@@ -174,7 +174,10 @@ void TestEditorSceneClipboard(
             const Pico::FEditorWorldSnapshot& Snapshot,
             Pico::EWorldSerializationError* RestoreError)
         {
-            if (!EngineLoop.ReplaceWorld(Snapshot.WorldData, RestoreError))
+            if (!EngineLoop.ReplaceWorld(
+                    Snapshot.WorldData,
+                    RestoreError,
+                    {Pico::EPropertyChangeType::UndoRedo}))
             {
                 return false;
             }
@@ -687,7 +690,10 @@ void TestEditorTransactions(FTestRunner& Runner)
             const Pico::FEditorWorldSnapshot& Snapshot,
             Pico::EWorldSerializationError* RestoreError)
         {
-            if (!EngineLoop.ReplaceWorld(Snapshot.WorldData, RestoreError))
+            if (!EngineLoop.ReplaceWorld(
+                    Snapshot.WorldData,
+                    RestoreError,
+                    {Pico::EPropertyChangeType::UndoRedo}))
             {
                 return false;
             }

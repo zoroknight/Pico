@@ -485,6 +485,19 @@ bool FEditorSceneClipboard::BuildPaste(
             ReportError(OutError, EEditorClipboardError::InvalidSceneData);
             return false;
         }
+        for (FSerializedDynamicDelegateRecord& Delegate : Record.DynamicDelegates)
+        {
+            for (FSerializedDynamicDelegateBinding& Binding : Delegate.Bindings)
+            {
+                const FSceneObjectId RemappedTarget =
+                    RemapId(Binding.Target.SceneId, IdMap);
+                if (RemappedTarget.IsValid())
+                {
+                    Binding.Target.SceneId = RemappedTarget;
+                    Binding.Target.ObjectPath.clear();
+                }
+            }
+        }
         Data.Objects.push_back(std::move(Record));
     }
 
@@ -496,6 +509,7 @@ bool FEditorSceneClipboard::BuildPaste(
             RemapId(SourceRelation.RootComponentId, IdMap);
         Relation.AttachParentId =
             RemapId(SourceRelation.AttachParentId, IdMap);
+        Relation.AttachSocketName = SourceRelation.AttachSocketName;
         if (!Relation.ObjectId.IsValid()
             || (SourceRelation.RootComponentId.IsValid()
                 && !Relation.RootComponentId.IsValid())

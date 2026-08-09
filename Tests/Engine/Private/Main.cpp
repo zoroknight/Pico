@@ -17,6 +17,7 @@
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Object/GarbageCollection.h"
+#include "Pico/Object/DynamicMulticastDelegate.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectInitializer.h"
 #include "Pico/Object/ObjectRegistry.h"
@@ -119,6 +120,99 @@ protected:
 };
 
 PICO_DEFINE_CLASS_NO_PROPERTIES(PLoadTrackingActor)
+
+class PStageHActor final : public Pico::PActor
+{
+    PICO_DECLARE_CLASS(PStageHActor, Pico::PActor)
+
+public:
+    void BroadcastValue(Pico::int32 InValue)
+    {
+        OnValue.Broadcast(InValue);
+    }
+
+    void HandleValue(Pico::int32 InValue)
+    {
+        ++ReceivedCount;
+        LastReceivedValue = InValue;
+    }
+
+    Pico::TDynamicMulticastDelegate<void(Pico::int32)>& GetOnValue()
+    {
+        return OnValue;
+    }
+
+    Pico::int32 GetValue() const { return Value; }
+    Pico::int32 GetReceivedCount() const { return ReceivedCount; }
+    Pico::int32 GetLastReceivedValue() const { return LastReceivedValue; }
+    Pico::int32 GetPreChangeCount() const { return PreChangeCount; }
+    Pico::int32 GetPostChangeCount() const { return PostChangeCount; }
+    Pico::EPropertyChangeType GetLastChangeType() const { return LastChangeType; }
+    Pico::FName GetLastPropertyName() const { return LastPropertyName; }
+
+    void ResetChangeTracking()
+    {
+        PreChangeCount = 0;
+        PostChangeCount = 0;
+        LastPropertyName = {};
+        LastChangeType = Pico::EPropertyChangeType::ValueSet;
+    }
+
+protected:
+    explicit PStageHActor(const Pico::FObjectConstructionParams& Params)
+        : PActor(Params)
+    {
+    }
+
+    void PreEditChange(const Pico::PProperty* Property) override
+    {
+        ++PreChangeCount;
+        LastPropertyName = Property != nullptr ? Property->GetName() : Pico::FName {};
+    }
+
+    void PostEditChangeProperty(const Pico::FPropertyChangedEvent& Event) override
+    {
+        ++PostChangeCount;
+        LastPropertyName = Event.Property != nullptr
+            ? Event.Property->GetName()
+            : Pico::FName {};
+        LastChangeType = Event.ChangeType;
+    }
+
+private:
+    Pico::int32 Value = 10;
+    Pico::TDynamicMulticastDelegate<void(Pico::int32)> OnValue;
+    Pico::int32 ReceivedCount = 0;
+    Pico::int32 LastReceivedValue = 0;
+    Pico::int32 PreChangeCount = 0;
+    Pico::int32 PostChangeCount = 0;
+    Pico::EPropertyChangeType LastChangeType = Pico::EPropertyChangeType::ValueSet;
+    Pico::FName LastPropertyName;
+};
+
+PICO_DEFINE_CLASS(PStageHActor)
+
+bool PStageHActor::RegisterProperties(Pico::PClass& Class)
+{
+    std::vector<Pico::PProperty> Properties;
+    PICO_ADD_PROPERTY(Properties, Value);
+    Pico::FPropertyMetadata DelegateMetadata;
+    DelegateMetadata.Flags = Pico::EPropertyFlags::Serializable;
+    Properties.push_back(Pico::PProperty::Create<&ThisClass::OnValue>(
+        Pico::FName("OnValue"), DelegateMetadata));
+    if (!Class.AddProperties(std::move(Properties)))
+    {
+        return false;
+    }
+
+    std::vector<Pico::PFunction> Functions;
+    PICO_ADD_FUNCTION(
+        Functions,
+        HandleValue,
+        Pico::EFunctionFlags::Callable,
+        Pico::FName("Value"));
+    return Class.AddFunctions(std::move(Functions));
+}
 
 class PSelfDestroyActor : public Pico::PActor
 {
@@ -283,6 +377,7 @@ bool InitializeWorldTypes(FTestRunner& Runner)
         PDerivedDefaultSubobjectActor::RegisterClass();
     const bool bCountingActorRegistered = PCountingActor::RegisterClass();
     const bool bLoadTrackingActorRegistered = PLoadTrackingActor::RegisterClass();
+    const bool bStageHActorRegistered = PStageHActor::RegisterClass();
     const bool bSelfDestroyActorRegistered = PSelfDestroyActor::RegisterClass();
     const bool bThrowingTickActorRegistered = PThrowingTickActor::RegisterClass();
     const bool bLevelRegistered = Pico::PLevel::RegisterClass();
@@ -315,6 +410,7 @@ bool InitializeWorldTypes(FTestRunner& Runner)
         "A derived default-subobject Actor registers with the class registry");
     Runner.Expect(bCountingActorRegistered, "A test actor registers with the class registry");
     Runner.Expect(bLoadTrackingActorRegistered, "A PostLoad test actor registers with the class registry");
+    Runner.Expect(bStageHActorRegistered, "The Stage H persistence actor registers with delegate metadata");
     Runner.Expect(bSelfDestroyActorRegistered, "A self-destroying test actor registers with the class registry");
     Runner.Expect(bLevelRegistered, "PLevel registers with the class registry");
     Runner.Expect(bWorldRegistered, "PWorld registers with the class registry");
@@ -334,6 +430,7 @@ bool InitializeWorldTypes(FTestRunner& Runner)
         && bDerivedDefaultSubobjectActorRegistered
         && bCountingActorRegistered
         && bLoadTrackingActorRegistered
+        && bStageHActorRegistered
         && bSelfDestroyActorRegistered
         && bThrowingTickActorRegistered
         && bLevelRegistered
@@ -1655,20 +1752,48 @@ void TestWorldAssetDataSerialization(FTestRunner& Runner)
         "Invalid world magic fails without changing the output data");
 
     Pico::FMemoryWriter Version1Writer;
+    Pico::uint32 LegacyMagic = 0x444c5750;
+    Pico::uint32 LegacyVersion = 1;
+    Pico::uint32 LegacyObjectCount =
+        static_cast<Pico::uint32>(EmptyWorldData.Objects.size());
+    Pico::uint32 LegacyRelationCount = 0;
+    Pico::uint64 LegacyWorldId = EmptyWorldData.WorldId.Value;
+    Pico::uint64 LegacyPersistentLevelId =
+        EmptyWorldData.PersistentLevelId.Value;
+    Pico::uint64 LegacyCurrentLevelId = EmptyWorldData.CurrentLevelId.Value;
+    Version1Writer.SerializeUInt32(LegacyMagic);
+    Version1Writer.SerializeUInt32(LegacyVersion);
+    Version1Writer.SerializeUInt32(LegacyObjectCount);
+    Version1Writer.SerializeUInt32(LegacyRelationCount);
+    Version1Writer.SerializeUInt64(LegacyWorldId);
+    Version1Writer.SerializeUInt64(LegacyPersistentLevelId);
+    Version1Writer.SerializeUInt64(LegacyCurrentLevelId);
+    for (const Pico::FSceneObjectRecord& SourceRecord : EmptyWorldData.Objects)
+    {
+        Pico::FSceneObjectRecord Record = SourceRecord;
+        Version1Writer.SerializeUInt64(Record.Id.Value);
+        Version1Writer.SerializeUInt64(Record.OuterId.Value);
+        Version1Writer.SerializeString(Record.ClassName);
+        Version1Writer.SerializeString(Record.ObjectName);
+        Pico::uint32 Flags = static_cast<Pico::uint32>(Record.Flags);
+        Pico::uint32 PropertyCount =
+            static_cast<Pico::uint32>(Record.Properties.size());
+        Version1Writer.SerializeUInt32(Flags);
+        Version1Writer.SerializeUInt32(PropertyCount);
+        for (Pico::FSerializedPropertyRecord& Property : Record.Properties)
+        {
+            Pico::SerializePropertyRecord(Version1Writer, Property);
+        }
+    }
     Runner.Expect(
-        Pico::SerializeWorldAsset(Version1Writer, EmptyWorldData, &Error),
-        "A relation-free scene prepares the legacy compatibility fixture");
-    std::vector<Pico::uint8> Version1Data = Version1Writer.GetData();
-    Version1Data[4] = 1;
-    Version1Data[5] = 0;
-    Version1Data[6] = 0;
-    Version1Data[7] = 0;
-    Pico::FMemoryReader Version1Reader(Version1Data);
+        !Version1Writer.HasError(),
+        "A relation-free scene prepares a real version 1 compatibility fixture");
+    Pico::FMemoryReader Version1Reader(Version1Writer.GetData());
     Pico::FWorldAssetData Version1LoadedData;
     Runner.Expect(
         Pico::DeserializeWorldAsset(Version1Reader, Version1LoadedData, &Error)
             && Version1LoadedData.Objects.size() == EmptyWorldData.Objects.size(),
-        "World format version 3 remains compatible with version 1 scenes");
+        "World format version 4 remains compatible with version 1 scenes");
 
     std::vector<Pico::uint8> UnsupportedVersion = Writer.GetData();
     UnsupportedVersion[4] = 99;
@@ -1876,6 +2001,306 @@ void TestWorldAssetDataSerialization(FTestRunner& Runner)
         "A PostLoad exception rolls back every partially loaded object");
     PLoadTrackingActor::bThrowPostLoad = false;
 
+    Pico::PObjectSystem::Shutdown();
+}
+
+void TestStageHPersistenceAndPropertyNotifications(FTestRunner& Runner)
+{
+    if (!InitializeWorldTypes(Runner))
+    {
+        return;
+    }
+
+    Pico::PWorld* World = Pico::NewObject<Pico::PWorld>(nullptr, "StageHWorld");
+    const bool bWorldReady = World != nullptr && World->Initialize();
+    PStageHActor* Source = bWorldReady
+        ? World->SpawnActor<PStageHActor>("Source")
+        : nullptr;
+    PStageHActor* Target = bWorldReady
+        ? World->SpawnActor<PStageHActor>("Target")
+        : nullptr;
+    Runner.Expect(
+        Source != nullptr && Target != nullptr,
+        "Stage H creates a source and target Actor in one serializable World");
+    if (Source == nullptr || Target == nullptr)
+    {
+        Pico::DestroyObjectTree(World);
+        Pico::PObjectSystem::Shutdown();
+        return;
+    }
+
+    const Pico::PProperty* ValueProperty =
+        PStageHActor::StaticClass()->FindProperty(Pico::FName("Value"));
+    int ExternalPreCount = 0;
+    int ExternalPostCount = 0;
+    Source->OnPropertyChanging().AddLambda(
+        [&ExternalPreCount, Source, ValueProperty](
+            Pico::PObject* Object,
+            const Pico::FPropertyChangedEvent& Event)
+        {
+            if (Object == Source && Event.Property == ValueProperty)
+            {
+                ++ExternalPreCount;
+            }
+        });
+    Source->OnPropertyChanged().AddLambda(
+        [&ExternalPostCount, Source, ValueProperty](
+            Pico::PObject* Object,
+            const Pico::FPropertyChangedEvent& Event)
+        {
+            if (Object == Source
+                && Event.Property == ValueProperty
+                && Event.ChangeType == Pico::EPropertyChangeType::ValueSet)
+            {
+                ++ExternalPostCount;
+            }
+        });
+    Source->ResetChangeTracking();
+    Runner.Expect(
+        ValueProperty != nullptr
+            && ValueProperty->SetValue(Source, Pico::int32 {42})
+            && Source->GetValue() == 42
+            && Source->GetPreChangeCount() == 1
+            && Source->GetPostChangeCount() == 1
+            && Source->GetLastPropertyName() == Pico::FName("Value")
+            && ExternalPreCount == 1
+            && ExternalPostCount == 1,
+        "Reflected writes share one PreEditChange, PostEditChange, and native notification path");
+
+    PStageHActor* DefaultActor = static_cast<PStageHActor*>(
+        PStageHActor::StaticClass()->GetMutableDefaultObject());
+    const Pico::int32 OriginalDefault = DefaultActor != nullptr
+        ? DefaultActor->GetValue()
+        : 0;
+    if (DefaultActor != nullptr)
+    {
+        DefaultActor->ResetChangeTracking();
+    }
+    const bool bDefaultChanged = DefaultActor != nullptr
+        && ValueProperty->SetValue(DefaultActor, Pico::int32 {77});
+    PStageHActor* FutureInstance = bDefaultChanged
+        ? World->SpawnActor<PStageHActor>("FutureInstance")
+        : nullptr;
+    Runner.Expect(
+        bDefaultChanged
+            && DefaultActor->GetPostChangeCount() == 1
+            && FutureInstance != nullptr
+            && FutureInstance->GetValue() == 77
+            && Source->GetValue() == 42,
+        "Changing the CDO notifies observers and affects future instances without overwriting live instances");
+    if (DefaultActor != nullptr)
+    {
+        ValueProperty->SetValue(DefaultActor, OriginalDefault);
+    }
+
+    const Pico::FDynamicDelegateBindingResult Binding =
+        Source->GetOnValue().AddDynamic(Target, Pico::FName("HandleValue"));
+    Runner.Expect(
+        Binding.IsSuccess(),
+        "A reflected dynamic multicast property binds a Callable target function");
+
+    Pico::FWorldAssetData Captured;
+    Pico::EWorldSerializationError Error = Pico::EWorldSerializationError::None;
+    const bool bCaptured = Pico::CaptureWorld(*World, Captured, &Error);
+    const Pico::FSceneObjectRecord* SourceRecord = nullptr;
+    for (const Pico::FSceneObjectRecord& Record : Captured.Objects)
+    {
+        if (Record.ObjectName == "Source")
+        {
+            SourceRecord = &Record;
+            break;
+        }
+    }
+    const bool bBindingCaptured = SourceRecord != nullptr
+        && SourceRecord->DynamicDelegates.size() == 1
+        && SourceRecord->DynamicDelegates[0].PropertyName == "OnValue"
+        && SourceRecord->DynamicDelegates[0].Bindings.size() == 1
+        && SourceRecord->DynamicDelegates[0].Bindings[0].Target.SceneId.IsValid()
+        && SourceRecord->DynamicDelegates[0].Bindings[0].Target.ObjectPath
+            == Target->GetPathName()
+        && SourceRecord->DynamicDelegates[0].Bindings[0].FunctionName
+            == "HandleValue";
+    Runner.Expect(
+        bCaptured && bBindingCaptured,
+        "World capture stores delegate property, stable scene reference, object path, and function name");
+
+    Pico::FMemoryWriter Writer;
+    Pico::FWorldAssetData LoadedData;
+    const bool bRoundTripped = bCaptured
+        && Pico::SerializeWorldAsset(Writer, Captured, &Error);
+    Pico::FMemoryReader Reader(Writer.GetData());
+    Runner.Expect(
+        bRoundTripped
+            && Pico::DeserializeWorldAsset(Reader, LoadedData, &Error)
+            && Reader.GetRemainingSize() == 0,
+        "World format version 4 round-trips dynamic multicast binding records");
+
+    const auto StageHSuffix =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::filesystem::path StageHFile =
+        std::filesystem::temp_directory_path()
+        / ("PicoStageHDelegate_" + std::to_string(StageHSuffix) + ".pworld");
+    std::error_code FileError;
+    std::filesystem::remove(StageHFile, FileError);
+    Runner.Expect(
+        Pico::SaveWorldToFile(StageHFile, *World, &Error),
+        "A real .pworld file stores the reflected dynamic delegate binding");
+
+    const Pico::FObjectHandle OldTargetHandle = Target->GetHandle();
+    Pico::DestroyObjectTree(World);
+    World = Pico::LoadWorldFromFile(StageHFile, &Error);
+    PStageHActor* FileSource = nullptr;
+    PStageHActor* FileTarget = nullptr;
+    if (World != nullptr)
+    {
+        for (Pico::PActor* Actor : World->GetPersistentLevel()->GetActors())
+        {
+            if (Actor->GetName() == Pico::FName("Source"))
+                FileSource = static_cast<PStageHActor*>(Actor);
+            else if (Actor->GetName() == Pico::FName("Target"))
+                FileTarget = static_cast<PStageHActor*>(Actor);
+        }
+    }
+    if (FileSource != nullptr && FileTarget != nullptr)
+    {
+        FileSource->BroadcastValue(99);
+    }
+    Runner.Expect(
+        FileSource != nullptr
+            && FileTarget != nullptr
+            && FileSource->GetOnValue().Num() == 1
+            && FileSource->GetLastChangeType() == Pico::EPropertyChangeType::Load
+            && FileTarget->GetLastReceivedValue() == 99,
+        "Closing and reopening a .pworld restores the binding with Load notifications");
+    Pico::DestroyObjectTree(World);
+
+    World = Pico::CreateWorldFromAssetData(
+        LoadedData,
+        &Error,
+        {Pico::EPropertyChangeType::UndoRedo});
+    PStageHActor* RestoredSource = nullptr;
+    PStageHActor* RestoredTarget = nullptr;
+    if (World != nullptr)
+    {
+        for (Pico::PActor* Actor : World->GetPersistentLevel()->GetActors())
+        {
+            if (Actor->GetName() == Pico::FName("Source"))
+                RestoredSource = static_cast<PStageHActor*>(Actor);
+            else if (Actor->GetName() == Pico::FName("Target"))
+                RestoredTarget = static_cast<PStageHActor*>(Actor);
+        }
+    }
+    Runner.Expect(
+        RestoredSource != nullptr
+            && RestoredTarget != nullptr
+            && RestoredSource->GetOnValue().Num() == 1
+            && RestoredTarget->GetHandle() != OldTargetHandle
+            && RestoredSource->GetPostChangeCount() >= 2
+            && RestoredSource->GetLastChangeType()
+                == Pico::EPropertyChangeType::UndoRedo,
+        "Two-phase load resolves new runtime handles and reports UndoRedo property restoration");
+    if (RestoredSource != nullptr && RestoredTarget != nullptr)
+    {
+        RestoredSource->BroadcastValue(123);
+    }
+    Runner.Expect(
+        RestoredTarget != nullptr
+            && RestoredTarget->GetReceivedCount() == 1
+            && RestoredTarget->GetLastReceivedValue() == 123,
+        "A dynamic multicast binding still reaches its target after the original World is destroyed");
+
+    Pico::DestroyObjectTree(World);
+    Pico::FWorldAssetData PathFallbackData = LoadedData;
+    for (Pico::FSceneObjectRecord& Record : PathFallbackData.Objects)
+    {
+        if (Record.ObjectName == "Source" && !Record.DynamicDelegates.empty())
+        {
+            Record.DynamicDelegates[0].Bindings[0].Target.SceneId = Record.Id;
+        }
+    }
+    World = Pico::CreateWorldFromAssetData(PathFallbackData, &Error);
+    RestoredSource = nullptr;
+    RestoredTarget = nullptr;
+    if (World != nullptr)
+    {
+        for (Pico::PActor* Actor : World->GetPersistentLevel()->GetActors())
+        {
+            if (Actor->GetName() == Pico::FName("Source"))
+                RestoredSource = static_cast<PStageHActor*>(Actor);
+            else if (Actor->GetName() == Pico::FName("Target"))
+                RestoredTarget = static_cast<PStageHActor*>(Actor);
+        }
+    }
+    if (RestoredSource != nullptr)
+    {
+        RestoredSource->BroadcastValue(321);
+    }
+    Runner.Expect(
+        RestoredTarget != nullptr
+            && RestoredTarget->GetLastReceivedValue() == 321,
+        "ObjectPath safely repairs a serialized reference whose SceneId resolves to the wrong object");
+
+    Pico::DestroyObjectTree(World);
+    Pico::FWorldAssetData StaleTargetData = LoadedData;
+    for (Pico::FSceneObjectRecord& Record : StaleTargetData.Objects)
+    {
+        if (Record.ObjectName == "Source" && !Record.DynamicDelegates.empty())
+        {
+            auto& TargetReference =
+                Record.DynamicDelegates[0].Bindings[0].Target;
+            TargetReference.SceneId = Pico::FSceneObjectId {999999};
+            TargetReference.ObjectPath = "StageHWorld.PersistentLevel.Missing";
+        }
+    }
+    World = Pico::CreateWorldFromAssetData(StaleTargetData, &Error);
+    RestoredSource = nullptr;
+    if (World != nullptr)
+    {
+        for (Pico::PActor* Actor : World->GetPersistentLevel()->GetActors())
+        {
+            if (Actor->GetName() == Pico::FName("Source"))
+            {
+                RestoredSource = static_cast<PStageHActor*>(Actor);
+            }
+        }
+    }
+    Runner.Expect(
+        World != nullptr
+            && RestoredSource != nullptr
+            && RestoredSource->GetOnValue().Num() == 0,
+        "A stale serialized target is skipped without failing the complete World load");
+
+    Pico::DestroyObjectTree(World);
+    Pico::FWorldAssetData MissingFunctionData = LoadedData;
+    for (Pico::FSceneObjectRecord& Record : MissingFunctionData.Objects)
+    {
+        if (Record.ObjectName == "Source" && !Record.DynamicDelegates.empty())
+        {
+            Record.DynamicDelegates[0].Bindings[0].FunctionName = "MissingFunction";
+        }
+    }
+    World = Pico::CreateWorldFromAssetData(MissingFunctionData, &Error);
+    RestoredSource = nullptr;
+    if (World != nullptr)
+    {
+        for (Pico::PActor* Actor : World->GetPersistentLevel()->GetActors())
+        {
+            if (Actor->GetName() == Pico::FName("Source"))
+            {
+                RestoredSource = static_cast<PStageHActor*>(Actor);
+            }
+        }
+    }
+    Runner.Expect(
+        World != nullptr
+            && RestoredSource != nullptr
+            && RestoredSource->GetOnValue().Num() == 0,
+        "A removed or renamed PFunction becomes a skipped binding instead of corrupting the scene");
+
+    Pico::DestroyObjectTree(World);
+    std::filesystem::remove(StageHFile, FileError);
+    std::filesystem::remove(StageHFile.string() + ".tmp", FileError);
+    std::filesystem::remove(StageHFile.string() + ".bak", FileError);
     Pico::PObjectSystem::Shutdown();
 }
 
@@ -2432,6 +2857,7 @@ int main()
     TestSceneComponentAttachmentHierarchy(Runner);
     TestPrimitiveComponentSceneData(Runner);
     TestWorldAssetDataSerialization(Runner);
+    TestStageHPersistenceAndPropertyNotifications(Runner);
     TestWorldFilePersistence(Runner);
     TestEngineLoopWorldReplacement(Runner);
     TestCameraSpringArmSockets(Runner);

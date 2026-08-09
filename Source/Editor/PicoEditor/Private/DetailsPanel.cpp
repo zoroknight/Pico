@@ -7,6 +7,7 @@
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/Class.h"
+#include "Pico/Object/DynamicMulticastDelegate.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/Property.h"
 
@@ -386,7 +387,8 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
                 State,
                 [Object, Property, Value]()
                 {
-                    return Property->SetValue(Object, Value);
+                    return Property->SetValue(
+                        Object, Value, EPropertyChangeType::Interactive);
                 });
         }
         break;
@@ -402,7 +404,8 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
                 State,
                 [Object, Property, Value]()
                 {
-                    return Property->SetValue(Object, Value);
+                    return Property->SetValue(
+                        Object, Value, EPropertyChangeType::Interactive);
                 });
         }
         break;
@@ -434,7 +437,8 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
                 State,
                 [Object, Property, Value]()
                 {
-                    return Property->SetValue(Object, Value);
+                    return Property->SetValue(
+                        Object, Value, EPropertyChangeType::Interactive);
                 });
         }
         break;
@@ -450,7 +454,8 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
                 State,
                 [Object, Property, Value]()
                 {
-                    return Property->SetValue(Object, Value);
+                    return Property->SetValue(
+                        Object, Value, EPropertyChangeType::Interactive);
                 });
         }
         break;
@@ -466,7 +471,8 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
                 State,
                 [Object, Property, Value]()
                 {
-                    return Property->SetValue(Object, Value);
+                    return Property->SetValue(
+                        Object, Value, EPropertyChangeType::Interactive);
                 });
         }
         break;
@@ -511,6 +517,22 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
                 }
             }
         }
+        break;
+    }
+    case EPropertyType::Object:
+    {
+        PObject* Referenced = Property->GetReferencedObject(Object);
+        ImGui::TextUnformatted(
+            Referenced != nullptr ? Referenced->GetPathName().c_str() : "None");
+        break;
+    }
+    case EPropertyType::DynamicMulticastDelegate:
+    {
+        const FDynamicMulticastDelegate* Delegate =
+            Property->GetDynamicMulticastDelegate(Object);
+        ImGui::Text(
+            "%zu binding(s)",
+            Delegate != nullptr ? Delegate->Num() : std::size_t {0});
         break;
     }
     }

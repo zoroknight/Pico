@@ -2,10 +2,12 @@
 #include "DynamicDelegateExperiment.h"
 #include "GarbageCollectionExperiment.h"
 #include "NativeDelegateExperiment.h"
+#include "PropertyNotificationExperiment.h"
 
 #include "Pico/Developer/ReflectionDebug.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ClassRegistry.h"
+#include "Pico/Object/DynamicMulticastDelegate.h"
 #include "Pico/Object/Function.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectGlobals.h"
@@ -226,6 +228,7 @@ FInspectorApp::FInspectorApp()
 
     Experiments.push_back(std::make_unique<FNativeDelegateExperiment>());
     Experiments.push_back(std::make_unique<FDynamicDelegateExperiment>());
+    Experiments.push_back(std::make_unique<FPropertyNotificationExperiment>());
     Experiments.push_back(std::make_unique<FGarbageCollectionExperiment>());
     for (const std::unique_ptr<IInspectorExperiment>& Experiment : Experiments)
     {
@@ -825,6 +828,15 @@ void FInspectorApp::DrawPropertyEditor(PObject* Object, const PProperty* Propert
             "%s (%s)",
             Referenced != nullptr ? Referenced->GetPathName().c_str() : "None",
             Property->GetObjectReferenceKind() == EObjectReferenceKind::Strong ? "Strong" : "Weak");
+        break;
+    }
+    case EPropertyType::DynamicMulticastDelegate:
+    {
+        const FDynamicMulticastDelegate* Delegate =
+            Property->GetDynamicMulticastDelegate(Object);
+        ImGui::Text(
+            "%zu binding(s)",
+            Delegate != nullptr ? Delegate->Num() : std::size_t {0});
         break;
     }
     }

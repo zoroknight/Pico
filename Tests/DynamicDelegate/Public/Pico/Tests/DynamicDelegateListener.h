@@ -44,6 +44,8 @@ protected:
         const Pico::FObjectConstructionParams& Params);
 
 private:
+    PPROPERTY(NotEditable)
+    Pico::TDynamicMulticastDelegate<void(Pico::int32)> PersistedEvent;
     Pico::TDynamicMulticastDelegate<void(Pico::int32)>* MutationDelegate = nullptr;
     PDynamicDelegateListener* LateTarget = nullptr;
     Pico::FDelegateHandle SelfHandle;

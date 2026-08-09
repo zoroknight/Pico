@@ -1,6 +1,7 @@
 #include "Pico/Developer/ReflectionDebug.h"
 
 #include "Pico/Object/Class.h"
+#include "Pico/Object/DynamicMulticastDelegate.h"
 #include "Pico/Object/Function.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/Property.h"
@@ -126,6 +127,15 @@ void AppendPropertyValue(std::ostringstream& Stream, const PProperty& Property, 
                     ? " [Strong]" : " [Weak]");
         break;
     }
+    case EPropertyType::DynamicMulticastDelegate:
+    {
+        const FDynamicMulticastDelegate* Delegate =
+            Property.GetDynamicMulticastDelegate(&Object);
+        Stream << (Delegate != nullptr
+            ? std::to_string(Delegate->Num()) + " binding(s)"
+            : "<unavailable>");
+        break;
+    }
     }
 }
 }
@@ -150,6 +160,8 @@ std::string_view GetPropertyTypeName(EPropertyType Type)
         return "AssetPath";
     case EPropertyType::Object:
         return "Object";
+    case EPropertyType::DynamicMulticastDelegate:
+        return "DynamicMulticastDelegate";
     }
 
     return "Unknown";

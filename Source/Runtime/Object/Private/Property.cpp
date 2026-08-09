@@ -14,7 +14,9 @@ PProperty::PProperty(
     FConstAccessor InConstAccessor,
     FPropertyMetadata InMetadata,
     EObjectReferenceKind InObjectReferenceKind,
-    FReferenceAccessor InReferenceAccessor)
+    FReferenceAccessor InReferenceAccessor,
+    FDynamicMutableAccessor InDynamicMutableAccessor,
+    FDynamicConstAccessor InDynamicConstAccessor)
     : Name(InName)
     , Type(InType)
     , Metadata(InMetadata)
@@ -24,6 +26,8 @@ PProperty::PProperty(
     , ConstAccessor(InConstAccessor)
     , ObjectReferenceKind(InObjectReferenceKind)
     , ReferenceAccessor(InReferenceAccessor)
+    , DynamicMutableAccessor(InDynamicMutableAccessor)
+    , DynamicConstAccessor(InDynamicConstAccessor)
 {
 }
 
@@ -69,6 +73,53 @@ PObject* PProperty::GetReferencedObject(const PObject* Object) const
         && ReferenceAccessor != nullptr
         ? ResolveObject(ReferenceAccessor(Object))
         : nullptr;
+}
+
+FDynamicMulticastDelegate* PProperty::GetDynamicMulticastDelegate(PObject* Object) const
+{
+    return Object != nullptr
+        && OwnerClass != nullptr
+        && Object->IsA(OwnerClass)
+        && Type == EPropertyType::DynamicMulticastDelegate
+        && DynamicMutableAccessor != nullptr
+        ? DynamicMutableAccessor(Object)
+        : nullptr;
+}
+
+const FDynamicMulticastDelegate* PProperty::GetDynamicMulticastDelegate(
+    const PObject* Object) const
+{
+    return Object != nullptr
+        && OwnerClass != nullptr
+        && Object->IsA(OwnerClass)
+        && Type == EPropertyType::DynamicMulticastDelegate
+        && DynamicConstAccessor != nullptr
+        ? DynamicConstAccessor(Object)
+        : nullptr;
+}
+
+bool PProperty::NotifyPreChange(
+    PObject* Object,
+    EPropertyChangeType ChangeType) const
+{
+    if (Object == nullptr || OwnerClass == nullptr || !Object->IsA(OwnerClass))
+    {
+        return false;
+    }
+    Object->NotifyPrePropertyChange({Object, this, ChangeType});
+    return true;
+}
+
+bool PProperty::NotifyPostChange(
+    PObject* Object,
+    EPropertyChangeType ChangeType) const
+{
+    if (Object == nullptr || OwnerClass == nullptr || !Object->IsA(OwnerClass))
+    {
+        return false;
+    }
+    Object->NotifyPostPropertyChange({Object, this, ChangeType});
+    return true;
 }
 
 std::size_t PProperty::GetSize() const
@@ -122,5 +173,33 @@ const void* PProperty::GetValueAddress(
     }
 
     return ConstAccessor(Object);
+}
+
+bool PProperty::SetValueAddress(
+    PObject* Object,
+    EPropertyType ExpectedType,
+    std::size_t ExpectedSize,
+    const void* Source,
+    FValueCopier Copier,
+    EPropertyChangeType ChangeType,
+    bool bNotify) const
+{
+    void* Destination = GetValueAddress(Object, ExpectedType, ExpectedSize);
+    if (Destination == nullptr || Source == nullptr || Copier == nullptr)
+    {
+        return false;
+    }
+
+    const FPropertyChangedEvent Event {Object, this, ChangeType};
+    if (bNotify)
+    {
+        Object->NotifyPrePropertyChange(Event);
+    }
+    Copier(Destination, Source);
+    if (bNotify)
+    {
+        Object->NotifyPostPropertyChange(Event);
+    }
+    return true;
 }
 }

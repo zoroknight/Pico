@@ -71,6 +71,9 @@ bool ApplyValue(
         if (const FAssetPath* Typed = std::get_if<FAssetPath>(&Value))
             return Property->SetValue(Object, *Typed);
         break;
+    case EPropertyType::Object:
+    case EPropertyType::DynamicMulticastDelegate:
+        break;
     }
     return false;
 }
@@ -136,11 +139,6 @@ FEditorPropertyResult FEditorPropertyService::SetProperty(
     try
     {
         bApplied = ApplyValue(Object, Property, Value);
-        if (bApplied)
-        {
-            Object->PostEditChangeProperty(
-                {Property, EPropertyChangeType::ValueSet});
-        }
     }
     catch (...)
     {

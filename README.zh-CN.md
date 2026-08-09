@@ -21,6 +21,9 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 为每个已注册类创建 CDO，通过继承的默认子对象模板声明固定对象图，并由统一构造链生成彼此独立的运行时实例。
 - 使用类型安全的 Native 单播与多播委托，通过带代数 Handle 弱绑定对象，并广播 Actor 生成和销毁事件。
 - 使用动态多播委托按“弱对象Handle + PFunction名称”绑定Callable函数，校验签名并经ProcessEvent广播。
+- 在 `.pworld` 中按场景ID、对象路径和函数名持久化反射动态多播属性，并在新对象图创建后修复绑定。
+- 反射属性写入统一产生前后通知，区分ValueSet、Interactive、Load和UndoRedo；修改CDO只影响未来实例。
+- 第 3 项目月的对象系统核心已经完成并通过 Debug/Release 全量测试；下一阶段进入 Gameplay Framework。
 - 使用 `PCLASS`、`PPROPERTY` 和 `PFUNCTION` 在原生 C++ 声明旁标记反射内容，并由
   PicoHeaderTool 在编译前生成重复的注册代码。
 - 通过 `PObject::ProcessEvent` 调用反射 Native 函数，支持类型化参数/返回值元数据、继承查找、
@@ -344,7 +347,7 @@ GameWorld
 ```
 
 PicoInspector 默认进入 Native Delegate 实验；`Runtime Browser -> Functions` 用于通用
-`ProcessEvent` 调用，`Experiments` 用于观察Native监听生命周期、动态PFunction绑定、广播日志、
+`ProcessEvent` 调用，`Experiments` 用于观察Native监听生命周期、动态PFunction绑定、属性通知与CDO继承、
 GC对象图和延迟请求在安全点的消费过程。完整操作步骤、每一步验证目的、Lambda与Weak PObject的区别见
 [PicoInspector 可视化验收指南](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)。Dynamic Multicast
 实验中的 `Remove Selected` 删除一条Handle绑定，`Remove Target Bindings` 删除当前Target的全部绑定，
@@ -426,6 +429,7 @@ private:
 - [第三个月 PicoHeaderTool](Docs/Month03_17_PicoHeaderTool.md)
 - [第三个月 Mark-Sweep GC](Docs/Month03_18_GarbageCollection.md)
 - [第三个月 Dynamic Multicast Delegate](Docs/Month03_19_DynamicMulticastDelegates.md)
+- [第三个月稳定引用与属性通知](Docs/Month03_20_StableReferencesAndPropertyNotifications.md)
 - [第四个月编辑器事务](Docs/Month04_9_EditorTransactions.md)
 - [第四个月属性事务](Docs/Month04_10_EditorPropertyTransactions.md)
 - [第四个月编辑器剪贴板](Docs/Month04_11_EditorClipboard.md)
@@ -445,6 +449,7 @@ GameInstance 链路已经完成。后续学习路线为：
 - Jolt 物理、角色移动和精简动画接入
 - Replication、RPC、Transform 同步、客户端预测与修正
 - Dedicated Server/广域网验证、Cook、Package 和可独立运行的 Windows 构建
+- 精简的 `PicoTask` Worker Pool 与 Game Thread Dispatcher，用于异步 Cook、构建和 AI 请求；运行时对象仍由 Game Thread 修改
 - 精简版 Gameplay Ability System 与 AbilityTask，随后接入 AI 工具和 Agent 工作流
 
 持续维护的排期和验收标准位于 [Pico 剩余开发路线](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)，

@@ -178,6 +178,8 @@ bool PClass::ValidateProperty(
     std::span<const PProperty> PendingProperties) const
 {
     const std::size_t TypeSize = GetPropertyTypeSize(Property.GetType());
+    const bool bDynamicDelegate =
+        Property.GetType() == EPropertyType::DynamicMulticastDelegate;
     const bool bSerializable =
         Property.HasAnyFlags(EPropertyFlags::Serializable);
     const bool bTransient =
@@ -192,8 +194,8 @@ bool PClass::ValidateProperty(
             && !bSerializable
         : Property.GetObjectReferenceKind() == EObjectReferenceKind::None;
     if (Property.GetName().IsNone()
-        || TypeSize == 0
-        || Property.GetSize() != TypeSize
+        || (!bDynamicDelegate && TypeSize == 0)
+        || (bDynamicDelegate ? Property.GetSize() == 0 : Property.GetSize() != TypeSize)
         || Property.GetOwnerTypeToken() != NativeTypeToken
         || !Property.HasValidAccessors()
         || (bSerializable && bTransient)

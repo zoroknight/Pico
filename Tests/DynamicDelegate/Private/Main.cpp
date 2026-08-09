@@ -50,6 +50,15 @@ void TestBindingAndBroadcast(FTestRunner& Runner)
     Runner.Expect(
         Listener != nullptr && NativeOnly != nullptr,
         "Dynamic delegate binding fixtures are created");
+    const Pico::PProperty* PersistedProperty =
+        PDynamicDelegateListener::StaticClass()->FindProperty(
+            Pico::FName("PersistedEvent"));
+    Runner.Expect(
+        PersistedProperty != nullptr
+            && PersistedProperty->GetType()
+                == Pico::EPropertyType::DynamicMulticastDelegate
+            && PersistedProperty->GetDynamicMulticastDelegate(Listener) != nullptr,
+        "PicoHeaderTool registers a reflected dynamic multicast property");
 
     Runner.Expect(
         Delegate.AddDynamic(nullptr, Pico::FName("OnValue")).Result

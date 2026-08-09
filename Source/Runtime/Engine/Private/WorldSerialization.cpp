@@ -9,8 +9,10 @@
 #include "Pico/Engine/World.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ClassRegistry.h"
+#include "Pico/Object/DynamicMulticastDelegate.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectGlobals.h"
+#include "Pico/Object/Property.h"
 #include "Pico/Object/SerializationFile.h"
 
 #include <fstream>
@@ -25,11 +27,13 @@ namespace Pico
 namespace
 {
 constexpr uint32 WorldMagic = 0x444c5750;
-constexpr uint32 WorldFormatVersion = 3;
+constexpr uint32 WorldFormatVersion = 4;
 constexpr uint32 MinimumWorldFormatVersion = 1;
 constexpr uint32 MaxSceneObjectCount = 64 * 1024;
 constexpr uint32 MaxSceneRelationCount = 128 * 1024;
 constexpr uint32 MaxObjectPropertyCount = 4 * 1024;
+constexpr uint32 MaxDynamicDelegateCount = 1024;
+constexpr uint32 MaxDynamicDelegateBindingCount = 16 * 1024;
 constexpr std::size_t MaxSceneNameLength = 1024;
 constexpr std::size_t MaxWorldFileSize = 256 * 1024 * 1024;
 
@@ -105,6 +109,94 @@ bool HasAttachmentCycle(
     return false;
 }
 
+void GatherProperties(const PClass* Class, std::vector<const PProperty*>& OutProperties)
+{
+    if (Class == nullptr)
+    {
+        return;
+    }
+    GatherProperties(Class->GetSuperClass(), OutProperties);
+    for (const PProperty& Property : Class->GetProperties())
+    {
+        OutProperties.push_back(&Property);
+    }
+}
+
+bool CaptureDynamicDelegates(
+    const PObject& Object,
+    const std::unordered_map<const PObject*, FSceneObjectId>& ObjectIds,
+    FSceneObjectRecord& Record)
+{
+    std::vector<const PProperty*> Properties;
+    GatherProperties(Object.GetClass(), Properties);
+    for (const PProperty* Property : Properties)
+    {
+        if (Property == nullptr
+            || Property->GetType() != EPropertyType::DynamicMulticastDelegate
+            || !Property->HasAnyFlags(EPropertyFlags::Serializable)
+            || Property->HasAnyFlags(EPropertyFlags::Transient))
+        {
+            continue;
+        }
+
+        const FDynamicMulticastDelegate* Delegate =
+            Property->GetDynamicMulticastDelegate(&Object);
+        if (Delegate == nullptr)
+        {
+            return false;
+        }
+
+        FSerializedDynamicDelegateRecord DelegateRecord;
+        DelegateRecord.PropertyName = Property->GetName().ToString();
+        for (const FDynamicDelegateBindingView& Binding : Delegate->GetBindings())
+        {
+            PObject* Target = Binding.bTargetAlive
+                ? ResolveObject(Binding.TargetHandle)
+                : nullptr;
+            const auto TargetId = Target != nullptr ? ObjectIds.find(Target) : ObjectIds.end();
+            if (Target == nullptr || TargetId == ObjectIds.end())
+            {
+                continue;
+            }
+            DelegateRecord.Bindings.push_back({
+                {TargetId->second, Target->GetPathName()},
+                Binding.FunctionName.ToString()});
+        }
+        if (!DelegateRecord.Bindings.empty())
+        {
+            Record.DynamicDelegates.push_back(std::move(DelegateRecord));
+        }
+    }
+    return Record.DynamicDelegates.size() <= MaxDynamicDelegateCount;
+}
+
+bool SerializeDynamicDelegateRecord(
+    FArchive& Archive,
+    FSerializedDynamicDelegateRecord& Record)
+{
+    Archive.SerializeString(Record.PropertyName);
+    uint32 BindingCount = Archive.IsSaving()
+        ? static_cast<uint32>(Record.Bindings.size())
+        : 0;
+    Archive.SerializeUInt32(BindingCount);
+    if (Archive.HasError() || BindingCount > MaxDynamicDelegateBindingCount)
+    {
+        return false;
+    }
+    if (Archive.IsLoading())
+    {
+        Record.Bindings.clear();
+        Record.Bindings.resize(BindingCount);
+    }
+    for (FSerializedDynamicDelegateBinding& Binding : Record.Bindings)
+    {
+        Archive.SerializeUInt64(Binding.Target.SceneId.Value);
+        Archive.SerializeString(Binding.Target.ObjectPath);
+        Archive.SerializeString(Binding.FunctionName);
+    }
+    return !Archive.HasError();
+}
+
 bool AddObjectRecord(
     const PObject& Object,
     FSceneObjectId OuterId,
@@ -152,7 +244,10 @@ bool AddObjectRecord(
     return true;
 }
 
-bool SerializeObjectRecord(FArchive& Archive, FSceneObjectRecord& Record)
+bool SerializeObjectRecord(
+    FArchive& Archive,
+    FSceneObjectRecord& Record,
+    uint32 Version)
 {
     Archive.SerializeUInt64(Record.Id.Value);
     Archive.SerializeUInt64(Record.OuterId.Value);
@@ -187,6 +282,34 @@ bool SerializeObjectRecord(FArchive& Archive, FSceneObjectRecord& Record)
             return false;
         }
     }
+
+    if (Version >= 4)
+    {
+        uint32 DelegateCount = Archive.IsSaving()
+            ? static_cast<uint32>(Record.DynamicDelegates.size())
+            : 0;
+        Archive.SerializeUInt32(DelegateCount);
+        if (Archive.HasError() || DelegateCount > MaxDynamicDelegateCount)
+        {
+            return false;
+        }
+        if (Archive.IsLoading())
+        {
+            Record.DynamicDelegates.clear();
+            Record.DynamicDelegates.resize(DelegateCount);
+        }
+        for (FSerializedDynamicDelegateRecord& Delegate : Record.DynamicDelegates)
+        {
+            if (!SerializeDynamicDelegateRecord(Archive, Delegate))
+            {
+                return false;
+            }
+        }
+    }
+    else if (Archive.IsLoading())
+    {
+        Record.DynamicDelegates.clear();
+    }
     return !Archive.HasError();
 }
 
@@ -210,7 +333,8 @@ class FWorldAssetLoader
 public:
     static PWorld* Create(
         const FWorldAssetData& Data,
-        EWorldSerializationError* OutError)
+        EWorldSerializationError* OutError,
+        FWorldLoadOptions Options)
     {
         if (!ValidateWorldAssetData(Data, OutError))
         {
@@ -364,7 +488,10 @@ public:
             for (const FSerializedPropertyRecord& Property : Record.Properties)
             {
                 const ESerializedPropertyApplyResult Result =
-                    ApplySerializedProperty(Object, Property);
+                    ApplySerializedProperty(
+                        Object,
+                        Property,
+                        Options.PropertyChangeType);
                 if (Result == ESerializedPropertyApplyResult::TypeMismatch)
                 {
                     return Fail(EWorldSerializationError::PropertyTypeMismatch);
@@ -411,6 +538,77 @@ public:
             {
                 return Fail(EWorldSerializationError::RelationRestoreFailed);
             }
+        }
+
+        std::unordered_map<std::string, PObject*> ObjectsByPath;
+        ObjectsByPath.reserve(Objects.size());
+        for (const auto& [Id, Object] : Objects)
+        {
+            (void)Id;
+            if (Object != nullptr)
+            {
+                ObjectsByPath.emplace(Object->GetPathName(), Object);
+            }
+        }
+
+        try
+        {
+            for (const FSceneObjectRecord& Record : Data.Objects)
+            {
+                PObject* Owner = Objects.at(Record.Id.Value);
+                for (const FSerializedDynamicDelegateRecord& SerializedDelegate :
+                    Record.DynamicDelegates)
+                {
+                    const PProperty* Property = Owner->GetClass()->FindProperty(
+                        FName(SerializedDelegate.PropertyName));
+                    FDynamicMulticastDelegate* Delegate = Property != nullptr
+                        ? Property->GetDynamicMulticastDelegate(Owner)
+                        : nullptr;
+                    if (Property == nullptr || Delegate == nullptr)
+                    {
+                        return Fail(EWorldSerializationError::PropertyAccessFailed);
+                    }
+
+                    Property->NotifyPreChange(Owner, Options.PropertyChangeType);
+                    Delegate->Clear();
+                    for (const FSerializedDynamicDelegateBinding& Binding :
+                        SerializedDelegate.Bindings)
+                    {
+                        PObject* Target = nullptr;
+                        if (Binding.Target.SceneId.IsValid())
+                        {
+                            const auto Found = Objects.find(
+                                Binding.Target.SceneId.Value);
+                            PObject* Candidate =
+                                Found != Objects.end() ? Found->second : nullptr;
+                            if (Candidate != nullptr
+                                && (Binding.Target.ObjectPath.empty()
+                                    || Candidate->GetPathName()
+                                        == Binding.Target.ObjectPath))
+                            {
+                                Target = Candidate;
+                            }
+                        }
+                        if (Target == nullptr && !Binding.Target.ObjectPath.empty())
+                        {
+                            const auto Found = ObjectsByPath.find(
+                                Binding.Target.ObjectPath);
+                            Target = Found != ObjectsByPath.end() ? Found->second : nullptr;
+                        }
+                        if (Target != nullptr)
+                        {
+                            Delegate->AddDynamic(
+                                Target,
+                                FName(Binding.FunctionName));
+                        }
+                    }
+                    Property->NotifyPostChange(Owner, Options.PropertyChangeType);
+                }
+            }
+        }
+        catch (...)
+        {
+            return Fail(EWorldSerializationError::PropertyAccessFailed);
         }
 
         try
@@ -548,6 +746,21 @@ bool CaptureWorld(
         }
     }
 
+    for (const auto& [Object, Id] : ObjectIds)
+    {
+        if (Object == nullptr
+            || !Id.IsValid()
+            || Id.Value > Data.Objects.size()
+            || !CaptureDynamicDelegates(
+                *Object,
+                ObjectIds,
+                Data.Objects[static_cast<std::size_t>(Id.Value - 1)]))
+        {
+            ReportError(OutError, EWorldSerializationError::PropertyAccessFailed);
+            return false;
+        }
+    }
+
     const auto PersistentLevel = ObjectIds.find(World.GetPersistentLevel());
     const auto CurrentLevel = ObjectIds.find(World.GetCurrentLevel());
     if (PersistentLevel == ObjectIds.end() || CurrentLevel == ObjectIds.end())
@@ -660,6 +873,11 @@ bool ValidateWorldAssetData(
             ReportError(OutError, EWorldSerializationError::PropertyLimitExceeded);
             return false;
         }
+        if (Record.DynamicDelegates.size() > MaxDynamicDelegateCount)
+        {
+            ReportError(OutError, EWorldSerializationError::PropertyLimitExceeded);
+            return false;
+        }
 
         std::unordered_set<std::string> PropertyNames;
         for (const FSerializedPropertyRecord& Property : Record.Properties)
@@ -671,6 +889,32 @@ bool ValidateWorldAssetData(
             {
                 ReportError(OutError, EWorldSerializationError::InvalidObjectGraph);
                 return false;
+            }
+        }
+
+        std::unordered_set<std::string> DelegateNames;
+        for (const FSerializedDynamicDelegateRecord& Delegate : Record.DynamicDelegates)
+        {
+            if (Delegate.PropertyName.empty()
+                || Delegate.PropertyName.size() > MaxSceneNameLength
+                || Delegate.Bindings.empty()
+                || Delegate.Bindings.size() > MaxDynamicDelegateBindingCount
+                || !DelegateNames.insert(Delegate.PropertyName).second)
+            {
+                ReportError(OutError, EWorldSerializationError::InvalidObjectGraph);
+                return false;
+            }
+            for (const FSerializedDynamicDelegateBinding& Binding : Delegate.Bindings)
+            {
+                if ((!Binding.Target.SceneId.IsValid()
+                        && Binding.Target.ObjectPath.empty())
+                    || Binding.Target.ObjectPath.size() > MaxSceneNameLength
+                    || Binding.FunctionName.empty()
+                    || Binding.FunctionName.size() > MaxSceneNameLength)
+                {
+                    ReportError(OutError, EWorldSerializationError::InvalidObjectGraph);
+                    return false;
+                }
             }
         }
     }
@@ -690,10 +934,24 @@ bool ValidateWorldAssetData(
 
     for (const FSceneObjectRecord& Record : Data.Objects)
     {
-        if (FindRecordClass(Record) == nullptr)
+        const PClass* RecordClass = FindRecordClass(Record);
+        if (RecordClass == nullptr)
         {
             ReportError(OutError, EWorldSerializationError::ClassNotFound);
             return false;
+        }
+        for (const FSerializedDynamicDelegateRecord& Delegate : Record.DynamicDelegates)
+        {
+            const PProperty* Property =
+                RecordClass->FindProperty(FName(Delegate.PropertyName));
+            if (Property == nullptr
+                || Property->GetType() != EPropertyType::DynamicMulticastDelegate
+                || !Property->HasAnyFlags(EPropertyFlags::Serializable)
+                || Property->HasAnyFlags(EPropertyFlags::Transient))
+            {
+                ReportError(OutError, EWorldSerializationError::PropertyTypeMismatch);
+                return false;
+            }
         }
         if (Record.Id == Data.WorldId)
         {
@@ -840,7 +1098,7 @@ bool SerializeWorldAsset(
 
     for (FSceneObjectRecord& Record : SerializedData.Objects)
     {
-        if (!SerializeObjectRecord(Archive, Record))
+        if (!SerializeObjectRecord(Archive, Record, Version))
         {
             ReportError(OutError, EWorldSerializationError::InvalidArchive);
             return false;
@@ -906,7 +1164,7 @@ bool DeserializeWorldAsset(
     Data.Objects.resize(ObjectCount);
     for (FSceneObjectRecord& Record : Data.Objects)
     {
-        if (!SerializeObjectRecord(Archive, Record))
+        if (!SerializeObjectRecord(Archive, Record, Version))
         {
             ReportError(
                 OutError,
@@ -949,10 +1207,11 @@ bool DeserializeWorldAsset(
 
 PWorld* CreateWorldFromAssetData(
     const FWorldAssetData& Data,
-    EWorldSerializationError* OutError)
+    EWorldSerializationError* OutError,
+    FWorldLoadOptions Options)
 {
     ReportError(OutError, EWorldSerializationError::None);
-    return FWorldAssetLoader::Create(Data, OutError);
+    return FWorldAssetLoader::Create(Data, OutError, Options);
 }
 
 bool SaveWorldToFile(

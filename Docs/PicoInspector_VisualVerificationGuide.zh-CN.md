@@ -307,7 +307,25 @@ Live bindings。
 被回收，而其他Inspector实验Fixture受临时Root保护。再次Broadcast同样应清理一个Expired绑定。这条
 流程把PFunction、动态委托、弱对象Handle和GC串成一条完整链路。
 
-## 14. 完整通过标准
+## 14. Property Notifications综合实验
+
+打开 `Experiments -> Property Notifications`。界面同时显示普通实例、CDO和后续创建实例的Health。
+
+1. 将Change Source设为ValueSet，修改New Health并点击 `Set Instance Through PProperty`。日志应先出现
+   Pre、再出现Post；Pre观察到旧值，Post观察到新值。这验证写入发生在两次通知之间。
+2. 依次选择Interactive、Load和UndoRedo重复设置。日志中的source应与选择一致，证明监听者可以区分
+   拖动编辑、加载恢复和事务恢复，而不需要猜测调用来源。
+3. 点击 `Set CDO Default`。日志目标应为CDO，普通实例Health保持不变。这验证CDO也是可通知的反射对象，
+   但修改类默认值不会强行覆盖已有实例。
+4. 点击 `Spawn From CDO`。Future Instance Health应等于当前CDO Health。这证明统一构造链会把新的默认值
+   复制给后续实例。
+5. 再修改CDO，观察Future Instance仍保持生成时的值；再次Spawn后才继承新值。
+6. 点击Reset。CDO恢复实验前默认值，计数和日志恢复确定状态，避免影响其他实验。
+
+动态绑定落盘不在这个无World Fixture中伪造；`PicoEngineTests`使用真实World验证 `.pworld` v4保存、销毁
+原对象图、按SceneId/ObjectPath修复新Handle并重新广播，同时覆盖失效目标和缺失PFunction容错。
+
+## 15. 完整通过标准
 
 - 正确的 PFunction 调用返回结果并触发两个监听者。
 - Float 参数和缺失返回存储在执行前被拒绝且零副作用。
@@ -323,5 +341,8 @@ Live bindings。
 - Dynamic Multicast正确绑定匹配的PFunction，并拒绝Character的错误签名。
 - Add Dynamic允许重复，Add Unique Dynamic拒绝重复，Handle和RemoveAll作用范围正确。
 - 动态监听目标被显式销毁或GC回收后，Broadcast安全清理弱绑定。
+- 反射属性写入严格产生一次Pre和一次Post通知，并携带正确变化来源。
+- 修改CDO只影响未来实例；Reset恢复CDO，实验之间不存在默认值污染。
+- `.pworld`重新加载后动态委托绑定到新对象Handle，失效绑定不会阻止World加载。
 
-当前不持久化动态委托绑定。稳定对象身份序列化与加载后的引用修复在阶段H接入。
+动态委托持久化、稳定对象引用修复和属性通知已在阶段H接入；当前不支持跨World软引用和完整UE Archetype传播。

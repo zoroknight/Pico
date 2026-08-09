@@ -3,6 +3,7 @@
 #include "Pico/Asset/AssetManager.h"
 #include "Pico/Asset/AssetRegistry.h"
 #include "Pico/Core/Time.h"
+#include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Object/ObjectTypes.h"
 
 #include <filesystem>
@@ -10,8 +11,6 @@
 namespace Pico
 {
 class PWorld;
-enum class EWorldSerializationError;
-struct FWorldAssetData;
 
 class FEngineLoop
 {
@@ -28,7 +27,8 @@ public:
         EWorldSerializationError* OutError = nullptr);
     bool ReplaceWorld(
         const FWorldAssetData& Data,
-        EWorldSerializationError* OutError = nullptr);
+        EWorldSerializationError* OutError = nullptr,
+        FWorldLoadOptions Options = {});
 
     bool ShouldExit() const;
     float GetDeltaSeconds() const;

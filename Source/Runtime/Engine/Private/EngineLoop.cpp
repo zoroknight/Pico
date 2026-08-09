@@ -380,7 +380,8 @@ bool FEngineLoop::LoadWorld(
 
 bool FEngineLoop::ReplaceWorld(
     const FWorldAssetData& Data,
-    EWorldSerializationError* OutError)
+    EWorldSerializationError* OutError,
+    FWorldLoadOptions Options)
 {
     if (OutError != nullptr)
     {
@@ -453,7 +454,7 @@ bool FEngineLoop::ReplaceWorld(
         bRenamedOldWorld = true;
     }
 
-    PWorld* NewWorld = CreateWorldFromAssetData(Data, OutError);
+    PWorld* NewWorld = CreateWorldFromAssetData(Data, OutError, Options);
     if (NewWorld == nullptr)
     {
         if (bRenamedOldWorld && !RenameObject(OldWorld, OldName))

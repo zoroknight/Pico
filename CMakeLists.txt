@@ -489,6 +489,8 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoInspector/Private/Main.cpp
         Source/Editor/PicoInspector/Private/NativeDelegateExperiment.cpp
         Source/Editor/PicoInspector/Private/NativeDelegateExperiment.h
+        Source/Editor/PicoInspector/Private/PropertyNotificationExperiment.cpp
+        Source/Editor/PicoInspector/Private/PropertyNotificationExperiment.h
     )
 
     target_link_libraries(PicoInspector
