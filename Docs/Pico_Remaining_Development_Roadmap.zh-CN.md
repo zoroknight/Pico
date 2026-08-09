@@ -103,6 +103,43 @@ CDO / ObjectInitializer
 
 不得在统一移动函数、网络所有权和 RPC 稳定前提前实现客户端预测。
 
+## 阶段准入门槛
+
+以下项目用于控制物理、动画、网络、多线程和打包的返工风险。建议时间用于安排实现，最晚时间是进入依赖系统前必须通过的硬门槛。
+
+| 风险控制项 | 建议时间 | 最晚时间/准入条件 | 验收 |
+| --- | --- | --- | --- |
+| Game Thread 身份、`IsInGameThread/CheckGameThread` 和关键对象入口断言 | 第 4 月第 1 周 | 第 4 月结束前 | Worker 误调用对象创建、销毁、GC、反射写入或 World 修改时立即失败 |
+| TickGroup、TickFunction 和 prerequisite | 第 4 月第 1 周 | Gameplay 类型开始参与 Tick 前 | Controller、Pawn、Movement 和未来 Physics 顺序确定且可测试 |
+| Gameplay Framework 生命周期和所有权关系 | 第 4 月第 2～4 周 | Movement 与 Replication 前 | 本地玩家从 Login 到 Possess、MatchState 的链路完整 |
+| 正式编辑器 Events/Bindings | 第 4 月第 4 周 | Gameplay 网络交互配置前 | 可配置签名匹配绑定，支持 Dirty、Undo/Redo、失效诊断和重载恢复 |
+| 仓库外最小运行探针 | 第 4 月末 | 第 5 月结束前 | 在仓库外目录运行两帧并列出绝对路径、资源和 DLL 缺口；允许首次失败但必须形成问题清单 |
+| `MoveComponent`、Sweep/Teleport、`FHitResult` 和统一移动语义 | 第 5 月第 1 周 | Jolt、Root Motion 和网络移动前 | Gameplay、物理修正、Root Motion 和网络纠错共用移动入口 |
+| Jolt 查询与 PhysicsScene 边界 | 第 5 月第 2 周 | CharacterMovement 前 | Raycast、Sweep、Trigger 和刚体同步不绕过 SceneComponent/Movement |
+| CharacterMovement 确定性输入与模拟 | 第 5 月第 3 周 | 客户端预测前 | 相同状态与输入可重演行走、跳跃和下落 |
+| Skeleton/Pose/Root Motion 边界 | 第 5 月第 4 周 | 动画驱动 Gameplay 前 | 动画输出 Pose/Root Motion，Root Motion 仍经 MovementComponent |
+| `FNetObjectId`、NetRole、Ownership，与 ObjectHandle/SceneId 类型隔离 | 第 6 月第 1 周 | ActorChannel 和属性同步前 | 编译期和运行时均不能把本地/磁盘身份当作网络身份 |
+| Replication Dirty Tracking 和网络对象引用 | 第 6 月第 2 周 | RPC 和预测前 | 权威属性、Spawn/Destroy 和对象引用可复制 |
+| RPC 方向、Role、Ownership 和参数校验 | 第 6 月第 3 周 | Gameplay 网络交互前 | 非法客户端调用被拒绝且没有副作用 |
+| 客户端预测、服务器重演与纠错 | 第 6 月第 4 周 | 网络模拟和公网验证前 | 高延迟下可预测、Ack、Correction 和重演 |
+| `PicoTask` Worker Pool、Dispatcher、取消和安全关闭 | 第 7 月第 3 周前半 | 异步 Cook、构建和 AI 请求前 | Worker 只产生纯数据，Game Thread 应用对象结果，退出时无遗留线程 |
+| Cook/Stage 和仓库外 Runtime 布局 | 第 7 月第 3 周后半 | Package 前 | EXE、Config、Content、项目模块和第三方库形成完整 Stage |
+| Development/Shipping Package | 第 7 月第 4 周 | AI Build/Package 工具前 | 独立程序不依赖源码、编辑器或仓库目录 |
+
+顺序上的硬约束为：
+
+```text
+Tick/Gameplay
+ -> MoveComponent
+ -> Physics/CharacterMovement/Animation
+ -> NetId/Replication/RPC
+ -> Prediction
+ -> Network Simulation/WAN
+ -> PicoTask
+ -> Cook/Stage/Package
+ -> Async AI Tools
+```
+
 ## 第 3 月（已完成）：对象系统核心
 
 目标：补齐 Gameplay、RPC、AI 和编辑器共同依赖的 UE 式对象基础。
@@ -150,7 +187,7 @@ Root Set、原生引用上报和 Inspector GC 实验见
 
 | 周次 | 任务 | 月末验收 |
 | --- | --- | --- |
-| 第 1 周 | TickGroup、TickFunction、prerequisite 和 GameInstance World 生命周期 | Controller、Movement、Pawn 顺序确定 |
+| 第 1 周 | Game Thread 身份与关键对象入口断言；TickGroup、TickFunction、prerequisite 和 GameInstance World 生命周期 | 非主线程对象访问可立即发现；Controller、Movement、Pawn 顺序确定 |
 | 第 2 周 | LocalPlayer、GameModeBase、GameStateBase、Controller、PlayerController、PlayerState、Pawn、PlayerStart | Gameplay 类型和关系完整 |
 | 第 3 周 | Standalone Login、PostLogin、RestartPlayer、Possess、UnPossess、重生和旁观基础 | 本地玩家通过 GameMode 获得 Pawn |
 | 第 4 周 | GameMode/GameState Match 状态机、Gameplay 委托和正式编辑器 Events/Bindings 面板 | Waiting、InProgress、PostMatch 可运行；场景可配置签名匹配的动态绑定 |
@@ -172,16 +209,20 @@ GameInstance
 过滤签名匹配的 `PFunction`，支持添加、精确删除、失效目标诊断、Dirty 和 Undo/Redo，并验证 `.pworld`
 重新加载后仍可广播。PicoInspector 继续承担 Pre/Post、GC 和 Handle 等底层实验，不把开发调试界面复制进正式编辑器。
 
+第 4 月结束时执行一次早期仓库外运行探针：把 `PicoSandboxGame`、最低 Config/Content 和必要 DLL 放入
+仓库外临时目录并运行两帧。首次探针允许失败，但必须记录编译期绝对路径、默认项目定位、缺失资源、
+第三方库和 Runtime 对 Editor/源码目录的隐式依赖；正式 Cook/Package 仍在第 7 月完成。
+
 ## 第 5 月：Movement、物理与动画
 
 目标：形成可被服务器重演、可接物理和动画的统一角色移动。
 
 | 周次 | 任务 | 月末验收 |
 | --- | --- | --- |
-| 第 1 周 | MovementComponent、PawnMovementComponent、FloatingPawnMovement | 输入经 Controller 和 Movement 驱动 Pawn |
-| 第 2 周 | Jolt PhysicsScene、Shape、Body、Raycast、Sweep、Trigger、`FHitResult` | 刚体、查询和碰撞事件可用 |
-| 第 3 周 | Character、CharacterMovement，地面检测、行走、跳跃、下落和沿墙滑动 | 角色移动和碰撞稳定 |
-| 第 4 周 | Skeleton、SkeletalMesh、AnimationClip、AnimInstance、Idle/Walk/Jump、基础 Root Motion | 动画由移动状态驱动 |
+| 第 1 周 | `MoveComponent`、Sweep/Teleport、`FHitResult`、MovementComponent、PawnMovementComponent、FloatingPawnMovement | 输入经 Controller 和唯一移动入口驱动 Pawn |
+| 第 2 周 | Jolt PhysicsScene、Shape、Body、Raycast、Sweep、Trigger 和 Transform/Body 同步规则 | 刚体、查询和碰撞事件可用且不绕过移动边界 |
+| 第 3 周 | Character、CharacterMovement，确定性输入、地面检测、行走、跳跃、下落和沿墙滑动 | 角色移动稳定，相同状态与输入可供服务器重演 |
+| 第 4 周 | Skeleton、SkeletalMesh、AnimationClip、AnimInstance、Idle/Walk/Jump、基础 Root Motion | 动画由移动状态驱动，Root Motion 经 MovementComponent |
 
 月末 Demo 必须支持 WASD、跳跃、碰撞、推动刚体和 Idle/Walk/Jump 动画。
 
@@ -191,9 +232,9 @@ GameInstance
 
 | 周次 | 任务 | 月末验收 |
 | --- | --- | --- |
-| 第 1 周 | NetDriver、Connection、Transport、握手、NetMode、NetRole、Owner、NetId | 本机客户端可连接服务器 |
-| 第 2 周 | ActorChannel、Spawn/Destroy、对象引用、Dirty Tracking、Replication Condition、OnRep | Actor 和属性可复制 |
-| 第 3 周 | Server/Client/Multicast RPC、可靠/不可靠、函数反射调用、Ownership 校验 | 交互 RPC 可验证 |
+| 第 1 周 | NetDriver、Connection、Transport、握手、NetMode、NetRole、Ownership、`FNetObjectId` 与身份类型隔离 | 本机客户端可连接服务器，网络身份不复用 ObjectHandle/SceneId |
+| 第 2 周 | ActorChannel、Spawn/Destroy、网络对象引用、Dirty Tracking、Replication Condition、OnRep | Actor 和属性可复制 |
+| 第 3 周 | Server/Client/Multicast RPC、可靠/不可靠、函数反射调用、方向/Role/Ownership/参数校验 | 合法交互 RPC 可执行，非法调用零副作用 |
 | 第 4 周 | SavedMove、输入序号、服务器重演、Ack/Correction、回滚重演、模拟代理插值 | 高延迟移动可预测和纠正 |
 
 网络职责固定为：GameMode 仅服务器；GameState/PlayerState 对所有客户端；PlayerController 仅服务器和所属客户端；Pawn 对相关连接复制。
