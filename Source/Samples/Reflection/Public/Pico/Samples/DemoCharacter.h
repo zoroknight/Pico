@@ -41,6 +41,7 @@ class PDemoHealthObserver final : public PObject
     GENERATED_BODY()
 
 public:
+    PFUNCTION(Callable)
     void HandleHealthChanged(int32 OldHealth, int32 NewHealth);
     int32 GetNotificationCount() const;
     int32 GetLastOldHealth() const;

@@ -1,4 +1,5 @@
 #include "InspectorApp.h"
+#include "DynamicDelegateExperiment.h"
 #include "GarbageCollectionExperiment.h"
 #include "NativeDelegateExperiment.h"
 
@@ -224,6 +225,7 @@ FInspectorApp::FInspectorApp()
     }
 
     Experiments.push_back(std::make_unique<FNativeDelegateExperiment>());
+    Experiments.push_back(std::make_unique<FDynamicDelegateExperiment>());
     Experiments.push_back(std::make_unique<FGarbageCollectionExperiment>());
     for (const std::unique_ptr<IInspectorExperiment>& Experiment : Experiments)
     {
@@ -610,7 +612,7 @@ void FInspectorApp::DrawFunctionParameter(std::size_t Index)
             }
             for (PObject* Candidate : FObjectRegistry::GetObjects())
             {
-                if (!Candidate->IsA(Parameter.Value.ObjectClass))
+                if (!Candidate->IsA(Parameter.Value.ResolveObjectClass()))
                 {
                     continue;
                 }

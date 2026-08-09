@@ -95,8 +95,18 @@ enum class EFunctionInvokeResult : uint8
 
 struct FFunctionValueDescriptor
 {
+    using FObjectClassResolver = const PClass* (*)();
+
     EFunctionValueType Type = EFunctionValueType::Void;
     const PClass* ObjectClass = nullptr;
+    FObjectClassResolver ObjectClassResolver = nullptr;
+
+    const PClass* ResolveObjectClass() const
+    {
+        return ObjectClass != nullptr
+            ? ObjectClass
+            : (ObjectClassResolver != nullptr ? ObjectClassResolver() : nullptr);
+    }
 };
 
 struct FFunctionParameter
@@ -104,6 +114,10 @@ struct FFunctionParameter
     FName Name;
     FFunctionValueDescriptor Value;
 };
+
+bool IsFunctionValueCompatible(
+    const FFunctionValue& Value,
+    const FFunctionValueDescriptor& Descriptor);
 
 namespace Detail
 {
@@ -165,7 +179,11 @@ FFunctionValueDescriptor MakeFunctionValueDescriptor()
     Result.Type = GetFunctionValueType<T>();
     if constexpr (IsSupportedObjectPointer<T>)
     {
-        Result.ObjectClass = std::remove_pointer_t<TFunctionBaseType<T>>::StaticClass();
+        using TObject = std::remove_pointer_t<TFunctionBaseType<T>>;
+        Result.ObjectClassResolver = []() -> const PClass*
+        {
+            return TObject::StaticClass();
+        };
     }
     return Result;
 }
@@ -322,8 +340,6 @@ private:
     }
 
     bool ValidateCreatedMetadata(std::size_t ArgumentCount, bool bMethodIsConst) const;
-    bool IsValueCompatible(const FFunctionValue& Value, const FFunctionValueDescriptor& Descriptor) const;
-
     friend class PClass;
 
     FName Name;

@@ -426,26 +426,33 @@ std::string GenerateSource(const FOptions& Options, const std::vector<FClass>& C
         }
         Out << "PICO_DEFINE_CLASS(" << Class.Name << ")\n\n";
         Out << "bool " << Class.Name << "::RegisterProperties(::Pico::PClass& Class)\n{\n";
-        Out << "    std::vector<::Pico::PProperty> Properties;\n";
-        for (const auto& Property : Class.Properties)
+        if (!Class.Properties.empty())
         {
-            if (Property.Specifiers.empty())
-                Out << "    PICO_ADD_PROPERTY(Properties, " << Property.Name << ");\n";
-            else
-                Out << "    PICO_ADD_PROPERTY_METADATA(Properties, " << Property.Name
-                    << ", (::Pico::FPropertyMetadata { " << PropertyFlags(Property)
-                    << ", ::Pico::EAssetReferenceType::None }));\n";
+            Out << "    std::vector<::Pico::PProperty> Properties;\n";
+            for (const auto& Property : Class.Properties)
+            {
+                if (Property.Specifiers.empty())
+                    Out << "    PICO_ADD_PROPERTY(Properties, " << Property.Name << ");\n";
+                else
+                    Out << "    PICO_ADD_PROPERTY_METADATA(Properties, " << Property.Name
+                        << ", (::Pico::FPropertyMetadata { " << PropertyFlags(Property)
+                        << ", ::Pico::EAssetReferenceType::None }));\n";
+            }
+            Out << "    if (!Class.AddProperties(std::move(Properties))) return false;\n";
         }
-        Out << "    if (!Class.AddProperties(std::move(Properties))) return false;\n\n";
-        Out << "    std::vector<::Pico::PFunction> Functions;\n";
-        for (const auto& Function : Class.Functions)
+        if (!Class.Functions.empty())
         {
-            Out << "    PICO_ADD_FUNCTION(Functions, " << Function.Name << ", " << FunctionFlags(Function);
-            for (const auto& Parameter : Function.Parameters)
-                Out << ", ::Pico::FName(\"" << Parameter << "\")";
-            Out << ");\n";
+            Out << "\n    std::vector<::Pico::PFunction> Functions;\n";
+            for (const auto& Function : Class.Functions)
+            {
+                Out << "    PICO_ADD_FUNCTION(Functions, " << Function.Name << ", " << FunctionFlags(Function);
+                for (const auto& Parameter : Function.Parameters)
+                    Out << ", ::Pico::FName(\"" << Parameter << "\")";
+                Out << ");\n";
+            }
+            Out << "    if (!Class.AddFunctions(std::move(Functions))) return false;\n";
         }
-        Out << "    return Class.AddFunctions(std::move(Functions));\n}\n\n";
+        Out << "    return true;\n}\n\n";
     }
     if (!OpenNamespace.empty()) Out << "}\n";
     return Out.str();

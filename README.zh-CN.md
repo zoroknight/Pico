@@ -20,6 +20,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 通过 `PClass` 和 `NewObject` 创建具有反射信息的原生 C++ 对象。
 - 为每个已注册类创建 CDO，通过继承的默认子对象模板声明固定对象图，并由统一构造链生成彼此独立的运行时实例。
 - 使用类型安全的 Native 单播与多播委托，通过带代数 Handle 弱绑定对象，并广播 Actor 生成和销毁事件。
+- 使用动态多播委托按“弱对象Handle + PFunction名称”绑定Callable函数，校验签名并经ProcessEvent广播。
 - 使用 `PCLASS`、`PPROPERTY` 和 `PFUNCTION` 在原生 C++ 声明旁标记反射内容，并由
   PicoHeaderTool 在编译前生成重复的注册代码。
 - 通过 `PObject::ProcessEvent` 调用反射 Native 函数，支持类型化参数/返回值元数据、继承查找、
@@ -80,7 +81,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
-Debug 和 Release 均可完整构建，十一个 CTest 目标全部通过。
+Debug 和 Release 均可完整构建，十二个 CTest 目标全部通过。
 
 ## 架构
 
@@ -343,10 +344,11 @@ GameWorld
 ```
 
 PicoInspector 默认进入 Native Delegate 实验；`Runtime Browser -> Functions` 用于通用
-`ProcessEvent` 调用，`Experiments` 用于观察监听生命周期、广播日志、GC 对象图和延迟请求在安全点
-的消费过程。完整操作步骤、每一步验证目的、Lambda 与 Weak PObject 的区别见
-[PicoInspector 可视化验收指南](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)。默认 UI Scale
-为 `1.4`，需要时可通过 `-uiscale=1.6` 等参数覆盖。
+`ProcessEvent` 调用，`Experiments` 用于观察Native监听生命周期、动态PFunction绑定、广播日志、
+GC对象图和延迟请求在安全点的消费过程。完整操作步骤、每一步验证目的、Lambda与Weak PObject的区别见
+[PicoInspector 可视化验收指南](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)。Dynamic Multicast
+实验中的 `Remove Selected` 删除一条Handle绑定，`Remove Target Bindings` 删除当前Target的全部绑定，
+`Clear All` 清空整个委托。默认 UI Scale 为 `1.4`，需要时可通过 `-uiscale=1.6` 等参数覆盖。
 
 ## 构建与测试
 
@@ -423,6 +425,7 @@ private:
 - [第三个月GLAD集成](Docs/Month03_12_GLADIntegration.md)
 - [第三个月 PicoHeaderTool](Docs/Month03_17_PicoHeaderTool.md)
 - [第三个月 Mark-Sweep GC](Docs/Month03_18_GarbageCollection.md)
+- [第三个月 Dynamic Multicast Delegate](Docs/Month03_19_DynamicMulticastDelegates.md)
 - [第四个月编辑器事务](Docs/Month04_9_EditorTransactions.md)
 - [第四个月属性事务](Docs/Month04_10_EditorPropertyTransactions.md)
 - [第四个月编辑器剪贴板](Docs/Month04_11_EditorClipboard.md)

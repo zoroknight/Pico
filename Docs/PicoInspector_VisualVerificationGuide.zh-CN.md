@@ -275,7 +275,39 @@ Collect Now                 = 执行层立即开始Mark-Sweep
 这组操作验证：Root 是遍历起点；反射 `TObjectPtr` 形成强边；`TWeakObjectPtr` 不保持目标存活；
 Mark-Sweep 可以回收引用计数无法处理的无 Root 循环；GC请求与真正收集是两个独立阶段。
 
-## 13. 完整通过标准
+## 13. Dynamic Multicast综合实验
+
+打开 `Experiments -> Dynamic Multicast`。事件签名固定为：
+
+```text
+void OnHealthChanged(Int32 OldHealth, Int32 NewHealth)
+```
+
+选择 `Observer A` 和 `HandleHealthChanged`，点击 `Add Dynamic`，再点击
+`Broadcast Dynamic Event`。预期Live bindings为1、Invoked为1、Observer A calls增加1。这证明绑定只
+保存对象与函数名，广播通过 `FindFunction -> ProcessEvent` 到达真实监听函数。
+
+再次点击 `Add Dynamic` 会产生重复绑定；下一次广播调用两次。Reset后连续点击两次
+`Add Unique Dynamic`，第二次应在日志中返回 `AlreadyBound`，Live bindings保持1。这验证普通添加和
+唯一添加的重复策略。
+
+选择 `Character (mismatch demo)` 与 `ApplyDamage`，点击添加应返回 `SignatureMismatch`。`ApplyDamage`
+虽然是Callable，但只接收一个Int32并返回Int32，不能监听 `void(Int32, Int32)` 事件。失败绑定不能增加
+Live bindings。
+
+绑定Observer A两次、Observer B一次。在绑定表选中A的一行后，`Remove Selected`只删除该
+`FDelegateHandle`；保持Target下拉框为Observer A并点击 `Remove Target Bindings`，会删除A剩余的全部
+绑定，但保留B；`Clear All`则清空整个委托。三步分别验证精确解绑、按监听对象批量解绑和事件源整体
+清理。界面按钮名是 `Remove Target Bindings`，其底层调用为 `Delegate.RemoveAll(Target)`。
+
+重新绑定Observer A后，点击 `Destroy Target`。绑定表应显示Weak Target为Expired，但程序不崩溃；
+下一次Broadcast的Removed invalid为1，绑定从表格消失。它验证动态绑定不保存裸对象地址。
+
+最后Reset、绑定Observer A、点击 `Remove Target Root -> Request GC -> Run GC Safe Point`。Observer A
+被回收，而其他Inspector实验Fixture受临时Root保护。再次Broadcast同样应清理一个Expired绑定。这条
+流程把PFunction、动态委托、弱对象Handle和GC串成一条完整链路。
+
+## 14. 完整通过标准
 
 - 正确的 PFunction 调用返回结果并触发两个监听者。
 - Float 参数和缺失返回存储在执行前被拒绝且零副作用。
@@ -288,6 +320,8 @@ Mark-Sweep 可以回收引用计数无法处理的无 Root 循环；GC请求与�
 - GC 实验按 Root、强引用、弱引用和无 Root 循环规则回收对象。
 - GC请求保持对象Alive，多个请求原因正确合并，并只在Run Safe Point后被消费。
 - Collect Now可以和延迟调度形成明确对照，事件时间线与对象Handle状态一致。
+- Dynamic Multicast正确绑定匹配的PFunction，并拒绝Character的错误签名。
+- Add Dynamic允许重复，Add Unique Dynamic拒绝重复，Handle和RemoveAll作用范围正确。
+- 动态监听目标被显式销毁或GC回收后，Broadcast安全清理弱绑定。
 
-当前不测试动态委托配置。下一阶段先实现运行时 Dynamic Multicast Delegate，用“弱对象引用 +
-PFunction 名称”广播；稳定身份序列化与加载后的引用修复在随后阶段接入。
+当前不持久化动态委托绑定。稳定对象身份序列化与加载后的引用修复在阶段H接入。

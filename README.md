@@ -26,6 +26,8 @@ The current implementation can:
   independent runtime object graphs through one initialization path.
 - Bind type-safe native single-cast and multicast delegates, including generation-safe weak object
   listeners and Actor spawn/destroy lifecycle events.
+- Bind Callable reflected functions by weak object handle and function name through a signature-checked
+  dynamic multicast delegate, then broadcast through `ProcessEvent`.
 - Declare classes, properties, and functions beside native C++ members with `PCLASS`, `PPROPERTY`,
   and `PFUNCTION`; PicoHeaderTool generates the repetitive registration code before compilation.
 - Invoke reflected native functions through `PObject::ProcessEvent` with typed parameters, return
@@ -94,7 +96,7 @@ The current implementation can:
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-Debug and Release configurations build successfully, and all eleven CTest targets pass.
+Debug and Release configurations build successfully, and all twelve CTest targets pass.
 
 ## Architecture
 
@@ -380,10 +382,12 @@ Example commands:
 ```
 
 PicoInspector starts in its Native Delegate experiment. Use `Runtime Browser -> Functions` for
-generic `ProcessEvent` calls, or `Experiments` to inspect listener lifetime, broadcast logs, GC object
-graphs, and deferred requests consumed at a safe point. See the
+generic `ProcessEvent` calls, or `Experiments` to inspect native listener lifetime, dynamic PFunction
+bindings, broadcast logs, GC object graphs, and deferred requests consumed at a safe point. See the
 [visual verification guide](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md) for the test sequence
-and the purpose of every step. Its default UI scale is `1.4`; override it with values such as
+and the purpose of every step. In the Dynamic Multicast experiment, `Remove Selected` removes one
+delegate handle, `Remove Target Bindings` removes every binding owned by the selected target, and
+`Clear All` empties the delegate. Its default UI scale is `1.4`; override it with values such as
 `-uiscale=1.6` when needed.
 
 ## Build and Test
@@ -454,6 +458,7 @@ See:
 - [Reflection Authoring Guide](Docs/ReflectionAuthoringGuide.md)
 - [PicoHeaderTool](Docs/Month03_17_PicoHeaderTool.md)
 - [Mark-Sweep Garbage Collection](Docs/Month03_18_GarbageCollection.md)
+- [Dynamic Multicast Delegates](Docs/Month03_19_DynamicMulticastDelegates.md)
 - [Native Delegate Authoring Guide (Chinese)](Docs/DelegateAuthoringGuide.md)
 - [PicoInspector Developer Sandbox Plan (Chinese)](Docs/PicoInspector_DeveloperSandbox_Plan.zh-CN.md)
 - [PicoInspector Visual Verification Guide (Chinese)](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)

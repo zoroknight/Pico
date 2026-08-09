@@ -89,9 +89,9 @@ bool PFunction::ValidateCreatedMetadata(std::size_t ArgumentCount, bool bMethodI
     return true;
 }
 
-bool PFunction::IsValueCompatible(
+bool IsFunctionValueCompatible(
     const FFunctionValue& Value,
-    const FFunctionValueDescriptor& Descriptor) const
+    const FFunctionValueDescriptor& Descriptor)
 {
     switch (Descriptor.Type)
     {
@@ -115,7 +115,7 @@ bool PFunction::IsValueCompatible(
         return Object == nullptr
             || (ResolveObject(Object->GetHandle()) == Object
                 && !Object->IsBeginningDestroy()
-                && Object->IsA(Descriptor.ObjectClass));
+                && Object->IsA(Descriptor.ResolveObjectClass()));
     }
     }
     return false;
@@ -143,7 +143,7 @@ EFunctionInvokeResult PFunction::Invoke(
     }
     for (std::size_t Index = 0; Index < Arguments.size(); ++Index)
     {
-        if (!IsValueCompatible(Arguments[Index], Parameters[Index].Value))
+        if (!IsFunctionValueCompatible(Arguments[Index], Parameters[Index].Value))
         {
             return Parameters[Index].Value.Type == EFunctionValueType::Object
                 && std::holds_alternative<PObject*>(Arguments[Index])

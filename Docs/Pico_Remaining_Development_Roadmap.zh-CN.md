@@ -111,7 +111,7 @@ CDO / ObjectInitializer
 | G | Dynamic Multicast Delegate、签名校验、反射函数绑定和失效监听清理 | 可通过对象引用与函数名绑定多个 `PFunction`，并经 `ProcessEvent` 安全广播 |
 | H | 动态委托稳定引用序列化、引用修复、属性变化通知和编辑器事务适配 | `.pworld` 加载后恢复动态绑定；CDO、实例和反射属性修改均能正确通知 |
 
-阶段 A、B、C、D、D.1、E、F 已完成。CDO 与统一构造链见
+阶段 A、B、C、D、D.1、E、F、G 已完成。CDO 与统一构造链见
 [`Month03_13_ClassDefaultObjects.md`](Month03_13_ClassDefaultObjects.md)，默认子对象模板、继承、
 World 重建复用和编辑器限制见
 [`Month03_14_DefaultSubobjects.md`](Month03_14_DefaultSubobjects.md)，Native Delegate、广播变更语义和
@@ -123,7 +123,10 @@ Native Delegate 实验、Event Log、Reset 和可调 UI Scale 见
 Token 解析、生成文件、CMake 增量依赖和项目类迁移见
 [`Month03_17_PicoHeaderTool.md`](Month03_17_PicoHeaderTool.md)。Stop-the-world Mark-Sweep、强弱对象引用、
 Root Set、原生引用上报和 Inspector GC 实验见
-[`Month03_18_GarbageCollection.md`](Month03_18_GarbageCollection.md)。下一阶段为 G：Dynamic Multicast Delegate。
+[`Month03_18_GarbageCollection.md`](Month03_18_GarbageCollection.md)。动态多播委托、签名校验、
+广播快照、弱绑定清理和Inspector综合实验见
+[`Month03_19_DynamicMulticastDelegates.md`](Month03_19_DynamicMulticastDelegates.md)。下一阶段为 H：
+稳定引用序列化、引用修复、属性变化通知和编辑器事务适配。
 
 动态多播委托安排在 HeaderTool 与 GC 之后：运行时绑定保存“弱对象引用 + 函数名”，广播时通过
 `PClass::FindFunction` 和 `PObject::ProcessEvent` 调用；持久化不得保存本次运行的 `FObjectHandle`，

@@ -267,3 +267,30 @@ Details：通过 PProperty 读取和修改的实例属性
 8. 确认 `Mana`保持修改后的值。
 
 完成这个练习，就亲手走过了“C++ 成员变量变成运行时可观察、可编辑、可持久化属性”的完整链路。
+
+## 动态多播委托
+
+动态多播监听函数必须进入反射系统，并使用 `Callable`：
+
+```cpp
+PFUNCTION(Callable)
+void HandleHealthChanged(int32 OldHealth, int32 NewHealth);
+```
+
+声明、绑定和广播：
+
+```cpp
+TDynamicMulticastDelegate<void(int32, int32)> OnHealthChanged;
+
+FDynamicDelegateBindingResult Binding = OnHealthChanged.AddDynamic(
+    Observer,
+    FName("HandleHealthChanged"));
+
+FDynamicDelegateBroadcastReport Report =
+    OnHealthChanged.Broadcast(100, 75);
+```
+
+绑定时会校验函数存在、`Callable`、参数数量、参数类型和 `void` 返回。绑定保存弱对象Handle与函数名，
+广播时经 `FindFunction` 和 `ProcessEvent` 调用。监听对象被显式销毁或GC回收后，下一次广播会跳过并
+清理失效绑定。详细契约见
+[`Month03_19_DynamicMulticastDelegates.md`](Month03_19_DynamicMulticastDelegates.md)。

@@ -141,6 +141,7 @@ add_library(PicoObject STATIC
     Source/Runtime/Object/Private/Archive.cpp
     Source/Runtime/Object/Private/Class.cpp
     Source/Runtime/Object/Private/ClassRegistry.cpp
+    Source/Runtime/Object/Private/DynamicMulticastDelegate.cpp
     Source/Runtime/Object/Private/Function.cpp
     Source/Runtime/Object/Private/GarbageCollection.cpp
     Source/Runtime/Object/Private/Object.cpp
@@ -478,6 +479,8 @@ if(PICO_BUILD_INSPECTOR)
     endif()
 
     add_executable(PicoInspector
+        Source/Editor/PicoInspector/Private/DynamicDelegateExperiment.cpp
+        Source/Editor/PicoInspector/Private/DynamicDelegateExperiment.h
         Source/Editor/PicoInspector/Private/InspectorExperiment.h
         Source/Editor/PicoInspector/Private/GarbageCollectionExperiment.cpp
         Source/Editor/PicoInspector/Private/GarbageCollectionExperiment.h
@@ -671,6 +674,35 @@ else()
     target_compile_options(PicoGarbageCollectionTests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+pico_generate_reflection(
+    PICO_DYNAMIC_DELEGATE_TEST_GENERATED
+    "${PICO_ROOT_DIR}/Tests/DynamicDelegate/Public/Pico/Tests/DynamicDelegateListener.h"
+    "Pico/Tests/DynamicDelegateListener.h"
+    "Pico/Tests/DynamicDelegateListener.generated.h"
+    "Pico_Tests_DynamicDelegateListener_h"
+)
+
+add_executable(PicoDynamicDelegateTests
+    Tests/DynamicDelegate/Private/DynamicDelegateListener.cpp
+    Tests/DynamicDelegate/Private/Main.cpp
+    ${PICO_DYNAMIC_DELEGATE_TEST_GENERATED}
+)
+
+target_include_directories(PicoDynamicDelegateTests
+    PRIVATE
+        Tests/Common
+        Tests/DynamicDelegate/Public
+        ${PICO_GENERATED_DIR}
+)
+target_link_libraries(PicoDynamicDelegateTests PRIVATE PicoObject)
+set_target_properties(PicoDynamicDelegateTests PROPERTIES FOLDER "Tests/Object")
+
+if(MSVC)
+    target_compile_options(PicoDynamicDelegateTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoDynamicDelegateTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
     target_compile_options(PicoObjectTests PRIVATE /W4 /permissive-)
 else()
@@ -742,6 +774,7 @@ if(BUILD_TESTING)
     add_test(NAME PicoAssetImportTests COMMAND PicoAssetImportTests)
     add_test(NAME PicoObjectTests COMMAND PicoObjectTests)
     add_test(NAME PicoGarbageCollectionTests COMMAND PicoGarbageCollectionTests)
+    add_test(NAME PicoDynamicDelegateTests COMMAND PicoDynamicDelegateTests)
     add_test(NAME PicoEngineTests COMMAND PicoEngineTests)
     add_test(NAME PicoGameTests COMMAND PicoGameTests)
     if(PICO_BUILD_INSPECTOR)
@@ -761,6 +794,9 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoGarbageCollectionTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoDynamicDelegateTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoEngineTests PROPERTIES

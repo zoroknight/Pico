@@ -30,6 +30,25 @@ foreach(EXPECTED
     endif()
 endforeach()
 
+execute_process(
+    COMMAND "${PHT}"
+        --input "${FIXTURE_DIR}/FunctionOnlyReflectedType.h"
+        --header-output "${OUTPUT_DIR}/FunctionOnlyReflectedType.generated.h"
+        --source-output "${OUTPUT_DIR}/FunctionOnlyReflectedType.gen.cpp"
+        --include "FunctionOnlyReflectedType.h"
+        --file-id "FunctionOnlyReflectedType_h"
+    RESULT_VARIABLE FUNCTION_ONLY_RESULT
+)
+if(NOT FUNCTION_ONLY_RESULT EQUAL 0)
+    message(FATAL_ERROR "function-only fixture failed")
+endif()
+file(READ "${OUTPUT_DIR}/FunctionOnlyReflectedType.gen.cpp" FUNCTION_ONLY_SOURCE)
+if(FUNCTION_ONLY_SOURCE MATCHES "AddProperties"
+    OR NOT FUNCTION_ONLY_SOURCE MATCHES "PICO_ADD_FUNCTION\\(Functions, Notify"
+    OR NOT FUNCTION_ONLY_SOURCE MATCHES "return true;")
+    message(FATAL_ERROR "function-only generation did not skip the empty property collection")
+endif()
+
 file(TIMESTAMP "${VALID_SOURCE}" FIRST_TIMESTAMP "%s")
 execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 1)
 execute_process(
