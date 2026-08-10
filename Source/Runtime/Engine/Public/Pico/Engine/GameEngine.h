@@ -2,13 +2,13 @@
 
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Input/InputSystem.h"
+#include "Pico/Object/ObjectTypes.h"
 
 #include <filesystem>
-#include <memory>
 
 namespace Pico
 {
-class FGameInstance;
+class PGameInstance;
 class IGameModule;
 
 class FGameEngine
@@ -24,13 +24,16 @@ public:
     int Init();
     void Tick();
     void Exit();
+    bool LoadMap(
+        const std::filesystem::path& FilePath,
+        EWorldSerializationError* OutError = nullptr);
 
     bool ShouldExit() const;
     FEngineLoop& GetEngineLoop();
     const FEngineLoop& GetEngineLoop() const;
     FInputSystem& GetInputSystem();
     const FInputSystem& GetInputSystem() const;
-    FGameInstance* GetGameInstance() const;
+    PGameInstance* GetGameInstance() const;
     IGameModule* GetGameModule() const;
     const std::filesystem::path& GetDefaultMapPath() const;
 
@@ -40,10 +43,13 @@ public:
         std::filesystem::path& OutPath);
 
 private:
+    bool CreateGameInstance();
+    void DestroyGameInstance();
+
     FEngineLoop EngineLoop;
     FInputSystem InputSystem;
     IGameModule* GameModule = nullptr;
-    std::unique_ptr<FGameInstance> GameInstance;
+    FObjectHandle GameInstanceHandle;
     std::filesystem::path DefaultMapPath;
     bool bModuleStarted = false;
     bool bPreInitialized = false;

@@ -118,6 +118,7 @@ void BuildDefaultDockLayout(ImGuiID DockspaceId, const ImVec2& DockspaceSize)
     ImGui::DockBuilderDockWindow("Viewport", CenterNodeId);
     ImGui::DockBuilderDockWindow("Details", DetailsNodeId);
     ImGui::DockBuilderDockWindow("Content Browser", ContentBrowserNodeId);
+    ImGui::DockBuilderDockWindow("Message Log", ContentBrowserNodeId);
     ImGui::DockBuilderFinish(DockspaceId);
 }
 
@@ -242,6 +243,8 @@ void FPicoEditorApp::Draw()
         ImGui::SameLine();
         DrawEditMenu();
         ImGui::SameLine();
+        DrawViewMenu();
+        ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
         DrawToolbar();
@@ -264,6 +267,7 @@ void FPicoEditorApp::Draw()
     }
     DrawRenamePopup();
     DrawUnsavedChangesPopup();
+    DrawPlayValidationPopup();
     ImGui::End();
 
     if (ImGui::Begin("Scene Outliner"))
@@ -284,6 +288,8 @@ void FPicoEditorApp::Draw()
             [this](FEditorCommandResult Result) { ApplyCommandResult(std::move(Result)); });
     }
     ImGui::End();
+
+    DrawMessageLog();
 
     if (ImGui::Begin(
             "Viewport",
@@ -609,6 +615,10 @@ void FPicoEditorApp::DrawToolbar()
         if (ImGui::MenuItem("Cube"))
         {
             SpawnCubeActor();
+        }
+        if (ImGui::MenuItem("Player Start"))
+        {
+            SpawnPlayerStart();
         }
         if (ImGui::MenuItem("Camera"))
         {
@@ -954,6 +964,16 @@ void FPicoEditorApp::DrawEditMenu()
     ImGui::EndMenu();
 }
 
+void FPicoEditorApp::DrawViewMenu()
+{
+    if (!ImGui::BeginMenu("View"))
+    {
+        return;
+    }
+    ImGui::MenuItem("Message Log", nullptr, &bMessageLogOpen);
+    ImGui::EndMenu();
+}
+
 void FPicoEditorApp::DrawStatusBar()
 {
     if (Status.empty())
@@ -964,8 +984,117 @@ void FPicoEditorApp::DrawStatusBar()
 
     const ImVec4 Color = bStatusIsError
         ? ImVec4(0.95f, 0.42f, 0.35f, 1.0f)
-        : ImVec4(0.35f, 0.78f, 0.66f, 1.0f);
+        : (bStatusIsWarning
+            ? ImVec4(0.95f, 0.76f, 0.28f, 1.0f)
+            : ImVec4(0.35f, 0.78f, 0.66f, 1.0f));
     ImGui::TextColored(Color, "%s", Status.c_str());
+}
+
+void FPicoEditorApp::DrawMessageLog()
+{
+    if (!bMessageLogOpen)
+    {
+        return;
+    }
+    if (bFocusMessageLog)
+    {
+        ImGui::SetNextWindowFocus();
+        bFocusMessageLog = false;
+    }
+    if (ImGui::Begin("Message Log", &bMessageLogOpen))
+    {
+        if (ImGui::Button("Clear"))
+        {
+            Messages.clear();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("%zu message(s)", Messages.size());
+        ImGui::Separator();
+        if (ImGui::BeginChild(
+                "MessageLogEntries",
+                ImVec2(0.0f, 0.0f),
+                false,
+                ImGuiWindowFlags_HorizontalScrollbar))
+        {
+            for (const FEditorMessage& Message : Messages)
+            {
+                const ImVec4 Color = Message.Severity == EMessageSeverity::Error
+                    ? ImVec4(0.95f, 0.42f, 0.35f, 1.0f)
+                    : (Message.Severity == EMessageSeverity::Warning
+                        ? ImVec4(0.95f, 0.76f, 0.28f, 1.0f)
+                        : ImVec4(0.35f, 0.78f, 0.66f, 1.0f));
+                const char* Prefix = Message.Severity == EMessageSeverity::Error
+                    ? "[Error] "
+                    : (Message.Severity == EMessageSeverity::Warning
+                        ? "[Warning] " : "[Info] ");
+                ImGui::TextColored(Color, "%s%s", Prefix, Message.Text.c_str());
+            }
+        }
+        ImGui::EndChild();
+    }
+    ImGui::End();
+}
+
+void FPicoEditorApp::DrawPlayValidationPopup()
+{
+    if (bOpenPlayValidationPopup)
+    {
+        ImGui::OpenPopup("Play Validation");
+        bOpenPlayValidationPopup = false;
+    }
+    if (!ImGui::BeginPopupModal(
+            "Play Validation", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        return;
+    }
+
+    const ImVec4 Color = bPendingPlayBlocked
+        ? ImVec4(0.95f, 0.42f, 0.35f, 1.0f)
+        : (bPendingPlayWarning
+            ? ImVec4(0.95f, 0.76f, 0.28f, 1.0f)
+            : ImVec4(0.35f, 0.78f, 0.66f, 1.0f));
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 520.0f);
+    ImGui::TextColored(Color, "%s", PendingPlayValidation.c_str());
+    ImGui::PopTextWrapPos();
+
+    if (bPendingPlayNeedsSave)
+    {
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+            "Standalone Play runs in another process. Save the current World "
+            "explicitly so that process can load the same scene.");
+    }
+    ImGui::Separator();
+
+    if (bPendingPlayBlocked)
+    {
+        if (ImGui::Button("Close", ImVec2(110.0f, 0.0f)))
+        {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+        return;
+    }
+
+    const char* ConfirmLabel = bPendingPlayNeedsSave
+        ? "Save & Play"
+        : (bPendingPlayWarning ? "Play Anyway" : "Play");
+    if (ImGui::Button(ConfirmLabel, ImVec2(120.0f, 0.0f)))
+    {
+        if (!bPendingPlayNeedsSave || SaveWorld())
+        {
+            const std::string Validation = PendingPlayValidation;
+            bPendingPlayNeedsSave = false;
+            ImGui::CloseCurrentPopup();
+            LaunchGame(Validation);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(100.0f, 0.0f)))
+    {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void FPicoEditorApp::DrawRenamePopup()
@@ -1078,17 +1207,43 @@ void FPicoEditorApp::StartGame()
     }
 
     FinishInteractiveEdit();
-    if ((!WorldDocument.HasAssetPath() || WorldDocument.IsDirty())
-        && !SaveWorld())
-    {
-        return;
-    }
-
     if (!FPaths::HasProject())
     {
         SetStatus("Play requires an active Pico project", true);
         return;
     }
+
+    const FEditorCommandResult Validation =
+        CommandService.ValidateGameplayForPlay();
+    if (!Validation.bSucceeded)
+    {
+        SetStatus(Validation.Message, true);
+        PendingPlayValidation = Validation.Message;
+        bPendingPlayBlocked = true;
+        bPendingPlayWarning = false;
+        bPendingPlayNeedsSave = false;
+        bOpenPlayValidationPopup = true;
+        return;
+    }
+
+    const bool bWarning = Validation.Message.rfind("Gameplay warning:", 0) == 0;
+    const bool bNeedsSave =
+        !WorldDocument.HasAssetPath() || WorldDocument.IsDirty();
+    SetStatus(Validation.Message, false, bWarning);
+    if (bWarning || bNeedsSave)
+    {
+        PendingPlayValidation = Validation.Message;
+        bPendingPlayBlocked = false;
+        bPendingPlayWarning = bWarning;
+        bPendingPlayNeedsSave = bNeedsSave;
+        bOpenPlayValidationPopup = true;
+        return;
+    }
+    LaunchGame(Validation.Message);
+}
+
+void FPicoEditorApp::LaunchGame(const std::string& ValidationMessage)
+{
 
     FConfigFile ProjectConfig;
     ProjectConfig.Load(FPaths::GetProjectConfigFile("Pico.ini"));
@@ -1134,7 +1289,8 @@ void FPicoEditorApp::StartGame()
     }
     SetStatus(
         "Playing standalone game (process "
-            + std::to_string(GameProcess.GetProcessId()) + ")");
+            + std::to_string(GameProcess.GetProcessId()) + "); "
+            + ValidationMessage);
 }
 
 void FPicoEditorApp::StopGame(bool bUpdateStatus)
@@ -1187,6 +1343,12 @@ void FPicoEditorApp::SpawnCubeActor()
 {
     FinishInteractiveEdit();
     ApplyCommandResult(CommandService.SpawnActor(true));
+}
+
+void FPicoEditorApp::SpawnPlayerStart()
+{
+    FinishInteractiveEdit();
+    ApplyCommandResult(CommandService.SpawnPlayerStart());
 }
 
 void FPicoEditorApp::SpawnComponentActor(EEditorSceneComponentType Type)
@@ -1799,10 +1961,29 @@ void FPicoEditorApp::SelectAllActors()
     SetStatus("Selected " + std::to_string(Selection.Num()) + " Actor(s)");
 }
 
-void FPicoEditorApp::SetStatus(std::string Message, bool bIsError)
+void FPicoEditorApp::SetStatus(
+    std::string Message,
+    bool bIsError,
+    bool bIsWarning)
 {
     Status = std::move(Message);
     bStatusIsError = bIsError;
+    bStatusIsWarning = bIsWarning && !bIsError;
+    Messages.push_back({
+        bStatusIsError ? EMessageSeverity::Error
+            : (bStatusIsWarning ? EMessageSeverity::Warning
+                                : EMessageSeverity::Info),
+        Status
+    });
+    if (Messages.size() > 200)
+    {
+        Messages.erase(Messages.begin(), Messages.begin() + 50);
+    }
+    if (bStatusIsError || bStatusIsWarning)
+    {
+        bMessageLogOpen = true;
+        bFocusMessageLog = true;
+    }
 }
 
 void FPicoEditorApp::ApplyCommandResult(FEditorCommandResult Result)

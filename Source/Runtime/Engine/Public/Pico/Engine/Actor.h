@@ -2,6 +2,7 @@
 
 #include "Pico/Core/Math/Transform.h"
 #include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/TickFunction.h"
 #include "Pico/Object/ObjectDelegate.h"
 #include "Pico/Object/ReflectionMacros.h"
 
@@ -25,6 +26,8 @@ class PActor : public PObject
     PICO_DECLARE_CLASS(PActor, PObject)
 
 public:
+    FActorTickFunction PrimaryActorTick;
+
     PWorld* GetWorld() const;
     PLevel* GetLevel() const;
     PActor* GetOwner() const;
@@ -94,6 +97,7 @@ private:
 
     friend class PWorld;
     friend class FWorldAssetLoader;
+    friend class FActorTickFunction;
 
     std::vector<FObjectHandle> ComponentHandles;
     FObjectHandle RootComponentHandle;

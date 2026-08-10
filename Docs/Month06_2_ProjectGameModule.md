@@ -12,16 +12,20 @@ PicoSandboxGame main
   -> FGameEngine::PreInit
   -> FEngineLoop::Init
   -> IGameModule::StartupModule
+  -> select and initialize a reflected PGameInstance
   -> load the configured World
-  -> create and initialize FGameInstance
+  -> PGameInstance::OnWorldInitialized
   -> World and project Actor ticks
 ```
 
 Engine classes are registered by `FEngineLoop`. The project module starts after the object system
 and engine classes exist, but before World deserialization needs to resolve project class names.
-The game instance starts only after the active World has been replaced by the configured map.
+The project module returns a `PClass` derived from `PGameInstance`. `FGameEngine` constructs it through
+`NewObject` before map loading, roots it across map replacement, and sends explicit World lifecycle
+notifications after a replacement commits.
 
-Shutdown reverses the ownership order: GameInstance, project module, active World, object system.
+Shutdown cleans up and destroys the GameInstance, tears down the active World and object system, and
+only then shuts down the project module so native project code remains available during object cleanup.
 
 ## Targets
 
@@ -35,7 +39,7 @@ and launches that executable with the current project descriptor and `/Game/...`
 
 ## Minimal Gameplay
 
-`FSandboxGameInstance` spawns a reflected `PSandboxPawn` after map load and gives it the runtime input
+`PSandboxGameInstance` spawns a reflected `PSandboxPawn` from `OnWorldInitialized` and gives it the runtime input
 system. The Pawn creates a static-mesh root and consumes `MoveForward` and `MoveRight` during the
 existing Actor Tick. This proves that project code, reflection, World ownership, project assets,
 input mappings, and rendering all participate in one runtime path.

@@ -10,6 +10,7 @@
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/PlayerStart.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/SpringArmComponent.h"
@@ -559,6 +560,53 @@ void TestEditorCommandService(FTestRunner& Runner)
             && Lighting.DirectionalLight.bEnabled
             && Lighting.PointLightCount == 1,
         "The renderer gathers authored Directional and Point Lights from the scene");
+
+    const Pico::FEditorCommandResult NoStartValidation =
+        Commands.ValidateGameplayForPlay();
+    Runner.Expect(
+        NoStartValidation.bSucceeded
+            && NoStartValidation.Message.find("no PlayerStart") != std::string::npos,
+        "Play validation warns when a scene has no authored PlayerStart");
+
+    const Pico::FEditorCommandResult PlayerStartResult = Commands.SpawnPlayerStart();
+    Runner.Expect(
+        PlayerStartResult.bSucceeded
+            && Selection.Resolve() != nullptr
+            && Selection.Resolve()->IsA(Pico::PPlayerStart::StaticClass())
+            && static_cast<Pico::PPlayerStart*>(Selection.Resolve())
+                ->GetRootComponent() != nullptr,
+        "Command service transactionally creates and selects a PlayerStart");
+    auto* FirstPlayerStart = Selection.Resolve() != nullptr
+            && Selection.Resolve()->IsA(Pico::PPlayerStart::StaticClass())
+        ? static_cast<Pico::PPlayerStart*>(Selection.Resolve())
+        : nullptr;
+    if (FirstPlayerStart != nullptr)
+    {
+        FirstPlayerStart->SetPlayerStartId(7);
+    }
+    const Pico::FEditorCommandResult ValidGameplay =
+        Commands.ValidateGameplayForPlay();
+    Runner.Expect(
+        ValidGameplay.bSucceeded
+            && ValidGameplay.Message.find("passed") != std::string::npos,
+        "Play validation accepts a rooted PlayerStart with a unique ID");
+
+    const Pico::FEditorCommandResult SecondStartResult = Commands.SpawnPlayerStart();
+    auto* SecondPlayerStart = Selection.Resolve() != nullptr
+            && Selection.Resolve()->IsA(Pico::PPlayerStart::StaticClass())
+        ? static_cast<Pico::PPlayerStart*>(Selection.Resolve())
+        : nullptr;
+    if (SecondPlayerStart != nullptr)
+    {
+        SecondPlayerStart->SetPlayerStartId(7);
+    }
+    const Pico::FEditorCommandResult DuplicateStartValidation =
+        Commands.ValidateGameplayForPlay();
+    Runner.Expect(
+        SecondStartResult.bSucceeded
+            && DuplicateStartValidation.bSucceeded
+            && DuplicateStartValidation.Message.find("duplicate") != std::string::npos,
+        "Play validation warns about duplicate PlayerStart IDs without blocking Standalone");
 
     EngineLoop.Exit();
     Runner.Expect(

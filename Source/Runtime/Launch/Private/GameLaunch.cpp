@@ -1,10 +1,20 @@
 #include "Pico/Launch/GameLaunch.h"
 
 #include "Pico/Engine/GameEngine.h"
+#include "Pico/Engine/GameInstance.h"
+#include "Pico/Engine/GameModeBase.h"
+#include "Pico/Engine/GameStateBase.h"
+#include "Pico/Engine/LocalPlayer.h"
+#include "Pico/Engine/Pawn.h"
+#include "Pico/Engine/PlayerController.h"
+#include "Pico/Engine/PlayerState.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Render/SceneViewportRenderer.h"
 
 #include <GLFW/glfw3.h>
+#include <backends/imgui_impl_glfw.h>
+#include <backends/imgui_impl_opengl3.h>
+#include <imgui.h>
 
 #include <cstdio>
 #include <exception>
@@ -12,12 +22,211 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
 struct FWindowInputContext
 {
     Pico::FInputSystem* InputSystem = nullptr;
+};
+
+struct FGameplayDebugPanel
+{
+    void Update(Pico::FGameEngine& GameEngine)
+    {
+        Pico::PGameInstance* GameInstance = GameEngine.GetGameInstance();
+        Pico::PLocalPlayer* LocalPlayer = GameInstance != nullptr
+            ? GameInstance->GetPrimaryLocalPlayer()
+            : nullptr;
+        Pico::PPlayerController* Controller = LocalPlayer != nullptr
+            ? LocalPlayer->GetPlayerController()
+            : nullptr;
+        Pico::PWorld* World = GameEngine.GetEngineLoop().GetWorld();
+        Observe("World", World, WorldHandle);
+        Observe("GameMode", World != nullptr ? World->GetGameMode() : nullptr, GameModeHandle);
+        Observe("GameState", World != nullptr ? World->GetGameState() : nullptr, GameStateHandle);
+        Observe("LocalPlayer", LocalPlayer, LocalPlayerHandle);
+        Observe("PlayerController", Controller, ControllerHandle);
+        Observe("PlayerState", Controller != nullptr ? Controller->GetPlayerState() : nullptr, PlayerStateHandle);
+        Pico::PPawn* Pawn = Controller != nullptr ? Controller->GetPawn() : nullptr;
+        Observe("Pawn", Pawn, PawnHandle);
+        if (Pawn != nullptr)
+        {
+            LastPawnHandle = Pawn->GetHandle();
+        }
+    }
+
+    void Draw(Pico::FGameEngine& GameEngine)
+    {
+        if (!bVisible)
+        {
+            return;
+        }
+        ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(470.0f, 560.0f), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Gameplay Debug", &bVisible))
+        {
+            ImGui::End();
+            return;
+        }
+
+        Pico::PGameInstance* GameInstance = GameEngine.GetGameInstance();
+        Pico::PLocalPlayer* LocalPlayer = GameInstance != nullptr
+            ? GameInstance->GetPrimaryLocalPlayer()
+            : nullptr;
+        Pico::PPlayerController* Controller = LocalPlayer != nullptr
+            ? LocalPlayer->GetPlayerController()
+            : nullptr;
+        Pico::PPlayerState* PlayerState = Controller != nullptr
+            ? Controller->GetPlayerState()
+            : nullptr;
+        Pico::PPawn* Pawn = Controller != nullptr ? Controller->GetPawn() : nullptr;
+        Pico::PWorld* World = GameEngine.GetEngineLoop().GetWorld();
+
+        ImGui::TextUnformatted("Runtime object chain");
+        DrawObject("GameInstance", GameInstance);
+        DrawObject("LocalPlayer", LocalPlayer);
+        DrawObject("World", World);
+        DrawObject("GameMode", World != nullptr ? World->GetGameMode() : nullptr);
+        DrawObject("GameState", World != nullptr ? World->GetGameState() : nullptr);
+        DrawObject("PlayerController", Controller);
+        DrawObject("PlayerState", PlayerState);
+        DrawObject("Controlled Pawn", Pawn);
+        if (PlayerState != nullptr)
+        {
+            ImGui::Text("PlayerId: %d   Score: %.1f   Spectator: %s",
+                PlayerState->GetPlayerId(),
+                PlayerState->GetScore(),
+                PlayerState->IsSpectator() ? "yes" : "no");
+        }
+
+        ImGui::Separator();
+        const bool bCanRestart = World != nullptr
+            && World->GetGameMode() != nullptr
+            && Controller != nullptr;
+        if (!bCanRestart) ImGui::BeginDisabled();
+        if (ImGui::Button("Restart Player"))
+        {
+            World->GetGameMode()->RestartPlayer(Controller);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Destroy Pawn") && Pawn != nullptr)
+        {
+            Pawn->Destroy();
+        }
+        if (!bCanRestart) ImGui::EndDisabled();
+
+        const bool bCanUnPossess = Controller != nullptr && Pawn != nullptr;
+        if (!bCanUnPossess) ImGui::BeginDisabled();
+        if (ImGui::Button("UnPossess"))
+        {
+            Controller->UnPossess();
+            if (PlayerState != nullptr) PlayerState->SetIsSpectator(true);
+        }
+        if (!bCanUnPossess) ImGui::EndDisabled();
+        ImGui::SameLine();
+        Pico::PObject* LastPawnObject = Pico::ResolveObject(LastPawnHandle);
+        Pico::PPawn* AvailablePawn = LastPawnObject != nullptr
+                && LastPawnObject->IsA(Pico::PPawn::StaticClass())
+                && !static_cast<Pico::PPawn*>(LastPawnObject)->IsPendingDestroy()
+            ? static_cast<Pico::PPawn*>(LastPawnObject)
+            : nullptr;
+        const bool bCanPossess = Controller != nullptr
+            && Controller->GetPawn() == nullptr
+            && AvailablePawn != nullptr;
+        if (!bCanPossess) ImGui::BeginDisabled();
+        if (ImGui::Button("Possess Last Pawn"))
+        {
+            Controller->Possess(AvailablePawn);
+            if (PlayerState != nullptr) PlayerState->SetIsSpectator(false);
+        }
+        if (!bCanPossess) ImGui::EndDisabled();
+
+        if (ImGui::Button("Reload Map"))
+        {
+            GameEngine.LoadMap(GameEngine.GetDefaultMapPath());
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear Events"))
+        {
+            Events.clear();
+        }
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Lifecycle events");
+        ImGui::BeginChild("GameplayEvents", ImVec2(0.0f, 0.0f), true);
+        for (const std::string& Event : Events)
+        {
+            ImGui::TextUnformatted(Event.c_str());
+        }
+        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 2.0f)
+        {
+            ImGui::SetScrollHereY(1.0f);
+        }
+        ImGui::EndChild();
+        ImGui::End();
+    }
+
+    bool bVisible = true;
+
+private:
+    static void DrawObject(const char* Label, Pico::PObject* Object)
+    {
+        if (Object == nullptr)
+        {
+            ImGui::TextDisabled("%-18s <none>", Label);
+            return;
+        }
+        const Pico::FObjectHandle Handle = Object->GetHandle();
+        ImGui::Text("%-18s %s [%u:%u]",
+            Label,
+            Object->GetName().ToString().c_str(),
+            Handle.Index,
+            Handle.Serial);
+    }
+
+    void Observe(
+        const char* Label,
+        Pico::PObject* Object,
+        Pico::FObjectHandle& Previous)
+    {
+        const Pico::FObjectHandle Current = Object != nullptr
+            ? Object->GetHandle()
+            : Pico::FObjectHandle {};
+        if (Current == Previous)
+        {
+            return;
+        }
+        if (Previous.IsValid())
+        {
+            Events.emplace_back(std::string(Label) + " released ["
+                + std::to_string(Previous.Index) + ":"
+                + std::to_string(Previous.Serial) + "]");
+        }
+        if (Object != nullptr)
+        {
+            Events.emplace_back(std::string(Label) + " -> "
+                + Object->GetName().ToString() + " ["
+                + std::to_string(Current.Index) + ":"
+                + std::to_string(Current.Serial) + "]");
+        }
+        Previous = Current;
+        if (Events.size() > 128)
+        {
+            Events.erase(Events.begin(), Events.begin() + 32);
+        }
+    }
+
+    std::vector<std::string> Events;
+    Pico::FObjectHandle WorldHandle;
+    Pico::FObjectHandle GameModeHandle;
+    Pico::FObjectHandle GameStateHandle;
+    Pico::FObjectHandle LocalPlayerHandle;
+    Pico::FObjectHandle ControllerHandle;
+    Pico::FObjectHandle PlayerStateHandle;
+    Pico::FObjectHandle PawnHandle;
+    Pico::FObjectHandle LastPawnHandle;
 };
 
 std::filesystem::path FindProjectFile(
@@ -170,6 +379,9 @@ int RunPicoGame(
     FGameEngine GameEngine(GameModule);
     FSceneViewportRenderer Renderer;
     bool bRendererInitialized = false;
+    bool bImGuiContextCreated = false;
+    bool bImGuiGlfwInitialized = false;
+    bool bImGuiOpenGLInitialized = false;
     int ExitCode = 1;
 
     try
@@ -179,6 +391,26 @@ int RunPicoGame(
         {
             throw std::runtime_error("scene renderer initialization failed");
         }
+
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        bImGuiContextCreated = true;
+        ImGuiIO& ImGuiIO = ImGui::GetIO();
+        const std::filesystem::path InterfaceFont = "C:/Windows/Fonts/segoeui.ttf";
+        if (std::filesystem::is_regular_file(InterfaceFont))
+        {
+            ImGuiIO.FontDefault = ImGuiIO.Fonts->AddFontFromFileTTF(
+                InterfaceFont.string().c_str(), 20.0f);
+        }
+        if (ImGuiIO.FontDefault == nullptr)
+        {
+            ImFontConfig FontConfig;
+            FontConfig.SizePixels = 20.0f;
+            ImGuiIO.FontDefault = ImGuiIO.Fonts->AddFontDefault(&FontConfig);
+        }
+        ImGui::StyleColorsDark();
+        ImGui::GetStyle().WindowRounding = 3.0f;
+        ImGui::GetStyle().FrameRounding = 2.0f;
 
         const std::filesystem::path ProjectFile =
             FindProjectFile(Argc, Argv, DefaultProjectFile);
@@ -196,6 +428,16 @@ int RunPicoGame(
         glfwSetScrollCallback(Window, &OnScroll);
         glfwSetWindowFocusCallback(Window, &OnFocus);
 
+        bImGuiGlfwInitialized = ImGui_ImplGlfw_InitForOpenGL(Window, true);
+        bImGuiOpenGLInitialized = ImGui_ImplOpenGL3_Init("#version 130");
+        if (!bImGuiGlfwInitialized || !bImGuiOpenGLInitialized)
+        {
+            throw std::runtime_error("game debug UI initialization failed");
+        }
+
+        FGameplayDebugPanel GameplayDebug;
+        bool bF1WasDown = false;
+
         while (ExitCode == 0
             && !glfwWindowShouldClose(Window)
             && !GameEngine.ShouldExit())
@@ -203,7 +445,14 @@ int RunPicoGame(
             FInputSystem& Input = GameEngine.GetInputSystem();
             Input.BeginFrame();
             glfwPollEvents();
+            const bool bF1Down = glfwGetKey(Window, GLFW_KEY_F1) == GLFW_PRESS;
+            if (bF1Down && !bF1WasDown)
+            {
+                GameplayDebug.bVisible = !GameplayDebug.bVisible;
+            }
+            bF1WasDown = bF1Down;
             GameEngine.Tick();
+            GameplayDebug.Update(GameEngine);
 
             int Width = 0;
             int Height = 0;
@@ -226,6 +475,13 @@ int RunPicoGame(
                 Renderer.PresentToBackBuffer(
                     static_cast<uint32>(Width),
                     static_cast<uint32>(Height));
+
+                ImGui_ImplOpenGL3_NewFrame();
+                ImGui_ImplGlfw_NewFrame();
+                ImGui::NewFrame();
+                GameplayDebug.Draw(GameEngine);
+                ImGui::Render();
+                ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
                 glfwSwapBuffers(Window);
             }
             Input.EndFrame();
@@ -248,6 +504,9 @@ int RunPicoGame(
     {
         Renderer.Shutdown();
     }
+    if (bImGuiOpenGLInitialized) ImGui_ImplOpenGL3_Shutdown();
+    if (bImGuiGlfwInitialized) ImGui_ImplGlfw_Shutdown();
+    if (bImGuiContextCreated) ImGui::DestroyContext();
     glfwDestroyWindow(Window);
     glfwTerminate();
     return ExitCode;

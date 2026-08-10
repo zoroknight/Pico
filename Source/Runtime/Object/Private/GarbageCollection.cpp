@@ -1,6 +1,7 @@
 #include "Pico/Object/GarbageCollection.h"
 
 #include "Pico/Object/ObjectRegistry.h"
+#include "Pico/Core/GameThread.h"
 
 namespace Pico
 {
@@ -15,11 +16,13 @@ EGarbageCollectionReason& GetRequestedReasons()
 
 bool AddToRoot(PObject* Object)
 {
+    if (!CheckGameThread("AddToRoot")) return false;
     return FObjectRegistry::AddToRoot(Object);
 }
 
 bool RemoveFromRoot(PObject* Object)
 {
+    if (!CheckGameThread("RemoveFromRoot")) return false;
     return FObjectRegistry::RemoveFromRoot(Object);
 }
 
@@ -35,6 +38,7 @@ bool IsGarbageCollecting()
 
 void RequestGarbageCollection(EGarbageCollectionReason Reason)
 {
+    if (!CheckGameThread("RequestGarbageCollection")) return;
     if (Reason != EGarbageCollectionReason::None)
     {
         GetRequestedReasons() = GetRequestedReasons() | Reason;
@@ -53,6 +57,7 @@ EGarbageCollectionReason GetPendingGarbageCollectionReasons()
 
 bool CollectGarbageIfRequested(FGarbageCollectionResult* OutResult)
 {
+    if (!CheckGameThread("CollectGarbageIfRequested")) return false;
     if (!IsGarbageCollectionRequested())
     {
         return false;
@@ -68,11 +73,13 @@ bool CollectGarbageIfRequested(FGarbageCollectionResult* OutResult)
 
 void ResetGarbageCollectionRequests()
 {
+    if (IsGameThreadInitialized() && !CheckGameThread("ResetGarbageCollectionRequests")) return;
     GetRequestedReasons() = EGarbageCollectionReason::None;
 }
 
 FGarbageCollectionResult CollectGarbage()
 {
+    if (!CheckGameThread("CollectGarbage")) return {};
     const EGarbageCollectionReason ReasonsAtStart = GetRequestedReasons();
     GetRequestedReasons() = EGarbageCollectionReason::None;
     FGarbageCollectionResult Result = FObjectRegistry::CollectGarbage();

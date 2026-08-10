@@ -725,6 +725,10 @@ bool CaptureWorld(
                 ReportError(OutError, EWorldSerializationError::InvalidObjectGraph);
                 return false;
             }
+            if (HasAnyFlags(Actor->GetFlags(), EObjectFlags::Transient))
+            {
+                continue;
+            }
             if (!AddObjectRecord(*Actor, LevelId, Data, ObjectIds, OutError))
             {
                 return false;
@@ -775,6 +779,11 @@ bool CaptureWorld(
     {
         for (PActor* Actor : Level->GetActors())
         {
+            if (Actor == nullptr
+                || HasAnyFlags(Actor->GetFlags(), EObjectFlags::Transient))
+            {
+                continue;
+            }
             if (PSceneComponent* RootComponent = Actor->GetRootComponent())
             {
                 const auto RootId = ObjectIds.find(RootComponent);

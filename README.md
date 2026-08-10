@@ -19,8 +19,25 @@ The current implementation can:
 - Launch a standalone `PicoGame` runtime with frame-based input, configurable Action/Axis mappings,
   and a project default map or command-line map override.
 - Build a project-specific `PicoSandboxGame` runtime whose statically linked Game Module registers
-  native project classes before map loading and creates a project GameInstance afterward.
-- Spawn a reflected project Pawn that consumes mapped WASD input through the normal World/Actor Tick.
+  native project classes before map loading and selects a reflected project `PGameInstance` class.
+- Keep object creation, destruction, GC, reflected property writes, and World ticking on an explicit
+  Game Thread, with worker-thread misuse rejected at the API boundary.
+- Schedule Actor and ActorComponent updates through `FTickFunction`, four ordered TickGroups,
+  same-World prerequisites, runtime enable/disable, and tick intervals.
+- Construct a rooted `PGameInstance` through `PClass/NewObject` and notify it across Init, map load,
+  Tick, World cleanup, and engine Shutdown.
+- Model the first UE-inspired Gameplay Framework layer with persistent `PLocalPlayer`, World-owned
+  GameMode/GameState, Controller/PlayerController, PlayerState, Pawn, and scene-authored PlayerStart.
+- Configure project Gameplay classes on the GameMode CDO, keep runtime rule Actors transient, and
+  preserve PlayerStart through normal editor transactions and `.pworld` reconstruction.
+- Run Standalone players through `PPlayer`, GameMode Login/PostLogin, PlayerState registration,
+  RestartPlayer, and paired Possess/UnPossess lifecycle operations.
+- Route mapped WASD input through a project PlayerController to its possessed Pawn, while retaining
+  GameInstance and LocalPlayer and rebuilding World-owned Gameplay objects across map replacement.
+- Inspect the live Gameplay object chain, restart/destroy/repossess its Pawn, and reload the map from
+  the standalone runtime's `Gameplay Debug` panel; inspect PlayerStart shape and validation in editor.
+- Create PlayerStart from the editor toolbar, review persistent green/yellow/red diagnostics in
+  `Message Log`, and explicitly confirm `Save & Play` before a dirty World is launched out of process.
 - Create reflected native objects through `PClass` and `NewObject`.
 - Give every registered class a CDO, declare inherited default-subobject templates, and materialize
   independent runtime object graphs through one initialization path.
@@ -32,8 +49,8 @@ The current implementation can:
   and function names, then restore them after the new runtime object graph exists.
 - Route reflected writes through pre/post property notifications with explicit ValueSet, Interactive,
   Load, and UndoRedo sources; CDO edits affect future instances without overwriting live objects.
-- Complete the third project-month object-system milestone with full Debug and Release test coverage;
-  the next milestone is the UE-inspired Gameplay Framework.
+- Complete the third project-month object-system milestone and the first three weeks of the fourth
+  project month, including Game Thread/Tick scheduling and a runnable UE-inspired player lifecycle.
 - Declare classes, properties, and functions beside native C++ members with `PCLASS`, `PPROPERTY`,
   and `PFUNCTION`; PicoHeaderTool generates the repetitive registration code before compilation.
 - Invoke reflected native functions through `PObject::ProcessEvent` with typed parameters, return
@@ -148,8 +165,9 @@ PicoSandboxGame
 | `PicoHeaderTool` | Token-based parser and build-time generator for constrained native reflection annotations |
 | `PicoSandboxModule` | Project classes, Game Module startup, GameInstance creation, reflection, serialization, and tests |
 
-The runtime modules do not depend on ImGui. `PicoCore`, `PicoAsset`, `PicoObject`, and `PicoEngine` also remain
-independent of GLFW and OpenGL.
+The core runtime modules `PicoCore`, `PicoAsset`, `PicoObject`, and `PicoEngine` remain independent
+of ImGui, GLFW, and OpenGL. The reusable `PicoGameRuntime` launch layer uses GLFW, OpenGL, and ImGui
+for the standalone window, rendering, and Development Gameplay Debug overlay.
 
 ## Runtime Object Model
 
@@ -179,6 +197,30 @@ PWorld
             -> PCubeComponent
             -> PStaticMeshComponent
 ```
+
+The current standalone player chain is:
+
+```text
+FGameEngine
+  -> PGameInstance                         persists across map replacement
+    -> PLocalPlayer : PPlayer              persists across map replacement
+      -> PPlayerController                 belongs to the current World
+        -> PPlayerState                    registered in the current GameState
+        -> PPawn                           controlled through Possess
+
+PWorld
+  -> PGameModeBase                         Login, Logout, RestartPlayer and rules
+  -> PGameStateBase                        shared World state and PlayerState list
+  -> PLevel
+    -> PPlayerStart                        authored spawn transform
+```
+
+GameMode logs each LocalPlayer in, creates its Controller and PlayerState, registers the PlayerState
+with GameState, chooses a PlayerStart, spawns the configured default Pawn, and calls `Possess`.
+`UnPossess` only removes the bidirectional control relationship; it does not destroy the Pawn.
+`RestartPlayer` replaces the Pawn while preserving the Controller and PlayerState. Map replacement
+preserves GameInstance and LocalPlayer, cleans up every old World-owned Gameplay object, then logs
+the persistent LocalPlayer into the new World and creates a fresh Controller, PlayerState, and Pawn.
 
 `FObjectRegistry` owns object memory. Handles do not extend lifetime, and stale handles resolve to
 `nullptr`. Outer defines naming and deterministic destruction order and forms a child-to-parent GC
@@ -260,10 +302,11 @@ The project runtime reads `[Game] DefaultMap` and the Action/Axis mappings in `[
 `-map=/Game/Maps/Example.pworld` overrides the default map, and `-frames=N` supports automated
 smoke runs. The generic `PicoGame` target remains available for projects without native code.
 
-The editor toolbar's green triangle saves the current World when needed and launches this standalone
-runtime with the current document's `/Game/...` map path. While it is running, the control becomes
-a red square that stops the game process. Tooltips identify both controls; closing either process is
-detected and the editor returns to its ready state.
+The editor toolbar's green triangle launches this standalone runtime with the current document's
+`/Game/...` map path. A dirty or untitled World opens an explicit `Save & Play` confirmation because
+the child process can only load scene data from disk; Play never silently overwrites the document.
+While the game is running, the control becomes a red square that stops the process. Tooltips identify
+both controls; closing either process is detected and the editor returns to its ready state.
 
 ## Editor Controls
 
@@ -276,6 +319,8 @@ GameWorld
 
 - Use `Add > Empty Actor` to create an editor-authored Actor with `DefaultSceneRoot`.
 - Use `Add > Cube` to create an Actor whose renderable `PCubeComponent` is also its root.
+- Use `Add > Player Start` to create the Gameplay spawn point. The same command is available from
+  the World or Level context menu under `Add Actor`; the viewport displays its capsule and direction.
 - Use `Add > Camera`, `Spring Arm`, `Directional Light`, or `Point Light` to create reflected,
   transaction-backed scene actors. The same types are available under `Add Component`.
 - To build a camera rig, select a Spring Arm component and add a Camera component. Pico attaches
@@ -357,6 +402,11 @@ also be opened from the Content Browser. The window title marks dirty documents 
 New, Open, and Exit offer save/discard/cancel protection. Failed loads preserve the current World
 and document identity; safe saves use temporary replacement and retain a `.bak` of overwritten files.
 Saving scene data never rewrites C++ source.
+
+The bottom `Message Log` records editor operations and Play validation with green Info, yellow
+Warning, and red Error entries. Its `Clear` button and message count remain fixed while the entries
+scroll independently. Reopen the panel through `View > Message Log`. Missing PlayerStart and
+duplicate IDs allow `Play Anyway`; invalid PlayerStart scene roots block Play.
 
 Editor panel layout is separate from scene data and persists in
 `Projects/<ProjectName>/Saved/Editor/PicoEditorLayout.ini`.
@@ -477,6 +527,9 @@ See:
 - [Month 4 Property Transactions](Docs/Month04_10_EditorPropertyTransactions.md)
 - [Month 4 Editor Clipboard](Docs/Month04_11_EditorClipboard.md)
 - [Project Game Module and Runtime Target](Docs/Month06_2_ProjectGameModule.md)
+- [Game Thread, Tick Scheduling, and PGameInstance](Docs/Month07_1_GameThreadTickAndGameInstance.md)
+- [Gameplay Framework Types and Ownership](Docs/Month07_2_GameplayFrameworkTypes.md)
+- [Standalone Login, Possess, and Gameplay Debug](Docs/Month07_3_StandaloneLoginPossessAndGameplayDebug.md)
 - [Class Default Objects and Unified Construction](Docs/Month03_13_ClassDefaultObjects.md)
 - [Default Subobject Templates](Docs/Month03_14_DefaultSubobjects.md)
 - [Native Delegates and Weak Object Binding](Docs/Month03_15_NativeDelegates.md)
@@ -484,11 +537,15 @@ See:
 
 ## Roadmap
 
-The asset-driven editor, imported static meshes, materials, textures, PBR rendering, standalone Play,
-and the first project Game Module/GameInstance path are complete. The remaining learning path is:
+The asset-driven editor, rendering path, standalone Play, reflected GameInstance lifecycle, explicit
+Game Thread boundary, TickFunction scheduler, Gameplay type ownership, Standalone Login/PostLogin,
+Possess/UnPossess, RestartPlayer, map replacement, and runtime Gameplay Debug are complete through
+project month 4 week 3.
+The remaining learning path is:
 
-- A UE-inspired Gameplay Framework with GameMode, GameState, PlayerController, PlayerState, Pawn,
-  Character, and movement components
+- MatchState, Gameplay lifecycle delegates, and editor Events/Bindings to finish the current
+  UE-inspired Gameplay Framework milestone
+- Character and movement components with one authoritative movement entry point
 - Jolt physics, character movement, and a small animation integration
 - Replication, RPC, transform synchronization, client prediction, and correction
 - Dedicated-server/WAN validation, Cook, Package, and a standalone Windows build

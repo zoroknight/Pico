@@ -25,6 +25,7 @@ add_library(PicoCore STATIC
     Source/Runtime/Core/Private/CommandLine.cpp
     Source/Runtime/Core/Private/Config.cpp
     Source/Runtime/Core/Private/Delegate.cpp
+    Source/Runtime/Core/Private/GameThread.cpp
     Source/Runtime/Core/Private/Log.cpp
     Source/Runtime/Core/Private/Math/Math.cpp
     Source/Runtime/Core/Private/Name.cpp
@@ -253,16 +254,27 @@ add_library(PicoEngine STATIC
     Source/Runtime/Engine/Private/CameraComponent.cpp
     Source/Runtime/Engine/Private/CubeComponent.cpp
     Source/Runtime/Engine/Private/DirectionalLightComponent.cpp
+    Source/Runtime/Engine/Private/Controller.cpp
     Source/Runtime/Engine/Private/EngineLoop.cpp
     Source/Runtime/Engine/Private/GameInstance.cpp
     Source/Runtime/Engine/Private/GameEngine.cpp
+    Source/Runtime/Engine/Private/GameModeBase.cpp
+    Source/Runtime/Engine/Private/GameStateBase.cpp
     Source/Runtime/Engine/Private/Level.cpp
     Source/Runtime/Engine/Private/LightComponent.cpp
+    Source/Runtime/Engine/Private/LocalPlayer.cpp
+    Source/Runtime/Engine/Private/Pawn.cpp
+    Source/Runtime/Engine/Private/Player.cpp
         Source/Runtime/Engine/Private/PointLightComponent.cpp
         Source/Runtime/Engine/Private/SpringArmComponent.cpp
     Source/Runtime/Engine/Private/PrimitiveComponent.cpp
+    Source/Runtime/Engine/Private/PlayerController.cpp
+    Source/Runtime/Engine/Private/PlayerStart.cpp
+    Source/Runtime/Engine/Private/PlayerState.cpp
     Source/Runtime/Engine/Private/SceneComponent.cpp
     Source/Runtime/Engine/Private/StaticMeshComponent.cpp
+    Source/Runtime/Engine/Private/TickFunction.cpp
+    Source/Runtime/Engine/Private/TickTaskManager.cpp
     Source/Runtime/Engine/Private/World.cpp
     Source/Runtime/Engine/Private/WorldSerialization.cpp
 )
@@ -370,6 +382,29 @@ add_executable(PicoGame
     Source/Programs/PicoGame/Private/Main.cpp
 )
 
+add_library(PicoImGui STATIC
+    ThirdParty/ImGui/imgui.cpp
+    ThirdParty/ImGui/imgui_draw.cpp
+    ThirdParty/ImGui/imgui_tables.cpp
+    ThirdParty/ImGui/imgui_widgets.cpp
+    ThirdParty/ImGui/backends/imgui_impl_glfw.cpp
+    ThirdParty/ImGui/backends/imgui_impl_opengl3.cpp
+)
+
+target_include_directories(PicoImGui
+    PUBLIC
+        ThirdParty/ImGui
+        ThirdParty/ImGui/backends
+)
+
+target_link_libraries(PicoImGui
+    PUBLIC
+        glfw
+        OpenGL::GL
+)
+
+set_target_properties(PicoImGui PROPERTIES FOLDER "ThirdParty")
+
 add_library(PicoGameRuntime STATIC
     Source/Runtime/Launch/Private/GameLaunch.cpp
 )
@@ -379,7 +414,7 @@ target_include_directories(PicoGameRuntime
         Source/Runtime/Launch/Public
 )
 
-target_link_libraries(PicoGameRuntime PUBLIC glfw PicoRender)
+target_link_libraries(PicoGameRuntime PUBLIC glfw PicoImGui PicoRender)
 set_target_properties(PicoGameRuntime PROPERTIES FOLDER "Pico")
 
 if(MSVC)
@@ -405,29 +440,6 @@ else()
 endif()
 
 if(PICO_BUILD_INSPECTOR)
-    add_library(PicoImGui STATIC
-        ThirdParty/ImGui/imgui.cpp
-        ThirdParty/ImGui/imgui_draw.cpp
-        ThirdParty/ImGui/imgui_tables.cpp
-        ThirdParty/ImGui/imgui_widgets.cpp
-        ThirdParty/ImGui/backends/imgui_impl_glfw.cpp
-        ThirdParty/ImGui/backends/imgui_impl_opengl3.cpp
-    )
-
-    target_include_directories(PicoImGui
-        PUBLIC
-            ThirdParty/ImGui
-            ThirdParty/ImGui/backends
-    )
-
-    target_link_libraries(PicoImGui
-        PUBLIC
-            glfw
-            OpenGL::GL
-    )
-
-    set_target_properties(PicoImGui PROPERTIES FOLDER "ThirdParty")
-
     add_library(PicoImGuizmo STATIC
         ThirdParty/ImGuizmo/src/ImGuizmo.cpp
     )

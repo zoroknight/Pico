@@ -12,8 +12,10 @@ add_library(PicoSandboxModule STATIC
     Source/Private/SandboxCharacter.cpp
     Source/Private/SandboxEntity.cpp
     Source/Private/SandboxGameInstance.cpp
+    Source/Private/SandboxGameMode.cpp
     Source/Private/SandboxModule.cpp
     Source/Private/SandboxPawn.cpp
+    Source/Private/SandboxPlayerController.cpp
     Source/Private/SandboxSession.cpp
     ${PICO_SANDBOX_PAWN_GENERATED}
 )

@@ -3,14 +3,14 @@
 #include "Pico/Core/AssetPath.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
-#include "Pico/Input/InputSystem.h"
 #include "Pico/Object/ObjectInitializer.h"
 
 namespace PicoSandbox
 {
 PSandboxPawn::PSandboxPawn(const Pico::FObjectConstructionParams& Params)
-    : PActor(Params)
+    : PPawn(Params)
 {
+    PrimaryActorTick.SetCanEverTick(false);
 }
 
 bool PSandboxPawn::DefineDefaultSubobjects(Pico::FObjectInitializer& Initializer)
@@ -37,31 +37,28 @@ bool PSandboxPawn::DefineDefaultSubobjects(Pico::FObjectInitializer& Initializer
         && Initializer.AttachSubobject(Mesh, Root);
 }
 
-void PSandboxPawn::SetInputSystem(Pico::FInputSystem* InInputSystem)
-{
-    InputSystem = InInputSystem;
-}
-
 float PSandboxPawn::GetMoveSpeed() const
 {
     return MoveSpeed;
 }
 
-void PSandboxPawn::Tick(float DeltaSeconds)
+void PSandboxPawn::MoveFromInput(
+    float Forward,
+    float Right,
+    float DeltaSeconds)
 {
-    if (InputSystem == nullptr)
-    {
-        return;
-    }
+    MoveInWorldDirection(Pico::FVector3(Forward, Right, 0.0f), DeltaSeconds);
+}
 
-    const float Forward = InputSystem->GetAxisValue("MoveForward");
-    const float Right = InputSystem->GetAxisValue("MoveRight");
-    const Pico::FVector3 Direction(Forward, Right, 0.0f);
-    if (!Direction.IsNearlyZero())
+void PSandboxPawn::MoveInWorldDirection(
+    const Pico::FVector3& WorldDirection,
+    float DeltaSeconds)
+{
+    if (!WorldDirection.IsNearlyZero())
     {
         SetActorLocation(
             GetActorLocation()
-                + Direction.GetSafeNormal() * MoveSpeed * DeltaSeconds);
+                + WorldDirection.GetSafeNormal() * MoveSpeed * DeltaSeconds);
     }
 }
 }

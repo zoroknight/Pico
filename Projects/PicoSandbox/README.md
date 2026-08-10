@@ -106,8 +106,8 @@ Without PicoHeaderTool, these declarations are real C++ code rather than annotat
 ## Game Module And Registration
 
 The project owns both its reusable persistence-class registration entry point and its Game Module.
-The module registers every project class before the startup map is loaded, then creates the
-project-specific GameInstance:
+The module registers every project class before the startup map is loaded, then selects the
+project-specific reflected GameInstance class:
 
 ```cpp
 bool RegisterSandboxClasses()
@@ -118,18 +118,50 @@ bool RegisterSandboxClasses()
 
 bool FPicoSandboxGameModule::StartupModule()
 {
-    return RegisterSandboxClasses() && PSandboxPawn::RegisterClass();
+    return RegisterSandboxClasses()
+        && PSandboxPawn::RegisterClass()
+        && PSandboxGameMode::RegisterClass()
+        && PSandboxGameInstance::RegisterClass();
 }
 
-std::unique_ptr<Pico::FGameInstance> FPicoSandboxGameModule::CreateGameInstance()
+const Pico::PClass* FPicoSandboxGameModule::GetGameInstanceClass() const
 {
-    return std::make_unique<FSandboxGameInstance>();
+    return PSandboxGameInstance::StaticClass();
+}
+
+const Pico::PClass* FPicoSandboxGameModule::GetGameModeClass() const
+{
+    return PSandboxGameMode::StaticClass();
 }
 ```
+
+After registration, `PSandboxGameMode` configures `PSandboxPlayerController` and `PSandboxPawn` as
+its default Gameplay classes on the GameMode CDO. The engine logs each `PLocalPlayer` in through
+GameMode, creates the PlayerController and PlayerState, spawns a Pawn at PlayerStart, and calls
+`Possess`. `PSandboxPlayerController` reads mapped input and drives its current `PSandboxPawn`, so
+the project GameInstance no longer creates or controls a Pawn directly.
 
 Register base classes before derived classes. `PicoSandboxGame` statically links this module and
 passes it to `PicoGameRuntime`; the engine remains unaware of Sandbox types and contains no
 project-specific special case.
+
+## Gameplay Runtime Verification
+
+Run `PicoSandboxGame` and use these controls:
+
+| Control | Result |
+| --- | --- |
+| `W/A/S/D` | The Sandbox PlayerController moves its possessed Pawn relative to the active game camera |
+| `R` | GameMode restarts the same player with a new Pawn at PlayerStart |
+| `F1` | Show or hide the `Gameplay Debug` panel |
+| `UnPossess` | Keep the Pawn but detach it from the Controller |
+| `Possess Last Pawn` | Reattach the last live Pawn |
+| `Destroy Pawn` | Destroy only the current Pawn |
+| `Restart Player` | Spawn and possess a replacement Pawn without replacing PlayerController/PlayerState |
+| `Reload Map` | Preserve GameInstance/LocalPlayer and rebuild World-owned Gameplay objects |
+
+The complete purpose of each check is documented in
+[`Docs/Month07_3_StandaloneLoginPossessAndGameplayDebug.md`](../../Docs/Month07_3_StandaloneLoginPossessAndGameplayDebug.md).
 
 ## Persistence Asset
 

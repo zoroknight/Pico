@@ -7,6 +7,10 @@
 #include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Engine/GameInstance.h"
 #include "Pico/Engine/GameModule.h"
+#include "Pico/Engine/GameModeBase.h"
+#include "Pico/Engine/World.h"
+#include "Pico/Object/Class.h"
+#include "Pico/Object/ObjectGlobals.h"
 
 #include <string>
 
@@ -81,8 +85,14 @@ int FGameEngine::Init()
         bModuleStarted = true;
     }
 
+    if (!CreateGameInstance())
+    {
+        PICO_LOG(LogEngine, Error, "Game Init failed to create the game instance");
+        return 1;
+    }
+
     EWorldSerializationError WorldError = EWorldSerializationError::None;
-    if (!EngineLoop.LoadWorld(DefaultMapPath, &WorldError))
+    if (!LoadMap(DefaultMapPath, &WorldError))
     {
         PICO_LOG(
             LogEngine,
@@ -90,20 +100,7 @@ int FGameEngine::Init()
             "Game Init failed to load default map '{}' (error={})",
             DefaultMapPath.string(),
             static_cast<int>(WorldError));
-        return 1;
-    }
-
-    GameInstance = GameModule != nullptr
-        ? GameModule->CreateGameInstance()
-        : std::make_unique<FGameInstance>();
-    if (GameInstance == nullptr || !GameInstance->Init(*this))
-    {
-        PICO_LOG(LogEngine, Error, "Game Init failed to initialize the game instance");
-        if (GameInstance != nullptr)
-        {
-            GameInstance->Shutdown();
-        }
-        GameInstance.reset();
+        DestroyGameInstance();
         return 1;
     }
 
@@ -115,7 +112,7 @@ int FGameEngine::Init()
 void FGameEngine::Tick()
 {
     EngineLoop.Tick();
-    if (GameInstance != nullptr)
+    if (PGameInstance* GameInstance = GetGameInstance())
     {
         GameInstance->Tick(EngineLoop.GetDeltaSeconds());
     }
@@ -123,11 +120,8 @@ void FGameEngine::Tick()
 
 void FGameEngine::Exit()
 {
-    if (GameInstance != nullptr)
-    {
-        GameInstance->Shutdown();
-        GameInstance.reset();
-    }
+    DestroyGameInstance();
+    EngineLoop.Exit();
     if (bModuleStarted && GameModule != nullptr)
     {
         GameModule->ShutdownModule();
@@ -136,7 +130,52 @@ void FGameEngine::Exit()
     bInitialized = false;
     bPreInitialized = false;
     DefaultMapPath.clear();
-    EngineLoop.Exit();
+}
+
+bool FGameEngine::LoadMap(
+    const std::filesystem::path& FilePath,
+    EWorldSerializationError* OutError)
+{
+    PGameInstance* GameInstance = GetGameInstance();
+    PWorld* OldWorld = EngineLoop.GetWorld();
+    FWorldAssetData Data;
+    if (!LoadWorldAssetDataFromFile(FilePath, Data, OutError))
+    {
+        return false;
+    }
+
+    const bool bWasBoundToOldWorld =
+        GameInstance != nullptr && GameInstance->GetWorld() == OldWorld;
+    if (bWasBoundToOldWorld)
+    {
+        GameInstance->DispatchWorldCleanup(OldWorld);
+    }
+
+    if (!EngineLoop.ReplaceWorld(Data, OutError))
+    {
+        if (bWasBoundToOldWorld)
+        {
+            GameInstance->DispatchWorldInitialized(OldWorld);
+        }
+        return false;
+    }
+
+    if (GameInstance != nullptr)
+    {
+        const PClass* GameModeClass = GameModule != nullptr
+            ? GameModule->GetGameModeClass()
+            : nullptr;
+        if (GameModeClass == nullptr)
+        {
+            GameModeClass = PGameModeBase::StaticClass();
+        }
+        if (!EngineLoop.GetWorld()->InitializeGameplay(GameModeClass))
+        {
+            return false;
+        }
+        GameInstance->DispatchWorldInitialized(EngineLoop.GetWorld());
+    }
+    return true;
 }
 
 bool FGameEngine::ShouldExit() const
@@ -164,9 +203,16 @@ const FInputSystem& FGameEngine::GetInputSystem() const
     return InputSystem;
 }
 
-FGameInstance* FGameEngine::GetGameInstance() const
+PGameInstance* FGameEngine::GetGameInstance() const
 {
-    return GameInstance.get();
+    if (!GameInstanceHandle.IsValid())
+    {
+        return nullptr;
+    }
+    PObject* Object = ResolveObject(GameInstanceHandle);
+    return Object != nullptr && Object->IsA(PGameInstance::StaticClass())
+        ? static_cast<PGameInstance*>(Object)
+        : nullptr;
 }
 
 IGameModule* FGameEngine::GetGameModule() const
@@ -177,6 +223,55 @@ IGameModule* FGameEngine::GetGameModule() const
 const std::filesystem::path& FGameEngine::GetDefaultMapPath() const
 {
     return DefaultMapPath;
+}
+
+bool FGameEngine::CreateGameInstance()
+{
+    const PClass* GameInstanceClass = GameModule != nullptr
+        ? GameModule->GetGameInstanceClass()
+        : PGameInstance::StaticClass();
+    if (GameInstanceClass == nullptr
+        || !GameInstanceClass->IsChildOf(PGameInstance::StaticClass()))
+    {
+        return false;
+    }
+
+    PObject* Object = NewObject(
+        GameInstanceClass,
+        nullptr,
+        "GameInstance",
+        EObjectFlags::RootSet);
+    if (Object == nullptr)
+    {
+        return false;
+    }
+
+    PGameInstance* GameInstance = static_cast<PGameInstance*>(Object);
+    GameInstanceHandle = GameInstance->GetHandle();
+    if (!GameInstance->DispatchInit(*this))
+    {
+        DestroyGameInstance();
+        return false;
+    }
+    return true;
+}
+
+void FGameEngine::DestroyGameInstance()
+{
+    PGameInstance* GameInstance = GetGameInstance();
+    if (GameInstance == nullptr)
+    {
+        GameInstanceHandle = {};
+        return;
+    }
+
+    if (PWorld* World = GameInstance->GetWorld())
+    {
+        GameInstance->DispatchWorldCleanup(World);
+    }
+    GameInstance->DispatchShutdown();
+    DestroyObjectTree(GameInstance);
+    GameInstanceHandle = {};
 }
 
 bool FGameEngine::ResolveContentPath(

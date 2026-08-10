@@ -108,6 +108,10 @@ void FSceneOutlinerPanel::Draw(
             {
                 SpawnCubeActor();
             }
+            if (ImGui::MenuItem("Player Start"))
+            {
+                SpawnPlayerStart();
+            }
             ImGui::EndMenu();
         }
         ImGui::BeginDisabled(!CanPasteClipboard());
@@ -163,6 +167,10 @@ void FSceneOutlinerPanel::DrawLevelNode(PLevel* Level)
             if (ImGui::MenuItem("Cube"))
             {
                 SpawnCubeActor();
+            }
+            if (ImGui::MenuItem("Player Start"))
+            {
+                SpawnPlayerStart();
             }
             ImGui::EndMenu();
         }
@@ -404,6 +412,11 @@ void FSceneOutlinerPanel::SpawnEmptyActor()
 void FSceneOutlinerPanel::SpawnCubeActor()
 {
     Queue->Enqueue([this]() { ApplyResult(Commands->SpawnActor(true)); });
+}
+
+void FSceneOutlinerPanel::SpawnPlayerStart()
+{
+    Queue->Enqueue([this]() { ApplyResult(Commands->SpawnPlayerStart()); });
 }
 
 void FSceneOutlinerPanel::AddSceneComponentToSelection()

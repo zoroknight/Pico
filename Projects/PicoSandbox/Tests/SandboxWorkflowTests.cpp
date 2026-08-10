@@ -4,15 +4,22 @@
 #include "Pico/Object/ClassRegistry.h"
 #include "Pico/Object/Property.h"
 #include "Pico/Engine/GameEngine.h"
+#include "Pico/Engine/GameModeBase.h"
 #include "Pico/Engine/GameModule.h"
+#include "Pico/Engine/LocalPlayer.h"
+#include "Pico/Engine/Pawn.h"
+#include "Pico/Engine/PlayerController.h"
+#include "Pico/Engine/World.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Input/InputSystem.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "PicoSandbox/SandboxCharacter.h"
 #include "PicoSandbox/SandboxEntity.h"
 #include "PicoSandbox/SandboxGameInstance.h"
+#include "PicoSandbox/SandboxGameMode.h"
 #include "PicoSandbox/SandboxModule.h"
 #include "PicoSandbox/SandboxPawn.h"
+#include "PicoSandbox/SandboxPlayerController.h"
 #include "PicoSandbox/SandboxSession.h"
 
 #include <filesystem>
@@ -104,16 +111,49 @@ int main()
             "Sandbox module starts before the default map is loaded");
         Runner.Expect(
             Pico::FClassRegistry::FindClass(Pico::FName("PSandboxPawn"))
-                == PicoSandbox::PSandboxPawn::StaticClass(),
-            "Sandbox runtime registers its project Actor class");
+                == PicoSandbox::PSandboxPawn::StaticClass()
+                && PicoSandbox::PSandboxPawn::StaticClass()->IsChildOf(
+                    Pico::PPawn::StaticClass())
+                && Pico::FClassRegistry::FindClass(Pico::FName("PSandboxGameMode"))
+                    == PicoSandbox::PSandboxGameMode::StaticClass(),
+            "Sandbox runtime registers project Pawn and GameMode classes");
 
-        auto* GameInstance = dynamic_cast<PicoSandbox::FSandboxGameInstance*>(
+        auto* GameInstance = dynamic_cast<PicoSandbox::PSandboxGameInstance*>(
             GameEngine.GetGameInstance());
-        PicoSandbox::PSandboxPawn* Pawn =
-            GameInstance != nullptr ? GameInstance->GetPawn() : nullptr;
+        Pico::PGameModeBase* GameMode = GameEngine.GetEngineLoop().GetWorld() != nullptr
+            ? GameEngine.GetEngineLoop().GetWorld()->GetGameMode()
+            : nullptr;
+        Pico::PLocalPlayer* LocalPlayer = GameInstance != nullptr
+            ? GameInstance->GetPrimaryLocalPlayer()
+            : nullptr;
+        auto* Controller = LocalPlayer != nullptr
+                && LocalPlayer->GetPlayerController() != nullptr
+                && LocalPlayer->GetPlayerController()->IsA(
+                    PicoSandbox::PSandboxPlayerController::StaticClass())
+            ? static_cast<PicoSandbox::PSandboxPlayerController*>(
+                LocalPlayer->GetPlayerController())
+            : nullptr;
+        PicoSandbox::PSandboxPawn* Pawn = Controller != nullptr
+                && Controller->GetPawn() != nullptr
+                && Controller->GetPawn()->IsA(
+                    PicoSandbox::PSandboxPawn::StaticClass())
+            ? static_cast<PicoSandbox::PSandboxPawn*>(Controller->GetPawn())
+            : nullptr;
         Runner.Expect(
-            Pawn != nullptr && Pawn->GetRootComponent() != nullptr,
-            "Sandbox GameInstance spawns a visible project Pawn");
+            Pawn != nullptr
+                && Pawn->GetRootComponent() != nullptr
+                && LocalPlayer != nullptr
+                && Controller != nullptr
+                && Controller->GetPlayer() == LocalPlayer
+                && Pawn->GetController() == Controller
+                && GameMode != nullptr
+                && GameMode->GetClass()
+                    == PicoSandbox::PSandboxGameMode::StaticClass()
+                && GameMode->GetDefaultPawnClass()
+                    == PicoSandbox::PSandboxPawn::StaticClass()
+                && GameMode->GetPlayerControllerClass()
+                    == PicoSandbox::PSandboxPlayerController::StaticClass(),
+            "Sandbox logs in its LocalPlayer and uses GameMode defaults to spawn and possess the project Pawn");
 
         Pico::PObject* MeshObject = Pawn != nullptr
             ? Pico::FindObject(Pawn, Pico::FName("SandboxPlayerMesh"))
@@ -145,7 +185,14 @@ int main()
             Input.EndFrame();
             Runner.Expect(
                 !Pawn->GetActorLocation().Equals(StartLocation),
-                "Sandbox Pawn consumes mapped input through the World Tick");
+                "Sandbox PlayerController consumes mapped input and drives its possessed Pawn");
+
+            const Pico::FObjectHandle OldPawnHandle = Pawn->GetHandle();
+            Runner.Expect(
+                GameMode->RestartPlayer(Controller)
+                    && Controller->GetPawn() != nullptr
+                    && Controller->GetPawn()->GetHandle() != OldPawnHandle,
+                "Sandbox GameMode respawns and re-possesses a new Pawn without replacing the Controller");
         }
 
         GameEngine.Exit();

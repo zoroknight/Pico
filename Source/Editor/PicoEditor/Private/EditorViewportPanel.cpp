@@ -11,6 +11,7 @@
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/PrimitiveComponent.h"
+#include "Pico/Engine/PlayerStart.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Object/Object.h"
@@ -136,6 +137,19 @@ void FEditorViewportPanel::Draw(
     const float ItemWidth = std::max(ItemMax.x - ItemMin.x, 1.0f);
     const float ItemHeight = std::max(ItemMax.y - ItemMin.y, 1.0f);
     const bool bHovered = ImGui::IsItemHovered();
+
+    PObject* PrimarySelection = Selection.Resolve();
+    if (PrimarySelection != nullptr
+        && PrimarySelection->IsA(PPlayerStart::StaticClass()))
+    {
+        const auto* PlayerStart = static_cast<const PPlayerStart*>(PrimarySelection);
+        const std::string Label = "Player Start "
+            + std::to_string(PlayerStart->GetPlayerStartId());
+        ImGui::GetWindowDrawList()->AddText(
+            ImVec2(ItemMin.x + 12.0f, ItemMin.y + 12.0f),
+            IM_COL32(70, 245, 145, 255),
+            Label.c_str());
+    }
 
     FEditorTransformGizmoResult GizmoResult;
     FTransform GizmoTransform;

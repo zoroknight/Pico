@@ -14,8 +14,18 @@
 #include "Pico/Engine/CameraComponent.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/DirectionalLightComponent.h"
+#include "Pico/Engine/Controller.h"
+#include "Pico/Engine/GameInstance.h"
+#include "Pico/Engine/GameModeBase.h"
+#include "Pico/Engine/GameStateBase.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/LightComponent.h"
+#include "Pico/Engine/LocalPlayer.h"
+#include "Pico/Engine/Player.h"
+#include "Pico/Engine/Pawn.h"
+#include "Pico/Engine/PlayerController.h"
+#include "Pico/Engine/PlayerStart.h"
+#include "Pico/Engine/PlayerState.h"
 #include "Pico/Engine/PointLightComponent.h"
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/PrimitiveComponent.h"
@@ -222,7 +232,10 @@ int FEngineLoop::Init()
 
     bObjectSystemInitialized = true;
 
-    if (!PActorComponent::RegisterClass()
+    if (!PPlayer::RegisterClass()
+        || !PLocalPlayer::RegisterClass()
+        || !PGameInstance::RegisterClass()
+        || !PActorComponent::RegisterClass()
         || !PSceneComponent::RegisterClass()
         || !PCameraComponent::RegisterClass()
         || !PLightComponent::RegisterClass()
@@ -233,6 +246,13 @@ int FEngineLoop::Init()
         || !PCubeComponent::RegisterClass()
         || !PStaticMeshComponent::RegisterClass()
         || !PActor::RegisterClass()
+        || !PPawn::RegisterClass()
+        || !PController::RegisterClass()
+        || !PPlayerState::RegisterClass()
+        || !PPlayerController::RegisterClass()
+        || !PGameStateBase::RegisterClass()
+        || !PGameModeBase::RegisterClass()
+        || !PPlayerStart::RegisterClass()
         || !PLevel::RegisterClass()
         || !PWorld::RegisterClass())
     {
@@ -346,8 +366,11 @@ void FEngineLoop::Exit()
         DestroyObjectTree(World);
     }
     WorldHandle = {};
-    RequestGarbageCollection(EGarbageCollectionReason::EngineExit);
-    RunGarbageCollectionSafePoint();
+    if (bObjectSystemInitialized)
+    {
+        RequestGarbageCollection(EGarbageCollectionReason::EngineExit);
+        RunGarbageCollectionSafePoint();
+    }
     AssetManager.Clear();
     AssetRegistry.Clear();
 

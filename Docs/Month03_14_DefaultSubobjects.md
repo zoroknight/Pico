@@ -46,7 +46,7 @@ Native classes override `DefineDefaultSubobjects(FObjectInitializer&)` and use:
 - `AttachSubobject(Subobject, Parent, SocketName)`.
 
 `PSandboxPawn` now declares `DefaultSceneRoot` and `SandboxPlayerMesh` through this path. The mesh
-and material defaults live on the mesh template. `FSandboxGameInstance` only spawns the Pawn and
+and material defaults live on the mesh template. `PSandboxGameInstance` only spawns the Pawn and
 binds runtime input; it no longer assembles the Pawn's component structure.
 
 ## Instance Construction

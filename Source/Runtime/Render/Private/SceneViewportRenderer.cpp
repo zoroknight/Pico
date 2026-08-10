@@ -15,6 +15,7 @@
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/LightComponent.h"
 #include "Pico/Engine/PointLightComponent.h"
+#include "Pico/Engine/PlayerStart.h"
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/SpringArmComponent.h"
@@ -277,7 +278,34 @@ FComponentVisualization BuildComponentVisualization(
         FVector3::UpVector).GetSafeNormal();
     const FVector3 Right = FVector3::Cross(Forward, Up).GetSafeNormal();
 
-    if (Component->IsA(PCameraComponent::StaticClass()))
+    const PActor* Owner = Component->GetOwner();
+    if (Owner != nullptr && Owner->IsA(PPlayerStart::StaticClass()))
+    {
+        const float Radius = VisualSize * 0.34f;
+        const float HalfHeight = VisualSize * 0.75f;
+        const FVector3 Top = Origin + Up * HalfHeight;
+        const FVector3 Bottom = Origin - Up * HalfHeight;
+        AddCircle(Result.Vertices, Top, Forward, Right, Radius);
+        AddCircle(Result.Vertices, Bottom, Forward, Right, Radius);
+        AddLine(Result.Vertices, Top + Forward * Radius, Bottom + Forward * Radius);
+        AddLine(Result.Vertices, Top - Forward * Radius, Bottom - Forward * Radius);
+        AddLine(Result.Vertices, Top + Right * Radius, Bottom + Right * Radius);
+        AddLine(Result.Vertices, Top - Right * Radius, Bottom - Right * Radius);
+        const FVector3 ArrowEnd = Origin + Forward * (VisualSize * 1.35f);
+        AddLine(Result.Vertices, Origin, ArrowEnd);
+        AddLine(
+            Result.Vertices,
+            ArrowEnd,
+            ArrowEnd - Forward * (VisualSize * 0.35f) + Right * (VisualSize * 0.2f));
+        AddLine(
+            Result.Vertices,
+            ArrowEnd,
+            ArrowEnd - Forward * (VisualSize * 0.35f) - Right * (VisualSize * 0.2f));
+        Result.Color = bSelected
+            ? FVector3(0.25f, 1.0f, 0.55f)
+            : FVector3(0.15f, 0.75f, 0.42f);
+    }
+    else if (Component->IsA(PCameraComponent::StaticClass()))
     {
         const auto* Camera = static_cast<const PCameraComponent*>(Component);
         const FVector3 ViewForward = (View.Target - View.Position).GetSafeNormal();

@@ -53,24 +53,42 @@ public:
     bool ShouldClose() const;
 
 private:
+    enum class EMessageSeverity
+    {
+        Info,
+        Warning,
+        Error
+    };
+
+    struct FEditorMessage
+    {
+        EMessageSeverity Severity = EMessageSeverity::Info;
+        std::string Text;
+    };
+
     PWorld* GetWorld() const;
     PObject* GetSelectedObject() const;
 
     void HandleShortcuts();
     void DrawFileMenu();
     void DrawEditMenu();
+    void DrawViewMenu();
     void DrawToolbar();
     void DrawViewport(float Width, float Height);
     void DrawStatusBar();
+    void DrawMessageLog();
+    void DrawPlayValidationPopup();
     void DrawUnsavedChangesPopup();
     void DrawRenamePopup();
     void ProcessDeferredActions();
     void StartGame();
+    void LaunchGame(const std::string& ValidationMessage);
     void StopGame(bool bUpdateStatus = true);
     void UpdateGameProcess();
 
     void SpawnEmptyActor();
     void SpawnCubeActor();
+    void SpawnPlayerStart();
     void SpawnComponentActor(EEditorSceneComponentType Type);
     void SpawnStaticMeshActor();
     void AddRootToSelectedActor();
@@ -133,7 +151,10 @@ private:
         const std::vector<PObject*>& OrderedObjects = {});
     void SelectAllActors();
     void ApplyCommandResult(FEditorCommandResult Result);
-    void SetStatus(std::string Message, bool bIsError = false);
+    void SetStatus(
+        std::string Message,
+        bool bIsError = false,
+        bool bIsWarning = false);
 
     FEditorSelection Selection;
     FEditorToolState ToolState;
@@ -159,11 +180,20 @@ private:
     std::array<char, 128> RenameBuffer {};
     std::string InteractiveEditKey;
     std::string Status;
+    std::string PendingPlayValidation;
+    std::vector<FEditorMessage> Messages;
     bool bInteractiveEditChanged = false;
     bool bInteractiveEditVisited = false;
     bool bFinishInteractiveEditRequested = false;
     bool bCancelInteractiveEditRequested = false;
     bool bStatusIsError = false;
+    bool bStatusIsWarning = false;
+    bool bMessageLogOpen = true;
+    bool bFocusMessageLog = false;
+    bool bOpenPlayValidationPopup = false;
+    bool bPendingPlayBlocked = false;
+    bool bPendingPlayWarning = false;
+    bool bPendingPlayNeedsSave = false;
     bool bResetDockLayout = false;
     bool bOpenRenamePopup = false;
     bool bPreviewSceneCamera = false;

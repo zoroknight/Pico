@@ -19,6 +19,8 @@ PICO_DEFINE_CLASS_NO_PROPERTIES(PActor)
 PActor::PActor(const FObjectConstructionParams& Params)
     : PObject(Params)
 {
+    PrimaryActorTick.SetCanEverTick(true);
+    PrimaryActorTick.SetTickEnabled(true);
 }
 
 void PActor::AddReferencedObjects(FReferenceCollector& Collector) const
@@ -318,6 +320,10 @@ void PActor::DispatchBeginPlay()
     if (!bHasBegunPlay && !bPendingDestroy)
     {
         bHasBegunPlay = true;
+        if (PWorld* World = GetWorld())
+        {
+            World->GetTickTaskManager().RegisterTickFunction(PrimaryActorTick, this);
+        }
         RegisterAllComponents();
         BeginPlay();
     }
@@ -336,6 +342,10 @@ void PActor::DispatchEndPlay()
     if (bHasBegunPlay && !bHasEndedPlay)
     {
         bHasEndedPlay = true;
+        if (PWorld* World = GetWorld())
+        {
+            World->GetTickTaskManager().UnregisterTickFunction(PrimaryActorTick);
+        }
         EndPlay();
         UnregisterAllComponents();
     }

@@ -1,6 +1,7 @@
 #include "Pico/Engine/ActorComponent.h"
 
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/World.h"
 
 namespace Pico
 {
@@ -36,6 +37,13 @@ void PActorComponent::RegisterComponent()
     {
         bRegistered = true;
         OnRegister();
+        if (PrimaryComponentTick.CanEverTick())
+        {
+            if (PWorld* World = GetWorld())
+            {
+                World->GetTickTaskManager().RegisterTickFunction(PrimaryComponentTick, this);
+            }
+        }
     }
 }
 
@@ -43,6 +51,10 @@ void PActorComponent::UnregisterComponent()
 {
     if (bRegistered)
     {
+        if (PWorld* World = GetWorld())
+        {
+            World->GetTickTaskManager().UnregisterTickFunction(PrimaryComponentTick);
+        }
         OnUnregister();
         bRegistered = false;
     }
@@ -60,5 +72,17 @@ void PActorComponent::OnRegister()
 
 void PActorComponent::OnUnregister()
 {
+}
+
+void PActorComponent::TickComponent(float)
+{
+}
+
+void PActorComponent::DispatchTickComponent(float DeltaSeconds)
+{
+    if (bRegistered && !IsBeginningDestroy())
+    {
+        TickComponent(DeltaSeconds);
+    }
 }
 }

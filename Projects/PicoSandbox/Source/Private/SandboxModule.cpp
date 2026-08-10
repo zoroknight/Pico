@@ -2,11 +2,12 @@
 
 #include "Pico/Engine/GameModule.h"
 #include "PicoSandbox/SandboxGameInstance.h"
+#include "PicoSandbox/SandboxGameMode.h"
 #include "PicoSandbox/SandboxCharacter.h"
 #include "PicoSandbox/SandboxEntity.h"
 #include "PicoSandbox/SandboxPawn.h"
-
-#include <memory>
+#include "PicoSandbox/SandboxPlayerController.h"
+#include "Pico/Object/ObjectGlobals.h"
 
 namespace PicoSandbox
 {
@@ -17,12 +18,30 @@ class FPicoSandboxGameModule final : public Pico::IGameModule
 public:
     bool StartupModule() override
     {
-        return RegisterSandboxClasses() && PSandboxPawn::RegisterClass();
+        if (!(RegisterSandboxClasses()
+            && PSandboxPawn::RegisterClass()
+            && PSandboxPlayerController::RegisterClass()
+            && PSandboxGameMode::RegisterClass()
+            && PSandboxGameInstance::RegisterClass()))
+        {
+            return false;
+        }
+        Pico::PGameModeBase* Defaults =
+            Pico::GetMutableDefault<PSandboxGameMode>();
+        return Defaults != nullptr
+            && Defaults->SetDefaultPawnClass(PSandboxPawn::StaticClass())
+            && Defaults->SetPlayerControllerClass(
+                PSandboxPlayerController::StaticClass());
     }
 
-    std::unique_ptr<Pico::FGameInstance> CreateGameInstance() override
+    const Pico::PClass* GetGameInstanceClass() const override
     {
-        return std::make_unique<FSandboxGameInstance>();
+        return PSandboxGameInstance::StaticClass();
+    }
+
+    const Pico::PClass* GetGameModeClass() const override
+    {
+        return PSandboxGameMode::StaticClass();
     }
 
     void ShutdownModule() override

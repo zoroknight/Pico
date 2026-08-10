@@ -41,6 +41,8 @@ public:
         std::function<void()> OnWorldChanged = {});
 
     FEditorCommandResult SpawnActor(bool bCubeActor);
+    FEditorCommandResult SpawnPlayerStart();
+    FEditorCommandResult ValidateGameplayForPlay() const;
     FEditorCommandResult SpawnComponentActor(EEditorSceneComponentType Type);
     FEditorCommandResult SpawnStaticMeshActor(const FAssetPath& AssetPath);
     FEditorCommandResult AddSceneRoot();
@@ -104,6 +106,7 @@ private:
     std::function<void()> OnWorldChanged;
     unsigned int NextActorNumber = 1;
     unsigned int NextCubeNumber = 1;
+    unsigned int NextPlayerStartNumber = 1;
     unsigned int NextStaticMeshNumber = 1;
     unsigned int NextComponentNumber = 1;
     unsigned int NextCubeComponentNumber = 1;

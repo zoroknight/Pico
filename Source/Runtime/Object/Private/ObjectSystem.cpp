@@ -1,6 +1,7 @@
 #include "Pico/Object/ObjectSystem.h"
 
 #include "Pico/Core/Log.h"
+#include "Pico/Core/GameThread.h"
 #include "Pico/Object/ClassRegistry.h"
 #include "Pico/Object/GarbageCollection.h"
 #include "Pico/Object/Object.h"
@@ -17,7 +18,12 @@ bool PObjectSystem::Init()
 {
     if (GObjectSystemInitialized)
     {
-        return true;
+        return CheckGameThread("PObjectSystem::Init");
+    }
+    if (!InitializeGameThread())
+    {
+        PICO_LOG(LogObject, Error, "Object system must initialize on the owning Game Thread");
+        return false;
     }
 
     ResetGarbageCollectionRequests();
@@ -25,6 +31,7 @@ bool PObjectSystem::Init()
     if (!FClassRegistry::RegisterClass(PObject::StaticClass()))
     {
         FClassRegistry::Clear();
+        ShutdownGameThread();
         return false;
     }
 
@@ -39,12 +46,17 @@ void PObjectSystem::Shutdown()
     {
         return;
     }
+    if (!CheckGameThread("PObjectSystem::Shutdown"))
+    {
+        return;
+    }
 
     FObjectRegistry::DestroyAllObjects();
     ResetGarbageCollectionRequests();
     FClassRegistry::Clear();
     GObjectSystemInitialized = false;
     PICO_LOG(LogObject, Info, "Object system shut down");
+    ShutdownGameThread();
 }
 
 bool PObjectSystem::IsInitialized()

@@ -2,8 +2,11 @@
 
 #include "Pico/Core/ScopeExit.h"
 
+#include "Pico/Core/GameThread.h"
 #include "Pico/Core/Log.h"
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/GameModeBase.h"
+#include "Pico/Engine/GameStateBase.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ObjectGlobals.h"
@@ -28,10 +31,16 @@ void PWorld::AddReferencedObjects(FReferenceCollector& Collector) const
     PObject::AddReferencedObjects(Collector);
     Collector.AddReferencedHandles(LevelHandles);
     Collector.AddReferencedHandles(PendingDestroyActorHandles);
+    Collector.AddReferencedHandle(GameModeHandle);
+    Collector.AddReferencedHandle(GameStateHandle);
 }
 
 bool PWorld::Initialize()
 {
+    if (!CheckGameThread("PWorld::Initialize"))
+    {
+        return false;
+    }
     if (State != EWorldState::Uninitialized)
     {
         PICO_LOG(LogEngine, Error, "World '{}' cannot be initialized from its current state", GetPathName());
@@ -55,8 +64,46 @@ bool PWorld::Initialize()
     return true;
 }
 
+bool PWorld::InitializeGameplay(const PClass* GameModeClass)
+{
+    if (!CheckGameThread("PWorld::InitializeGameplay")
+        || State != EWorldState::Initialized
+        || GameModeHandle.IsValid()
+        || GameModeClass == nullptr
+        || !GameModeClass->IsChildOf(PGameModeBase::StaticClass()))
+    {
+        return false;
+    }
+
+    FActorSpawnParameters Parameters;
+    Parameters.Name = FName("GameMode");
+    Parameters.ObjectFlags = EObjectFlags::Transient;
+    PActor* Actor = SpawnActor(GameModeClass, Parameters);
+    PGameModeBase* GameMode = Actor != nullptr
+        ? static_cast<PGameModeBase*>(Actor)
+        : nullptr;
+    PGameStateBase* GameState =
+        GameMode != nullptr ? GameMode->CreateGameState() : nullptr;
+    if (GameMode == nullptr || GameState == nullptr)
+    {
+        if (GameMode != nullptr)
+        {
+            DestroyActor(GameMode);
+        }
+        return false;
+    }
+
+    GameModeHandle = GameMode->GetHandle();
+    GameStateHandle = GameState->GetHandle();
+    return true;
+}
+
 void PWorld::Tick(float DeltaSeconds)
 {
+    if (!CheckGameThread("PWorld::Tick"))
+    {
+        return;
+    }
     if (State != EWorldState::Initialized)
     {
         PICO_LOG(LogEngine, Warning, "World '{}' ignored Tick outside the initialized state", GetPathName());
@@ -83,23 +130,7 @@ void PWorld::Tick(float DeltaSeconds)
         {
             bTickingActors = false;
         });
-    const std::vector<PLevel*> Levels = GetLevels();
-    for (PLevel* Level : Levels)
-    {
-        if (Level == nullptr)
-        {
-            continue;
-        }
-
-        const std::vector<PActor*> Actors = Level->GetActors();
-        for (PActor* Actor : Actors)
-        {
-            if (Actor != nullptr && OwnsActor(Actor))
-            {
-                Actor->DispatchTick(DeltaSeconds);
-            }
-        }
-    }
+    TickTaskManager.Tick(DeltaSeconds);
     ResetTickingActors.Release();
     bTickingActors = false;
     ProcessPendingDestroyActors();
@@ -107,6 +138,10 @@ void PWorld::Tick(float DeltaSeconds)
 
 void PWorld::TearDown()
 {
+    if (!CheckGameThread("PWorld::TearDown"))
+    {
+        return;
+    }
     if (State == EWorldState::TearingDown || State == EWorldState::TornDown)
     {
         return;
@@ -144,12 +179,19 @@ void PWorld::TearDown()
     PersistentLevelHandle = {};
     CurrentLevelHandle = {};
     PendingDestroyActorHandles.clear();
+    GameModeHandle = {};
+    GameStateHandle = {};
+    TickTaskManager.Reset();
     State = EWorldState::TornDown;
     PICO_LOG(LogEngine, Info, "World '{}' torn down after {} ticks", GetPathName(), TickCount);
 }
 
 PLevel* PWorld::CreateLevel(FName Name)
 {
+    if (!CheckGameThread("PWorld::CreateLevel"))
+    {
+        return nullptr;
+    }
     if (State != EWorldState::Initialized)
     {
         PICO_LOG(LogEngine, Error, "World '{}' cannot create a level outside the initialized state", GetPathName());
@@ -171,6 +213,10 @@ PLevel* PWorld::CreateLevel(std::string_view Name)
 
 bool PWorld::RemoveLevel(PLevel* Level)
 {
+    if (!CheckGameThread("PWorld::RemoveLevel"))
+    {
+        return false;
+    }
     if (State != EWorldState::Initialized || Level == nullptr)
     {
         return false;
@@ -205,6 +251,10 @@ bool PWorld::RemoveLevel(PLevel* Level)
 
 bool PWorld::SetCurrentLevel(PLevel* Level)
 {
+    if (!CheckGameThread("PWorld::SetCurrentLevel"))
+    {
+        return false;
+    }
     if (State != EWorldState::Initialized || !OwnsLevel(Level))
     {
         return false;
@@ -216,6 +266,10 @@ bool PWorld::SetCurrentLevel(PLevel* Level)
 
 PActor* PWorld::SpawnActor(const PClass* ActorClass, const FActorSpawnParameters& SpawnParameters)
 {
+    if (!CheckGameThread("PWorld::SpawnActor"))
+    {
+        return nullptr;
+    }
     if (State != EWorldState::Initialized)
     {
         PICO_LOG(LogEngine, Error, "World '{}' cannot spawn actors outside the initialized state", GetPathName());
@@ -324,6 +378,10 @@ PActor* PWorld::SpawnActor(const PClass* ActorClass, std::string_view Name, PLev
 
 bool PWorld::DestroyActor(PActor* Actor)
 {
+    if (!CheckGameThread("PWorld::DestroyActor"))
+    {
+        return false;
+    }
     if (!OwnsActor(Actor))
     {
         return false;
@@ -400,6 +458,25 @@ uint64 PWorld::GetTickCount() const
 double PWorld::GetTimeSeconds() const
 {
     return TimeSeconds;
+}
+
+FTickTaskManager& PWorld::GetTickTaskManager() { return TickTaskManager; }
+const FTickTaskManager& PWorld::GetTickTaskManager() const { return TickTaskManager; }
+
+PGameModeBase* PWorld::GetGameMode() const
+{
+    PObject* Object = ResolveObject(GameModeHandle);
+    return Object != nullptr && Object->IsA(PGameModeBase::StaticClass())
+        ? static_cast<PGameModeBase*>(Object)
+        : nullptr;
+}
+
+PGameStateBase* PWorld::GetGameState() const
+{
+    PObject* Object = ResolveObject(GameStateHandle);
+    return Object != nullptr && Object->IsA(PGameStateBase::StaticClass())
+        ? static_cast<PGameStateBase*>(Object)
+        : nullptr;
 }
 
 void PWorld::BeginDestroy()

@@ -50,6 +50,7 @@ private:
     void EnsureSelected(PObject* Object);
     void SpawnEmptyActor();
     void SpawnCubeActor();
+    void SpawnPlayerStart();
     void AddSceneComponentToSelection();
     void AddCubeComponentToSelection();
     void DestroySelectedObject();

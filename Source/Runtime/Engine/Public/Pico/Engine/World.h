@@ -3,6 +3,7 @@
 #include "Pico/Core/Types.h"
 #include "Pico/Object/ObjectDelegate.h"
 #include "Pico/Object/ReflectionMacros.h"
+#include "Pico/Engine/TickTaskManager.h"
 
 #include <string_view>
 #include <type_traits>
@@ -13,6 +14,8 @@ namespace Pico
 class PActor;
 class FWorldAssetLoader;
 class FReferenceCollector;
+class PGameModeBase;
+class PGameStateBase;
 class PLevel;
 
 using FOnActorSpawned = TObjectMulticastDelegate<void(PActor*)>;
@@ -39,6 +42,7 @@ class PWorld final : public PObject
 
 public:
     bool Initialize();
+    bool InitializeGameplay(const PClass* GameModeClass);
     void Tick(float DeltaSeconds);
     void TearDown();
 
@@ -78,6 +82,10 @@ public:
     EWorldState GetState() const;
     uint64 GetTickCount() const;
     double GetTimeSeconds() const;
+    FTickTaskManager& GetTickTaskManager();
+    const FTickTaskManager& GetTickTaskManager() const;
+    PGameModeBase* GetGameMode() const;
+    PGameStateBase* GetGameState() const;
 
 protected:
     explicit PWorld(const FObjectConstructionParams& Params);
@@ -96,7 +104,10 @@ private:
     std::vector<FObjectHandle> PendingDestroyActorHandles;
     FObjectHandle PersistentLevelHandle;
     FObjectHandle CurrentLevelHandle;
+    FObjectHandle GameModeHandle;
+    FObjectHandle GameStateHandle;
     FOnActorSpawned ActorSpawnedEvent;
+    FTickTaskManager TickTaskManager;
     EWorldState State = EWorldState::Uninitialized;
     uint64 TickCount = 0;
     double TimeSeconds = 0.0;

@@ -1,19 +1,27 @@
 #include "TestRunner.h"
 
 #include "Pico/Core/App.h"
+#include "Pico/Core/GameThread.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/CameraComponent.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/DirectionalLightComponent.h"
 #include "Pico/Engine/EngineLoop.h"
+#include "Pico/Engine/GameModeBase.h"
+#include "Pico/Engine/GameStateBase.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/LightComponent.h"
 #include "Pico/Engine/PointLightComponent.h"
+#include "Pico/Engine/Pawn.h"
+#include "Pico/Engine/PlayerController.h"
+#include "Pico/Engine/PlayerStart.h"
+#include "Pico/Engine/PlayerState.h"
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
+#include "Pico/Engine/TickTaskManager.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Object/GarbageCollection.h"
@@ -30,6 +38,7 @@
 #include <fstream>
 #include <limits>
 #include <stdexcept>
+#include <thread>
 
 namespace
 {
@@ -92,6 +101,92 @@ protected:
 };
 
 PICO_DEFINE_CLASS_NO_PROPERTIES(PCountingActor)
+
+class PTickOrderActor : public Pico::PActor
+{
+    PICO_DECLARE_CLASS(PTickOrderActor, Pico::PActor)
+
+public:
+    inline static std::vector<int> ExecutionOrder;
+    int Token = 0;
+    int TickCount = 0;
+    float LastDeltaSeconds = 0.0f;
+
+    void Tick(float DeltaSeconds) override
+    {
+        ExecutionOrder.push_back(Token);
+        ++TickCount;
+        LastDeltaSeconds = DeltaSeconds;
+    }
+
+protected:
+    explicit PTickOrderActor(const Pico::FObjectConstructionParams& Params)
+        : PActor(Params)
+    {
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PTickOrderActor)
+
+class PCountingTickComponent : public Pico::PActorComponent
+{
+    PICO_DECLARE_CLASS(PCountingTickComponent, Pico::PActorComponent)
+
+public:
+    int TickCount = 0;
+
+    void TickComponent(float) override
+    {
+        ++TickCount;
+    }
+
+protected:
+    explicit PCountingTickComponent(const Pico::FObjectConstructionParams& Params)
+        : PActorComponent(Params)
+    {
+        PrimaryComponentTick.SetCanEverTick(true);
+        PrimaryComponentTick.SetTickEnabled(true);
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PCountingTickComponent)
+
+class PTestGameplayController : public Pico::PPlayerController
+{
+    PICO_DECLARE_CLASS(PTestGameplayController, Pico::PPlayerController)
+
+public:
+    bool AssignPawn(Pico::PPawn* InPawn) { return Possess(InPawn); }
+    bool AssignPlayerState(Pico::PPlayerState* InPlayerState)
+    {
+        return SetPlayerState(InPlayerState);
+    }
+    int PossessCount = 0;
+    int UnPossessCount = 0;
+
+protected:
+    explicit PTestGameplayController(const Pico::FObjectConstructionParams& Params)
+        : PPlayerController(Params)
+    {
+    }
+    void OnPossess(Pico::PPawn*) override { ++PossessCount; }
+    void OnUnPossess(Pico::PPawn*) override { ++UnPossessCount; }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PTestGameplayController)
+
+class PTestGameMode : public Pico::PGameModeBase
+{
+    PICO_DECLARE_CLASS(PTestGameMode, Pico::PGameModeBase)
+
+protected:
+    explicit PTestGameMode(const Pico::FObjectConstructionParams& Params)
+        : PGameModeBase(Params)
+    {
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PTestGameMode)
 
 class PLoadTrackingActor : public Pico::PActor
 {
@@ -2663,6 +2758,285 @@ void TestEngineLoopWorldReplacement(FTestRunner& Runner)
         "World replacement test leaves no registered objects");
 }
 
+void TestGameplayFrameworkTypes(FTestRunner& Runner)
+{
+    char Program[] = "PicoGameplayFrameworkTests";
+    char MaxFPS[] = "-maxfps=0";
+    char* Arguments[] = { Program, MaxFPS };
+    Pico::FEngineLoop EngineLoop;
+    const bool bInitialized = EngineLoop.PreInit(2, Arguments) == 0
+        && EngineLoop.Init() == 0
+        && PTestGameplayController::RegisterClass()
+        && PTestGameMode::RegisterClass();
+    Runner.Expect(bInitialized, "Gameplay Framework test initializes reflected runtime types");
+    if (!bInitialized)
+    {
+        EngineLoop.Exit();
+        return;
+    }
+
+    PTestGameMode* Defaults = Pico::GetMutableDefault<PTestGameMode>();
+    Runner.Expect(
+        Defaults != nullptr
+            && Defaults->SetPlayerControllerClass(PTestGameplayController::StaticClass())
+            && Defaults->SetDefaultPawnClass(Pico::PPawn::StaticClass())
+            && !Defaults->SetDefaultPawnClass(Pico::PActor::StaticClass()),
+        "GameMode CDO validates and stores default Gameplay classes");
+
+    Pico::PWorld* World = EngineLoop.GetWorld();
+    Runner.Expect(
+        World != nullptr && World->InitializeGameplay(PTestGameMode::StaticClass()),
+        "World initializes its runtime GameMode and GameState");
+    Pico::PGameModeBase* GameMode = World != nullptr ? World->GetGameMode() : nullptr;
+    Pico::PGameStateBase* GameState = World != nullptr ? World->GetGameState() : nullptr;
+    Runner.Expect(
+        GameMode != nullptr
+            && GameMode->GetClass() == PTestGameMode::StaticClass()
+            && GameState != nullptr
+            && GameMode->GetGameState() == GameState
+            && GameMode->GetPlayerControllerClass()
+                == PTestGameplayController::StaticClass()
+            && Pico::HasAnyFlags(GameMode->GetFlags(), Pico::EObjectFlags::Transient)
+            && Pico::HasAnyFlags(GameState->GetFlags(), Pico::EObjectFlags::Transient),
+        "GameMode instance reads CDO defaults and owns the transient GameState association");
+    Runner.Expect(
+        !GameMode->SetDefaultPawnClass(Pico::PPawn::StaticClass()),
+        "Runtime GameMode instances cannot mutate class defaults");
+
+    Pico::FActorSpawnParameters RuntimeParameters;
+    RuntimeParameters.ObjectFlags = Pico::EObjectFlags::Transient;
+    RuntimeParameters.Name = Pico::FName("PlayerController");
+    auto* Controller = static_cast<PTestGameplayController*>(
+        World->SpawnActor(PTestGameplayController::StaticClass(), RuntimeParameters));
+    RuntimeParameters.Name = Pico::FName("PlayerPawn");
+    Pico::PPawn* Pawn = static_cast<Pico::PPawn*>(
+        World->SpawnActor(Pico::PPawn::StaticClass(), RuntimeParameters));
+    RuntimeParameters.Name = Pico::FName("PlayerState");
+    Pico::PPlayerState* PlayerState = static_cast<Pico::PPlayerState*>(
+        World->SpawnActor(Pico::PPlayerState::StaticClass(), RuntimeParameters));
+    Pico::PPlayerStart* PlayerStart =
+        World->SpawnActor<Pico::PPlayerStart>("PlayerStart_1");
+    Runner.Expect(
+        Controller != nullptr && Pawn != nullptr
+            && PlayerState != nullptr && PlayerStart != nullptr,
+        "World creates Controller, Pawn, PlayerState, and scene-authored PlayerStart types");
+    if (Controller == nullptr || Pawn == nullptr
+        || PlayerState == nullptr || PlayerStart == nullptr)
+    {
+        EngineLoop.Exit();
+        return;
+    }
+
+    PlayerState->SetPlayerId(7);
+    PlayerState->SetScore(12.5f);
+    PlayerState->SetIsSpectator(true);
+    PlayerStart->SetPlayerStartId(42);
+    PlayerStart->SetActorLocation(Pico::FVector3(100.0f, 200.0f, 300.0f));
+    Runner.Expect(
+        Controller->AssignPawn(Pawn)
+            && Controller->AssignPlayerState(PlayerState)
+            && GameState->AddPlayerState(PlayerState)
+            && Controller->GetPawn() == Pawn
+            && Pawn->GetController() == Controller
+            && Controller->GetPlayerState() == PlayerState
+            && Controller->PossessCount == 1
+            && GameState->GetPlayerStates()
+                == std::vector<Pico::PPlayerState*>({PlayerState})
+            && PlayerState->GetPlayerId() == 7
+            && PlayerState->GetScore() == 12.5f
+            && PlayerState->IsSpectator(),
+        "Gameplay associations and public PlayerState data are internally consistent");
+
+    Controller->UnPossess();
+    Runner.Expect(
+        Controller->GetPawn() == nullptr
+            && Pawn->GetController() == nullptr
+            && Controller->UnPossessCount == 1
+            && Controller->Possess(Pawn)
+            && Controller->GetPawn() == Pawn
+            && Pawn->GetController() == Controller
+            && Controller->PossessCount == 2,
+        "Public UnPossess and Possess keep both sides consistent and invoke lifecycle hooks");
+
+    World->Tick(0.016f);
+    Runner.Expect(
+        Controller->PrimaryActorTick.IsRegistered()
+            && Pawn->PrimaryActorTick.IsRegistered()
+            && !GameMode->PrimaryActorTick.IsRegistered()
+            && !GameState->PrimaryActorTick.IsRegistered()
+            && !PlayerState->PrimaryActorTick.IsRegistered()
+            && !PlayerStart->PrimaryActorTick.IsRegistered(),
+        "Only Controller and Pawn participate in the first Gameplay tick skeleton");
+
+    const Pico::FObjectHandle PawnHandle = Pawn->GetHandle();
+    Runner.Expect(
+        World->DestroyActor(Pawn)
+            && Pico::ResolveObject(PawnHandle) == nullptr
+            && Controller->GetPawn() == nullptr
+            && Controller->UnPossessCount == 2,
+        "Destroying a Pawn formally unpossesses its Controller and leaves no stale association");
+
+    Pico::FWorldAssetData Data;
+    Pico::EWorldSerializationError Error = Pico::EWorldSerializationError::None;
+    Runner.Expect(
+        Pico::CaptureWorld(*World, Data, &Error),
+        "Gameplay World captures its scene-authored objects");
+    bool bFoundPlayerStart = false;
+    bool bFoundRuntimeGameplayActor = false;
+    for (const Pico::FSceneObjectRecord& Record : Data.Objects)
+    {
+        bFoundPlayerStart = bFoundPlayerStart
+            || Record.ClassName == "PPlayerStart";
+        bFoundRuntimeGameplayActor = bFoundRuntimeGameplayActor
+            || Record.ObjectName == "GameMode"
+            || Record.ObjectName == "GameState"
+            || Record.ObjectName == "PlayerController"
+            || Record.ObjectName == "PlayerState";
+    }
+    Runner.Expect(
+        bFoundPlayerStart && !bFoundRuntimeGameplayActor,
+        "World persistence includes PlayerStart but excludes transient runtime Gameplay actors");
+
+    Runner.Expect(
+        EngineLoop.ReplaceWorld(Data, &Error),
+        "PlayerStart scene data survives transactional World replacement");
+    Pico::PObject* RestoredObject = Pico::FindObject(
+        EngineLoop.GetWorld()->GetPersistentLevel(),
+        Pico::FName("PlayerStart_1"));
+    auto* RestoredPlayerStart = RestoredObject != nullptr
+            && RestoredObject->IsA(Pico::PPlayerStart::StaticClass())
+        ? static_cast<Pico::PPlayerStart*>(RestoredObject)
+        : nullptr;
+    Runner.Expect(
+        RestoredPlayerStart != nullptr
+            && RestoredPlayerStart->GetPlayerStartId() == 42
+            && RestoredPlayerStart->GetActorLocation().Equals(
+                Pico::FVector3(100.0f, 200.0f, 300.0f)),
+        "PlayerStart restores its reflected ID, root component, and transform");
+
+    EngineLoop.Exit();
+}
+
+void TestTickSchedulingAndGameThread(FTestRunner& Runner)
+{
+    char Program[] = "PicoTickTests";
+    char MaxFPS[] = "-maxfps=0";
+    char* Arguments[] = { Program, MaxFPS };
+
+    Pico::FEngineLoop EngineLoop;
+    const bool bInitialized = EngineLoop.PreInit(2, Arguments) == 0
+        && EngineLoop.Init() == 0
+        && PTickOrderActor::RegisterClass()
+        && PCountingTickComponent::RegisterClass();
+    Runner.Expect(bInitialized, "Tick scheduling test initializes its runtime classes");
+    if (!bInitialized)
+    {
+        EngineLoop.Exit();
+        return;
+    }
+
+    Runner.Expect(
+        Pico::IsGameThreadInitialized() && Pico::IsInGameThread(),
+        "Object-system initialization identifies the current thread as the Game Thread");
+    Pico::PWorld* World = EngineLoop.GetWorld();
+    const Pico::uint64 WorldTicksBeforeWorker = World->GetTickCount();
+    bool bWorkerWasGameThread = true;
+    Pico::PObject* WorkerObject = reinterpret_cast<Pico::PObject*>(1);
+    std::thread Worker(
+        [&]()
+        {
+            bWorkerWasGameThread = Pico::IsInGameThread();
+            WorkerObject = Pico::NewObject<Pico::PObject>(nullptr, "WorkerObject");
+            World->Tick(0.1f);
+        });
+    Worker.join();
+    Runner.Expect(
+        !bWorkerWasGameThread
+            && WorkerObject == nullptr
+            && World->GetTickCount() == WorldTicksBeforeWorker,
+        "Object creation and World ticking from a worker thread are rejected");
+
+    PTickOrderActor* Pre = World->SpawnActor<PTickOrderActor>("Pre");
+    PTickOrderActor* Post = World->SpawnActor<PTickOrderActor>("Post");
+    PTickOrderActor* Dependent = World->SpawnActor<PTickOrderActor>("Dependent");
+    PTickOrderActor* Prerequisite = World->SpawnActor<PTickOrderActor>("Prerequisite");
+    PTickOrderActor* Interval = World->SpawnActor<PTickOrderActor>("Interval");
+    PTickOrderActor* Disabled = World->SpawnActor<PTickOrderActor>("Disabled");
+    Pico::PActor* ComponentOwner = World->SpawnActor<Pico::PActor>("ComponentOwner");
+    PCountingTickComponent* Component = ComponentOwner != nullptr
+        ? ComponentOwner->CreateComponent<PCountingTickComponent>("TickComponent")
+        : nullptr;
+    Runner.Expect(
+        Pre != nullptr && Post != nullptr && Dependent != nullptr
+            && Prerequisite != nullptr && Interval != nullptr
+            && Disabled != nullptr && Component != nullptr,
+        "Tick test creates actor and component tick owners");
+    if (Pre == nullptr || Post == nullptr || Dependent == nullptr
+        || Prerequisite == nullptr || Interval == nullptr
+        || Disabled == nullptr || Component == nullptr)
+    {
+        EngineLoop.Exit();
+        return;
+    }
+
+    Pre->Token = 1;
+    Post->Token = 2;
+    Prerequisite->Token = 3;
+    Dependent->Token = 4;
+    Interval->Token = 5;
+    Disabled->Token = 6;
+    Pre->PrimaryActorTick.SetTickGroup(Pico::ETickGroup::PrePhysics);
+    Post->PrimaryActorTick.SetTickGroup(Pico::ETickGroup::PostPhysics);
+    Prerequisite->PrimaryActorTick.SetTickGroup(Pico::ETickGroup::PostUpdateWork);
+    Dependent->PrimaryActorTick.SetTickGroup(Pico::ETickGroup::PostUpdateWork);
+    Interval->PrimaryActorTick.SetTickInterval(0.1f);
+    Disabled->PrimaryActorTick.SetTickEnabled(false);
+
+    World->Tick(0.0f);
+    Runner.Expect(
+        Dependent->PrimaryActorTick.AddPrerequisite(Prerequisite->PrimaryActorTick),
+        "Registered tick functions accept same-World prerequisites");
+    PTickOrderActor::ExecutionOrder.clear();
+    World->Tick(0.04f);
+    Runner.Expect(
+        PTickOrderActor::ExecutionOrder == std::vector<int>({1, 2, 3, 4}),
+        "Tick groups and same-group prerequisites produce deterministic order");
+    Runner.Expect(
+        Interval->TickCount == 0 && Disabled->TickCount == 0,
+        "Tick intervals and disabled tick functions suppress execution");
+
+    World->Tick(0.04f);
+    World->Tick(0.04f);
+    Runner.Expect(
+        Interval->TickCount == 1
+            && std::abs(Interval->LastDeltaSeconds - 0.12f) < 0.0001f,
+        "Tick intervals accumulate elapsed time and deliver it once");
+    Runner.Expect(
+        Component->TickCount == 4,
+        "Registered ActorComponents receive their own component ticks");
+
+    const int PreTicksBeforeDisable = Pre->TickCount;
+    Pre->PrimaryActorTick.SetTickEnabled(false);
+    World->Tick(0.01f);
+    Runner.Expect(
+        Pre->TickCount == PreTicksBeforeDisable,
+        "A registered tick function can be disabled at runtime");
+
+    const std::size_t RegisteredBeforeDestroy =
+        World->GetTickTaskManager().GetRegisteredTickFunctionCount();
+    ComponentOwner->Destroy();
+    World->Tick(0.01f);
+    Runner.Expect(
+        World->GetTickTaskManager().GetRegisteredTickFunctionCount() + 2
+            == RegisteredBeforeDestroy,
+        "Destroying an Actor unregisters both actor and component tick functions");
+
+    EngineLoop.Exit();
+    Runner.Expect(
+        !Pico::IsGameThreadInitialized(),
+        "Engine shutdown releases the Game Thread identity");
+}
+
 void TestEngineLoopWorldLifecycle(FTestRunner& Runner)
 {
     char Program[] = "PicoEngineTests";
@@ -2861,6 +3235,8 @@ int main()
     TestWorldFilePersistence(Runner);
     TestEngineLoopWorldReplacement(Runner);
     TestCameraSpringArmSockets(Runner);
+    TestGameplayFrameworkTypes(Runner);
+    TestTickSchedulingAndGameThread(Runner);
     TestEngineLoopWorldLifecycle(Runner);
     TestTwoFrameLifecycle(Runner);
     TestZeroFrameLifecycle(Runner);

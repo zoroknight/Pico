@@ -9,6 +9,7 @@
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/PointLightComponent.h"
+#include "Pico/Engine/PlayerStart.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
@@ -19,6 +20,7 @@
 #include "Pico/Object/ObjectName.h"
 
 #include <algorithm>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -66,6 +68,58 @@ FEditorCommandService::FEditorCommandService(
 PWorld* FEditorCommandService::GetWorld() const
 {
     return EngineLoop != nullptr ? EngineLoop->GetWorld() : nullptr;
+}
+
+FEditorCommandResult FEditorCommandService::ValidateGameplayForPlay() const
+{
+    PWorld* World = GetWorld();
+    if (World == nullptr)
+    {
+        return Failure("Gameplay validation requires an active World");
+    }
+
+    std::unordered_set<int32> PlayerStartIds;
+    std::size_t PlayerStartCount = 0;
+    bool bHasDuplicateId = false;
+    for (PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr)
+        {
+            continue;
+        }
+        for (PActor* Actor : Level->GetActors())
+        {
+            if (Actor == nullptr || !Actor->IsA(PPlayerStart::StaticClass()))
+            {
+                continue;
+            }
+            const auto* PlayerStart = static_cast<const PPlayerStart*>(Actor);
+            ++PlayerStartCount;
+            if (PlayerStart->GetRootComponent() == nullptr)
+            {
+                return Failure(
+                    "PlayerStart '" + PlayerStart->GetName().ToString()
+                    + "' has no scene root");
+            }
+            if (!PlayerStartIds.insert(PlayerStart->GetPlayerStartId()).second)
+            {
+                bHasDuplicateId = true;
+            }
+        }
+    }
+    if (PlayerStartCount == 0)
+    {
+        return Success(
+            "Gameplay warning: no PlayerStart; runtime will use the world origin");
+    }
+    if (bHasDuplicateId)
+    {
+        return Success(
+            "Gameplay warning: duplicate PlayerStartId values; first valid start wins");
+    }
+    return Success(
+        "Gameplay validation passed ("
+        + std::to_string(PlayerStartCount) + " PlayerStart(s))");
 }
 
 PActor* FEditorCommandService::CreateActor(std::string Name, bool bCubeActor)
@@ -331,6 +385,37 @@ FEditorCommandResult FEditorCommandService::SpawnActor(bool bCubeActor)
         return Failure("Could not commit create transaction: " + std::string(ToString(Error)));
     }
     return Success("Spawned " + Path);
+}
+
+FEditorCommandResult FEditorCommandService::SpawnPlayerStart()
+{
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    if (!BeginTransaction("Create Player Start", Error))
+    {
+        return Failure("Could not begin Player Start transaction");
+    }
+
+    PWorld* World = GetWorld();
+    PPlayerStart* PlayerStart = nullptr;
+    do
+    {
+        PlayerStart = World != nullptr
+            ? World->SpawnActor<PPlayerStart>(
+                "PlayerStart_" + std::to_string(NextPlayerStartNumber++))
+            : nullptr;
+    }
+    while (PlayerStart == nullptr && NextPlayerStartNumber < 10000);
+
+    if (PlayerStart == nullptr)
+    {
+        RollbackTransaction(Error);
+        return Failure("Failed to spawn a Player Start");
+    }
+    const std::string Path = PlayerStart->GetPathName();
+    Selection->Set(PlayerStart);
+    return CommitTransaction(Error)
+        ? Success("Spawned " + Path)
+        : Failure("Could not commit Player Start transaction");
 }
 
 FEditorCommandResult FEditorCommandService::SpawnComponentActor(

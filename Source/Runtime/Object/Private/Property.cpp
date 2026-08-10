@@ -1,5 +1,7 @@
 #include "Pico/Object/Property.h"
 
+#include "Pico/Core/GameThread.h"
+
 #include "Pico/Object/Class.h"
 #include "Pico/Object/Object.h"
 
@@ -184,6 +186,10 @@ bool PProperty::SetValueAddress(
     EPropertyChangeType ChangeType,
     bool bNotify) const
 {
+    if (!CheckGameThread("PProperty::SetValue"))
+    {
+        return false;
+    }
     void* Destination = GetValueAddress(Object, ExpectedType, ExpectedSize);
     if (Destination == nullptr || Source == nullptr || Copier == nullptr)
     {

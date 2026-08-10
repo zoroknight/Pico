@@ -2,12 +2,88 @@
 
 #include "Pico/Core/Config.h"
 #include "Pico/Engine/GameEngine.h"
+#include "Pico/Engine/GameInstance.h"
+#include "Pico/Engine/GameModeBase.h"
+#include "Pico/Engine/GameStateBase.h"
+#include "Pico/Engine/GameModule.h"
+#include "Pico/Engine/LocalPlayer.h"
+#include "Pico/Engine/Pawn.h"
+#include "Pico/Engine/PlayerController.h"
+#include "Pico/Engine/PlayerState.h"
+#include "Pico/Engine/World.h"
 #include "Pico/Input/InputSystem.h"
+#include "Pico/Object/GarbageCollection.h"
+#include "Pico/Object/ObjectGlobals.h"
+#include "Pico/Object/ObjectSystem.h"
 
 #include <filesystem>
+#include <string>
+#include <vector>
 
 namespace
 {
+class PTestGameInstance final : public Pico::PGameInstance
+{
+    PICO_DECLARE_CLASS(PTestGameInstance, Pico::PGameInstance)
+
+public:
+    inline static std::vector<std::string> Events;
+
+    bool Init(Pico::FGameEngine& GameEngine) override
+    {
+        Events.emplace_back("Init");
+        return Pico::PGameInstance::Init(GameEngine);
+    }
+
+    void OnWorldInitialized(Pico::PWorld*) override
+    {
+        Events.emplace_back("WorldInitialized");
+    }
+
+    void Tick(float) override
+    {
+        Events.emplace_back("Tick");
+    }
+
+    void OnWorldCleanup(Pico::PWorld*) override
+    {
+        Events.emplace_back("WorldCleanup");
+    }
+
+    void Shutdown() override
+    {
+        Events.emplace_back("Shutdown");
+    }
+
+protected:
+    explicit PTestGameInstance(const Pico::FObjectConstructionParams& Params)
+        : PGameInstance(Params)
+    {
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PTestGameInstance)
+
+class FTestGameModule final : public Pico::IGameModule
+{
+public:
+    bool StartupModule() override
+    {
+        PTestGameInstance::Events.emplace_back("ModuleStartup");
+        return PTestGameInstance::RegisterClass();
+    }
+
+    const Pico::PClass* GetGameInstanceClass() const override
+    {
+        return PTestGameInstance::StaticClass();
+    }
+
+    void ShutdownModule() override
+    {
+        PTestGameInstance::Events.emplace_back("ModuleShutdown");
+    }
+};
+
 void TestKeyTransitions(FTestRunner& Runner)
 {
     Pico::FInputSystem Input;
@@ -119,6 +195,129 @@ void TestContentPathResolution(FTestRunner& Runner)
             ContentRoot, "Maps/EditorWorld.pworld", Resolved),
         "default map requires a Game virtual path");
 }
+
+void TestGameInstanceLifecycle(FTestRunner& Runner)
+{
+    PTestGameInstance::Events.clear();
+    FTestGameModule Module;
+    Pico::FGameEngine GameEngine(&Module);
+    char Program[] = "PicoGameTests";
+    char MaxFPS[] = "-maxfps=0";
+    char* Arguments[] = { Program, MaxFPS };
+    const std::filesystem::path ProjectFile =
+        std::filesystem::absolute("Projects/PicoSandbox/PicoSandbox.pico");
+
+    const bool bInitialized = GameEngine.PreInit(2, Arguments, ProjectFile) == 0
+        && GameEngine.Init() == 0;
+    Runner.Expect(bInitialized, "GameEngine initializes a reflected project GameInstance");
+    if (!bInitialized)
+    {
+        GameEngine.Exit();
+        return;
+    }
+
+    PTestGameInstance* GameInstance =
+        static_cast<PTestGameInstance*>(GameEngine.GetGameInstance());
+    Runner.Expect(
+        GameInstance != nullptr
+            && GameInstance->GetClass() == PTestGameInstance::StaticClass()
+            && GameInstance->GetGameEngine() == &GameEngine
+            && GameInstance->GetWorld() == GameEngine.GetEngineLoop().GetWorld(),
+        "GameInstance is constructed through PClass and bound to the loaded World");
+    Pico::PLocalPlayer* LocalPlayer = GameInstance->GetPrimaryLocalPlayer();
+    const Pico::FObjectHandle LocalPlayerHandle =
+        LocalPlayer != nullptr ? LocalPlayer->GetHandle() : Pico::FObjectHandle {};
+    Pico::PPlayerController* InitialController = LocalPlayer != nullptr
+        ? LocalPlayer->GetPlayerController()
+        : nullptr;
+    Pico::PPlayerState* InitialPlayerState = InitialController != nullptr
+        ? InitialController->GetPlayerState()
+        : nullptr;
+    Pico::PPawn* InitialPawn = InitialController != nullptr
+        ? InitialController->GetPawn()
+        : nullptr;
+    const Pico::FObjectHandle InitialControllerHandle = InitialController != nullptr
+        ? InitialController->GetHandle() : Pico::FObjectHandle {};
+    const Pico::FObjectHandle InitialPlayerStateHandle = InitialPlayerState != nullptr
+        ? InitialPlayerState->GetHandle() : Pico::FObjectHandle {};
+    const Pico::FObjectHandle InitialPawnHandle = InitialPawn != nullptr
+        ? InitialPawn->GetHandle() : Pico::FObjectHandle {};
+    Runner.Expect(
+        LocalPlayer != nullptr
+            && LocalPlayer->GetOuter() == GameInstance
+            && LocalPlayer->GetLocalPlayerIndex() == 0
+            && InitialController != nullptr
+            && InitialController->GetPlayer() == LocalPlayer
+            && InitialPlayerState != nullptr
+            && InitialPawn != nullptr
+            && InitialPawn->GetController() == InitialController
+            && GameEngine.GetEngineLoop().GetWorld()->GetGameMode() != nullptr
+            && GameEngine.GetEngineLoop().GetWorld()->GetGameState() != nullptr
+            && GameEngine.GetEngineLoop().GetWorld()->GetGameState()
+                ->GetPlayerStates().size() == 1,
+        "GameInstance logs its persistent LocalPlayer into the World Gameplay chain");
+    Runner.Expect(
+        PTestGameInstance::Events
+            == std::vector<std::string>({"ModuleStartup", "Init", "WorldInitialized"}),
+        "GameInstance initialization happens before its World initialization callback");
+
+    const Pico::FObjectHandle GameInstanceHandle = GameInstance->GetHandle();
+    Pico::CollectGarbage();
+    Runner.Expect(
+        Pico::ResolveObject(GameInstanceHandle) == GameInstance,
+        "The rooted GameInstance survives a full garbage collection");
+    Runner.Expect(
+        Pico::ResolveObject(LocalPlayerHandle) == LocalPlayer,
+        "GameInstance keeps its LocalPlayer reachable during garbage collection");
+    Runner.Expect(
+        Pico::ResolveObject(InitialControllerHandle) == InitialController
+            && Pico::ResolveObject(InitialPlayerStateHandle) == InitialPlayerState
+            && Pico::ResolveObject(InitialPawnHandle) == InitialPawn,
+        "World Gameplay ownership keeps the logged-in player chain reachable during garbage collection");
+
+    GameEngine.Tick();
+    Runner.Expect(
+        PTestGameInstance::Events.back() == "Tick",
+        "GameEngine forwards each frame to GameInstance");
+
+    Runner.Expect(
+        GameEngine.LoadMap(GameEngine.GetDefaultMapPath()),
+        "GameEngine can replace its active map through the GameInstance lifecycle");
+    Runner.Expect(
+        PTestGameInstance::Events.size() >= 6
+            && PTestGameInstance::Events[PTestGameInstance::Events.size() - 2]
+                == "WorldCleanup"
+            && PTestGameInstance::Events.back() == "WorldInitialized",
+        "Map replacement cleans up the old World before initializing the new World");
+    Runner.Expect(
+        GameEngine.GetGameInstance()->GetPrimaryLocalPlayer() == LocalPlayer
+            && Pico::ResolveObject(LocalPlayerHandle) == LocalPlayer
+            && LocalPlayer->GetPlayerController() != nullptr
+            && LocalPlayer->GetPlayerController() != InitialController
+            && Pico::ResolveObject(InitialControllerHandle) == nullptr
+            && Pico::ResolveObject(InitialPlayerStateHandle) == nullptr
+            && Pico::ResolveObject(InitialPawnHandle) == nullptr,
+        "LocalPlayer survives map replacement while its World Gameplay actors are recreated");
+
+    GameEngine.Exit();
+    Runner.Expect(
+        PTestGameInstance::Events
+            == std::vector<std::string>({
+                "ModuleStartup",
+                "Init",
+                "WorldInitialized",
+                "Tick",
+                "WorldCleanup",
+                "WorldInitialized",
+                "WorldCleanup",
+                "Shutdown",
+                "ModuleShutdown"}),
+        "GameInstance cleanup finishes before the project module shuts down");
+    Runner.Expect(
+        !Pico::PObjectSystem::IsInitialized()
+            && GameEngine.GetGameInstance() == nullptr,
+        "GameEngine exit destroys GameInstance and shuts down the object system");
+}
 }
 
 int main()
@@ -129,5 +328,6 @@ int main()
     TestMappings(Runner);
     TestDefaultMappings(Runner);
     TestContentPathResolution(Runner);
+    TestGameInstanceLifecycle(Runner);
     return Runner.Finish();
 }

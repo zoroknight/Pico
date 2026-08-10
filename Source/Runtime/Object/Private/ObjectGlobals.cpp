@@ -1,6 +1,7 @@
 #include "Pico/Object/ObjectGlobals.h"
 
 #include "Pico/Core/Log.h"
+#include "Pico/Core/GameThread.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ClassRegistry.h"
 #include "Pico/Object/ObjectRegistry.h"
@@ -11,6 +12,10 @@ namespace Pico
 {
 PObject* NewObject(const FObjectConstructionParams& Params)
 {
+    if (!CheckGameThread("NewObject"))
+    {
+        return nullptr;
+    }
     if (!PObjectSystem::IsInitialized())
     {
         PICO_LOG(LogObject, Error, "NewObject called before the object system was initialized");
@@ -111,26 +116,46 @@ PObject* NewObject(const PClass* Class, PObject* Outer, FName Name, EObjectFlags
 
 bool DestroyObject(PObject* Object)
 {
+    if (!CheckGameThread("DestroyObject"))
+    {
+        return false;
+    }
     return FObjectRegistry::DestroyObject(Object);
 }
 
 void DestroyObjectTree(PObject* Root)
 {
+    if (!CheckGameThread("DestroyObjectTree"))
+    {
+        return;
+    }
     FObjectRegistry::DestroyObjectTree(Root);
 }
 
 PObject* ResolveObject(FObjectHandle Handle)
 {
+    if (!CheckGameThread("ResolveObject"))
+    {
+        return nullptr;
+    }
     return FObjectRegistry::ResolveObject(Handle);
 }
 
 PObject* FindObject(PObject* Outer, FName Name)
 {
+    if (!CheckGameThread("FindObject"))
+    {
+        return nullptr;
+    }
     return FObjectRegistry::FindObject(Outer, Name);
 }
 
 bool RenameObject(PObject* Object, FName NewName)
 {
+    if (!CheckGameThread("RenameObject"))
+    {
+        return false;
+    }
     return FObjectRegistry::RenameObject(Object, NewName);
 }
 }
