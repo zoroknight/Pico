@@ -16,7 +16,15 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 运行类似 UE 的 `PreInit -> Init -> Tick -> Exit` 引擎循环。
 - 启动独立的 `PicoGame` Runtime，提供逐帧输入、可配置的 Action/Axis 映射，并支持项目默认地图或命令行地图覆盖。
 - 构建项目专属的 `PicoSandboxGame` Runtime：静态链接的 Game Module 在地图加载前注册项目原生类型，随后创建项目 GameInstance。
-- 生成可反射的项目 Pawn，通过正常的 World/Actor Tick 消费 WASD 映射输入。
+- 生成可反射的项目 Character，通过正常的 World/Actor Tick 消费 WASD 与 Jump 映射输入。
+- 通过确定性输入与状态驱动胶囊体行走、跳跃、下落、落地、沿墙滑动和推动动态刚体，为后续客户端预测保留重演边界。
+- Jolt 使用固定 60 Hz、每个 World 帧最多四个子步，所有后端类型仍隔离在 `PicoPhysicsCore` 接口之后。
+- 通过原生 Skeleton、SkeletalMesh、AnimationClip、AnimInstance、Pose 与 CPU 蒙皮播放移动状态驱动的
+  Idle/Walk/Jump，Root Motion 仍经 Sweep/MoveComponent 执行。
+- 在独立运行时的 `Gameplay Debug` 中分别查看地面速度、动画状态、移动模式、当前 Clip 和播放时间，
+  因而可以明确区分“零速度时播放 Idle”和“角色仍处于地面 Walking 移动模式”。
+- 从 Content Browser 导入 glTF/GLB 或 FBX，先在独立临时 Preview World 中检查参考姿势、动画、时间轴
+  和镜头，再由编辑器自动生成项目原生资产、内部 `/Game` 引用并刷新 AssetRegistry，无需手动复制文件。
 - 通过 `PClass` 和 `NewObject` 创建具有反射信息的原生 C++ 对象。
 - 为每个已注册类创建 CDO，通过继承的默认子对象模板声明固定对象图，并由统一构造链生成彼此独立的运行时实例。
 - 使用类型安全的 Native 单播与多播委托，通过带代数 Handle 弱绑定对象，并广播 Actor 生成和销毁事件。
@@ -92,7 +100,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
-Debug 和 Release 均可完整构建，十二个 CTest 目标全部通过。
+Debug 和 Release 均可完整构建，十六个 CTest 目标全部通过。
 
 ## 架构
 
@@ -129,6 +137,8 @@ PicoSandboxGame
 | `PicoAsset` | 经过校验的虚拟资产发现、确定性项目注册表和文件元数据 |
 | `PicoAssetImport` | 仅供开发阶段使用的 OBJ 到原生 Static Mesh 转换 |
 | `PicoObject` | 对象模型、反射、委托、强弱引用、Root Set、Mark-Sweep GC、注册表、Handle、Outer 和序列化 |
+| `PicoPhysicsCore` | 后端无关的 Shape、Body Handle、查询、命中结果和 PhysicsScene 接口 |
+| `PicoPhysicsJolt` | Jolt 5.6.0 Shape/Body、固定步模拟、查询、接触事件和单位转换适配层 |
 | `PicoEngine` | EngineLoop、World、Level、Actor、Component、挂接和可渲染场景数据 |
 | `PicoRender` | 基于GLAD的OpenGL、Shader、几何体、Framebuffer、场景遍历和绘制提交 |
 | `PicoGameRuntime` | 可复用的项目启动、GLFW 窗口、输入轮询、逐帧循环和运行时渲染 |
@@ -210,7 +220,11 @@ ProjectRoot/
 - Git for Windows
 - 支持 OpenGL 3.3 的显卡和驱动
 
-GLFW、Dear ImGui、ImGuizmo、TinyObjLoader 和 stb_image 已包含在 `ThirdParty` 中。
+GLFW、Dear ImGui、ImGuizmo、TinyObjLoader 和 stb_image 已包含在 `ThirdParty` 中。Jolt Physics 通过
+CMake `FetchContent` 获取并固定到提交 `e77f175595e64cb44218cc9d9d56fc365ad0e36a`。
+Assimp 是骨骼 glTF/GLB 与 FBX 导入使用的可选源码依赖。将源码放到 `ThirdParty/Assimp`（默认的
+`PICO_ASSIMP_SOURCE_DIR`），CMake 就会自动使用；该目录因体积较大而有意被 Git 忽略。系统安装包和
+`-DPICO_FETCH_ASSIMP=ON` 仍可作为回退方式。
 
 ## 快速开始
 
@@ -451,11 +465,17 @@ private:
 
 ## 路线图
 
-第 4 月任务完成度为 100%。资产驱动编辑器、Static Mesh 导入、材质、贴图、PBR 渲染、独立 Play、
-Gameplay Framework 主链和 Runtime 布局加固均已验收。后续学习路线为：
+项目第 5 月运行时主线已经完成，包括统一移动框架、Jolt PhysicsScene、确定性 CharacterMovement、原生骨骼
+动画资产、AnimInstance 状态选择、CPU 蒙皮和可碰撞 Root Motion。本地 Assimp 6.0.4 源码已经接入，
+并使用 Assimp 官方样例在 Debug 和 Release 下完成了真实 glTF/FBX 骨骼导入验收。资产驱动编辑器、Static Mesh 导入、
+材质、贴图、PBR 渲染、独立 Play、Gameplay Framework、Runtime 布局，以及 Controller -> Pawn 输入缓存
+-> CharacterMovement -> MoveComponent 主链均已验收。实现说明见
+[Movement Foundation](Docs/Month08_1_MovementFoundation.md)、
+[Jolt Physics Scene](Docs/Month08_2_JoltPhysics.md) 和
+[Character Movement](Docs/Month08_3_CharacterMovement.md) 和
+[Skeletal Animation](Docs/Month08_4_SkeletalAnimation.md)、
+[Skeletal Asset Preview And Import](Docs/Month08_5_SkeletalAssetPreview.md)。后续学习路线为：
 
-- Character 与 MovementComponent，以及供物理和网络统一使用的 `MoveComponent` 入口
-- Jolt 物理、角色移动和精简动画接入
 - Replication、RPC、Transform 同步、客户端预测与修正
 - Dedicated Server/广域网验证、Cook、Package 和可独立运行的 Windows 构建
 - 精简的 `PicoTask` Worker Pool 与 Game Thread Dispatcher，用于异步 Cook、构建和 AI 请求；运行时对象仍由 Game Thread 修改

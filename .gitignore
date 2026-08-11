@@ -32,6 +32,9 @@ Saved/
 imgui.ini
 *.log
 
+# Optional local source dependency (configured through PICO_ASSIMP_SOURCE_DIR)
+ThirdParty/Assimp/
+
 # Temporary and operating-system files
 *.tmp
 *.bak

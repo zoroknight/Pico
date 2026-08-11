@@ -19,6 +19,69 @@ set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMake")
 
 option(PICO_BUILD_INSPECTOR "Build the Pico reflection inspector" ON)
 
+# Third-party subprojects must not leak a Debug postfix into Pico or Jolt targets.
+set(CMAKE_DEBUG_POSTFIX "" CACHE STRING "Debug library postfix" FORCE)
+
+include(FetchContent)
+set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)
+set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
+set(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE OFF CACHE BOOL "" FORCE)
+set(PROFILER_IN_DEBUG_AND_RELEASE OFF CACHE BOOL "" FORCE)
+set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
+set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
+set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    jolt
+    GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
+    GIT_TAG e77f175595e64cb44218cc9d9d56fc365ad0e36a
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR Build
+)
+FetchContent_MakeAvailable(jolt)
+
+option(PICO_FETCH_ASSIMP "Download Assimp for glTF/FBX skeletal animation import" OFF)
+set(PICO_ASSIMP_SOURCE_DIR
+    "${PICO_ROOT_DIR}/ThirdParty/Assimp"
+    CACHE PATH
+    "Path to a local Assimp source tree")
+
+set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
+set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_GLTF_IMPORTER ON CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_FBX_IMPORTER ON CACHE BOOL "" FORCE)
+
+if(EXISTS "${PICO_ASSIMP_SOURCE_DIR}/CMakeLists.txt")
+    message(STATUS "Using local Assimp source: ${PICO_ASSIMP_SOURCE_DIR}")
+    set(_PICO_SAVED_CMAKE_DEBUG_POSTFIX "${CMAKE_DEBUG_POSTFIX}")
+    add_subdirectory(
+        "${PICO_ASSIMP_SOURCE_DIR}"
+        "${CMAKE_BINARY_DIR}/ThirdParty/Assimp"
+        EXCLUDE_FROM_ALL)
+    set(CMAKE_DEBUG_POSTFIX
+        "${_PICO_SAVED_CMAKE_DEBUG_POSTFIX}"
+        CACHE STRING
+        "Debug library postfix"
+        FORCE)
+    unset(_PICO_SAVED_CMAKE_DEBUG_POSTFIX)
+elseif(PICO_FETCH_ASSIMP)
+    FetchContent_Declare(
+        assimp
+        URL https://github.com/assimp/assimp/archive/refs/tags/v6.0.4.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_MakeAvailable(assimp)
+else()
+    find_package(assimp CONFIG QUIET)
+endif()
+
 add_library(PicoCore STATIC
     Source/Runtime/Core/Private/AssetPath.cpp
     Source/Runtime/Core/Private/App.cpp
@@ -58,6 +121,7 @@ add_library(PicoAsset STATIC
     Source/Runtime/Asset/Private/AssetManager.cpp
     Source/Runtime/Asset/Private/AssetRegistry.cpp
     Source/Runtime/Asset/Private/Material.cpp
+    Source/Runtime/Asset/Private/SkeletalAnimation.cpp
     Source/Runtime/Asset/Private/StaticMesh.cpp
     Source/Runtime/Asset/Private/Texture.cpp
 )
@@ -111,10 +175,20 @@ else()
     target_compile_options(tinyobjloader PRIVATE -w)
 endif()
 
-add_library(PicoAssetImport STATIC
+set(PICO_ASSET_IMPORT_SOURCES
     Source/Developer/AssetImport/Private/StaticMeshImporter.cpp
     Source/Developer/AssetImport/Private/TextureImporter.cpp
 )
+
+if(TARGET assimp::assimp)
+    list(APPEND PICO_ASSET_IMPORT_SOURCES
+        Source/Developer/AssetImport/Private/SkeletalAnimationImporter.cpp)
+else()
+    list(APPEND PICO_ASSET_IMPORT_SOURCES
+        Source/Developer/AssetImport/Private/SkeletalAnimationImporterStub.cpp)
+endif()
+
+add_library(PicoAssetImport STATIC ${PICO_ASSET_IMPORT_SOURCES})
 
 target_include_directories(PicoAssetImport
     PUBLIC
@@ -124,9 +198,13 @@ target_include_directories(PicoAssetImport
 target_link_libraries(PicoAssetImport
     PUBLIC
         PicoAsset
-    PRIVATE
-        tinyobjloader
+    PRIVATE tinyobjloader
 )
+
+if(TARGET assimp::assimp)
+    target_link_libraries(PicoAssetImport PRIVATE assimp::assimp)
+    target_compile_definitions(PicoAssetImport PRIVATE PICO_WITH_ASSIMP=1)
+endif()
 
 target_include_directories(PicoAssetImport PRIVATE ThirdParty/stb)
 
@@ -248,10 +326,54 @@ target_link_libraries(PicoReflectionSample
 
 set_target_properties(PicoReflectionSample PROPERTIES FOLDER "Pico/Samples")
 
+add_library(PicoPhysicsCore STATIC
+    Source/Runtime/PhysicsCore/Private/CollisionTypes.cpp
+    Source/Runtime/PhysicsCore/Private/WorldCollisionQuery.cpp
+)
+
+target_include_directories(PicoPhysicsCore
+    PUBLIC
+        Source/Runtime/PhysicsCore/Public
+)
+
+target_link_libraries(PicoPhysicsCore PUBLIC PicoObject)
+set_target_properties(PicoPhysicsCore PROPERTIES FOLDER "Pico")
+
+if(MSVC)
+    target_compile_options(PicoPhysicsCore PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoPhysicsCore PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_library(PicoPhysicsJolt STATIC
+    Source/Runtime/PhysicsJolt/Private/JoltPhysicsScene.cpp
+)
+
+target_include_directories(PicoPhysicsJolt
+    PUBLIC
+        Source/Runtime/PhysicsJolt/Public
+)
+
+target_link_libraries(PicoPhysicsJolt
+    PUBLIC PicoPhysicsCore
+    PRIVATE Jolt
+)
+set_target_properties(PicoPhysicsJolt PROPERTIES FOLDER "Pico")
+
+if(MSVC)
+    target_compile_options(PicoPhysicsJolt PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoPhysicsJolt PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_library(PicoEngine STATIC
+    Source/Runtime/Engine/Private/AnimInstance.cpp
     Source/Runtime/Engine/Private/Actor.cpp
     Source/Runtime/Engine/Private/ActorComponent.cpp
     Source/Runtime/Engine/Private/CameraComponent.cpp
+    Source/Runtime/Engine/Private/CapsuleComponent.cpp
+    Source/Runtime/Engine/Private/Character.cpp
+    Source/Runtime/Engine/Private/CharacterMovementComponent.cpp
     Source/Runtime/Engine/Private/CubeComponent.cpp
     Source/Runtime/Engine/Private/DirectionalLightComponent.cpp
     Source/Runtime/Engine/Private/Controller.cpp
@@ -263,7 +385,10 @@ add_library(PicoEngine STATIC
     Source/Runtime/Engine/Private/Level.cpp
     Source/Runtime/Engine/Private/LightComponent.cpp
     Source/Runtime/Engine/Private/LocalPlayer.cpp
+    Source/Runtime/Engine/Private/MovementComponent.cpp
     Source/Runtime/Engine/Private/Pawn.cpp
+    Source/Runtime/Engine/Private/PawnMovementComponent.cpp
+    Source/Runtime/Engine/Private/FloatingPawnMovement.cpp
     Source/Runtime/Engine/Private/Player.cpp
         Source/Runtime/Engine/Private/PointLightComponent.cpp
         Source/Runtime/Engine/Private/SpringArmComponent.cpp
@@ -272,6 +397,7 @@ add_library(PicoEngine STATIC
     Source/Runtime/Engine/Private/PlayerStart.cpp
     Source/Runtime/Engine/Private/PlayerState.cpp
     Source/Runtime/Engine/Private/SceneComponent.cpp
+    Source/Runtime/Engine/Private/SkeletalMeshComponent.cpp
     Source/Runtime/Engine/Private/StaticMeshComponent.cpp
     Source/Runtime/Engine/Private/TickFunction.cpp
     Source/Runtime/Engine/Private/TickTaskManager.cpp
@@ -289,6 +415,8 @@ target_link_libraries(PicoEngine
         PicoAsset
         PicoInput
         PicoObject
+        PicoPhysicsCore
+        PicoPhysicsJolt
 )
 
 set_target_properties(PicoEngine PROPERTIES FOLDER "Pico")
@@ -533,6 +661,8 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Private/DetailsPanel.h
         Source/Editor/PicoEditor/Private/SceneOutlinerPanel.cpp
         Source/Editor/PicoEditor/Private/SceneOutlinerPanel.h
+        Source/Editor/PicoEditor/Private/SkeletalAssetEditor.cpp
+        Source/Editor/PicoEditor/Private/SkeletalAssetEditor.h
         Source/Editor/PicoEditor/Private/StaticMeshImportDialog.cpp
         Source/Editor/PicoEditor/Private/StaticMeshImportDialog.h
         Source/Editor/PicoEditor/Private/Main.cpp
@@ -550,6 +680,7 @@ if(PICO_BUILD_INSPECTOR)
             PicoEngine
             PicoRender
             PicoReflectionTools
+            PicoAssetImport
     )
 
     target_compile_definitions(PicoEditor
@@ -731,6 +862,15 @@ target_include_directories(PicoAssetImportTests PRIVATE Tests/Common)
 target_link_libraries(PicoAssetImportTests PRIVATE PicoAssetImport)
 set_target_properties(PicoAssetImportTests PROPERTIES FOLDER "Tests/AssetImport")
 
+if(TARGET assimp::assimp
+    AND EXISTS "${PICO_ASSIMP_SOURCE_DIR}/test/models/glTF2/simple_skin/simple_skin.gltf"
+    AND EXISTS "${PICO_ASSIMP_SOURCE_DIR}/test/models/FBX/animation_with_skeleton.fbx")
+    target_compile_definitions(PicoAssetImportTests PRIVATE
+        PICO_ASSIMP_GLTF_FIXTURE="${PICO_ASSIMP_SOURCE_DIR}/test/models/glTF2/simple_skin/simple_skin.gltf"
+        PICO_ASSIMP_FBX_FIXTURE="${PICO_ASSIMP_SOURCE_DIR}/test/models/FBX/animation_with_skeleton.fbx"
+    )
+endif()
+
 if(MSVC)
     target_compile_options(PicoAssetImportTests PRIVATE /W4 /permissive-)
 else()
@@ -764,10 +904,44 @@ target_include_directories(PicoGameTests PRIVATE Tests/Common)
 target_link_libraries(PicoGameTests PRIVATE PicoEngine)
 set_target_properties(PicoGameTests PROPERTIES FOLDER "Tests/Game")
 
+add_executable(PicoMovementTests
+    Tests/Movement/Private/Main.cpp
+)
+target_include_directories(PicoMovementTests PRIVATE Tests/Common)
+target_link_libraries(PicoMovementTests PRIVATE PicoEngine)
+set_target_properties(PicoMovementTests PROPERTIES FOLDER "Tests/Movement")
+
+add_executable(PicoPhysicsTests
+    Tests/Physics/Private/Main.cpp
+)
+target_include_directories(PicoPhysicsTests PRIVATE Tests/Common)
+target_link_libraries(PicoPhysicsTests PRIVATE PicoEngine)
+set_target_properties(PicoPhysicsTests PROPERTIES FOLDER "Tests/Physics")
+
+add_executable(PicoCharacterMovementTests
+    Tests/CharacterMovement/Private/Main.cpp
+)
+target_include_directories(PicoCharacterMovementTests PRIVATE Tests/Common)
+target_link_libraries(PicoCharacterMovementTests PRIVATE PicoEngine)
+set_target_properties(PicoCharacterMovementTests PROPERTIES FOLDER "Tests/Movement")
+
+add_executable(PicoAnimationTests
+    Tests/Animation/Private/Main.cpp
+)
+target_include_directories(PicoAnimationTests PRIVATE Tests/Common)
+target_link_libraries(PicoAnimationTests PRIVATE PicoEngine)
+set_target_properties(PicoAnimationTests PROPERTIES FOLDER "Tests/Animation")
+
 if(MSVC)
     target_compile_options(PicoGameTests PRIVATE /W4 /permissive-)
+    target_compile_options(PicoMovementTests PRIVATE /W4 /permissive-)
+    target_compile_options(PicoPhysicsTests PRIVATE /W4 /permissive-)
+    target_compile_options(PicoCharacterMovementTests PRIVATE /W4 /permissive-)
 else()
     target_compile_options(PicoGameTests PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(PicoMovementTests PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(PicoPhysicsTests PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(PicoCharacterMovementTests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 include(CTest)
@@ -791,6 +965,10 @@ if(BUILD_TESTING)
     add_test(NAME PicoDynamicDelegateTests COMMAND PicoDynamicDelegateTests)
     add_test(NAME PicoEngineTests COMMAND PicoEngineTests)
     add_test(NAME PicoGameTests COMMAND PicoGameTests)
+    add_test(NAME PicoMovementTests COMMAND PicoMovementTests)
+    add_test(NAME PicoPhysicsTests COMMAND PicoPhysicsTests)
+    add_test(NAME PicoCharacterMovementTests COMMAND PicoCharacterMovementTests)
+    add_test(NAME PicoAnimationTests COMMAND PicoAnimationTests)
     if(PICO_BUILD_INSPECTOR)
         add_test(NAME PicoEditorTests COMMAND PicoEditorTests)
         add_test(NAME PicoEditorAssetTests COMMAND PicoEditorAssetTests)
@@ -817,6 +995,18 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoGameTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoMovementTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoPhysicsTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoCharacterMovementTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoAnimationTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     if(PICO_BUILD_INSPECTOR)

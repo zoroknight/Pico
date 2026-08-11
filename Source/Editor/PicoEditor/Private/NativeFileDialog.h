@@ -7,6 +7,7 @@ namespace Pico
 {
 std::optional<std::filesystem::path> OpenObjFileDialog();
 std::optional<std::filesystem::path> OpenTextureFileDialog();
+std::optional<std::filesystem::path> OpenSkeletalMeshFileDialog();
 std::optional<std::filesystem::path> OpenWorldFileDialog(
     const std::filesystem::path& InitialDirectory);
 std::optional<std::filesystem::path> SaveWorldFileDialog(

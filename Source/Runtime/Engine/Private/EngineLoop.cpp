@@ -11,7 +11,11 @@
 #include "Pico/Core/Types.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/AnimInstance.h"
 #include "Pico/Engine/CameraComponent.h"
+#include "Pico/Engine/CapsuleComponent.h"
+#include "Pico/Engine/Character.h"
+#include "Pico/Engine/CharacterMovementComponent.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/DirectionalLightComponent.h"
 #include "Pico/Engine/Controller.h"
@@ -21,8 +25,11 @@
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/LightComponent.h"
 #include "Pico/Engine/LocalPlayer.h"
+#include "Pico/Engine/MovementComponent.h"
 #include "Pico/Engine/Player.h"
 #include "Pico/Engine/Pawn.h"
+#include "Pico/Engine/PawnMovementComponent.h"
+#include "Pico/Engine/FloatingPawnMovement.h"
 #include "Pico/Engine/PlayerController.h"
 #include "Pico/Engine/PlayerStart.h"
 #include "Pico/Engine/PlayerState.h"
@@ -30,6 +37,7 @@
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
@@ -292,7 +300,6 @@ int FEngineLoop::Init()
             AssetScanReport.IgnoredFileCount,
             AssetScanReport.Issues.size());
     }
-
     if (!PObjectSystem::Init())
     {
         PICO_LOG(LogEngine, Error, "Init: object system initialization failed");
@@ -304,8 +311,13 @@ int FEngineLoop::Init()
     if (!PPlayer::RegisterClass()
         || !PLocalPlayer::RegisterClass()
         || !PGameInstance::RegisterClass()
+        || !PAnimInstance::RegisterClass()
         || !PActorComponent::RegisterClass()
         || !PSceneComponent::RegisterClass()
+        || !PMovementComponent::RegisterClass()
+        || !PPawnMovementComponent::RegisterClass()
+        || !PFloatingPawnMovement::RegisterClass()
+        || !PCharacterMovementComponent::RegisterClass()
         || !PCameraComponent::RegisterClass()
         || !PLightComponent::RegisterClass()
         || !PDirectionalLightComponent::RegisterClass()
@@ -313,9 +325,12 @@ int FEngineLoop::Init()
         || !PSpringArmComponent::RegisterClass()
         || !PPrimitiveComponent::RegisterClass()
         || !PCubeComponent::RegisterClass()
+        || !PCapsuleComponent::RegisterClass()
         || !PStaticMeshComponent::RegisterClass()
+        || !PSkeletalMeshComponent::RegisterClass()
         || !PActor::RegisterClass()
         || !PPawn::RegisterClass()
+        || !PCharacter::RegisterClass()
         || !PController::RegisterClass()
         || !PPlayerState::RegisterClass()
         || !PPlayerController::RegisterClass()
@@ -335,6 +350,8 @@ int FEngineLoop::Init()
         PICO_LOG(LogEngine, Error, "Init: world creation failed");
         return 1;
     }
+
+    World->SetAssetServices(&AssetRegistry, &AssetManager);
 
     WorldHandle = World->GetHandle();
     if (!World->Initialize())
@@ -558,6 +575,8 @@ bool FEngineLoop::ReplaceWorld(
         }
         return false;
     }
+
+    NewWorld->SetAssetServices(&AssetRegistry, &AssetManager);
 
     if (!AddToRoot(NewWorld))
     {

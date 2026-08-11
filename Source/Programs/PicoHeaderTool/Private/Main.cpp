@@ -426,6 +426,10 @@ std::string GenerateSource(const FOptions& Options, const std::vector<FClass>& C
         }
         Out << "PICO_DEFINE_CLASS(" << Class.Name << ")\n\n";
         Out << "bool " << Class.Name << "::RegisterProperties(::Pico::PClass& Class)\n{\n";
+        if (Class.Properties.empty() && Class.Functions.empty())
+        {
+            Out << "    (void)Class;\n";
+        }
         if (!Class.Properties.empty())
         {
             Out << "    std::vector<::Pico::PProperty> Properties;\n";

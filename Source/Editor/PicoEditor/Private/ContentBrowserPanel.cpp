@@ -68,6 +68,7 @@ void FContentBrowserPanel::Draw(
     const FAssetRegistry& Registry,
     FEditorAssetSelection& Selection,
     FAction Import,
+    FAction ImportSkeletal,
     FAction ImportTexture,
     FAction CreateMaterial,
     FAction Refresh,
@@ -76,6 +77,7 @@ void FContentBrowserPanel::Draw(
     FAssetsAction DeleteAssets,
     FAssetAction RenameAsset,
     FAssetAction EditMaterial,
+    FAssetAction OpenSkeletal,
     FAssetAction OpenWorld,
     FAssetAction Create,
     FAssetAction Assign,
@@ -85,6 +87,11 @@ void FContentBrowserPanel::Draw(
     if (ImGui::Button("Import OBJ"))
     {
         Import();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Import Skeletal"))
+    {
+        ImportSkeletal();
     }
     ImGui::SameLine();
     if (ImGui::Button("Import Texture"))
@@ -141,7 +148,9 @@ void FContentBrowserPanel::Draw(
     ImGui::InputTextWithHint("##AssetSearch", "Search assets", SearchBuffer.data(), SearchBuffer.size());
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
-    constexpr const char* Types[] = {"All Types", "World", "Static Mesh", "Texture", "Material"};
+    constexpr const char* Types[] = {
+        "All Types", "World", "Static Mesh", "Texture", "Material",
+        "Skeleton", "Skeletal Mesh", "Animation"};
     ImGui::Combo("##AssetType", &TypeFilter, Types, static_cast<int>(std::size(Types)));
 
     if (ImGui::BeginTable("ContentBrowserLayout", 2, ImGuiTableFlags_Resizable))
@@ -159,6 +168,7 @@ void FContentBrowserPanel::Draw(
             DeleteAssets,
             RenameAsset,
             EditMaterial,
+            OpenSkeletal,
             OpenWorld,
             Create,
             Assign,
@@ -255,6 +265,7 @@ void FContentBrowserPanel::DrawAssetTable(
     const FAssetsAction& DeleteAssets,
     const FAssetAction& RenameAsset,
     const FAssetAction& EditMaterial,
+    const FAssetAction& OpenSkeletal,
     const FAssetAction& OpenWorld,
     const FAssetAction& Create,
     const FAssetAction& Assign,
@@ -326,6 +337,13 @@ void FContentBrowserPanel::DrawAssetTable(
         {
             EditMaterial(Record.AssetPath);
         }
+        else if (ImGui::IsItemHovered()
+            && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
+            && (Record.Type == EAssetType::SkeletalMesh
+                || Record.Type == EAssetType::AnimationClip))
+        {
+            OpenSkeletal(Record.AssetPath);
+        }
         if (ImGui::BeginDragDropSource())
         {
             const std::string Path(Record.AssetPath.ToString());
@@ -379,6 +397,11 @@ void FContentBrowserPanel::DrawAssetTable(
             {
                 if (ImGui::MenuItem("Edit Material...")) EditMaterial(Record.AssetPath);
                 if (ImGui::MenuItem("Assign to Selection")) Assign(Record.AssetPath);
+            }
+            else if (Record.Type == EAssetType::SkeletalMesh
+                || Record.Type == EAssetType::AnimationClip)
+            {
+                if (ImGui::MenuItem("Open Preview")) OpenSkeletal(Record.AssetPath);
             }
             ImGui::EndPopup();
         }

@@ -2,6 +2,7 @@
 
 #include "Pico/Object/Class.h"
 
+#include <cmath>
 #include <utility>
 #include <vector>
 
@@ -29,5 +30,15 @@ const FVector3& PCubeComponent::GetExtent() const
 void PCubeComponent::SetExtent(const FVector3& InExtent)
 {
     Extent = InExtent;
+    RecreatePhysicsState();
+}
+
+FCollisionShape PCubeComponent::GetCollisionShape() const
+{
+    const FVector3 Scale = GetWorldTransform().Scale;
+    return FCollisionShape::MakeBox(FVector3(
+        std::abs(Extent.X * Scale.X),
+        std::abs(Extent.Y * Scale.Y),
+        std::abs(Extent.Z * Scale.Z)));
 }
 }

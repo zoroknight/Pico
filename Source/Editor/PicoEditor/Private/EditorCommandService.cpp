@@ -11,6 +11,7 @@
 #include "Pico/Engine/PointLightComponent.h"
 #include "Pico/Engine/PlayerStart.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
@@ -46,6 +47,7 @@ const char* GetComponentTypeLabel(EEditorSceneComponentType Type)
     case EEditorSceneComponentType::SpringArm: return "Spring Arm";
     case EEditorSceneComponentType::DirectionalLight: return "Directional Light";
     case EEditorSceneComponentType::PointLight: return "Point Light";
+    case EEditorSceneComponentType::SkeletalMesh: return "Skeletal Mesh";
     }
     return "Component";
 }
@@ -260,6 +262,11 @@ PSceneComponent* FEditorCommandService::CreateComponent(
         Prefix = "PointLightComponent_";
         NextNumber = &NextPointLightComponentNumber;
         break;
+    case EEditorSceneComponentType::SkeletalMesh:
+        ComponentClass = PSkeletalMeshComponent::StaticClass();
+        Prefix = "SkeletalMeshComponent_";
+        NextNumber = &NextSkeletalMeshComponentNumber;
+        break;
     }
 
     PSceneComponent* Component = nullptr;
@@ -447,6 +454,10 @@ FEditorCommandResult FEditorCommandService::SpawnComponentActor(
     case EEditorSceneComponentType::PointLight:
         Prefix = "PointLight_";
         NextNumber = &NextPointLightNumber;
+        break;
+    case EEditorSceneComponentType::SkeletalMesh:
+        Prefix = "SkeletalMesh_";
+        NextNumber = &NextSkeletalMeshNumber;
         break;
     }
 

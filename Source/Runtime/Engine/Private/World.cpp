@@ -8,9 +8,12 @@
 #include "Pico/Engine/GameModeBase.h"
 #include "Pico/Engine/GameStateBase.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ReferenceCollector.h"
+#include "Pico/PhysicsCore/PhysicsScene.h"
+#include "Pico/PhysicsJolt/JoltPhysicsScene.h"
 
 #include <algorithm>
 #include <cmath>
@@ -25,6 +28,8 @@ PWorld::PWorld(const FObjectConstructionParams& Params)
     : PObject(Params)
 {
 }
+
+PWorld::~PWorld() = default;
 
 void PWorld::AddReferencedObjects(FReferenceCollector& Collector) const
 {
@@ -47,6 +52,8 @@ bool PWorld::Initialize()
         return false;
     }
 
+    if (!InitializePhysicsScene()) return false;
+
     PLevel* PersistentLevel = NewObject<PLevel>(this, "PersistentLevel");
     if (PersistentLevel == nullptr)
     {
@@ -61,6 +68,23 @@ bool PWorld::Initialize()
 
     PICO_LOG(LogEngine, Info, "World '{}' initialized with persistent level '{}'",
         GetPathName(), PersistentLevel->GetPathName());
+    return true;
+}
+
+bool PWorld::InitializePhysicsScene()
+{
+    if (PhysicsScene != nullptr)
+    {
+        return PhysicsScene->IsValid();
+    }
+
+    PhysicsScene = CreateJoltPhysicsScene();
+    if (PhysicsScene == nullptr || !PhysicsScene->IsValid())
+    {
+        PICO_LOG(LogEngine, Error, "World '{}' failed to initialize Jolt physics", GetPathName());
+        PhysicsScene.reset();
+        return false;
+    }
     return true;
 }
 
@@ -130,7 +154,28 @@ void PWorld::Tick(float DeltaSeconds)
         {
             bTickingActors = false;
         });
-    TickTaskManager.Tick(DeltaSeconds);
+    if (!TickTaskManager.BeginFrame(DeltaSeconds))
+    {
+        return;
+    }
+    auto EndTickFrame = MakeScopeExit(
+        [this]()
+        {
+            TickTaskManager.EndFrame();
+        });
+    TickTaskManager.RunTickGroup(ETickGroup::PrePhysics);
+    TickTaskManager.RunTickGroup(ETickGroup::DuringPhysics);
+    if (PhysicsScene != nullptr)
+    {
+        PhysicsStepCount += PhysicsScene->Step(DeltaSeconds);
+        SyncDynamicPhysicsBodies();
+        LastPhysicsEvents = PhysicsScene->DrainContactEvents();
+        DispatchPhysicsEvents();
+    }
+    TickTaskManager.RunTickGroup(ETickGroup::PostPhysics);
+    TickTaskManager.RunTickGroup(ETickGroup::PostUpdateWork);
+    TickTaskManager.EndFrame();
+    EndTickFrame.Release();
     ResetTickingActors.Release();
     bTickingActors = false;
     ProcessPendingDestroyActors();
@@ -181,6 +226,10 @@ void PWorld::TearDown()
     PendingDestroyActorHandles.clear();
     GameModeHandle = {};
     GameStateHandle = {};
+    CollisionQuery = nullptr;
+    LastPhysicsEvents.clear();
+    ActiveOverlapPairs.clear();
+    PhysicsScene.reset();
     TickTaskManager.Reset();
     State = EWorldState::TornDown;
     PICO_LOG(LogEngine, Info, "World '{}' torn down after {} ticks", GetPathName(), TickCount);
@@ -479,6 +528,46 @@ PGameStateBase* PWorld::GetGameState() const
         : nullptr;
 }
 
+uint64 PWorld::GetPhysicsStepCount() const { return PhysicsStepCount; }
+uint64 PWorld::GetPhysicsHitCount() const { return PhysicsHitCount; }
+uint64 PWorld::GetPhysicsBeginOverlapCount() const { return PhysicsBeginOverlapCount; }
+uint64 PWorld::GetPhysicsEndOverlapCount() const { return PhysicsEndOverlapCount; }
+
+IPhysicsScene* PWorld::GetPhysicsScene() const
+{
+    return PhysicsScene.get();
+}
+
+void PWorld::SetPhysicsScene(std::unique_ptr<IPhysicsScene> InPhysicsScene)
+{
+    if (CheckGameThread("PWorld::SetPhysicsScene") && !bTickingActors && !bHasBegunPlay)
+    {
+        PhysicsScene = std::move(InPhysicsScene);
+    }
+}
+
+IWorldCollisionQuery* PWorld::GetCollisionQuery() const
+{
+    return CollisionQuery != nullptr ? CollisionQuery : PhysicsScene.get();
+}
+
+void PWorld::SetCollisionQuery(IWorldCollisionQuery* InCollisionQuery)
+{
+    if (CheckGameThread("PWorld::SetCollisionQuery"))
+    {
+        CollisionQuery = InCollisionQuery;
+    }
+}
+
+void PWorld::SetAssetServices(FAssetRegistry* InRegistry, FAssetManager* InManager)
+{
+    AssetRegistry = InRegistry;
+    AssetManager = InManager;
+}
+
+FAssetRegistry* PWorld::GetAssetRegistry() const { return AssetRegistry; }
+FAssetManager* PWorld::GetAssetManager() const { return AssetManager; }
+
 void PWorld::BeginDestroy()
 {
     TearDown();
@@ -562,6 +651,117 @@ void PWorld::DestroyActorNow(PActor* Actor)
     if (Actor != nullptr)
     {
         DestroyObjectTree(Actor);
+    }
+}
+
+
+void PWorld::SyncDynamicPhysicsBodies()
+{
+    for (PLevel* Level : GetLevels())
+    {
+        if (Level == nullptr) continue;
+        for (PActor* Actor : Level->GetActors())
+        {
+            if (Actor == nullptr) continue;
+            for (PActorComponent* Component : Actor->GetComponents())
+            {
+                if (Component != nullptr && Component->IsA(PPrimitiveComponent::StaticClass()))
+                {
+                    static_cast<PPrimitiveComponent*>(Component)->SyncComponentFromPhysics();
+                }
+            }
+        }
+    }
+}
+
+void PWorld::DispatchPhysicsEvents()
+{
+    for (const FPhysicsContactEvent& RawEvent : LastPhysicsEvents)
+    {
+        FPhysicsContactEvent Event = RawEvent;
+        PObject* ObjectA = ResolveObject(Event.ObjectA);
+        PObject* ObjectB = ResolveObject(Event.ObjectB);
+        PPrimitiveComponent* ComponentA = ObjectA != nullptr
+                && ObjectA->IsA(PPrimitiveComponent::StaticClass())
+            ? static_cast<PPrimitiveComponent*>(ObjectA)
+            : nullptr;
+        PPrimitiveComponent* ComponentB = ObjectB != nullptr
+                && ObjectB->IsA(PPrimitiveComponent::StaticClass())
+            ? static_cast<PPrimitiveComponent*>(ObjectB)
+            : nullptr;
+
+        if (Event.bSensor)
+        {
+            const auto IsSamePair = [&Event](const FActiveOverlapPair& Pair)
+            {
+                return (Pair.A == Event.ObjectA && Pair.B == Event.ObjectB)
+                    || (Pair.A == Event.ObjectB && Pair.B == Event.ObjectA);
+            };
+            const auto Active = std::find_if(
+                ActiveOverlapPairs.begin(), ActiveOverlapPairs.end(), IsSamePair);
+
+            if (Event.Type == EPhysicsContactEventType::Begin
+                || Event.Type == EPhysicsContactEventType::Persist)
+            {
+                if (Active != ActiveOverlapPairs.end()) continue;
+                ActiveOverlapPairs.push_back({Event.ObjectA, Event.ObjectB});
+                Event.Type = EPhysicsContactEventType::Begin;
+                ++PhysicsBeginOverlapCount;
+            }
+            else
+            {
+                if (Active == ActiveOverlapPairs.end()) continue;
+
+                bool bStillOverlapping = false;
+                IWorldCollisionQuery* Query = GetCollisionQuery();
+                if (ComponentA != nullptr && ComponentB != nullptr && Query != nullptr)
+                {
+                    FCollisionQueryParams Params;
+                    Params.MovingObject = ComponentA->GetHandle();
+                    Params.bIgnoreSensors = false;
+                    std::vector<FOverlapResult> Overlaps;
+                    if (Query->Overlap(
+                            ComponentA->GetCollisionShape(),
+                            ComponentA->GetWorldTransform().Translation,
+                            ComponentA->GetWorldTransform().Rotation,
+                            Params,
+                            Overlaps))
+                    {
+                        bStillOverlapping = std::any_of(
+                            Overlaps.begin(), Overlaps.end(),
+                            [ComponentB](const FOverlapResult& Result)
+                            {
+                                return Result.OverlapObject == ComponentB->GetHandle();
+                            });
+                    }
+                }
+                if (bStillOverlapping) continue;
+                ActiveOverlapPairs.erase(Active);
+                ++PhysicsEndOverlapCount;
+            }
+        }
+        else if (Event.Type == EPhysicsContactEventType::Begin)
+        {
+            ++PhysicsHitCount;
+        }
+        const auto Dispatch = [&Event](PPrimitiveComponent* Component, PPrimitiveComponent* Other)
+        {
+            if (Component == nullptr) return;
+            try
+            {
+                Component->DispatchPhysicsEvent(Other, Event);
+            }
+            catch (const std::exception& Exception)
+            {
+                PICO_LOG(LogEngine, Error, "Physics event listener threw: {}", Exception.what());
+            }
+            catch (...)
+            {
+                PICO_LOG(LogEngine, Error, "Physics event listener threw an unknown exception");
+            }
+        };
+        Dispatch(ComponentA, ComponentB);
+        Dispatch(ComponentB, ComponentA);
     }
 }
 }

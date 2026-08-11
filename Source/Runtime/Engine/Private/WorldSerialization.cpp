@@ -409,6 +409,10 @@ public:
             PObject* CurrentObject = Objects.at(Data.CurrentLevelId.Value);
             World->PersistentLevelHandle = PersistentObject->GetHandle();
             World->CurrentLevelHandle = CurrentObject->GetHandle();
+            if (!World->InitializePhysicsScene())
+            {
+                return Fail(EWorldSerializationError::ObjectCreationFailed);
+            }
             World->State = EWorldState::Initialized;
 
             for (const FSceneObjectRecord& Record : Data.Objects)

@@ -103,7 +103,15 @@ void PSandboxPlayerController::Tick(float DeltaSeconds)
         const Pico::FVector3 Direction =
             Forward * Input.GetAxisValue("MoveForward")
             + Right * Input.GetAxisValue("MoveRight");
-        ControlledPawn->MoveInWorldDirection(Direction, DeltaSeconds);
+        ControlledPawn->AddMovementInput(Direction);
+        if (Input.WasActionPressed("Jump"))
+        {
+            ControlledPawn->Jump();
+        }
+        if (Input.WasActionReleased("Jump"))
+        {
+            ControlledPawn->StopJumping();
+        }
     }
     if (Input.WasKeyPressed(Pico::EKey::R))
     {

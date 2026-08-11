@@ -17,6 +17,7 @@
 #include "Pico/Engine/PointLightComponent.h"
 #include "Pico/Engine/PlayerStart.h"
 #include "Pico/Engine/PrimitiveComponent.h"
+#include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/World.h"
@@ -466,6 +467,16 @@ struct FSceneViewportRenderer::FImpl
         GLuint Texture = 0;
     };
 
+    struct FSkeletalMeshGpuResource
+    {
+        FObjectHandle ComponentHandle;
+        uint64 Revision = 0;
+        GLuint VertexArray = 0;
+        GLuint VertexBuffer = 0;
+        GLuint IndexBuffer = 0;
+        GLsizei IndexCount = 0;
+    };
+
     GLuint Program = 0;
     GLuint CubeVertexArray = 0;
     GLuint CubeVertexBuffer = 0;
@@ -478,6 +489,7 @@ struct FSceneViewportRenderer::FImpl
     GLuint ComponentVisualizationVertexArray = 0;
     GLuint ComponentVisualizationVertexBuffer = 0;
     std::vector<FStaticMeshGpuResource> StaticMeshes;
+    std::vector<FSkeletalMeshGpuResource> SkeletalMeshes;
     std::vector<FTextureGpuResource> Textures;
     GLuint Framebuffer = 0;
     GLuint ColorTexture = 0;
@@ -879,6 +891,13 @@ void FSceneViewportRenderer::Shutdown()
         }
     }
     Impl->StaticMeshes.clear();
+    for (FImpl::FSkeletalMeshGpuResource& Mesh : Impl->SkeletalMeshes)
+    {
+        if (Mesh.IndexBuffer != 0) glDeleteBuffers(1, &Mesh.IndexBuffer);
+        if (Mesh.VertexBuffer != 0) glDeleteBuffers(1, &Mesh.VertexBuffer);
+        if (Mesh.VertexArray != 0) glDeleteVertexArrays(1, &Mesh.VertexArray);
+    }
+    Impl->SkeletalMeshes.clear();
     for (FImpl::FTextureGpuResource& Texture : Impl->Textures)
     {
         if (Texture.Texture != 0)
@@ -1302,6 +1321,59 @@ bool FSceneViewportRenderer::Render(
             return Found->Texture;
         };
 
+    const auto GetSkeletalMeshResource =
+        [this](PSkeletalMeshComponent* Component)
+            -> FImpl::FSkeletalMeshGpuResource*
+        {
+            if (Component == nullptr) return nullptr;
+            const FSkinnedMeshRenderData& Mesh = Component->GetRenderData();
+            if (Mesh.Vertices.empty() || Mesh.Indices.empty()) return nullptr;
+            const FObjectHandle Handle = Component->GetHandle();
+            auto Found = std::find_if(
+                Impl->SkeletalMeshes.begin(),
+                Impl->SkeletalMeshes.end(),
+                [Handle](const FImpl::FSkeletalMeshGpuResource& Resource)
+                {
+                    return Resource.ComponentHandle == Handle;
+                });
+            if (Found == Impl->SkeletalMeshes.end())
+            {
+                Impl->SkeletalMeshes.push_back({});
+                Found = std::prev(Impl->SkeletalMeshes.end());
+                Found->ComponentHandle = Handle;
+                glGenVertexArrays(1, &Found->VertexArray);
+                glGenBuffers(1, &Found->VertexBuffer);
+                glGenBuffers(1, &Found->IndexBuffer);
+            }
+            if (Found->Revision == Mesh.Revision) return &*Found;
+
+            Found->Revision = Mesh.Revision;
+            Found->IndexCount = static_cast<GLsizei>(Mesh.Indices.size());
+            glBindVertexArray(Found->VertexArray);
+            glBindBuffer(GL_ARRAY_BUFFER, Found->VertexBuffer);
+            glBufferData(
+                GL_ARRAY_BUFFER,
+                static_cast<std::ptrdiff_t>(Mesh.Vertices.size() * sizeof(FStaticMeshVertex)),
+                Mesh.Vertices.data(),
+                GL_DYNAMIC_DRAW);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, Found->IndexBuffer);
+            glBufferData(
+                GL_ELEMENT_ARRAY_BUFFER,
+                static_cast<std::ptrdiff_t>(Mesh.Indices.size() * sizeof(uint32)),
+                Mesh.Indices.data(),
+                GL_STATIC_DRAW);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(FStaticMeshVertex),
+                reinterpret_cast<const void*>(offsetof(FStaticMeshVertex, Position)));
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(FStaticMeshVertex),
+                reinterpret_cast<const void*>(offsetof(FStaticMeshVertex, Normal)));
+            glEnableVertexAttribArray(2);
+            glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(FStaticMeshVertex),
+                reinterpret_cast<const void*>(offsetof(FStaticMeshVertex, TexCoord)));
+            return &*Found;
+        };
+
     for (PLevel* Level : World->GetLevels())
     {
         if (Level == nullptr)
@@ -1364,6 +1436,28 @@ bool FSceneViewportRenderer::Render(
                         {
                             BaseColorTexture =
                                 GetTextureResource(Material.BaseColorTexture);
+                        }
+                    }
+                }
+                else if (Component->IsA(PSkeletalMeshComponent::StaticClass()))
+                {
+                    PSkeletalMeshComponent* SkeletalMesh =
+                        static_cast<PSkeletalMeshComponent*>(Component);
+                    FImpl::FSkeletalMeshGpuResource* Resource =
+                        GetSkeletalMeshResource(SkeletalMesh);
+                    if (Resource == nullptr) continue;
+                    glBindVertexArray(Resource->VertexArray);
+                    IndexCount = Resource->IndexCount;
+                    const std::shared_ptr<const FMaterialData> LoadedMaterial =
+                        AssetManager.LoadMaterial(
+                            SkeletalMesh->GetMaterialAsset(), AssetRegistry);
+                    if (LoadedMaterial != nullptr)
+                    {
+                        bHasMaterial = true;
+                        Material = *LoadedMaterial;
+                        if (Material.BaseColorTexture.IsValid())
+                        {
+                            BaseColorTexture = GetTextureResource(Material.BaseColorTexture);
                         }
                     }
                 }

@@ -149,6 +149,18 @@ FPicoEditorApp::FPicoEditorApp(
             return RestoreEditorSnapshot(Snapshot, Error);
         })
     , ViewportPanel(InViewportRenderer, InWindow)
+    , SkeletalAssetEditor(
+        InEngineLoop,
+        [this](std::string Message, bool bError)
+        {
+            SetStatus(std::move(Message), bError);
+        },
+        [this](const FAssetPath& AssetPath)
+        {
+            AssetSelection.Select(AssetPath);
+            ContentBrowserPanel.FocusAsset(
+                EngineLoop->GetAssetRegistry(), AssetSelection, AssetPath);
+        })
     , AssetWorkflow(
         InEngineLoop,
         &AssetService,
@@ -375,6 +387,7 @@ void FPicoEditorApp::Draw()
             EngineLoop->GetAssetRegistry(),
             AssetSelection,
             [this]() { AssetWorkflow.OpenImport(); },
+            [this]() { SkeletalAssetEditor.OpenImport(); },
             [this]() { AssetWorkflow.OpenTextureImport(); },
             [this]() { AssetWorkflow.OpenCreateMaterial(); },
             [this]() { AssetWorkflow.RefreshRegistry(); },
@@ -402,6 +415,10 @@ void FPicoEditorApp::Draw()
             },
             [this](const FAssetPath& AssetPath)
             {
+                SkeletalAssetEditor.OpenAsset(AssetPath);
+            },
+            [this](const FAssetPath& AssetPath)
+            {
                 const FAssetPath StablePath = AssetPath;
                 CommandQueue.Enqueue(
                     [this, StablePath]()
@@ -421,6 +438,7 @@ void FPicoEditorApp::Draw()
     ImGui::End();
 
     AssetWorkflow.Draw();
+    SkeletalAssetEditor.Draw();
 
     if (bCancelInteractiveEditRequested)
     {
@@ -681,6 +699,10 @@ void FPicoEditorApp::DrawToolbar()
         if (ImGui::MenuItem("Point Light Component"))
         {
             AddComponentToSelection(EEditorSceneComponentType::PointLight);
+        }
+        if (ImGui::MenuItem("Skeletal Mesh Component"))
+        {
+            AddComponentToSelection(EEditorSceneComponentType::SkeletalMesh);
         }
         const FAssetPath* StaticMeshAsset = GetSelectedStaticMeshAsset();
         if (ImGui::MenuItem(

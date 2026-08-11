@@ -44,6 +44,7 @@ void PActorComponent::RegisterComponent()
                 World->GetTickTaskManager().RegisterTickFunction(PrimaryComponentTick, this);
             }
         }
+        OnTickRegistered();
     }
 }
 
@@ -67,6 +68,10 @@ void PActorComponent::BeginDestroy()
 }
 
 void PActorComponent::OnRegister()
+{
+}
+
+void PActorComponent::OnTickRegistered()
 {
 }
 

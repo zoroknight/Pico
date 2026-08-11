@@ -1,6 +1,10 @@
 #include "Pico/Engine/Pawn.h"
 
+#include "Pico/Core/GameThread.h"
 #include "Pico/Engine/Controller.h"
+#include "Pico/Engine/PawnMovementComponent.h"
+
+#include <cmath>
 
 namespace Pico
 {
@@ -25,6 +29,64 @@ PController* PPawn::GetController() const
     return Controller.Get();
 }
 
+PPawnMovementComponent* PPawn::GetMovementComponent() const
+{
+    for (PActorComponent* Component : GetComponents())
+    {
+        if (Component != nullptr
+            && Component->IsA(PPawnMovementComponent::StaticClass()))
+        {
+            return static_cast<PPawnMovementComponent*>(Component);
+        }
+    }
+    return nullptr;
+}
+
+void PPawn::AddMovementInput(
+    const FVector3& WorldDirection,
+    float ScaleValue,
+    bool bForce)
+{
+    (void)bForce;
+    if (!CheckGameThread("PPawn::AddMovementInput")
+        || !std::isfinite(ScaleValue)
+        || !std::isfinite(WorldDirection.X)
+        || !std::isfinite(WorldDirection.Y)
+        || !std::isfinite(WorldDirection.Z)
+        || WorldDirection.IsNearlyZero()
+        || ScaleValue == 0.0f)
+    {
+        return;
+    }
+    PendingMovementInputVector += WorldDirection.GetSafeNormal() * ScaleValue;
+    const float Size = PendingMovementInputVector.Size();
+    if (Size > 1.0f)
+    {
+        PendingMovementInputVector /= Size;
+    }
+}
+
+const FVector3& PPawn::GetPendingMovementInputVector() const
+{
+    return PendingMovementInputVector;
+}
+
+const FVector3& PPawn::GetLastMovementInputVector() const
+{
+    return LastMovementInputVector;
+}
+
+FVector3 PPawn::ConsumeMovementInputVector()
+{
+    if (!CheckGameThread("PPawn::ConsumeMovementInputVector"))
+    {
+        return FVector3::ZeroVector;
+    }
+    LastMovementInputVector = PendingMovementInputVector;
+    PendingMovementInputVector = FVector3::ZeroVector;
+    return LastMovementInputVector;
+}
+
 void PPawn::PossessedBy(PController*)
 {
 }
@@ -40,11 +102,21 @@ void PPawn::BeginDestroy()
         CurrentController->UnPossess();
     }
     Controller.Reset();
+    PendingMovementInputVector = FVector3::ZeroVector;
+    LastMovementInputVector = FVector3::ZeroVector;
     PActor::BeginDestroy();
 }
 
 void PPawn::SetController(PController* InController)
 {
     Controller = InController;
+}
+
+void PPawn::RefreshMovementTickPrerequisites()
+{
+    if (PPawnMovementComponent* Movement = GetMovementComponent())
+    {
+        Movement->RefreshControllerTickPrerequisite();
+    }
 }
 }

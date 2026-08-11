@@ -10,5 +10,9 @@ class PSandboxGameMode final : public Pico::PGameModeBase
 
 protected:
     explicit PSandboxGameMode(const Pico::FObjectConstructionParams& Params);
+    Pico::PPawn* SpawnDefaultPawnFor(
+        Pico::PController* Controller,
+        Pico::PPlayerStart* StartSpot) override;
+    void BeginPlay() override;
 };
 }

@@ -158,6 +158,7 @@ Run `PicoSandboxGame` and use these controls:
 | Control | Result |
 | --- | --- |
 | `W/A/S/D` | The Sandbox PlayerController moves its possessed Pawn relative to the active game camera |
+| `Space` | CharacterMovement jumps, falls under gravity, and returns to Walking after landing |
 | `R` | GameMode restarts the same player with a new Pawn at PlayerStart |
 | `F1` | Show or hide the `Gameplay Debug` panel |
 | `UnPossess` | Keep the Pawn but detach it from the Controller |
@@ -176,6 +177,8 @@ The complete purpose of each check is documented in
 [`Docs/Month07_3_StandaloneLoginPossessAndGameplayDebug.md`](../../Docs/Month07_3_StandaloneLoginPossessAndGameplayDebug.md).
 MatchState and editor binding acceptance is documented in
 [`Docs/Month07_4_MatchStateGameplayEventsAndBindings.md`](../../Docs/Month07_4_MatchStateGameplayEventsAndBindings.md).
+Character movement and its F1 diagnostics are documented in
+[`Docs/Month08_3_CharacterMovement.md`](../../Docs/Month08_3_CharacterMovement.md).
 
 ## Persistence Asset
 

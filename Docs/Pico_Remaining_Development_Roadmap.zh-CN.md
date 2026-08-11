@@ -2,7 +2,7 @@
 
 本文档是 Pico 后续开发的长期基准，用于避免因对话上下文压缩、计划迭代或项目月份混淆而遗忘关键目标。
 
-计划中的“月份”均指项目开发月份，不是自然月。项目第 3 月已经验收完成，当前进入项目第 4 月；已经完成的工作只记录为基线，不重复列入剩余任务。
+计划中的“月份”均指项目开发月份，不是自然月。项目第 4 月已经验收完成，当前进入项目第 5 月；已经完成的工作只记录为基线，不重复列入剩余任务。
 
 ## 项目目标
 
@@ -33,12 +33,12 @@ Pico 是一个以学习 Unreal Engine 5 源码和完整游戏引擎链路为主�
 - 独立 `PicoGame` Runtime、输入 Action/Axis 映射和地图覆盖。
 - 编辑器绿色 Play、红色 Stop 和独立 Game World 进程。
 - Game Module、GameInstance、通用 `PicoGameRuntime` 和项目专属 `PicoSandboxGame` Target。
-- 临时 `PSandboxPawn` WASD 输入链路，用于证明项目代码可以进入 Runtime。
+- `PSandboxPawn` 的 Controller -> Pawn 输入缓存 -> FloatingPawnMovement -> MoveComponent WASD 链路。
 - CDO、默认子对象、Native Delegate、`PFunction/ProcessEvent`、PicoHeaderTool 和 Stop-the-world Mark-Sweep GC。
 - Dynamic Multicast Delegate、签名校验、弱目标清理，以及 `.pworld` v4 稳定引用和动态绑定恢复。
 - 反射属性 Pre/Post 变化通知、ValueSet/Interactive/Load/UndoRedo 来源和 PicoInspector 可视化实验。
 
-当前临时 Pawn 直接读取 `FInputSystem` 并修改 Transform。这只是链路验证，后续必须由 PlayerController、PawnMovementComponent 和统一移动函数替代。
+项目输入由 PlayerController 转换为世界空间移动意图，Pawn 只缓存输入，MovementComponent 消费后经统一移动函数修改 Transform。Jolt、Root Motion 和网络移动不得新增旁路。
 
 ## 固定架构决策
 
@@ -82,6 +82,58 @@ Loopback -> 本机多进程 -> 局域网 -> 网络模拟 -> 公网 Dedicated Ser
 - 多线程第一版只实现固定 Worker Pool、任务状态/取消、Game Thread Dispatcher 和安全关闭；不拆分 Render Thread、Physics Thread、动画任务图或并行 GC。
 - CharacterMovement 第一版只实现行走、跳跃、下落、地面检测和基础滑动。
 - GAS 只实现 Mini GAS，不复制完整 GameplayTask、TargetActor 和复杂 Effect Aggregator。
+- 可视化脚本第一版只实现 `PicoGraph Lite` Event Graph、受限节点、编译和字节码 VM；完整 UE Blueprint、
+  Kismet、热重载和调试器不进入 MVP。
+
+### 长期扩展边界
+
+现有对象、World、Gameplay、编辑器和项目边界适合继续扩展；增加新的 Component、资产类型、玩法类和
+编辑器面板不应要求重写基础对象系统。后端替换能力则取决于具体模块是否隔离第三方类型，后续实现必须
+遵守以下约束：
+
+Pico 从 UE5 学习的是“高层使用引擎自己的稳定概念，第三方后端在模块边界内适配”，不是要求所有后端
+都能无成本、运行时热切换。UE 的渲染通过 RHI 高度隔离 D3D12/Vulkan 等图形 API；物理通过 PhysicsCore、
+PhysicsInterface 和 Handle 控制 Chaos/历史 PhysX 的影响范围，但更换物理后端仍是大型工程；动画则重点
+分离 `SkeletalMeshComponent`、`AnimInstance/AnimInstanceProxy`、Pose 求值和渲染数据，而不是提供一个
+可任意替换整个动画系统的万能接口。
+
+Pico 的隔离分为三级：
+
+| 层级 | 要求 | 当前决策 |
+| --- | --- | --- |
+| 模块隔离 | Engine/Gameplay 依赖 Pico 接口，第三方库由独立适配模块实现 | 物理、动画导入和未来图形 API 必须遵守 |
+| 类型隔离 | 公共接口、反射、序列化和网络只使用 Pico 描述、Handle 和纯数据 | 从第 5 月开始作为硬门槛 |
+| 任意后端热切换 | 插件发现、多后端并存、运行时切换和覆盖每个后端函数的统一虚接口 | 不进入 MVP，没有第二种实现和真实需求时不提前抽象 |
+
+抽象只建立在稳定概念上，不为第三方库的每个函数机械增加包装。当前必须隔离物理后端；动画采用数据
+分层而不设计 `IAnimationBackend`；完整 RHI 延后到复杂渲染阶段，届时由第二种图形 API 或 Render Graph
+的真实需求校验接口设计。
+
+- 物理公共接口只暴露 Pico 自己的 Shape/Body 描述、`FPhysicsBodyHandle`、查询参数和 `FHitResult`；
+  Jolt 的类型、对象地址和生命周期只能存在于 Physics 适配层内部。
+- 动画分为资产数据、Pose/Root Motion 计算和渲染数据三层；`SkeletalMeshComponent` 不持有 OpenGL
+  资源，`AnimInstance` 不直接修改 Actor Transform。
+- Render Thread、Physics Worker 和资源 Worker 不直接持有或修改 Game Thread 的 `PObject`；跨线程只
+  传递不可变快照、稳定 Handle、命令和纯数据结果。
+- 网络、物理、动画和渲染不得把本地 `FObjectHandle` 当作跨进程、磁盘或后端资源身份。
+- 资产格式继续使用显式版本和依赖信息，复杂资产导入结果与具体导入库类型隔离。
+
+当前渲染可以继续承载 OpenGL 下的基础阴影、蒙皮和后处理，但 `FSceneViewportRenderer` 仍集中承担
+World 遍历、GPU 资源、Shader、Picking、辅助线和绘制。进入延迟渲染、多线程渲染、Render Graph、
+Vulkan/DirectX 12 或硬件光线追踪前，必须先完成：
+
+```text
+PrimitiveComponent
+ -> PrimitiveSceneProxy / MeshBatch
+ -> RenderScene
+ -> RenderPass / RenderGraph
+ -> RHI
+ -> OpenGL / Vulkan / DirectX 12
+```
+
+第 5 月动画接入只建立通用 SkeletalMesh Render Data 和蒙皮提交边界，不提前复制完整 RHI。复杂渲染功能
+开始前再安排独立 Render Architecture 阶段，拆分 `FSceneViewportRenderer` 并消除公共接口中的 OpenGL
+过程加载器、纹理 ID 和直接 GL 资源语义。
 
 ## 实施依赖顺序
 
@@ -119,6 +171,8 @@ CDO / ObjectInitializer
 | Jolt 查询与 PhysicsScene 边界 | 第 5 月第 2 周 | CharacterMovement 前 | Raycast、Sweep、Trigger 和刚体同步不绕过 SceneComponent/Movement |
 | CharacterMovement 确定性输入与模拟 | 第 5 月第 3 周 | 客户端预测前 | 相同状态与输入可重演行走、跳跃和下落 |
 | Skeleton/Pose/Root Motion 边界 | 第 5 月第 4 周 | 动画驱动 Gameplay 前 | 动画输出 Pose/Root Motion，Root Motion 仍经 MovementComponent |
+| 第三方物理与动画后端隔离 | 第 5 月第 2～4 周 | Jolt Body 或 GPU 蒙皮资源进入 Gameplay/反射属性前 | 公共接口和序列化数据不包含 Jolt、Assimp 或 OpenGL 对象；更换后端只影响适配层和资源转换层 |
+| Montage Lite 的 Section/Notify/Slot/Root Motion 边界 | 第 5 月动画基础后 3～5 天 | 第 8 月 PlayAnimationAndWait 前 | Section 跳转、NotifyWindow、中断清理和 Root Motion Sweep 可测；AbilityTask 不依赖动画内部裸指针 |
 | `FNetObjectId`、NetRole、Ownership，与 ObjectHandle/SceneId 类型隔离 | 第 6 月第 1 周 | ActorChannel 和属性同步前 | 编译期和运行时均不能把本地/磁盘身份当作网络身份 |
 | Replication Dirty Tracking 和网络对象引用 | 第 6 月第 2 周 | RPC 和预测前 | 权威属性、Spawn/Destroy 和对象引用可复制 |
 | RPC 方向、Role、Ownership 和参数校验 | 第 6 月第 3 周 | Gameplay 网络交互前 | 非法客户端调用被拒绝且没有副作用 |
@@ -126,6 +180,8 @@ CDO / ObjectInitializer
 | `PicoTask` Worker Pool、Dispatcher、取消和安全关闭 | 第 7 月第 3 周前半 | 异步 Cook、构建和 AI 请求前 | Worker 只产生纯数据，Game Thread 应用对象结果，退出时无遗留线程 |
 | Cook/Stage 和仓库外 Runtime 布局 | 第 7 月第 3 周后半 | Package 前 | EXE、Config、Content、项目模块和第三方库形成完整 Stage |
 | Development/Shipping Package | 第 7 月第 4 周 | AI Build/Package 工具前 | 独立程序不依赖源码、编辑器或仓库目录 |
+| PicoGraph 类型检查、字节码和执行预算 | MVP 后第 9 月 | AI 生成可执行玩法图前 | 非法连线无法编译；循环和单次执行受预算限制；Runtime 不递归遍历编辑器图 |
+| RenderProxy、RenderScene 和 RHI 边界 | MVP 后复杂渲染阶段 | 延迟渲染、Render Graph、多线程渲染、Vulkan/DX12 或光线追踪前 | Renderer 不再直接遍历并绘制 `PObject`；公共接口不暴露 OpenGL ID，后端可通过 RHI 替换 |
 
 顺序上的硬约束为：
 
@@ -139,6 +195,7 @@ Tick/Gameplay
  -> PicoTask
  -> Cook/Stage/Package
  -> Async AI Tools
+ -> PicoGraph Lite
 ```
 
 ## Tick 当前缺口与目标帧管线
@@ -346,12 +403,115 @@ PreInit 校验。第二次 Release 探针不携带 Source、CMakeLists 或项目
 
 | 周次 | 任务 | 月末验收 |
 | --- | --- | --- |
-| 第 1 周 | `MoveComponent`、Sweep/Teleport、`FHitResult`、MovementComponent、PawnMovementComponent、FloatingPawnMovement | 输入经 Controller 和唯一移动入口驱动 Pawn |
-| 第 2 周 | 拆分 TickGroup 分阶段执行；接入 Jolt PhysicsScene、Shape、Body、Raycast、Sweep、Trigger 和 Transform/Body 同步规则 | Jolt Step 位于 Pre/PostPhysics 之间；刚体、查询和碰撞事件可用且不绕过移动边界 |
+| 第 1 周 | `MoveComponent`、Sweep/Teleport、`FHitResult`、MovementComponent 的 UpdatedComponent/MoveUpdatedComponent/SafeMoveUpdatedComponent、PawnMovementComponent、FloatingPawnMovement | 输入经 Controller 和唯一 Gameplay 移动入口驱动 Pawn；编辑器/加载使用显式 Teleport |
+| 第 2 周 | 拆分 TickGroup 分阶段执行；通过 `IPhysicsScene/IWorldCollisionQuery` 接入 Jolt Shape、Body、Raycast、Sweep、Trigger 和 Transform/Body 同步规则 | Jolt Step 位于 Pre/PostPhysics 之间；公共接口不暴露 Jolt 类型，刚体、查询和碰撞事件不绕过移动边界 |
 | 第 3 周 | Character、CharacterMovement，确定性输入、地面检测、行走、跳跃、下落和沿墙滑动 | 角色移动稳定，相同状态与输入可供服务器重演 |
-| 第 4 周 | Skeleton、SkeletalMesh、AnimationClip、AnimInstance、Idle/Walk/Jump、基础 Root Motion | 动画由移动状态驱动，Root Motion 经 MovementComponent |
+| 第 4 周 | 分层实现 Skeleton、SkeletalMesh、AnimationClip、AnimInstance、Pose、通用蒙皮 Render Data、Idle/Walk/Jump 和基础 Root Motion；通过开发期导入层接入 Assimp，glTF/GLB 为正式验收输入，FBX 为实验性输入 | 动画由移动状态驱动，Root Motion 经 MovementComponent；动画资产和组件不持有 OpenGL、Assimp 或源格式对象；同一 Pico 原生资产链可承载 glTF/GLB 与受控 FBX |
+
+第 1 周已完成：新增独立 `PicoPhysicsCore` 数据边界、`FHitResult`、Collision Shape/Query、Sweep/Teleport
+语义、`UpdatedComponent`、`MoveUpdatedComponent/SafeMoveUpdatedComponent/SlideAlongSurface`、Pawn 输入缓存、
+PawnMovement/FloatingPawnMovement 继承链和 Controller Tick prerequisite。Sandbox 已迁移到统一移动入口，
+Gameplay Debug 可观察输入、速度、移动模式和命中结果。详见
+[`Month08_1_MovementFoundation.md`](Month08_1_MovementFoundation.md)。Debug/Release 均为 13/13 CTest
+通过，Movement 聚焦测试为 23/23 断言通过。
+
+第 2 周已完成：`FTickTaskManager` 已拆为显式 `BeginFrame/RunTickGroup/EndFrame`，`PWorld` 在
+Pre/PostPhysics 之间执行同步 Jolt Step；新增 `IPhysicsScene`、稳定 Body Handle、Body 描述/状态、
+Raycast/Sweep/Overlap、Box/Sphere/Capsule Shape、Static/Kinematic/Dynamic Transform 权威规则、Trigger 与
+Hit 委托，以及 `PicoPhysicsJolt` 后端隔离模块。Sandbox 运行时包含地面、墙、动态刚体和 Trigger，F1
+Gameplay Debug 可观察 Step、Body 和查询结果。详见
+[`Month08_2_JoltPhysics.md`](Month08_2_JoltPhysics.md)。Physics 聚焦测试为 18/18 断言通过，并覆盖
+序列化 World 替换后的物理服务重建与逻辑 Overlap 去重。
+当前 Debug/Release 均为 14/14 CTest 通过。
+
+第 3 周已完成：新增 `PCharacter` 与 `PCharacterMovementComponent`，通过继承的 CDO 默认子对象模板
+统一创建 Capsule 和移动组件；实现确定性移动输入/状态、地面 Sweep、可行走坡度、行走加减速、跳跃、
+下落、落地、离开平台、沿墙滑动和动态刚体推动。角色长帧模拟受最大迭代次数约束，Jolt 后端改为固定
+60 Hz 且每个 World 帧最多 4 个子步。Sandbox 已迁移至 Character，`Space` 接入 `Action.Jump`，F1
+Gameplay Debug 可观察移动模式、地面结果、法线、跳跃请求和模拟迭代次数。详见
+[`Month08_3_CharacterMovement.md`](Month08_3_CharacterMovement.md)。新增 CharacterMovement 聚焦测试
+覆盖默认子对象、行走/跳跃/下落/落地、确定性重演、长帧上限和推动刚体；第 4 周进入动画数据与运行边界。
+
+第 4 周已完成：新增 Pico 原生 `.pskeleton`、`.pskeletalmesh`、`.panimation` 格式及严格校验，
+`PAnimInstance` 根据 CharacterMovement 的地面速度与 MovementMode 选择 Idle/Walk/Jump，
+`PSkeletalMeshComponent` 输出通用 CPU 蒙皮 Render Data，`PicoRender` 按组件 Revision 动态上传顶点。
+Standalone 的 F1 Gameplay Debug 已将 GroundSpeed、AnimationState、MovementMode、当前 Clip 和播放时间
+分开显示，可直接验收静止时 `Idle + Walking`、移动时 `Walk + Walking` 和腾空时 `Jump + Falling` 的关系。
+Root Motion 被写入可重放的 `FCharacterMoveInput` 并经 Sweep/MoveComponent 执行；自动化测试覆盖资产往返、
+Pose、蒙皮、状态切换和撞墙 Root Motion。Sandbox 提供不依赖外部模型的双骨骼可视化样例。Assimp 适配源码与
+`PicoAssetTool import-skeletal` 已接入；本地 Assimp 6.0.4 源码会由 CMake 自动发现，并只启用 glTF 与 FBX
+Importer。已经使用 Assimp 官方蒙皮 glTF 和骨骼动画 FBX 样例完成真实文件导入，Debug 与 Release 自动化
+测试均通过。详见
+[`Month08_4_SkeletalAnimation.md`](Month08_4_SkeletalAnimation.md)。
+
+第 4 周收尾已补齐 UE Persona 思路的简化编辑器链路：Content Browser 可直接选择 glTF/GLB/FBX，Assimp
+先导入内存并在独立、RootSet 持有的临时 Preview World 中显示；确认后自动计算 Content 物理路径与
+`/Game` 引用，保存 Skeleton/SkeletalMesh/AnimationClip、刷新 AssetRegistry 并选中新资产。双击正式
+SkeletalMesh 或 AnimationClip 可再次预览，不创建、不修改也不保存地图 Actor。详见
+[`Month08_5_SkeletalAssetPreview.md`](Month08_5_SkeletalAssetPreview.md)。
 
 月末 Demo 必须支持 WASD、跳跃、碰撞、推动刚体和 Idle/Walk/Jump 动画。
+
+### 第 4 周动画导入范围
+
+动画导入采用“第三方库只解析源文件，Pico 负责运行时”的固定边界：
+
+```text
+glTF/GLB 或 FBX
+ -> PicoAssetImport + Assimp
+ -> 坐标系/单位/骨骼/权重/关键帧校验与转换
+ -> Pico 原生 Skeleton/SkeletalMesh/AnimationClip
+ -> AssetManager/AnimInstance/Pose/Renderer
+```
+
+- `PicoAssetImport` 是唯一允许包含 Assimp 头文件和对象的模块；`PicoAsset`、`PicoEngine`、Gameplay、
+  反射、序列化、网络和 `PicoRender` 不得暴露 `aiScene/aiNode/aiMesh/aiAnimation`。
+- 第一版正式保证一个受控 glTF/GLB 动画角色可以稳定导入、重导入、保存为 Pico 原生资产并在
+  Editor/Standalone 中播放。
+- 第一版使用同一导入器尝试一个简单 FBX 的 Skeleton、Skin Weights 和 AnimationClip；通过坐标、单位、
+  Bind Pose 和关键帧验收后标记为“实验性支持”，不承诺兼容任意 FBX 版本、DCC 导出设置、Morph、LOD
+  或复杂材质。
+- 不自行解析 FBX，也暂不直接接入 Autodesk FBX SDK；只有 Assimp 无法满足经过记录的真实 FBX 用例时，
+  才允许新增独立 `PicoAssetImportFBX` 适配模块，上层 Pico 原生资产格式保持不变。
+- 导入测试至少包含一个程序生成的双骨骼确定性样例和一个许可证清晰的可视化角色；测试资产来源、许可、
+  单位和导出设置必须随项目记录。
+
+### Pico Montage Lite 规划
+
+Montage Lite 不阻塞第 5 月基础动画 MVP，安排为第 5 月第 4 周后的 3～5 天收尾扩展；如果动画基础阶段
+消耗超出预期，可以后移，但最晚必须在第 8 月 `PlayAnimationAndWait` AbilityTask 开始前完成。第 5 月
+第 4 周先在 AnimationClip/AnimInstance 中预留 Notify、Slot 名称、播放结果和 Root Motion 提取边界。
+
+首版数据与运行实例：
+
+```text
+PAnimationMontageAsset
+  -> AnimationClip Segments
+  -> named Sections and next-section links
+  -> one DefaultSlot
+  -> Notify / NotifyWindow timeline
+
+FActiveMontageInstance
+  -> playback time/rate
+  -> current section
+  -> blend in/out state
+  -> playing/completed/interrupted state
+```
+
+首版必须支持：
+
+- `PlayMontage`、`StopMontage`、`JumpToSection`、`IsMontagePlaying`；
+- 多个 AnimationClip Segment、命名 Section、Section 跳转/循环和播放速率；
+- 一个 `DefaultSlot`、基础淡入淡出，以及 Completed/Interrupted Native 弱对象委托；
+- Notify 与 NotifyWindow 的 Begin/End 广播，跨越多关键点或循环边界时不漏发、不重复；
+- Root Motion 从 Montage 提取后交给 CharacterMovement，再经 MoveComponent/Sweep 执行；
+- `AbilityTask::PlayAnimationAndWait` 可等待完成、中断或取消，并在结束时解除全部弱委托；
+- 自动化验证连击 Section 跳转、换弹循环、NotifyWindow、撞墙 Root Motion 和中断清理。
+
+首版明确不做完整 Montage 时间轴编辑器、多 Slot Group 并发、骨骼遮罩/上半身分层、Sync Group、
+Branching Point 精确任务语义、复杂 Montage 优先级和任意 Montage 网络复制。网络阶段不复制每根骨骼或
+最终 Pose；将来确有玩法需求时只同步权威 Montage 资产身份、Section、服务器时间/位置、播放速率与必要
+事件，Root Motion 继续服从服务器移动与客户端纠错。
 
 ## 第 6 月：Replication、RPC 与预测
 
@@ -459,7 +619,7 @@ P2P/NAT 穿透和商业级拥塞控制。对应概念保留扩展点，但不得
 | --- | --- | --- |
 | 第 1 周 | GameplayTag、AttributeSet、AbilitySystemComponent、AbilitySpec | 属性和 Ability 可授予 |
 | 第 2 周 | GameplayEffect、Cost、Cooldown、Duration、Periodic 和 Tag 条件 | Effect 生命周期正确 |
-| 第 3 周 | AbilityTask、WaitGameplayEvent、WaitDelay、PlayAnimationAndWait、Ability 网络预测 | 异步 Ability 可等待、取消和预测 |
+| 第 3 周 | 基于已完成的 Montage Lite 实现 AbilityTask、WaitGameplayEvent、WaitDelay、PlayAnimationAndWait 和 Ability 网络预测 | 异步 Ability 可等待、取消和预测；Montage 完成/中断/Notify 能可靠结束或推进 Task |
 | 第 4 周 | 基于 PicoTask 的异步 DeepSeek/Kimi Provider、Tool Registry、中文命令、保存、构建和打包 | AI 请求不阻塞编辑器，并可驱动受控编辑器命令 |
 
 Mini GAS Demo 包含：
@@ -504,12 +664,79 @@ AI 不直接执行模型生成的任意 Shell 命令，也不直接修改未知�
 - 资产/Cook/AI 等耗时任务可在后台运行、取消并安全回到 Game Thread 应用结果。
 - 输出不依赖编辑器、源码和仓库目录的独立程序。
 
+## 第 9 月（MVP 后）：PicoGraph Lite 可视化脚本
+
+目标：以 UE Blueprint 的“反射暴露、强类型图、编译、生成运行表示和事件驱动”为学习重点，让已有原生
+Actor 可以挂载并执行可保存、可 Cook、可由 AI 安全生成的 Event Graph。PicoGraph 不进入当前半年 MVP
+验收，不得反向阻塞网络、Package、Mini GAS 或 AI Tool 主链。
+
+| 周次 | 任务 | 周末验收 |
+| --- | --- | --- |
+| 第 1 周 | `.pgraph` 资产、稳定 Node/Pin/Link ID、变量、Entry Event、图版本、序列化与基础节点编辑器 | 创建、连线、断线、Undo/Redo、保存、重开后图结构和布局完全恢复 |
+| 第 2 周 | Graph Schema、Pin 类型系统、控制流/数据流校验、Typed IR、Pico Bytecode Compiler 和编译诊断 | 非法类型、缺失输入、执行环和失效函数给出定位到节点/Pin 的错误；合法图产生确定字节码 |
+| 第 3 周 | `FPicoScriptVM`、Execution Context、指令/循环预算、`PScriptComponent`、BeginPlay/Custom Event、PFunction/Property/Delegate 节点 | 原生 Actor 可执行 Graph；函数和属性经反射访问；错误图不会卡死 Game Thread |
+| 第 4 周 | Latent Continuation、Delay、WaitGameplayEvent、PlayMontageAndWait、Cook/Package、AI Graph Tools 和可视化调试状态 | 开门/拾取/延迟/Montage 等待 Demo 可运行；AI 可生成受限图并经校验保存；Stage 外 Runtime 可执行 Cook 后字节码 |
+
+### PicoGraph 固定边界
+
+```text
+.pgraph Editor Asset
+ -> Graph Schema + Validator
+ -> Typed IR
+ -> Bytecode Compiler
+ -> Cooked Script Asset
+ -> FPicoScriptVM + FScriptExecutionContext
+ -> PFunction / PProperty / Delegate / AbilityTask
+```
+
+- Runtime 执行 Cook 后字节码，不递归遍历编辑器 Node 对象；图布局、注释和编辑器选择不进入运行数据。
+- Node/Pin/Link 使用稳定 ID，不能保存 UI 指针；对象引用沿用资产路径、SceneId 或运行时受控 Handle，
+  不发明可跨磁盘/网络复用的裸地址身份。
+- Pin 类型第一版复用 Pico 反射类型：Exec、Bool、Int32、Float、String、Name、Vector3、Rotator、Transform
+  和受 `PClass` 约束的 Object；隐式转换必须由 Graph Schema 明确列出。
+- `PFunction` 是 C++ 与脚本的唯一函数调用桥；只有显式 `Callable` 且满足上下文、线程、Role/Ownership
+  和权限元数据的函数才能生成节点。属性节点同样服从 ReadOnly、Transient、网络权威和变更通知规则。
+- VM 每次恢复都有最大指令数、循环次数和调用深度；超预算产生可诊断错误并终止当前执行，不阻塞 World。
+- Delay、WaitGameplayEvent 和 PlayMontageAndWait 不创建第二套等待线程，统一复用 AbilityTask/Latent Handle；
+  Actor 销毁、World 重载、网络预测拒绝和引擎退出时必须取消 Continuation 并清理弱委托。
+- AI 只能通过 `CreateGraph/AddNode/ConnectPins/SetDefaultValue/CompileGraph` 等受控工具构建图；编译成功前
+  不允许进入场景或 Package，模型输出不能绕过 Schema 直接写字节码或执行任意 Shell。
+
+第一阶段节点范围固定为：
+
+```text
+Event BeginPlay / Tick / Custom Event
+Call PFunction
+Get / Set Property
+Branch / Sequence / bounded ForLoop
+Bind Delegate / Broadcast Delegate
+SpawnActor / DestroyActor
+MoveComponent
+PlayMontageAndWait / ActivateAbility
+Delay / WaitGameplayEvent
+Log
+```
+
+第一阶段只让已有原生 Actor 通过 `PScriptComponent` 挂载 Graph。第二阶段可选实现
+`PGraphGeneratedClass + CDO + DefaultSubobject Templates`，使 Graph 定义可放置的新 Actor 类型；进入第二
+阶段前必须先证明运行时动态类注册、父类失效、CDO 重建、实例默认值和 `.pworld` 引用修复不会破坏现有
+原生类路径。
+
+首版明确不实现完整 Kismet Compiler、Blueprint Interface、Macro/Function Library、任意递归、无界循环、
+Construction Script、AnimGraph、节点热重载、Nativization、完整断点/单步调试、多人协作图编辑和任意
+Editor Utility 权限。可视化调试只显示当前节点、最近错误、调用栈摘要和剩余执行预算。
+
+第 9 月最终验收 Demo：在编辑器中用 Graph 创建 Trigger 开门、拾取加属性和播放攻击 Montage 的逻辑；
+保存并重开后行为恢复；AI 用中文生成同类受限 Graph；编译错误可定位；Cook 后在仓库外 Runtime 中运行，
+且网络权威操作仍由 Server RPC/Replication 规则约束。
+
 ## MVP 后任务
 
 以下内容不进入当前主线，只有主计划提前完成时才开始：
 
+- `PicoGraph Lite` 可视化脚本按上述第 9 月独立阶段执行；完整 Blueprint 生态继续延后。
 - ECS Registry、稠密组件存储和 Actor/ECS 桥接。
-- 光线追踪。
+- Render Architecture：PrimitiveSceneProxy、MeshBatch、RenderScene、RHI 和 RenderPass/RenderGraph；完成后再接入光线追踪。
 - 完整 GameplayTask Scheduler 和 TargetData 系统。
 - 更完整的 GAS Effect Aggregator 和复杂叠层。
 - NAT 穿透、P2P、Relay、匹配和账号平台。

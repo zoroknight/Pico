@@ -2,6 +2,7 @@
 
 #include "Pico/Asset/StaticMesh.h"
 #include "Pico/AssetImport/StaticMeshImporter.h"
+#include "Pico/AssetImport/SkeletalAnimationImporter.h"
 #include "Pico/AssetImport/TextureImporter.h"
 
 #include <chrono>
@@ -107,6 +108,57 @@ void TestTextureImport(FTestRunner& Runner)
     std::error_code ErrorCode;
     std::filesystem::remove_all(Root, ErrorCode);
 }
+
+#if defined(PICO_ASSIMP_GLTF_FIXTURE) && defined(PICO_ASSIMP_FBX_FIXTURE)
+void TestSkeletalImport(FTestRunner& Runner)
+{
+    Pico::FAssetPath SkeletonAssetPath;
+    Pico::FAssetPath::TryParse(
+        "/Game/Characters/AssimpTest.pskeleton", SkeletonAssetPath);
+
+    Pico::FSkeletalImportResult GltfResult;
+    Pico::ESkeletalImportError Error = Pico::ESkeletalImportError::None;
+    Runner.Expect(
+        Pico::ImportSkeletalAnimation(
+            PICO_ASSIMP_GLTF_FIXTURE, SkeletonAssetPath, {}, GltfResult, &Error)
+            && Error == Pico::ESkeletalImportError::None
+            && Pico::ValidateSkeleton(GltfResult.Skeleton)
+            && Pico::ValidateSkeletalMesh(GltfResult.Mesh, &GltfResult.Skeleton)
+            && !GltfResult.Animations.empty()
+            && Pico::ValidateAnimationClip(
+                GltfResult.Animations.front(), &GltfResult.Skeleton),
+        "Assimp imports an animated glTF skin into validated Pico native data");
+
+    const auto Suffix = std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::filesystem::path Root = std::filesystem::temp_directory_path()
+        / ("PicoSkeletalImportTests_" + std::to_string(Suffix));
+    std::filesystem::create_directories(Root / "Animations");
+    Runner.Expect(
+        Pico::SaveSkeletalImportResult(
+            GltfResult,
+            Root / "Test.pskeleton",
+            Root / "Test.pskeletalmesh",
+            Root / "Animations",
+            &Error)
+            && std::filesystem::is_regular_file(Root / "Test.pskeleton")
+            && std::filesystem::is_regular_file(Root / "Test.pskeletalmesh")
+            && !std::filesystem::is_empty(Root / "Animations"),
+        "Imported glTF skeleton, mesh and clips save as runtime-loadable Pico assets");
+
+    Pico::FSkeletalImportResult FbxResult;
+    Runner.Expect(
+        Pico::ImportSkeletalAnimation(
+            PICO_ASSIMP_FBX_FIXTURE, SkeletonAssetPath, {}, FbxResult, &Error)
+            && Error == Pico::ESkeletalImportError::None
+            && Pico::ValidateSkeleton(FbxResult.Skeleton)
+            && Pico::ValidateSkeletalMesh(FbxResult.Mesh, &FbxResult.Skeleton)
+            && !FbxResult.Animations.empty(),
+        "Assimp experimental FBX path imports a weighted mesh, skeleton and animation");
+
+    std::error_code ErrorCode;
+    std::filesystem::remove_all(Root, ErrorCode);
+}
+#endif
 }
 
 int main()
@@ -114,5 +166,8 @@ int main()
     FTestRunner Runner;
     TestObjImport(Runner);
     TestTextureImport(Runner);
+#if defined(PICO_ASSIMP_GLTF_FIXTURE) && defined(PICO_ASSIMP_FBX_FIXTURE)
+    TestSkeletalImport(Runner);
+#endif
     return Runner.Finish();
 }

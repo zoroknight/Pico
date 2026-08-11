@@ -1,10 +1,14 @@
 #include "Pico/Engine/SceneComponent.h"
 
+#include "Pico/Core/GameThread.h"
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/World.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ObjectGlobals.h"
+#include "Pico/PhysicsCore/WorldCollisionQuery.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 #include <vector>
 
@@ -137,6 +141,7 @@ const FTransform& PSceneComponent::GetRelativeTransform() const
 void PSceneComponent::SetRelativeTransform(const FTransform& Transform)
 {
     RelativeTransform = Transform;
+    NotifyTransformChangedRecursive(ETeleportType::TeleportPhysics);
 }
 
 const FVector3& PSceneComponent::GetRelativeLocation() const
@@ -147,6 +152,7 @@ const FVector3& PSceneComponent::GetRelativeLocation() const
 void PSceneComponent::SetRelativeLocation(const FVector3& Location)
 {
     RelativeTransform.Translation = Location;
+    NotifyTransformChangedRecursive(ETeleportType::TeleportPhysics);
 }
 
 FRotator PSceneComponent::GetRelativeRotation() const
@@ -157,6 +163,7 @@ FRotator PSceneComponent::GetRelativeRotation() const
 void PSceneComponent::SetRelativeRotation(const FRotator& Rotation)
 {
     RelativeTransform.Rotation = Rotation.Quaternion();
+    NotifyTransformChangedRecursive(ETeleportType::TeleportPhysics);
 }
 
 const FVector3& PSceneComponent::GetRelativeScale() const
@@ -167,6 +174,7 @@ const FVector3& PSceneComponent::GetRelativeScale() const
 void PSceneComponent::SetRelativeScale(const FVector3& Scale)
 {
     RelativeTransform.Scale = Scale;
+    NotifyTransformChangedRecursive(ETeleportType::TeleportPhysics);
 }
 
 FTransform PSceneComponent::GetWorldTransform() const
@@ -190,10 +198,107 @@ FTransform PSceneComponent::GetSocketTransform(FName SocketName) const
 
 void PSceneComponent::SetWorldTransform(const FTransform& Transform)
 {
+    SetWorldTransformInternal(Transform, ETeleportType::TeleportPhysics);
+}
+
+void PSceneComponent::SetWorldTransformInternal(
+    const FTransform& Transform,
+    ETeleportType Teleport)
+{
     const PSceneComponent* Parent = GetAttachParent();
     RelativeTransform = Parent != nullptr
         ? Transform.GetRelativeTransform(Parent->GetSocketTransform(AttachSocketName))
         : Transform;
+    NotifyTransformChangedRecursive(Teleport);
+}
+
+void PSceneComponent::SetWorldTransformFromPhysics(const FTransform& Transform)
+{
+    bApplyingPhysicsTransform = true;
+    SetWorldTransformInternal(Transform, ETeleportType::None);
+    bApplyingPhysicsTransform = false;
+}
+
+void PSceneComponent::OnWorldTransformChanged(ETeleportType)
+{
+}
+
+void PSceneComponent::NotifyTransformChangedRecursive(ETeleportType Teleport)
+{
+    if (!bApplyingPhysicsTransform)
+    {
+        OnWorldTransformChanged(Teleport);
+    }
+    for (PSceneComponent* Child : GetAttachChildren())
+    {
+        if (Child != nullptr)
+        {
+            Child->NotifyTransformChangedRecursive(Teleport);
+        }
+    }
+}
+
+FCollisionShape PSceneComponent::GetCollisionShape() const
+{
+    return FCollisionShape::MakePoint();
+}
+
+bool PSceneComponent::MoveComponent(
+    const FVector3& Delta,
+    const FQuat& NewRotation,
+    bool bSweep,
+    FHitResult* OutHit,
+    EMoveComponentFlags,
+    ETeleportType Teleport)
+{
+    if (!CheckGameThread("PSceneComponent::MoveComponent"))
+    {
+        return false;
+    }
+    const FTransform StartTransform = GetWorldTransform();
+    const FVector3 Start = StartTransform.Translation;
+    const FVector3 End = Start + Delta;
+    FHitResult Hit;
+    Hit.Reset(Start, End);
+
+    const bool bShouldSweep = bSweep && Teleport == ETeleportType::None
+        && !Delta.IsNearlyZero();
+    if (bShouldSweep)
+    {
+        PWorld* World = GetWorld();
+        IWorldCollisionQuery* CollisionQuery =
+            World != nullptr ? World->GetCollisionQuery() : nullptr;
+        if (CollisionQuery != nullptr)
+        {
+            FCollisionQueryParams QueryParams;
+            QueryParams.MovingObject = GetHandle();
+            CollisionQuery->Sweep(
+                GetCollisionShape(),
+                Start,
+                End,
+                NewRotation,
+                QueryParams,
+                Hit);
+        }
+    }
+
+    Hit.Time = std::clamp(Hit.Time, 0.0f, 1.0f);
+    if (!Hit.bBlockingHit)
+    {
+        Hit.Time = 1.0f;
+    }
+    Hit.Location = Start + Delta * Hit.Time;
+    Hit.Distance = (Hit.Location - Start).Size();
+    FTransform TargetTransform = StartTransform;
+    TargetTransform.Translation = Hit.Location;
+    TargetTransform.Rotation = NewRotation.GetNormalized();
+    SetWorldTransformInternal(TargetTransform, Teleport);
+
+    if (OutHit != nullptr)
+    {
+        *OutHit = Hit;
+    }
+    return !Hit.bStartPenetrating || Hit.Time > 0.0f;
 }
 
 void PSceneComponent::BeginDestroy()

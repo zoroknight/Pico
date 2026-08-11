@@ -4,15 +4,24 @@
 #include "Pico/Engine/GameInstance.h"
 #include "Pico/Engine/GameModeBase.h"
 #include "Pico/Engine/GameStateBase.h"
+#include "Pico/Engine/Character.h"
+#include "Pico/Engine/CharacterMovementComponent.h"
+#include "Pico/Engine/AnimInstance.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/LocalPlayer.h"
 #include "Pico/Engine/MatchState.h"
+#include "Pico/Engine/MovementComponent.h"
 #include "Pico/Engine/Pawn.h"
+#include "Pico/Engine/PawnMovementComponent.h"
 #include "Pico/Engine/PlayerController.h"
 #include "Pico/Engine/PlayerStart.h"
 #include "Pico/Engine/PlayerState.h"
+#include "Pico/Engine/PrimitiveComponent.h"
+#include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Render/SceneViewportRenderer.h"
+#include "Pico/PhysicsCore/WorldCollisionQuery.h"
 
 #include <GLFW/glfw3.h>
 #include <backends/imgui_impl_glfw.h>
@@ -20,6 +29,7 @@
 #include <imgui.h>
 
 #include <cstdio>
+#include <cmath>
 #include <exception>
 #include <filesystem>
 #include <stdexcept>
@@ -86,7 +96,7 @@ struct FGameplayDebugPanel
             return;
         }
         ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(470.0f, 560.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(500.0f, 680.0f), ImGuiCond_FirstUseEver);
         if (!ImGui::Begin("Gameplay Debug", &bVisible))
         {
             ImGui::End();
@@ -142,6 +152,158 @@ struct FGameplayDebugPanel
                 PlayerStart->OnPlayerSpawned().Num(),
                 PlayerStart->GetSpawnEventCount());
         }
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Movement");
+        Pico::PPawnMovementComponent* Movement =
+            Pawn != nullptr ? Pawn->GetMovementComponent() : nullptr;
+        DrawObject("MovementComponent", Movement);
+        DrawObject(
+            "UpdatedComponent",
+            Movement != nullptr ? Movement->GetUpdatedComponent() : nullptr);
+        if (Pawn != nullptr)
+        {
+            const Pico::FVector3& Pending =
+                Pawn->GetPendingMovementInputVector();
+            const Pico::FVector3& LastInput =
+                Pawn->GetLastMovementInputVector();
+            ImGui::Text("Pending input: %.3f  %.3f  %.3f",
+                Pending.X, Pending.Y, Pending.Z);
+            ImGui::Text("Last input: %.3f  %.3f  %.3f",
+                LastInput.X, LastInput.Y, LastInput.Z);
+        }
+        if (Movement != nullptr)
+        {
+            const Pico::FVector3& Velocity = Movement->GetVelocity();
+            const Pico::FVector3& MoveDelta = Movement->GetLastMoveDelta();
+            const Pico::FHitResult& Hit = Movement->GetLastHitResult();
+            ImGui::Text("Velocity: %.2f  %.2f  %.2f",
+                Velocity.X, Velocity.Y, Velocity.Z);
+            ImGui::Text("Last delta: %.3f  %.3f  %.3f",
+                MoveDelta.X, MoveDelta.Y, MoveDelta.Z);
+            ImGui::Text("Move: %s   Blocking hit: %s   Time: %.3f",
+                Movement->GetLastTeleportType() == Pico::ETeleportType::None
+                    ? (Movement->WasLastMoveSwept() ? "Sweep" : "Direct")
+                    : "Teleport",
+                Hit.bBlockingHit ? "yes" : "no",
+                Hit.Time);
+        }
+        Pico::PCharacterMovementComponent* CharacterMovement =
+            Movement != nullptr
+                && Movement->IsA(
+                    Pico::PCharacterMovementComponent::StaticClass())
+            ? static_cast<Pico::PCharacterMovementComponent*>(Movement)
+            : nullptr;
+        Pico::PCharacter* Character = Pawn != nullptr
+                && Pawn->IsA(Pico::PCharacter::StaticClass())
+            ? static_cast<Pico::PCharacter*>(Pawn)
+            : nullptr;
+        if (CharacterMovement != nullptr)
+        {
+            const Pico::FFindFloorResult& Floor =
+                CharacterMovement->GetCurrentFloor();
+            const Pico::FVector3& FloorNormal = Floor.HitResult.ImpactNormal;
+            ImGui::Text("Character mode: %s   On ground: %s",
+                Pico::ToString(CharacterMovement->GetMovementMode()),
+                CharacterMovement->IsMovingOnGround() ? "yes" : "no");
+            ImGui::Text("Floor: %s   Walkable: %s   Distance: %.3f",
+                Floor.bBlockingHit ? "hit" : "none",
+                Floor.bWalkableFloor ? "yes" : "no",
+                Floor.FloorDistance);
+            ImGui::Text("Floor normal: %.3f  %.3f  %.3f",
+                FloorNormal.X, FloorNormal.Y, FloorNormal.Z);
+            ImGui::Text("Jump pressed: %s   Simulation iterations: %d",
+                Character != nullptr && Character->IsJumpPressed()
+                    ? "yes"
+                    : "no",
+                CharacterMovement->GetLastSimulationIterations());
+        }
+
+        Pico::PSkeletalMeshComponent* SkeletalMesh = nullptr;
+        if (Pawn != nullptr)
+        {
+            for (Pico::PActorComponent* Component : Pawn->GetComponents())
+            {
+                if (Component != nullptr
+                    && Component->IsA(Pico::PSkeletalMeshComponent::StaticClass()))
+                {
+                    SkeletalMesh = static_cast<Pico::PSkeletalMeshComponent*>(Component);
+                    break;
+                }
+            }
+        }
+        ImGui::Separator();
+        ImGui::TextUnformatted("Animation");
+        if (SkeletalMesh != nullptr)
+        {
+            const Pico::FVector3 Velocity = Movement != nullptr
+                ? Movement->GetVelocity() : Pico::FVector3::ZeroVector;
+            const float GroundSpeed = std::sqrt(
+                Velocity.X * Velocity.X + Velocity.Y * Velocity.Y);
+            Pico::PAnimInstance* AnimInstance = SkeletalMesh->GetAnimInstance();
+            const Pico::FAnimationClipData* Clip = AnimInstance != nullptr
+                ? AnimInstance->GetCurrentClip() : nullptr;
+            ImGui::Text("Ground speed: %.2f   Animation state: %s",
+                GroundSpeed,
+                Pico::ToString(SkeletalMesh->GetAnimationState()));
+            ImGui::Text("Movement mode: %s   Current clip: %s",
+                CharacterMovement != nullptr
+                    ? Pico::ToString(CharacterMovement->GetMovementMode())
+                    : "None",
+                Clip != nullptr ? Clip->Name.c_str() : "None");
+            ImGui::Text("Playback time: %.3f s",
+                AnimInstance != nullptr ? AnimInstance->GetPlaybackTime() : 0.0f);
+        }
+        else
+        {
+            ImGui::TextDisabled("No SkeletalMeshComponent on the possessed Pawn");
+        }
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Physics");
+        ImGui::Text("Backend: %s   Steps: %llu",
+            World != nullptr && World->GetPhysicsScene() != nullptr ? "Jolt 5.6.0" : "none",
+            static_cast<unsigned long long>(World != nullptr ? World->GetPhysicsStepCount() : 0));
+        ImGui::Text("Hits: %llu   Begin overlap: %llu   End overlap: %llu",
+            static_cast<unsigned long long>(World != nullptr ? World->GetPhysicsHitCount() : 0),
+            static_cast<unsigned long long>(World != nullptr ? World->GetPhysicsBeginOverlapCount() : 0),
+            static_cast<unsigned long long>(World != nullptr ? World->GetPhysicsEndOverlapCount() : 0));
+        Pico::PSceneComponent* PawnRoot = Pawn != nullptr ? Pawn->GetRootComponent() : nullptr;
+        Pico::PPrimitiveComponent* PawnPrimitive = PawnRoot != nullptr
+                && PawnRoot->IsA(Pico::PPrimitiveComponent::StaticClass())
+            ? static_cast<Pico::PPrimitiveComponent*>(PawnRoot)
+            : nullptr;
+        if (PawnPrimitive != nullptr)
+        {
+            const Pico::FPhysicsBodyHandle Body = PawnPrimitive->GetPhysicsBodyHandle();
+            ImGui::Text("Pawn body: %u:%u   Type: %s",
+                Body.Id,
+                Body.Serial,
+                PawnPrimitive->GetPhysicsBodyType() == Pico::EPhysicsBodyType::Dynamic
+                    ? "Dynamic"
+                    : PawnPrimitive->GetPhysicsBodyType() == Pico::EPhysicsBodyType::Kinematic
+                        ? "Kinematic"
+                        : "Static");
+        }
+        if (ImGui::Button("Raycast Down") && World != nullptr && World->GetCollisionQuery() != nullptr)
+        {
+            const Pico::FVector3 Start = Pawn != nullptr
+                ? Pawn->GetActorLocation() + Pico::FVector3(0.0f, 0.0f, 300.0f)
+                : Pico::FVector3(0.0f, 0.0f, 300.0f);
+            Pico::FCollisionQueryParams Params;
+            if (PawnPrimitive != nullptr) Params.MovingObject = PawnPrimitive->GetHandle();
+            bLastRaycastHit = World->GetCollisionQuery()->Raycast(
+                Start,
+                Start - Pico::FVector3(0.0f, 0.0f, 1000.0f),
+                Params,
+                LastRaycastHit);
+        }
+        ImGui::SameLine();
+        ImGui::Text("%s  time %.3f  object %u:%u",
+            bLastRaycastHit ? "hit" : "no hit",
+            LastRaycastHit.Time,
+            LastRaycastHit.HitObject.Index,
+            LastRaycastHit.HitObject.Serial);
 
         ImGui::Separator();
         const Pico::EMatchState MatchState = GameMode != nullptr
@@ -233,6 +395,8 @@ struct FGameplayDebugPanel
     }
 
     bool bVisible = true;
+    bool bLastRaycastHit = false;
+    Pico::FHitResult LastRaycastHit;
 
 private:
     static Pico::PPlayerStart* FindPlayerStart(Pico::PWorld* World)

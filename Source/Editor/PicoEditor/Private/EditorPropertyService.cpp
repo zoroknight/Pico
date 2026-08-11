@@ -26,6 +26,10 @@ bool MatchesAssetType(EAssetType AssetType, EAssetReferenceType ReferenceType)
     {
     case EAssetReferenceType::StaticMesh:
         return AssetType == EAssetType::StaticMesh;
+    case EAssetReferenceType::SkeletalMesh:
+        return AssetType == EAssetType::SkeletalMesh;
+    case EAssetReferenceType::AnimationClip:
+        return AssetType == EAssetType::AnimationClip;
     case EAssetReferenceType::Texture:
         return AssetType == EAssetType::Texture;
     case EAssetReferenceType::Material:

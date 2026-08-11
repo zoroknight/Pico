@@ -56,6 +56,8 @@ enum class EAssetReferenceType : uint8
 {
     None,
     StaticMesh,
+    SkeletalMesh,
+    AnimationClip,
     Texture,
     Material
 };

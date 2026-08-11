@@ -28,6 +28,7 @@ protected:
     void BeginDestroy() override;
 
     virtual void OnRegister();
+    virtual void OnTickRegistered();
     virtual void OnUnregister();
 
 private:

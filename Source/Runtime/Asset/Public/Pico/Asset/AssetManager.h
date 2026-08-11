@@ -2,6 +2,7 @@
 
 #include "Pico/Asset/AssetRegistry.h"
 #include "Pico/Asset/Material.h"
+#include "Pico/Asset/SkeletalAnimation.h"
 #include "Pico/Asset/StaticMesh.h"
 #include "Pico/Asset/Texture.h"
 
@@ -25,9 +26,24 @@ public:
         const FAssetPath& AssetPath,
         const FAssetRegistry& Registry,
         EMaterialError* OutError = nullptr);
+    std::shared_ptr<const FSkeletonData> LoadSkeleton(
+        const FAssetPath& AssetPath,
+        const FAssetRegistry& Registry,
+        ESkeletalAssetError* OutError = nullptr);
+    std::shared_ptr<const FSkeletalMeshData> LoadSkeletalMesh(
+        const FAssetPath& AssetPath,
+        const FAssetRegistry& Registry,
+        ESkeletalAssetError* OutError = nullptr);
+    std::shared_ptr<const FAnimationClipData> LoadAnimationClip(
+        const FAssetPath& AssetPath,
+        const FAssetRegistry& Registry,
+        ESkeletalAssetError* OutError = nullptr);
     std::size_t GetCachedStaticMeshCount() const;
     std::size_t GetCachedTextureCount() const;
     std::size_t GetCachedMaterialCount() const;
+    std::size_t GetCachedSkeletonCount() const;
+    std::size_t GetCachedSkeletalMeshCount() const;
+    std::size_t GetCachedAnimationClipCount() const;
     void Invalidate(const FAssetPath& AssetPath);
     void Clear();
 
@@ -56,8 +72,20 @@ private:
         std::shared_ptr<const FMaterialData> Material;
     };
 
+    template<typename DataType>
+    struct TAnimationCacheEntry
+    {
+        FAssetPath AssetPath;
+        std::uintmax_t FileSize = 0;
+        std::filesystem::file_time_type LastWriteTime;
+        std::shared_ptr<const DataType> Data;
+    };
+
     std::vector<FStaticMeshCacheEntry> StaticMeshes;
     std::vector<FTextureCacheEntry> Textures;
     std::vector<FMaterialCacheEntry> Materials;
+    std::vector<TAnimationCacheEntry<FSkeletonData>> Skeletons;
+    std::vector<TAnimationCacheEntry<FSkeletalMeshData>> SkeletalMeshes;
+    std::vector<TAnimationCacheEntry<FAnimationClipData>> AnimationClips;
 };
 }

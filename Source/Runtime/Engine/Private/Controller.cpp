@@ -90,6 +90,7 @@ bool PController::SetPawn(PPawn* InPawn)
     if (OldPawn != nullptr && OldPawn->GetController() == this)
     {
         OldPawn->SetController(nullptr);
+        OldPawn->RefreshMovementTickPrerequisites();
     }
     Pawn = InPawn;
     if (InPawn != nullptr)
@@ -99,6 +100,7 @@ bool PController::SetPawn(PPawn* InPawn)
             OldController->Pawn.Reset();
         }
         InPawn->SetController(this);
+        InPawn->RefreshMovementTickPrerequisites();
     }
     return true;
 }

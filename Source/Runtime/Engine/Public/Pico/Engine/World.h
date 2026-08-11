@@ -4,19 +4,26 @@
 #include "Pico/Object/ObjectDelegate.h"
 #include "Pico/Object/ReflectionMacros.h"
 #include "Pico/Engine/TickTaskManager.h"
+#include "Pico/PhysicsCore/CollisionTypes.h"
 
 #include <string_view>
+#include <memory>
 #include <type_traits>
 #include <vector>
 
 namespace Pico
 {
 class PActor;
+class FAssetManager;
+class FAssetRegistry;
 class FWorldAssetLoader;
 class FReferenceCollector;
+class PPrimitiveComponent;
 class PGameModeBase;
 class PGameStateBase;
 class PLevel;
+class IWorldCollisionQuery;
+class IPhysicsScene;
 
 using FOnActorSpawned = TObjectMulticastDelegate<void(PActor*)>;
 
@@ -86,19 +93,40 @@ public:
     const FTickTaskManager& GetTickTaskManager() const;
     PGameModeBase* GetGameMode() const;
     PGameStateBase* GetGameState() const;
+    uint64 GetPhysicsStepCount() const;
+    uint64 GetPhysicsHitCount() const;
+    uint64 GetPhysicsBeginOverlapCount() const;
+    uint64 GetPhysicsEndOverlapCount() const;
+    IPhysicsScene* GetPhysicsScene() const;
+    void SetPhysicsScene(std::unique_ptr<IPhysicsScene> InPhysicsScene);
+    IWorldCollisionQuery* GetCollisionQuery() const;
+    void SetCollisionQuery(IWorldCollisionQuery* InCollisionQuery);
+    void SetAssetServices(FAssetRegistry* InRegistry, FAssetManager* InManager);
+    FAssetRegistry* GetAssetRegistry() const;
+    FAssetManager* GetAssetManager() const;
 
 protected:
     explicit PWorld(const FObjectConstructionParams& Params);
     void BeginDestroy() override;
     void AddReferencedObjects(FReferenceCollector& Collector) const override;
+    ~PWorld() override;
 
 private:
+    struct FActiveOverlapPair
+    {
+        FObjectHandle A;
+        FObjectHandle B;
+    };
+
+    bool InitializePhysicsScene();
     PLevel* ResolveLevel(FObjectHandle Handle) const;
     bool OwnsLevel(const PLevel* Level) const;
     bool OwnsActor(const PActor* Actor) const;
     void BeginPlay();
     void ProcessPendingDestroyActors();
     void DestroyActorNow(PActor* Actor);
+    void SyncDynamicPhysicsBodies();
+    void DispatchPhysicsEvents();
 
     std::vector<FObjectHandle> LevelHandles;
     std::vector<FObjectHandle> PendingDestroyActorHandles;
@@ -108,8 +136,18 @@ private:
     FObjectHandle GameStateHandle;
     FOnActorSpawned ActorSpawnedEvent;
     FTickTaskManager TickTaskManager;
+    std::unique_ptr<IPhysicsScene> PhysicsScene;
+    IWorldCollisionQuery* CollisionQuery = nullptr;
+    FAssetRegistry* AssetRegistry = nullptr;
+    FAssetManager* AssetManager = nullptr;
+    std::vector<FPhysicsContactEvent> LastPhysicsEvents;
+    std::vector<FActiveOverlapPair> ActiveOverlapPairs;
     EWorldState State = EWorldState::Uninitialized;
     uint64 TickCount = 0;
+    uint64 PhysicsStepCount = 0;
+    uint64 PhysicsHitCount = 0;
+    uint64 PhysicsBeginOverlapCount = 0;
+    uint64 PhysicsEndOverlapCount = 0;
     double TimeSeconds = 0.0;
     bool bHasBegunPlay = false;
     bool bTickingActors = false;

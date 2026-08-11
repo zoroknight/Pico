@@ -39,6 +39,7 @@ public:
 
     bool AddPrerequisite(FTickFunction& Prerequisite);
     bool RemovePrerequisite(const FTickFunction& Prerequisite);
+    bool HasPrerequisite(const FTickFunction& Prerequisite) const;
     void ClearPrerequisites();
 
 protected:

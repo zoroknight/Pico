@@ -51,6 +51,29 @@ std::optional<std::filesystem::path> OpenTextureFileDialog()
     return std::nullopt;
 }
 
+std::optional<std::filesystem::path> OpenSkeletalMeshFileDialog()
+{
+#if defined(_WIN32)
+    std::array<wchar_t, 32768> Buffer {};
+    OPENFILENAMEW Dialog {};
+    Dialog.lStructSize = sizeof(Dialog);
+    Dialog.hwndOwner = GetActiveWindow();
+    Dialog.lpstrFilter =
+        L"Skeletal Models (*.gltf;*.glb;*.fbx)\0*.gltf;*.glb;*.fbx\0"
+        L"glTF (*.gltf;*.glb)\0*.gltf;*.glb\0"
+        L"Autodesk FBX (*.fbx)\0*.fbx\0"
+        L"All Files (*.*)\0*.*\0\0";
+    Dialog.lpstrFile = Buffer.data();
+    Dialog.nMaxFile = static_cast<DWORD>(Buffer.size());
+    Dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (GetOpenFileNameW(&Dialog) != FALSE)
+    {
+        return std::filesystem::path(Buffer.data());
+    }
+#endif
+    return std::nullopt;
+}
+
 std::optional<std::filesystem::path> OpenWorldFileDialog(
     const std::filesystem::path& InitialDirectory)
 {

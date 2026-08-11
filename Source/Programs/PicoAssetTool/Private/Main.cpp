@@ -1,4 +1,5 @@
 #include "Pico/AssetImport/StaticMeshImporter.h"
+#include "Pico/AssetImport/SkeletalAnimationImporter.h"
 #include "Pico/Core/AssetPath.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
@@ -95,6 +96,42 @@ int RewriteWorldAssetPath(int Argc, char** Argv)
     std::cout << "Replaced " << ReplacedCount << " World asset reference(s)\n";
     return 0;
 }
+
+int ImportSkeletal(int Argc, char** Argv)
+{
+    if (Argc != 7)
+    {
+        std::cerr << "Usage: PicoAssetTool import-skeletal <source.gltf|glb|fbx> "
+            "</Game/path.pskeleton> <destination.pskeleton> "
+            "<destination.pskeletalmesh> <animation-directory>\n";
+        return 1;
+    }
+    Pico::FAssetPath SkeletonAssetPath;
+    if (!Pico::FAssetPath::TryParse(Argv[3], SkeletonAssetPath))
+    {
+        std::cerr << "Skeleton asset path must be a valid /Game path\n";
+        return 1;
+    }
+    Pico::FSkeletalImportResult Result;
+    Pico::ESkeletalImportError Error = Pico::ESkeletalImportError::None;
+    if (!Pico::ImportSkeletalAnimation(Argv[2], SkeletonAssetPath, {}, Result, &Error))
+    {
+        std::cerr << "Skeletal import failed: " << Pico::ToString(Error) << '\n';
+        return 1;
+    }
+    if (!Pico::SaveSkeletalImportResult(Result, Argv[4], Argv[5], Argv[6], &Error))
+    {
+        std::cerr << "Could not save skeletal assets: " << Pico::ToString(Error) << '\n';
+        return 1;
+    }
+    std::cout << "Imported skeleton, mesh and " << Result.Animations.size()
+        << " animation clip(s)\n";
+    for (const std::string& Warning : Result.Warnings)
+    {
+        std::cout << "Warning: " << Warning << '\n';
+    }
+    return 0;
+}
 }
 
 int main(int Argc, char** Argv)
@@ -104,10 +141,17 @@ int main(int Argc, char** Argv)
     {
         return RewriteWorldAssetPath(Argc, Argv);
     }
+    if (Argc >= 2 && std::string_view(Argv[1]) == "import-skeletal")
+    {
+        return ImportSkeletal(Argc, Argv);
+    }
     if (Argc != 4 || std::string_view(Argv[1]) != "import-obj")
     {
         std::cerr << "Usage:\n"
             "  PicoAssetTool import-obj <source.obj> <destination.pmesh>\n"
+            "  PicoAssetTool import-skeletal <source.gltf|glb|fbx> "
+            "</Game/path.pskeleton> <destination.pskeleton> "
+            "<destination.pskeletalmesh> <animation-directory>\n"
             "  PicoAssetTool rewrite-world-asset-path "
             "<world.pworld> <old-path> <new-path>\n";
         return 1;

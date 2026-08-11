@@ -80,6 +80,13 @@ bool FTickFunction::RemovePrerequisite(const FTickFunction& Prerequisite)
     return std::erase(PrerequisiteIds, Prerequisite.RegistrationId) > 0;
 }
 
+bool FTickFunction::HasPrerequisite(const FTickFunction& Prerequisite) const
+{
+    return Prerequisite.RegistrationId != 0
+        && std::find(PrerequisiteIds.begin(), PrerequisiteIds.end(),
+            Prerequisite.RegistrationId) != PrerequisiteIds.end();
+}
+
 void FTickFunction::ClearPrerequisites() { PrerequisiteIds.clear(); }
 FObjectHandle FTickFunction::GetOwnerHandle() const { return OwnerHandle; }
 

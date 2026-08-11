@@ -36,6 +36,18 @@ The current implementation can:
   GameState exposes replicated match data, elapsed time, and lifecycle notifications.
 - Route mapped WASD input through a project PlayerController to its possessed Pawn, while retaining
   GameInstance and LocalPlayer and rebuilding World-owned Gameplay objects across map replacement.
+- Drive a Character capsule through deterministic walking, jumping, falling, landing, wall sliding,
+  floor probing, and dynamic-body pushing; expose replayable movement input/state for future prediction.
+- Advance Jolt at a fixed 60 Hz with at most four substeps per World frame, while keeping backend
+  types behind `PicoPhysicsCore` handles and query contracts.
+- Play movement-driven Idle/Walk/Jump clips through native Skeleton, SkeletalMesh, AnimInstance,
+  Pose, CPU skinning, and swept Root Motion boundaries without leaking Assimp or OpenGL types.
+- Inspect ground speed, animation state, movement mode, current clip, and playback time independently
+  in the standalone `Gameplay Debug` panel, so grounded `Walking` movement can be distinguished from
+  an `Idle` animation at zero velocity.
+- Import glTF/GLB or FBX from the Content Browser into a transient skeletal Preview World, inspect
+  clips/reference pose with orbit, playback, speed, and timeline controls, then atomically create
+  project-native assets without manually translating disk paths into `/Game` references.
 - Inspect the live Gameplay object chain, restart/destroy/repossess its Pawn, and reload the map from
   the standalone runtime's `Gameplay Debug` panel; inspect PlayerStart shape and validation in editor.
 - Create PlayerStart from the editor toolbar, review persistent green/yellow/red diagnostics in
@@ -127,7 +139,7 @@ The current implementation can:
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-Debug and Release configurations build successfully, and all twelve CTest targets pass.
+Debug and Release configurations build successfully, and all sixteen CTest targets pass.
 
 ## Architecture
 
@@ -164,6 +176,8 @@ PicoSandboxGame
 | `PicoAsset` | Validated virtual asset discovery, deterministic project registry, and file metadata |
 | `PicoAssetImport` | Developer-only OBJ conversion into validated native static-mesh assets |
 | `PicoObject` | Object model, reflection, delegates, strong/weak references, Root Set, mark-sweep GC, registry, handles, Outer graph, serialization |
+| `PicoPhysicsCore` | Backend-neutral shapes, body handles, queries, hit results, and PhysicsScene contracts |
+| `PicoPhysicsJolt` | Jolt 5.6.0 shape/body, fixed-step simulation, query, contact-event, and unit-conversion adapter |
 | `PicoEngine` | Engine loop, World, Level, Actor, components, attachment, primitive scene data |
 | `PicoRender` | GLAD-backed OpenGL, shaders, geometry, framebuffer, scene traversal and draw submission |
 | `PicoGameRuntime` | Reusable project launch, GLFW window, input polling, frame loop, and runtime rendering |
@@ -214,7 +228,8 @@ FGameEngine
     -> PLocalPlayer : PPlayer              persists across map replacement
       -> PPlayerController                 belongs to the current World
         -> PPlayerState                    registered in the current GameState
-        -> PPawn                           controlled through Possess
+        -> PPawn / PCharacter              controlled through Possess
+             -> Capsule + CharacterMovement
 
 PWorld
   -> PGameModeBase                         Login, Logout, RestartPlayer and rules
@@ -277,7 +292,12 @@ object data never stores an absolute workstation path.
 - Git for Windows
 - A GPU and driver supporting OpenGL 3.3
 
-GLFW, Dear ImGui, ImGuizmo, TinyObjLoader, and stb_image are included under `ThirdParty`.
+GLFW, Dear ImGui, ImGuizmo, TinyObjLoader, and stb_image are included under `ThirdParty`. Jolt Physics
+is fetched by CMake and pinned to commit `e77f175595e64cb44218cc9d9d56fc365ad0e36a`.
+Assimp is an optional source dependency for skeletal glTF/GLB and FBX import. Place its source tree at
+`ThirdParty/Assimp` (the default `PICO_ASSIMP_SOURCE_DIR`) and CMake will use it automatically; the
+directory is intentionally Git-ignored because of its size. A system package or
+`-DPICO_FETCH_ASSIMP=ON` remains available as a fallback.
 
 ## Quick Start
 
@@ -543,6 +563,11 @@ See:
 - [Standalone Login, Possess, and Gameplay Debug](Docs/Month07_3_StandaloneLoginPossessAndGameplayDebug.md)
 - [MatchState, Gameplay Events, and Editor Bindings](Docs/Month07_4_MatchStateGameplayEventsAndBindings.md)
 - [Development, Installed, and Staged Runtime Layouts](Docs/Month07_5_DevelopmentInstalledAndStagedLayouts.md)
+- [Movement Foundation](Docs/Month08_1_MovementFoundation.md)
+- [Jolt Physics Scene](Docs/Month08_2_JoltPhysics.md)
+- [Character Movement](Docs/Month08_3_CharacterMovement.md)
+- [Skeletal Animation](Docs/Month08_4_SkeletalAnimation.md)
+- [Skeletal Asset Preview And Import](Docs/Month08_5_SkeletalAssetPreview.md)
 - [Class Default Objects and Unified Construction](Docs/Month03_13_ClassDefaultObjects.md)
 - [Default Subobject Templates](Docs/Month03_14_DefaultSubobjects.md)
 - [Native Delegates and Weak Object Binding](Docs/Month03_15_NativeDelegates.md)
@@ -550,14 +575,20 @@ See:
 
 ## Roadmap
 
-Project month 4 is 100% complete. The asset-driven editor, rendering path, standalone Play, reflected GameInstance lifecycle, explicit
+The project-month-5 runtime scope is complete, including the movement foundation, Jolt PhysicsScene,
+deterministic CharacterMovement, native skeletal-animation assets, AnimInstance state selection,
+CPU skinning, and swept Root Motion. The local Assimp 6.0.4 source integration and real glTF/FBX
+skeletal import paths have been accepted with Assimp's official fixtures in Debug and Release. The
+asset-driven editor, rendering path, standalone Play, reflected GameInstance lifecycle, explicit
 Game Thread boundary, TickFunction scheduler, Gameplay type ownership, MatchState, lifecycle events,
 persistent editor bindings, map replacement, and runtime Gameplay Debug are complete through project
-month 4.
+month 4. Controller input now flows through Character input accumulation, CharacterMovement, and the
+shared MoveComponent boundary. See [Movement Foundation](Docs/Month08_1_MovementFoundation.md),
+[Jolt Physics Scene](Docs/Month08_2_JoltPhysics.md), and
+[Character Movement](Docs/Month08_3_CharacterMovement.md), and
+[Skeletal Animation](Docs/Month08_4_SkeletalAnimation.md).
 The remaining learning path is:
 
-- Character and movement components with one authoritative movement entry point
-- Jolt physics, character movement, and a small animation integration
 - Replication, RPC, transform synchronization, client prediction, and correction
 - Dedicated-server/WAN validation, Cook, Package, and a standalone Windows build
 - A compact `PicoTask` worker pool and game-thread dispatcher for asynchronous Cook, build, and AI

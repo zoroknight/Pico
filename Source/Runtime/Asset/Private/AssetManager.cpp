@@ -151,6 +151,82 @@ std::size_t FAssetManager::GetCachedMaterialCount() const
     return Materials.size();
 }
 
+std::shared_ptr<const FSkeletonData> FAssetManager::LoadSkeleton(
+    const FAssetPath& AssetPath,
+    const FAssetRegistry& Registry,
+    ESkeletalAssetError* OutError)
+{
+    if (OutError != nullptr) *OutError = ESkeletalAssetError::None;
+    const FAssetRecord* Record = Registry.Find(AssetPath);
+    if (Record == nullptr || Record->Type != EAssetType::Skeleton)
+    {
+        if (OutError != nullptr) *OutError = ESkeletalAssetError::InvalidArgument;
+        return {};
+    }
+    auto Found = std::find_if(Skeletons.begin(), Skeletons.end(),
+        [Record](const auto& Entry) { return Entry.AssetPath == Record->AssetPath; });
+    if (Found != Skeletons.end() && Found->FileSize == Record->FileSize
+        && Found->LastWriteTime == Record->LastWriteTime) return Found->Data;
+    auto Loaded = std::make_shared<FSkeletonData>();
+    if (!LoadSkeletonFromFile(Record->FilePath, *Loaded, OutError)) return {};
+    if (Found != Skeletons.end())
+        *Found = {Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded};
+    else Skeletons.push_back({Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded});
+    return Loaded;
+}
+
+std::shared_ptr<const FSkeletalMeshData> FAssetManager::LoadSkeletalMesh(
+    const FAssetPath& AssetPath,
+    const FAssetRegistry& Registry,
+    ESkeletalAssetError* OutError)
+{
+    if (OutError != nullptr) *OutError = ESkeletalAssetError::None;
+    const FAssetRecord* Record = Registry.Find(AssetPath);
+    if (Record == nullptr || Record->Type != EAssetType::SkeletalMesh)
+    {
+        if (OutError != nullptr) *OutError = ESkeletalAssetError::InvalidArgument;
+        return {};
+    }
+    auto Found = std::find_if(SkeletalMeshes.begin(), SkeletalMeshes.end(),
+        [Record](const auto& Entry) { return Entry.AssetPath == Record->AssetPath; });
+    if (Found != SkeletalMeshes.end() && Found->FileSize == Record->FileSize
+        && Found->LastWriteTime == Record->LastWriteTime) return Found->Data;
+    auto Loaded = std::make_shared<FSkeletalMeshData>();
+    if (!LoadSkeletalMeshFromFile(Record->FilePath, *Loaded, OutError)) return {};
+    if (Found != SkeletalMeshes.end())
+        *Found = {Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded};
+    else SkeletalMeshes.push_back({Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded});
+    return Loaded;
+}
+
+std::shared_ptr<const FAnimationClipData> FAssetManager::LoadAnimationClip(
+    const FAssetPath& AssetPath,
+    const FAssetRegistry& Registry,
+    ESkeletalAssetError* OutError)
+{
+    if (OutError != nullptr) *OutError = ESkeletalAssetError::None;
+    const FAssetRecord* Record = Registry.Find(AssetPath);
+    if (Record == nullptr || Record->Type != EAssetType::AnimationClip)
+    {
+        if (OutError != nullptr) *OutError = ESkeletalAssetError::InvalidArgument;
+        return {};
+    }
+    auto Found = std::find_if(AnimationClips.begin(), AnimationClips.end(),
+        [Record](const auto& Entry) { return Entry.AssetPath == Record->AssetPath; });
+    if (Found != AnimationClips.end() && Found->FileSize == Record->FileSize
+        && Found->LastWriteTime == Record->LastWriteTime) return Found->Data;
+    auto Loaded = std::make_shared<FAnimationClipData>();
+    if (!LoadAnimationClipFromFile(Record->FilePath, *Loaded, OutError)) return {};
+    if (Found != AnimationClips.end())
+        *Found = {Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded};
+    else AnimationClips.push_back({Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded});
+    return Loaded;
+}
+
+std::size_t FAssetManager::GetCachedSkeletonCount() const { return Skeletons.size(); }
+std::size_t FAssetManager::GetCachedSkeletalMeshCount() const { return SkeletalMeshes.size(); }
+std::size_t FAssetManager::GetCachedAnimationClipCount() const { return AnimationClips.size(); }
+
 void FAssetManager::Invalidate(const FAssetPath& AssetPath)
 {
     const auto EqualsIgnoringCase = [](std::string_view Left, std::string_view Right)
@@ -182,6 +258,16 @@ void FAssetManager::Invalidate(const FAssetPath& AssetPath)
         {
             return EqualsIgnoringCase(Entry.AssetPath.ToString(), AssetPath.ToString());
         });
+    const auto EraseAnimation = [&AssetPath, &EqualsIgnoringCase](auto& Cache)
+    {
+        std::erase_if(Cache, [&AssetPath, &EqualsIgnoringCase](const auto& Entry)
+        {
+            return EqualsIgnoringCase(Entry.AssetPath.ToString(), AssetPath.ToString());
+        });
+    };
+    EraseAnimation(Skeletons);
+    EraseAnimation(SkeletalMeshes);
+    EraseAnimation(AnimationClips);
 }
 
 void FAssetManager::Clear()
@@ -189,5 +275,8 @@ void FAssetManager::Clear()
     StaticMeshes.clear();
     Textures.clear();
     Materials.clear();
+    Skeletons.clear();
+    SkeletalMeshes.clear();
+    AnimationClips.clear();
 }
 }

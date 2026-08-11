@@ -21,7 +21,8 @@ enum class EEditorSceneComponentType
     Camera,
     SpringArm,
     DirectionalLight,
-    PointLight
+    PointLight,
+    SkeletalMesh
 };
 
 struct FEditorCommandResult
@@ -115,9 +116,11 @@ private:
     unsigned int NextSpringArmNumber = 1;
     unsigned int NextDirectionalLightNumber = 1;
     unsigned int NextPointLightNumber = 1;
+    unsigned int NextSkeletalMeshNumber = 1;
     unsigned int NextCameraComponentNumber = 1;
     unsigned int NextSpringArmComponentNumber = 1;
     unsigned int NextDirectionalLightComponentNumber = 1;
     unsigned int NextPointLightComponentNumber = 1;
+    unsigned int NextSkeletalMeshComponentNumber = 1;
 };
 }

@@ -17,7 +17,10 @@ enum class EAssetType
     World,
     StaticMesh,
     Texture,
-    Material
+    Material,
+    Skeleton,
+    SkeletalMesh,
+    AnimationClip
 };
 
 enum class EAssetScanError

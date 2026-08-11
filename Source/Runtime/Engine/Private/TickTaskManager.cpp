@@ -64,30 +64,73 @@ void FTickTaskManager::UnregisterTickFunction(FTickFunction& TickFunction)
 
 void FTickTaskManager::Tick(float DeltaSeconds)
 {
-    if (!CheckGameThread("FTickTaskManager::Tick")
-        || bTicking
-        || !std::isfinite(DeltaSeconds)
-        || DeltaSeconds < 0.0f)
+    if (!BeginFrame(DeltaSeconds))
     {
         return;
     }
-    bTicking = true;
-    const uint64 FrameRegistrationLimit = NextRegistrationId;
     try
     {
         for (int Group = static_cast<int>(ETickGroup::PrePhysics);
              Group <= static_cast<int>(ETickGroup::PostUpdateWork);
              ++Group)
         {
-            TickGroup(FrameRegistrationLimit, Group, DeltaSeconds);
+            RunTickGroup(static_cast<ETickGroup>(Group));
         }
     }
     catch (...)
     {
-        bTicking = false;
+        EndFrame();
         throw;
     }
+    EndFrame();
+}
+
+bool FTickTaskManager::BeginFrame(float DeltaSeconds)
+{
+    if (!CheckGameThread("FTickTaskManager::BeginFrame")
+        || bTicking
+        || !std::isfinite(DeltaSeconds)
+        || DeltaSeconds < 0.0f)
+    {
+        return false;
+    }
     bTicking = false;
+    FrameRegistrationLimit = NextRegistrationId;
+    FrameDeltaSeconds = DeltaSeconds;
+    LastCompletedGroup = -1;
+    bTicking = true;
+    return true;
+}
+
+bool FTickTaskManager::RunTickGroup(ETickGroup Group)
+{
+    if (!CheckGameThread("FTickTaskManager::RunTickGroup") || !bTicking)
+    {
+        return false;
+    }
+    const int GroupIndex = static_cast<int>(Group);
+    if (GroupIndex != LastCompletedGroup + 1
+        || GroupIndex < static_cast<int>(ETickGroup::PrePhysics)
+        || GroupIndex > static_cast<int>(ETickGroup::PostUpdateWork))
+    {
+        PICO_LOG(LogEngine, Error, "Tick group {} was requested out of frame order", GroupIndex);
+        return false;
+    }
+    TickGroup(FrameRegistrationLimit, GroupIndex, FrameDeltaSeconds);
+    LastCompletedGroup = GroupIndex;
+    return true;
+}
+
+void FTickTaskManager::EndFrame()
+{
+    if (!CheckGameThread("FTickTaskManager::EndFrame") || !bTicking)
+    {
+        return;
+    }
+    bTicking = false;
+    FrameRegistrationLimit = 0;
+    FrameDeltaSeconds = 0.0f;
+    LastCompletedGroup = -1;
 }
 
 void FTickTaskManager::Reset()
@@ -106,6 +149,9 @@ void FTickTaskManager::Reset()
     }
     RegisteredTicks.clear();
     bTicking = false;
+    FrameRegistrationLimit = 0;
+    FrameDeltaSeconds = 0.0f;
+    LastCompletedGroup = -1;
 }
 
 std::size_t FTickTaskManager::GetRegisteredTickFunctionCount() const
@@ -129,14 +175,14 @@ const FTickTaskManager::FRegisteredTick* FTickTaskManager::FindRegisteredTick(ui
     return Found != RegisteredTicks.end() ? &*Found : nullptr;
 }
 
-void FTickTaskManager::TickGroup(uint64 FrameRegistrationLimit, int GroupIndex, float DeltaSeconds)
+void FTickTaskManager::TickGroup(uint64 RegistrationLimit, int GroupIndex, float DeltaSeconds)
 {
     const ETickGroup Group = static_cast<ETickGroup>(GroupIndex);
     std::vector<uint64> Nodes;
     for (const FRegisteredTick& Entry : RegisteredTicks)
     {
         FTickFunction* Function = Entry.Function;
-        if (Entry.Id < FrameRegistrationLimit
+        if (Entry.Id < RegistrationLimit
             && Function != nullptr
             && Function->GetTickGroup() == Group
             && Function->IsTickEnabled()

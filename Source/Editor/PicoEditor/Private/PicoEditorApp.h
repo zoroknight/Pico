@@ -5,6 +5,7 @@
 #include "ContentBrowserPanel.h"
 #include "DetailsPanel.h"
 #include "SceneOutlinerPanel.h"
+#include "SkeletalAssetEditor.h"
 
 #include "Pico/Core/Math/Vector3.h"
 #include "Pico/Core/PlatformProcess.h"
@@ -173,6 +174,7 @@ private:
     FSceneOutlinerPanel OutlinerPanel;
     FDetailsPanel DetailsPanel;
     FContentBrowserPanel ContentBrowserPanel;
+    FSkeletalAssetEditor SkeletalAssetEditor;
     FEditorAssetWorkflowController AssetWorkflow;
     FProcessHandle GameProcess;
     FAssetPath PendingWorldAssetPath;
