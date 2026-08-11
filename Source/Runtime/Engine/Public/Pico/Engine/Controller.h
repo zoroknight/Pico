@@ -7,6 +7,8 @@ namespace Pico
 {
 class PPawn;
 
+using FOnPossessedPawnChanged = TObjectMulticastDelegate<void(PPawn*, PPawn*)>;
+
 class PController : public PActor
 {
     PICO_DECLARE_CLASS(PController, PActor)
@@ -15,6 +17,7 @@ public:
     PPawn* GetPawn() const;
     bool Possess(PPawn* InPawn);
     void UnPossess();
+    FOnPossessedPawnChanged& OnPossessedPawnChanged();
 
 protected:
     explicit PController(const FObjectConstructionParams& Params);
@@ -25,5 +28,6 @@ protected:
 
 private:
     TWeakObjectPtr<PPawn> Pawn;
+    FOnPossessedPawnChanged PossessedPawnChangedEvent;
 };
 }

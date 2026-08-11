@@ -52,6 +52,7 @@ bool PController::Possess(PPawn* InPawn)
     }
     InPawn->PossessedBy(this);
     OnPossess(InPawn);
+    PossessedPawnChangedEvent.Broadcast(nullptr, InPawn);
     return true;
 }
 
@@ -66,6 +67,12 @@ void PController::UnPossess()
     SetPawn(nullptr);
     OldPawn->UnPossessed();
     OnUnPossess(OldPawn);
+    PossessedPawnChangedEvent.Broadcast(OldPawn, nullptr);
+}
+
+FOnPossessedPawnChanged& PController::OnPossessedPawnChanged()
+{
+    return PossessedPawnChangedEvent;
 }
 
 bool PController::SetPawn(PPawn* InPawn)
@@ -107,6 +114,7 @@ void PController::OnUnPossess(PPawn*)
 void PController::BeginDestroy()
 {
     UnPossess();
+    PossessedPawnChangedEvent.Clear();
     PActor::BeginDestroy();
 }
 }

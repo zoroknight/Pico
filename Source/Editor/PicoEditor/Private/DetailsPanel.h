@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace Pico
 {
@@ -54,6 +55,9 @@ private:
     void DrawActorDetails(PActor* Actor);
     void DrawSceneComponentDetails(PSceneComponent* Component);
     void DrawReflectedProperties(PObject* Object);
+    void DrawEventBindings(
+        PObject* Object,
+        const std::vector<const PProperty*>& Properties);
     void DrawPropertyEditor(PObject* Object, const PProperty* Property);
     bool PrepareInteractiveEdit(
         const std::string& Key,
@@ -75,6 +79,10 @@ private:
     const FAssetRegistry* AssetRegistry = nullptr;
     FBrowseAsset BrowseAsset;
     FAssetPath SelectedAsset;
+    FObjectHandle BindingOwnerHandle;
+    FName BindingPropertyName;
+    FObjectHandle BindingTargetHandle;
+    FName BindingFunctionName;
     FSetAssetReference SetAssetReference;
     FAssetReferenceWidget AssetReferenceWidget;
 };

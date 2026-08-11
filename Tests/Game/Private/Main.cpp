@@ -7,6 +7,7 @@
 #include "Pico/Engine/GameStateBase.h"
 #include "Pico/Engine/GameModule.h"
 #include "Pico/Engine/LocalPlayer.h"
+#include "Pico/Engine/MatchState.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerController.h"
 #include "Pico/Engine/PlayerState.h"
@@ -254,7 +255,9 @@ void TestGameInstanceLifecycle(FTestRunner& Runner)
             && GameEngine.GetEngineLoop().GetWorld()->GetGameMode() != nullptr
             && GameEngine.GetEngineLoop().GetWorld()->GetGameState() != nullptr
             && GameEngine.GetEngineLoop().GetWorld()->GetGameState()
-                ->GetPlayerStates().size() == 1,
+                ->GetPlayerStates().size() == 1
+            && GameEngine.GetEngineLoop().GetWorld()->GetGameState()
+                ->GetMatchState() == Pico::EMatchState::InProgress,
         "GameInstance logs its persistent LocalPlayer into the World Gameplay chain");
     Runner.Expect(
         PTestGameInstance::Events
@@ -277,8 +280,10 @@ void TestGameInstanceLifecycle(FTestRunner& Runner)
 
     GameEngine.Tick();
     Runner.Expect(
-        PTestGameInstance::Events.back() == "Tick",
-        "GameEngine forwards each frame to GameInstance");
+        PTestGameInstance::Events.back() == "Tick"
+            && GameEngine.GetEngineLoop().GetWorld()->GetGameState()
+                ->GetElapsedMatchTime() > 0.0f,
+        "GameEngine forwards each frame and advances the active match clock");
 
     Runner.Expect(
         GameEngine.LoadMap(GameEngine.GetDefaultMapPath()),

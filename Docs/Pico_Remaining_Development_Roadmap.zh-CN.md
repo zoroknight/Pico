@@ -272,9 +272,11 @@ Root Set、原生引用上报和 Inspector GC 实验见
 
 必须覆盖 CDO 继承、默认子对象、反射函数错误参数、强弱引用、循环引用、Root GC、Native/动态委托销毁安全、动态绑定签名不匹配、序列化引用修复和 HeaderTool 增量生成测试。
 
-## 第 4 月：Gameplay Framework
+## 第 4 月（已完成）：Gameplay Framework
 
 目标：完成 UE 风格本地游戏启动、玩家创建和控制流程。
+
+最终完成度：100%。Debug/Release 均为 12/12 CTest 通过，且无源码 Release Stage 两帧探针通过。
 
 | 周次 | 任务 | 月末验收 |
 | --- | --- | --- |
@@ -300,7 +302,14 @@ Root Set、原生引用上报和 Inspector GC 实验见
 `Logout` 和地图替换会按所有权顺序清理当前 World 对象。Sandbox 输入已迁移到项目 PlayerController，
 运行时新增可切换的 Gameplay Debug 面板，编辑器新增 PlayerStart 可视化和 Play 前校验。实现和逐步验收见
 [`Month07_3_StandaloneLoginPossessAndGameplayDebug.md`](Month07_3_StandaloneLoginPossessAndGameplayDebug.md)。
-下一项进入第 4 周 MatchState、Gameplay 委托和正式编辑器 Events/Bindings。
+
+第 4 周已完成：`PGameModeBase` 负责合法 MatchState 转换，`PGameStateBase` 保存可观察状态和仅在
+`InProgress` 累加的比赛时间；PostLogin、Logout、Possess/UnPossess 和 MatchState 均提供 Native
+生命周期委托。`PPlayerStart::OnPlayerSpawnedEvent` 作为正式动态事件示例，编辑器 Details 新增
+`Events & Bindings`，支持同 World 目标选择、签名匹配函数过滤、添加/删除、Dirty、Undo/Redo 和
+`.pworld` 重载修复。Gameplay Debug 可观察状态、计时、绑定数和广播数。实现与逐步验收见
+[`Month07_4_MatchStateGameplayEventsAndBindings.md`](Month07_4_MatchStateGameplayEventsAndBindings.md)。
+第 4 月 Gameplay Framework 主链完成，下一项进入第 5 月第 1 周统一移动入口。
 
 目标链路：
 
@@ -322,6 +331,14 @@ GameInstance
 第 4 月结束时执行一次早期仓库外运行探针：把 `PicoSandboxGame`、最低 Config/Content 和必要 DLL 放入
 仓库外临时目录并运行两帧。首次探针允许失败，但必须记录编译期绝对路径、默认项目定位、缺失资源、
 第三方库和 Runtime 对 Editor/源码目录的隐式依赖；正式 Cook/Package 仍在第 7 月完成。
+
+首次探针发现源码树识别依赖后已立即加固：`FPaths` 正式区分 Development、Installed 和 Staged；
+安装版使用 `PicoEngine.root`，Stage 使用 `PicoStage.manifest`，并支持互斥的 `-engineroot/-stageroot`。
+显式无效路径不得回退，Manifest 内 Engine/Project 相对路径不得逃逸 Stage，Engine 与项目名称/版本会在
+PreInit 校验。第二次 Release 探针不携带 Source、CMakeLists 或项目参数，从仓库外工作目录自动定位项目，
+加载 13 个资产、运行两帧并以 0 退出。正式 Cook、Stage 文件收集和 Package UI 仍按第 7 月执行，但源码树
+运行依赖已经解除。详见
+[`Month07_5_DevelopmentInstalledAndStagedLayouts.md`](Month07_5_DevelopmentInstalledAndStagedLayouts.md)。
 
 ## 第 5 月：Movement、物理与动画
 

@@ -15,6 +15,12 @@ declare classes
 
 The project is intentionally outside `Source/Runtime`, `Source/Developer`, and `Source/Editor`. Its game code does not include any Pico `Private` header.
 
+Packaged runtime layout is independent from this development location. A staged Sandbox uses
+`PicoStage.manifest` to locate `Engine` and `PicoSandbox` relative to the executable and does not
+require the Pico repository, CMake files, or any Source directory. The marker formats and root
+overrides are documented in
+[`Development, Installed, and Staged Runtime Layouts`](../../Docs/Month07_5_DevelopmentInstalledAndStagedLayouts.md).
+
 `PicoSandbox.pico` is the project boundary descriptor. Opening it gives Pico two independent roots:
 
 ```text
@@ -159,9 +165,17 @@ Run `PicoSandboxGame` and use these controls:
 | `Destroy Pawn` | Destroy only the current Pawn |
 | `Restart Player` | Spawn and possess a replacement Pawn without replacing PlayerController/PlayerState |
 | `Reload Map` | Preserve GameInstance/LocalPlayer and rebuild World-owned Gameplay objects |
+| `Start/End/Abort Match` | Exercise legal MatchState transitions and observe the GameState clock |
+
+To verify persistent dynamic events, select a PlayerStart Actor in PicoEditor and bind
+`OnPlayerSpawnedEvent` to that PlayerStart's `RecordPlayerSpawn` function under
+`Events & Bindings`. Save and Play. `Gameplay Debug` displays the restored binding count and the
+number of spawn broadcasts observed; `Restart Player` increments the counter again.
 
 The complete purpose of each check is documented in
 [`Docs/Month07_3_StandaloneLoginPossessAndGameplayDebug.md`](../../Docs/Month07_3_StandaloneLoginPossessAndGameplayDebug.md).
+MatchState and editor binding acceptance is documented in
+[`Docs/Month07_4_MatchStateGameplayEventsAndBindings.md`](../../Docs/Month07_4_MatchStateGameplayEventsAndBindings.md).
 
 ## Persistence Asset
 

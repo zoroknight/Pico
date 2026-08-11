@@ -8,12 +8,25 @@
 
 namespace Pico
 {
-PICO_DEFINE_CLASS_NO_PROPERTIES(PGameStateBase)
+PICO_DEFINE_CLASS(PGameStateBase)
+
+bool PGameStateBase::RegisterProperties(PClass& Class)
+{
+    FPropertyMetadata Metadata;
+    Metadata.Flags = EPropertyFlags::Transient
+        | EPropertyFlags::Replicated
+        | EPropertyFlags::ReadOnly;
+    std::vector<PProperty> Properties;
+    PICO_ADD_PROPERTY_METADATA(Properties, MatchStateValue, Metadata);
+    PICO_ADD_PROPERTY_METADATA(Properties, ElapsedMatchTime, Metadata);
+    return Class.AddProperties(std::move(Properties));
+}
 
 PGameStateBase::PGameStateBase(const FObjectConstructionParams& Params)
     : PActor(Params)
 {
-    PrimaryActorTick.SetCanEverTick(false);
+    PrimaryActorTick.SetCanEverTick(true);
+    PrimaryActorTick.SetTickGroup(ETickGroup::PostUpdateWork);
 }
 
 bool PGameStateBase::AddPlayerState(PPlayerState* PlayerState)
@@ -51,6 +64,51 @@ std::vector<PPlayerState*> PGameStateBase::GetPlayerStates() const
     return Result;
 }
 
+EMatchState PGameStateBase::GetMatchState() const
+{
+    return static_cast<EMatchState>(MatchStateValue);
+}
+
+bool PGameStateBase::IsMatchInProgress() const
+{
+    return GetMatchState() == EMatchState::InProgress;
+}
+
+float PGameStateBase::GetElapsedMatchTime() const
+{
+    return ElapsedMatchTime;
+}
+
+FOnGameStateMatchStateChanged& PGameStateBase::OnMatchStateChanged()
+{
+    return MatchStateChangedEvent;
+}
+
+void PGameStateBase::Tick(float DeltaSeconds)
+{
+    PActor::Tick(DeltaSeconds);
+    if (IsMatchInProgress())
+    {
+        ElapsedMatchTime += DeltaSeconds;
+    }
+}
+
+bool PGameStateBase::SetMatchState(EMatchState NewState)
+{
+    const EMatchState OldState = GetMatchState();
+    if (OldState == NewState)
+    {
+        return false;
+    }
+    MatchStateValue = static_cast<int32>(NewState);
+    if (NewState == EMatchState::InProgress)
+    {
+        ElapsedMatchTime = 0.0f;
+    }
+    MatchStateChangedEvent.Broadcast(OldState, NewState);
+    return true;
+}
+
 void PGameStateBase::AddReferencedObjects(FReferenceCollector& Collector) const
 {
     PActor::AddReferencedObjects(Collector);
@@ -59,6 +117,7 @@ void PGameStateBase::AddReferencedObjects(FReferenceCollector& Collector) const
 
 void PGameStateBase::BeginDestroy()
 {
+    MatchStateChangedEvent.Clear();
     PlayerStateHandles.clear();
     PActor::BeginDestroy();
 }

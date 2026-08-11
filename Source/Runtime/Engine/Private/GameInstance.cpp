@@ -100,10 +100,11 @@ void PGameInstance::LoginLocalPlayers(PWorld* World)
         PPlayerController* Controller = GameMode->Login(LocalPlayer);
         if (Controller != nullptr)
         {
-            GameMode->PostLogin(Controller);
+            GameMode->DispatchPostLogin(Controller);
             GameMode->HandleStartingNewPlayer(Controller);
         }
     }
+    GameMode->StartPlay();
 }
 
 void PGameInstance::LogoutLocalPlayers(PWorld* World)

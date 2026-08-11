@@ -9,10 +9,12 @@
 #include "Pico/Object/Class.h"
 #include "Pico/Object/DynamicMulticastDelegate.h"
 #include "Pico/Object/Object.h"
+#include "Pico/Object/ObjectRegistry.h"
 #include "Pico/Object/Property.h"
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
@@ -41,6 +43,44 @@ struct FEditorControlState
         bActive |= Other.bActive;
     }
 };
+
+PWorld* FindOwningWorld(PObject* Object)
+{
+    for (PObject* Current = Object; Current != nullptr; Current = Current->GetOuter())
+    {
+        if (Current->IsA(PWorld::StaticClass()))
+        {
+            return static_cast<PWorld*>(Current);
+        }
+    }
+    return nullptr;
+}
+
+std::vector<PObject*> GatherWorldObjects(PObject* Owner)
+{
+    PWorld* World = FindOwningWorld(Owner);
+    std::vector<PObject*> Result;
+    if (World == nullptr)
+    {
+        return Result;
+    }
+    for (PObject* Candidate : FObjectRegistry::GetObjects())
+    {
+        if (Candidate != nullptr
+            && !Candidate->IsBeginningDestroy()
+            && FindOwningWorld(Candidate) == World)
+        {
+            Result.push_back(Candidate);
+        }
+    }
+    std::sort(
+        Result.begin(), Result.end(),
+        [](const PObject* Left, const PObject* Right)
+        {
+            return Left->GetPathName() < Right->GetPathName();
+        });
+    return Result;
+}
 
 FEditorControlState DrawFloat3Control(
     const char* Label,
@@ -269,6 +309,7 @@ void FDetailsPanel::DrawActorDetails(PActor* Actor)
     ImGui::Separator();
     ImGui::Text("Components: %zu", Actor->GetComponents().size());
     ImGui::Text("Begun Play: %s", Actor->HasBegunPlay() ? "true" : "false");
+    DrawReflectedProperties(Actor);
 }
 
 
@@ -322,6 +363,7 @@ void FDetailsPanel::DrawReflectedProperties(PObject* Object)
         for (const PProperty* Property : Properties)
         {
             if (Property != nullptr
+                && Property->GetType() != EPropertyType::DynamicMulticastDelegate
                 && Property->HasAnyFlags(
                     EPropertyFlags::Editable | EPropertyFlags::ReadOnly))
             {
@@ -329,6 +371,208 @@ void FDetailsPanel::DrawReflectedProperties(PObject* Object)
             }
         }
         ImGui::EndTable();
+    }
+    DrawEventBindings(Object, Properties);
+}
+
+void FDetailsPanel::DrawEventBindings(
+    PObject* Object,
+    const std::vector<const PProperty*>& Properties)
+{
+    bool bHasEvents = false;
+    for (const PProperty* Property : Properties)
+    {
+        bHasEvents |= Property != nullptr
+            && Property->GetType() == EPropertyType::DynamicMulticastDelegate
+            && Property->HasAnyFlags(EPropertyFlags::Editable | EPropertyFlags::ReadOnly);
+    }
+    if (!bHasEvents)
+    {
+        return;
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextUnformatted("Events & Bindings");
+    for (const PProperty* Property : Properties)
+    {
+        if (Property == nullptr
+            || Property->GetType() != EPropertyType::DynamicMulticastDelegate
+            || !Property->HasAnyFlags(EPropertyFlags::Editable | EPropertyFlags::ReadOnly))
+        {
+            continue;
+        }
+
+        ImGui::PushID(Property);
+        FDynamicMulticastDelegate* Delegate =
+            Property->GetDynamicMulticastDelegate(Object);
+        const std::vector<FDynamicDelegateBindingView> Bindings =
+            Delegate != nullptr ? Delegate->GetBindings()
+                                : std::vector<FDynamicDelegateBindingView> {};
+        const std::string Header = Property->GetName().ToString()
+            + " (" + std::to_string(Bindings.size()) + ")";
+        if (ImGui::CollapsingHeader(Header.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            std::size_t BindingIndex = 0;
+            for (const FDynamicDelegateBindingView& Binding : Bindings)
+            {
+                ImGui::PushID(static_cast<int>(BindingIndex++));
+                PObject* Target = Binding.bTargetAlive
+                    ? ResolveObject(Binding.TargetHandle) : nullptr;
+                if (Target == nullptr)
+                {
+                    ImGui::TextColored(
+                        ImVec4(0.95f, 0.42f, 0.35f, 1.0f),
+                        "Invalid target -> %s",
+                        Binding.FunctionName.ToString().c_str());
+                }
+                else
+                {
+                    ImGui::Text(
+                        "%s -> %s",
+                        Target->GetPathName().c_str(),
+                        Binding.FunctionName.ToString().c_str());
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("X"))
+                {
+                    const std::string EditKey = Object->GetPathName()
+                        + "." + Property->GetName().ToString() + ".Bindings";
+                    const bool bCanApply = PrepareInteractiveEdit(
+                        EditKey,
+                        "Remove event binding from " + Object->GetPathName(),
+                        true,
+                        true);
+                    bool bRemoved = false;
+                    if (bCanApply && Delegate != nullptr
+                        && Property->NotifyPreChange(Object))
+                    {
+                        bRemoved = Delegate->Remove(Binding.Handle);
+                        Property->NotifyPostChange(Object);
+                    }
+                    CompleteInteractiveEdit(EditKey, true, false, bRemoved);
+                    SetStatus(
+                        bRemoved ? "Removed event binding"
+                                 : "Could not remove event binding",
+                        !bRemoved);
+                }
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("Remove binding");
+                }
+                ImGui::PopID();
+            }
+
+            const bool bReadOnly = Property->HasAnyFlags(EPropertyFlags::ReadOnly);
+            ImGui::BeginDisabled(bReadOnly || Delegate == nullptr);
+            if (ImGui::Button("Add Binding..."))
+            {
+                BindingOwnerHandle = Object->GetHandle();
+                BindingPropertyName = Property->GetName();
+                BindingTargetHandle = Object->GetHandle();
+                BindingFunctionName = {};
+                ImGui::OpenPopup("Add Event Binding");
+            }
+            ImGui::EndDisabled();
+
+            if (ImGui::BeginPopupModal(
+                    "Add Event Binding", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                PObject* BindingOwner = ResolveObject(BindingOwnerHandle);
+                const PProperty* BindingProperty = BindingOwner != nullptr
+                    ? BindingOwner->GetClass()->FindProperty(BindingPropertyName)
+                    : nullptr;
+                FDynamicMulticastDelegate* BindingDelegate = BindingProperty != nullptr
+                    ? BindingProperty->GetDynamicMulticastDelegate(BindingOwner)
+                    : nullptr;
+                PObject* Target = ResolveObject(BindingTargetHandle);
+                const std::string TargetPreview = Target != nullptr
+                    ? Target->GetPathName() : "Select target";
+                if (ImGui::BeginCombo("Target Object", TargetPreview.c_str()))
+                {
+                    for (PObject* Candidate : GatherWorldObjects(BindingOwner))
+                    {
+                        const bool bSelected = Candidate == Target;
+                        if (ImGui::Selectable(
+                                Candidate->GetPathName().c_str(), bSelected))
+                        {
+                            BindingTargetHandle = Candidate->GetHandle();
+                            BindingFunctionName = {};
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+
+                Target = ResolveObject(BindingTargetHandle);
+                const std::string FunctionPreview = BindingFunctionName.IsNone()
+                    ? "Select compatible function"
+                    : BindingFunctionName.ToString();
+                if (ImGui::BeginCombo("Target Function", FunctionPreview.c_str()))
+                {
+                    if (Target != nullptr && BindingDelegate != nullptr)
+                    {
+                        for (const PFunction* Function : GetAllFunctions(Target->GetClass()))
+                        {
+                            if (Function != nullptr
+                                && Function->HasAnyFlags(EFunctionFlags::Callable)
+                                && BindingDelegate->IsFunctionCompatible(*Function))
+                            {
+                                const bool bSelected =
+                                    BindingFunctionName == Function->GetName();
+                                if (ImGui::Selectable(
+                                        Function->GetName().ToString().c_str(),
+                                        bSelected))
+                                {
+                                    BindingFunctionName = Function->GetName();
+                                }
+                            }
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+
+                const bool bCanAdd = BindingOwner != nullptr
+                    && BindingProperty != nullptr
+                    && BindingDelegate != nullptr
+                    && Target != nullptr
+                    && !BindingFunctionName.IsNone();
+                ImGui::BeginDisabled(!bCanAdd);
+                if (ImGui::Button("Add", ImVec2(100.0f, 0.0f)))
+                {
+                    const std::string EditKey = BindingOwner->GetPathName()
+                        + "." + BindingPropertyName.ToString() + ".Bindings";
+                    const bool bCanApply = PrepareInteractiveEdit(
+                        EditKey,
+                        "Add event binding to " + BindingOwner->GetPathName(),
+                        true,
+                        true);
+                    bool bAdded = false;
+                    if (bCanApply && BindingProperty->NotifyPreChange(BindingOwner))
+                    {
+                        bAdded = BindingDelegate->AddUniqueDynamic(
+                            Target, BindingFunctionName).IsSuccess();
+                        BindingProperty->NotifyPostChange(BindingOwner);
+                    }
+                    CompleteInteractiveEdit(EditKey, true, false, bAdded);
+                    SetStatus(
+                        bAdded ? "Added event binding"
+                               : "Could not add event binding (possibly already bound)",
+                        !bAdded);
+                    if (bAdded)
+                    {
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(100.0f, 0.0f)))
+                {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+        }
+        ImGui::PopID();
     }
 }
 

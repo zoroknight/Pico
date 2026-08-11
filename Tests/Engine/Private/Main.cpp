@@ -12,6 +12,7 @@
 #include "Pico/Engine/GameStateBase.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/LightComponent.h"
+#include "Pico/Engine/MatchState.h"
 #include "Pico/Engine/PointLightComponent.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerController.h"
@@ -2832,6 +2833,16 @@ void TestGameplayFrameworkTypes(FTestRunner& Runner)
     PlayerState->SetIsSpectator(true);
     PlayerStart->SetPlayerStartId(42);
     PlayerStart->SetActorLocation(Pico::FVector3(100.0f, 200.0f, 300.0f));
+    int PossessedPawnChangedCount = 0;
+    Pico::PPawn* LastOldPawn = nullptr;
+    Pico::PPawn* LastNewPawn = nullptr;
+    Controller->OnPossessedPawnChanged().AddLambda(
+        [&](Pico::PPawn* OldPawn, Pico::PPawn* NewPawn)
+        {
+            ++PossessedPawnChangedCount;
+            LastOldPawn = OldPawn;
+            LastNewPawn = NewPawn;
+        });
     Runner.Expect(
         Controller->AssignPawn(Pawn)
             && Controller->AssignPlayerState(PlayerState)
@@ -2840,6 +2851,9 @@ void TestGameplayFrameworkTypes(FTestRunner& Runner)
             && Pawn->GetController() == Controller
             && Controller->GetPlayerState() == PlayerState
             && Controller->PossessCount == 1
+            && PossessedPawnChangedCount == 1
+            && LastOldPawn == nullptr
+            && LastNewPawn == Pawn
             && GameState->GetPlayerStates()
                 == std::vector<Pico::PPlayerState*>({PlayerState})
             && PlayerState->GetPlayerId() == 7
@@ -2857,16 +2871,67 @@ void TestGameplayFrameworkTypes(FTestRunner& Runner)
             && Pawn->GetController() == Controller
             && Controller->PossessCount == 2,
         "Public UnPossess and Possess keep both sides consistent and invoke lifecycle hooks");
+    Runner.Expect(
+        PossessedPawnChangedCount == 3
+            && LastOldPawn == nullptr
+            && LastNewPawn == Pawn,
+        "PossessedPawnChanged broadcasts each completed ownership transition");
+
+    int GameModeMatchEventCount = 0;
+    int GameStateMatchEventCount = 0;
+    Pico::EMatchState LastOldMatchState = Pico::EMatchState::EnteringMap;
+    Pico::EMatchState LastNewMatchState = Pico::EMatchState::EnteringMap;
+    GameMode->OnMatchStateChanged().AddLambda(
+        [&](Pico::EMatchState OldState, Pico::EMatchState NewState)
+        {
+            ++GameModeMatchEventCount;
+            LastOldMatchState = OldState;
+            LastNewMatchState = NewState;
+        });
+    GameState->OnMatchStateChanged().AddLambda(
+        [&](Pico::EMatchState, Pico::EMatchState)
+        {
+            ++GameStateMatchEventCount;
+        });
+    Runner.Expect(
+        GameMode->GetMatchState() == Pico::EMatchState::WaitingToStart
+            && GameMode->StartMatch()
+            && GameMode->HasMatchStarted()
+            && GameState->IsMatchInProgress()
+            && GameModeMatchEventCount == 1
+            && GameStateMatchEventCount == 1
+            && LastOldMatchState == Pico::EMatchState::WaitingToStart
+            && LastNewMatchState == Pico::EMatchState::InProgress
+            && !GameMode->StartMatch(),
+        "GameMode owns legal MatchState transitions and GameState mirrors them through delegates");
 
     World->Tick(0.016f);
     Runner.Expect(
         Controller->PrimaryActorTick.IsRegistered()
             && Pawn->PrimaryActorTick.IsRegistered()
             && !GameMode->PrimaryActorTick.IsRegistered()
-            && !GameState->PrimaryActorTick.IsRegistered()
+            && GameState->PrimaryActorTick.IsRegistered()
             && !PlayerState->PrimaryActorTick.IsRegistered()
-            && !PlayerStart->PrimaryActorTick.IsRegistered(),
-        "Only Controller and Pawn participate in the first Gameplay tick skeleton");
+            && !PlayerStart->PrimaryActorTick.IsRegistered()
+            && GameState->GetElapsedMatchTime() > 0.0f,
+        "GameState ticks after Gameplay actors and accumulates time only while the match is active");
+    Runner.Expect(
+        GameMode->EndMatch()
+            && GameMode->HasMatchEnded()
+            && GameState->GetMatchState() == Pico::EMatchState::WaitingPostMatch
+            && !GameMode->EndMatch()
+            && GameModeMatchEventCount == 2
+            && GameStateMatchEventCount == 2,
+        "Ending a match reaches WaitingPostMatch once and rejects duplicate transitions");
+
+    const auto BindingResult = PlayerStart->OnPlayerSpawned().AddUniqueDynamic(
+        PlayerStart, Pico::FName("RecordPlayerSpawn"));
+    PlayerStart->NotifyPlayerSpawned(Pawn);
+    Runner.Expect(
+        BindingResult.IsSuccess()
+            && PlayerStart->OnPlayerSpawned().Num() == 1
+            && PlayerStart->GetSpawnEventCount() == 1,
+        "PlayerStart dynamic event invokes its reflected listener before persistence");
 
     const Pico::FObjectHandle PawnHandle = Pawn->GetHandle();
     Runner.Expect(
@@ -2911,8 +2976,20 @@ void TestGameplayFrameworkTypes(FTestRunner& Runner)
         RestoredPlayerStart != nullptr
             && RestoredPlayerStart->GetPlayerStartId() == 42
             && RestoredPlayerStart->GetActorLocation().Equals(
-                Pico::FVector3(100.0f, 200.0f, 300.0f)),
-        "PlayerStart restores its reflected ID, root component, and transform");
+                Pico::FVector3(100.0f, 200.0f, 300.0f))
+            && RestoredPlayerStart->OnPlayerSpawned().Num() == 1
+            && RestoredPlayerStart->GetSpawnEventCount() == 0,
+        "PlayerStart restores its reflected data and dynamic binding while transient counters reset");
+    if (RestoredPlayerStart != nullptr)
+    {
+        Pico::PPawn* RestoredPawn = EngineLoop.GetWorld()->SpawnActor<Pico::PPawn>(
+            "RestoredPawn");
+        RestoredPlayerStart->NotifyPlayerSpawned(RestoredPawn);
+    }
+    Runner.Expect(
+        RestoredPlayerStart != nullptr
+            && RestoredPlayerStart->GetSpawnEventCount() == 1,
+        "A restored dynamic binding resolves its target and remains callable");
 
     EngineLoop.Exit();
 }

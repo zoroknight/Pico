@@ -32,12 +32,16 @@ The current implementation can:
   preserve PlayerStart through normal editor transactions and `.pworld` reconstruction.
 - Run Standalone players through `PPlayer`, GameMode Login/PostLogin, PlayerState registration,
   RestartPlayer, and paired Possess/UnPossess lifecycle operations.
+- Drive `EnteringMap -> WaitingToStart -> InProgress -> WaitingPostMatch` through GameMode while
+  GameState exposes replicated match data, elapsed time, and lifecycle notifications.
 - Route mapped WASD input through a project PlayerController to its possessed Pawn, while retaining
   GameInstance and LocalPlayer and rebuilding World-owned Gameplay objects across map replacement.
 - Inspect the live Gameplay object chain, restart/destroy/repossess its Pawn, and reload the map from
   the standalone runtime's `Gameplay Debug` panel; inspect PlayerStart shape and validation in editor.
 - Create PlayerStart from the editor toolbar, review persistent green/yellow/red diagnostics in
   `Message Log`, and explicitly confirm `Save & Play` before a dirty World is launched out of process.
+- Author signature-checked dynamic event bindings in Details through `Events & Bindings`, including
+  World-scoped target/function selection, Undo/Redo, dirty tracking, and `.pworld` restoration.
 - Create reflected native objects through `PClass` and `NewObject`.
 - Give every registered class a CDO, declare inherited default-subobject templates, and materialize
   independent runtime object graphs through one initialization path.
@@ -75,6 +79,10 @@ The current implementation can:
 - Author runtime Camera, Spring Arm, Directional Light, and Point Light components through the
   same reflection, serialization, hierarchy, and editor transaction paths as other components.
 - Open a `.pico` project with separate engine and project roots.
+- Distinguish Development, Installed, and Staged runtime layouts through validated Engine/Stage
+  markers, strict relative paths, version checks, and optional `-engineroot`/`-stageroot` overrides.
+- Run the Release Sandbox from an external Stage with no `Source`, `CMakeLists.txt`, repository
+  working directory, or explicit project argument; the manifest locates Engine, project, and assets.
 - Represent persistent references with validated `/Game/...` asset paths instead of machine-specific
   disk paths.
 - Deterministically scan native `.pworld`, `.pmesh`, `.ptex`, and `.pmat` files into a project asset
@@ -221,6 +229,9 @@ with GameState, chooses a PlayerStart, spawns the configured default Pawn, and c
 `RestartPlayer` replaces the Pawn while preserving the Controller and PlayerState. Map replacement
 preserves GameInstance and LocalPlayer, cleans up every old World-owned Gameplay object, then logs
 the persistent LocalPlayer into the new World and creates a fresh Controller, PlayerState, and Pawn.
+GameMode alone changes MatchState; GameState exposes the current state and match clock for later
+replication. Native delegates report engine lifecycle transitions, while reflected dynamic events
+are scene-authored in the Details panel and persist by stable object identity plus function name.
 
 `FObjectRegistry` owns object memory. Handles do not extend lifetime, and stale handles resolve to
 `nullptr`. Outer defines naming and deterministic destruction order and forms a child-to-parent GC
@@ -530,6 +541,8 @@ See:
 - [Game Thread, Tick Scheduling, and PGameInstance](Docs/Month07_1_GameThreadTickAndGameInstance.md)
 - [Gameplay Framework Types and Ownership](Docs/Month07_2_GameplayFrameworkTypes.md)
 - [Standalone Login, Possess, and Gameplay Debug](Docs/Month07_3_StandaloneLoginPossessAndGameplayDebug.md)
+- [MatchState, Gameplay Events, and Editor Bindings](Docs/Month07_4_MatchStateGameplayEventsAndBindings.md)
+- [Development, Installed, and Staged Runtime Layouts](Docs/Month07_5_DevelopmentInstalledAndStagedLayouts.md)
 - [Class Default Objects and Unified Construction](Docs/Month03_13_ClassDefaultObjects.md)
 - [Default Subobject Templates](Docs/Month03_14_DefaultSubobjects.md)
 - [Native Delegates and Weak Object Binding](Docs/Month03_15_NativeDelegates.md)
@@ -537,14 +550,12 @@ See:
 
 ## Roadmap
 
-The asset-driven editor, rendering path, standalone Play, reflected GameInstance lifecycle, explicit
-Game Thread boundary, TickFunction scheduler, Gameplay type ownership, Standalone Login/PostLogin,
-Possess/UnPossess, RestartPlayer, map replacement, and runtime Gameplay Debug are complete through
-project month 4 week 3.
+Project month 4 is 100% complete. The asset-driven editor, rendering path, standalone Play, reflected GameInstance lifecycle, explicit
+Game Thread boundary, TickFunction scheduler, Gameplay type ownership, MatchState, lifecycle events,
+persistent editor bindings, map replacement, and runtime Gameplay Debug are complete through project
+month 4.
 The remaining learning path is:
 
-- MatchState, Gameplay lifecycle delegates, and editor Events/Bindings to finish the current
-  UE-inspired Gameplay Framework milestone
 - Character and movement components with one authoritative movement entry point
 - Jolt physics, character movement, and a small animation integration
 - Replication, RPC, transform synchronization, client prediction, and correction

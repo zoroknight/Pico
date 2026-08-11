@@ -23,7 +23,11 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 使用动态多播委托按“弱对象Handle + PFunction名称”绑定Callable函数，校验签名并经ProcessEvent广播。
 - 在 `.pworld` 中按场景ID、对象路径和函数名持久化反射动态多播属性，并在新对象图创建后修复绑定。
 - 反射属性写入统一产生前后通知，区分ValueSet、Interactive、Load和UndoRedo；修改CDO只影响未来实例。
-- 第 3 项目月的对象系统核心已经完成并通过 Debug/Release 全量测试；下一阶段进入 Gameplay Framework。
+- 完成 UE 风格本地 Gameplay Framework：GameInstance/LocalPlayer 跨地图保留，GameMode 完成
+  Login、RestartPlayer 和 MatchState 决策，GameState 保存比赛状态、时间和 PlayerState 列表。
+- 通过 Controller 和 GameMode 的 Native 生命周期委托观察 Possess、UnPossess、登录、登出和比赛状态变化。
+- 在正式编辑器 Details 的 `Events & Bindings` 中配置签名匹配的动态委托，支持 Undo/Redo、Dirty
+  和 `.pworld` 保存加载；Gameplay Debug 可显示状态、绑定数和广播计数。
 - 使用 `PCLASS`、`PPROPERTY` 和 `PFUNCTION` 在原生 C++ 声明旁标记反射内容，并由
   PicoHeaderTool 在编译前生成重复的注册代码。
 - 通过 `PObject::ProcessEvent` 调用反射 Native 函数，支持类型化参数/返回值元数据、继承查找、
@@ -46,6 +50,10 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 通过统一的反射、序列化、层级和编辑器事务创建 Camera、Spring Arm、Directional Light
   和 Point Light 运行时组件。
 - 通过 `.pico` 打开引擎目录之外的项目边界。
+- 通过经过校验的 Engine/Stage 标记、相对路径和版本信息区分 Development、Installed、Staged，
+  并支持严格的 `-engineroot`、`-stageroot` 显式覆盖，不再要求打包目录携带源码树。
+- Release Sandbox 已通过仓库外 Stage 探针：不携带 `Source`、`CMakeLists.txt`、仓库工作目录或显式项目参数，
+  仍能由 Manifest 定位 Engine、项目和资产并正常运行。
 - 使用经过校验的 `/Game/...` 资产路径保存持久引用，不把本机磁盘路径写入对象或场景。
 - 确定性扫描项目中的 `.pworld`、`.pmesh`、`.ptex` 和 `.pmat` 原生文件，并通过支持
   大小写不敏感查询和刷新的资产注册表提供元数据。
@@ -423,6 +431,8 @@ private:
 - [PicoInspector Developer Sandbox 计划](Docs/PicoInspector_DeveloperSandbox_Plan.zh-CN.md)
 - [PicoInspector 可视化验收指南](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)
 - [PicoSandbox指南](Projects/PicoSandbox/README.md)
+- [MatchState、Gameplay 事件与编辑器绑定](Docs/Month07_4_MatchStateGameplayEventsAndBindings.md)
+- [Development、Installed 与 Staged 运行布局](Docs/Month07_5_DevelopmentInstalledAndStagedLayouts.md)
 - [第三个月编辑器视口](Docs/Month03_10_Editor3DViewport.md)
 - [第三个月编辑器停靠布局](Docs/Month03_11_EditorDocking.md)
 - [第三个月GLAD集成](Docs/Month03_12_GLADIntegration.md)
@@ -441,11 +451,10 @@ private:
 
 ## 路线图
 
-资产驱动编辑器、Static Mesh 导入、材质、贴图、PBR 渲染、独立 Play，以及第一版项目 Game Module/
-GameInstance 链路已经完成。后续学习路线为：
+第 4 月任务完成度为 100%。资产驱动编辑器、Static Mesh 导入、材质、贴图、PBR 渲染、独立 Play、
+Gameplay Framework 主链和 Runtime 布局加固均已验收。后续学习路线为：
 
-- 参考 UE 的 Gameplay Framework：GameMode、GameState、PlayerController、PlayerState、Pawn、Character
-  和 MovementComponent
+- Character 与 MovementComponent，以及供物理和网络统一使用的 `MoveComponent` 入口
 - Jolt 物理、角色移动和精简动画接入
 - Replication、RPC、Transform 同步、客户端预测与修正
 - Dedicated Server/广域网验证、Cook、Package 和可独立运行的 Windows 构建

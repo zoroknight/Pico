@@ -350,9 +350,107 @@ void TestPaths(FTestRunner& Runner)
             EngineRoot / "Source" / "Runtime" / "Core" / "Private" / "Hacked.cpp"),
         "Editor-generated files cannot target Engine Source");
 
+    const std::filesystem::path InstalledRoot = TestRoot / "InstalledEngine";
+    std::filesystem::create_directories(InstalledRoot / "Config", ErrorCode);
+    std::ofstream(InstalledRoot / "Config" / "Pico.ini")
+        << "[Engine]\nMaxFrameCount=-1\n";
+    std::ofstream(InstalledRoot / "PicoEngine.root")
+        << "[Engine]\n"
+        << "Name=Pico\n"
+        << "Version=0.1.0\n"
+        << "LayoutVersion=1\n";
+
+    Pico::FPathInitOptions InstalledOptions;
+    InstalledOptions.ExplicitEngineRoot = InstalledRoot;
+    Runner.Expect(
+        Pico::FPaths::Init(
+            ExecutablePath.string(), ProjectFile, InstalledOptions)
+            && Pico::FPaths::GetEngineLayoutMode()
+                == Pico::EEngineLayoutMode::Installed
+            && Pico::FPaths::GetEngineRootDir()
+                == std::filesystem::weakly_canonical(InstalledRoot)
+            && Pico::FPaths::GetLayoutEngineVersion() == "0.1.0"
+            && !Pico::FPaths::IsStaged(),
+        "An explicit installed Engine root needs only its marker and Config");
+
+    Pico::FPathInitOptions InvalidInstalledOptions;
+    InvalidInstalledOptions.ExplicitEngineRoot = TestRoot / "MissingEngine";
+    Runner.Expect(
+        !Pico::FPaths::Init(
+            ExecutablePath.string(), ProjectFile, InvalidInstalledOptions)
+            && Pico::FPaths::GetEngineLayoutMode()
+                == Pico::EEngineLayoutMode::Unknown,
+        "An invalid explicit Engine root fails instead of falling back to the development tree");
+
+    const std::filesystem::path StageRoot = TestRoot / "Stage";
+    const std::filesystem::path StageEngineRoot = StageRoot / "Engine";
+    const std::filesystem::path StageProjectRoot = StageRoot / "SampleProject";
+    const std::filesystem::path StageProjectFile =
+        StageProjectRoot / "SampleProject.pico";
+    const std::filesystem::path StageExecutable =
+        StageRoot / "Binaries" / "PicoSample.exe";
+    std::filesystem::create_directories(StageEngineRoot / "Config", ErrorCode);
+    std::filesystem::create_directories(StageProjectRoot / "Config", ErrorCode);
+    std::filesystem::create_directories(StageProjectRoot / "Content", ErrorCode);
+    std::filesystem::create_directories(StageExecutable.parent_path(), ErrorCode);
+    std::ofstream(StageEngineRoot / "Config" / "Pico.ini")
+        << "[Engine]\nMaxFrameCount=-1\n";
+    std::ofstream(StageEngineRoot / "PicoEngine.root")
+        << "[Engine]\nName=Pico\nVersion=0.1.0\nLayoutVersion=1\n";
+    std::ofstream(StageProjectFile)
+        << "[Project]\nName=SampleProject\nFileVersion=1\nEngineVersion=0.1.0\n";
+    std::ofstream(StageRoot / "PicoStage.manifest")
+        << "[Stage]\n"
+        << "LayoutVersion=1\n"
+        << "EngineVersion=0.1.0\n"
+        << "ProjectName=SampleProject\n"
+        << "EngineRelativePath=Engine\n"
+        << "ProjectRelativePath=SampleProject/SampleProject.pico\n";
+
+    Pico::FPathInitOptions StageOptions;
+    StageOptions.ExplicitStageRoot = StageRoot;
+    Runner.Expect(
+        Pico::FPaths::Init(StageExecutable.string(), {}, StageOptions)
+            && Pico::FPaths::IsStaged()
+            && Pico::FPaths::GetStageRootDir()
+                == std::filesystem::weakly_canonical(StageRoot)
+            && Pico::FPaths::GetEngineRootDir()
+                == std::filesystem::weakly_canonical(StageEngineRoot)
+            && Pico::FPaths::GetProjectFile()
+                == std::filesystem::weakly_canonical(StageProjectFile)
+            && Pico::FPaths::GetLayoutEngineVersion() == "0.1.0"
+            && Pico::FPaths::GetStageProjectName() == "SampleProject",
+        "A Stage manifest resolves Engine and default Project paths without Source files");
+    Runner.Expect(
+        Pico::FPaths::Init(StageExecutable.string())
+            && Pico::FPaths::IsStaged()
+            && Pico::FPaths::GetProjectRootDir()
+                == std::filesystem::weakly_canonical(StageProjectRoot),
+        "An executable inside Stage discovers its manifest without a working-directory dependency");
+
+    std::ofstream(StageEngineRoot / "PicoEngine.root", std::ios::trunc)
+        << "[Engine]\nName=Pico\nVersion=9.9.9\nLayoutVersion=1\n";
+    Runner.Expect(
+        !Pico::FPaths::Init(StageExecutable.string(), {}, StageOptions),
+        "Stage rejects mismatched Manifest and installed Engine versions");
+    std::ofstream(StageEngineRoot / "PicoEngine.root", std::ios::trunc)
+        << "[Engine]\nName=Pico\nVersion=0.1.0\nLayoutVersion=1\n";
+
+    Pico::FPathInitOptions EscapingStageOptions;
+    EscapingStageOptions.ExplicitStageRoot = StageRoot;
+    Runner.Expect(
+        !Pico::FPaths::Init(
+            StageExecutable.string(), ProjectFile, EscapingStageOptions),
+        "Staged runtime rejects a Project descriptor outside its Stage root");
+
     Runner.Expect(
         Pico::FPaths::Init(ExecutablePath.string()),
-        "Paths restore engine-only mode after project tests");
+        "Paths restore development engine-only mode after layout tests");
+    Runner.Expect(
+        Pico::FPaths::GetEngineLayoutMode()
+            == Pico::EEngineLayoutMode::Development
+            && Pico::FPaths::GetEngineRootDir() == EngineRoot,
+        "Development layout remains the default inside the source repository");
     std::filesystem::remove_all(TestRoot, ErrorCode);
 }
 

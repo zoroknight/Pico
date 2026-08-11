@@ -91,7 +91,31 @@ int FEngineLoop::PreInit(
         }
     }
 
-    if (!FPaths::Init(Argc > 0 ? Argv[0] : "", RequestedProjectFile))
+    FPathInitOptions PathOptions;
+    if (const std::optional<std::string> EngineRootArgument =
+            FCommandLine::GetValue("engineroot"))
+    {
+        PathOptions.ExplicitEngineRoot = *EngineRootArgument;
+    }
+    if (const std::optional<std::string> StageRootArgument =
+            FCommandLine::GetValue("stageroot"))
+    {
+        PathOptions.ExplicitStageRoot = *StageRootArgument;
+    }
+    if (!PathOptions.ExplicitEngineRoot.empty()
+        && !PathOptions.ExplicitStageRoot.empty())
+    {
+        PICO_LOG(
+            LogPaths,
+            Error,
+            "PreInit: -engineroot and -stageroot cannot be used together");
+        return 1;
+    }
+
+    if (!FPaths::Init(
+            Argc > 0 ? Argv[0] : "",
+            RequestedProjectFile,
+            PathOptions))
     {
         PICO_LOG(LogPaths, Error, "PreInit: engine or project paths could not be initialized");
         return 1;
@@ -116,6 +140,40 @@ int FEngineLoop::PreInit(
             return 1;
         }
         ProjectName = Descriptor.GetName();
+        if (FPaths::IsStaged()
+            && ProjectName != FPaths::GetStageProjectName())
+        {
+            PICO_LOG(
+                LogPaths,
+                Error,
+                "PreInit: Stage project '{}' does not match descriptor '{}'",
+                FPaths::GetStageProjectName(),
+                ProjectName);
+            return 1;
+        }
+        if (!Descriptor.GetEngineVersion().empty()
+            && Descriptor.GetEngineVersion() != PICO_VERSION)
+        {
+            PICO_LOG(
+                LogPaths,
+                Error,
+                "PreInit: project requires Engine {}, runtime is {}",
+                Descriptor.GetEngineVersion(),
+                PICO_VERSION);
+            return 1;
+        }
+    }
+
+    if (!FPaths::GetLayoutEngineVersion().empty()
+        && FPaths::GetLayoutEngineVersion() != PICO_VERSION)
+    {
+        PICO_LOG(
+            LogPaths,
+            Error,
+            "PreInit: layout requires Engine {}, runtime is {}",
+            FPaths::GetLayoutEngineVersion(),
+            PICO_VERSION);
+        return 1;
     }
 
     FApp::Init(ProjectName);
@@ -180,6 +238,17 @@ int FEngineLoop::PreInit(
 
     PICO_LOG(LogEngine, Info, "PreInit: project={} version={}", FApp::GetProjectName(), PICO_VERSION);
     PICO_LOG(LogPaths, Info, "PreInit: engine root={}", FPaths::GetEngineRootDir().string());
+    PICO_LOG(
+        LogPaths,
+        Info,
+        "PreInit: layout={}",
+        FPaths::IsStaged() ? "Staged"
+            : FPaths::GetEngineLayoutMode() == EEngineLayoutMode::Installed
+                ? "Installed" : "Development");
+    if (FPaths::IsStaged())
+    {
+        PICO_LOG(LogPaths, Info, "PreInit: stage root={}", FPaths::GetStageRootDir().string());
+    }
     if (FPaths::HasProject())
     {
         PICO_LOG(LogPaths, Info, "PreInit: project file={}", FPaths::GetProjectFile().string());

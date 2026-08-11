@@ -1,17 +1,27 @@
 #include "Pico/Core/Paths.h"
 
+#include "Pico/Core/Config.h"
+
 #include <array>
+#include <string>
 #include <system_error>
 
 namespace Pico
 {
-bool FPaths::Init(std::string_view Argv0, const std::filesystem::path& ProjectFile)
+bool FPaths::Init(
+    std::string_view Argv0,
+    const std::filesystem::path& ProjectFile,
+    const FPathInitOptions& Options)
 {
     ExecutablePath.clear();
     ExecutableDir.clear();
     EngineRootDir.clear();
+    StageRootDir.clear();
     ProjectFilePath.clear();
     ProjectRootDir.clear();
+    EngineLayoutMode = EEngineLayoutMode::Unknown;
+    LayoutEngineVersion.clear();
+    StageProjectName.clear();
 
     std::error_code ErrorCode;
     std::filesystem::path ArgvPath = std::filesystem::path(std::string(Argv0));
@@ -28,21 +38,61 @@ bool FPaths::Init(std::string_view Argv0, const std::filesystem::path& ProjectFi
 
     const std::filesystem::path CurrentDirectory =
         std::filesystem::current_path(ErrorCode);
-    EngineRootDir = FindEngineRoot(CurrentDirectory);
-    if (EngineRootDir.empty())
+
+    if (!Options.ExplicitStageRoot.empty())
     {
-        EngineRootDir = FindEngineRoot(ExecutableDir);
+        return InitializeStage(
+            NormalizePath(Options.ExplicitStageRoot), ProjectFile);
     }
-    if (EngineRootDir.empty())
+
+    if (!Options.ExplicitEngineRoot.empty())
     {
-        return false;
+        EngineRootDir = NormalizePath(Options.ExplicitEngineRoot);
+        EngineLayoutMode = DetectEngineRoot(EngineRootDir);
+        if (EngineLayoutMode == EEngineLayoutMode::Unknown)
+        {
+            EngineRootDir.clear();
+            return false;
+        }
+        if (EngineLayoutMode == EEngineLayoutMode::Installed)
+        {
+            FConfigFile Marker;
+            Marker.Load(EngineRootDir / "PicoEngine.root");
+            LayoutEngineVersion = Marker.GetString("Engine", "Version", "");
+        }
+    }
+    else
+    {
+        const std::filesystem::path AutomaticStageRoot =
+            FindStageRoot(ExecutableDir);
+        if (!AutomaticStageRoot.empty())
+        {
+            return InitializeStage(AutomaticStageRoot, ProjectFile);
+        }
+
+        EngineRootDir = FindEngineRoot(CurrentDirectory);
+        if (EngineRootDir.empty())
+        {
+            EngineRootDir = FindEngineRoot(ExecutableDir);
+        }
+        EngineLayoutMode = DetectEngineRoot(EngineRootDir);
+        if (EngineLayoutMode == EEngineLayoutMode::Unknown)
+        {
+            EngineRootDir.clear();
+            return false;
+        }
+        if (EngineLayoutMode == EEngineLayoutMode::Installed)
+        {
+            FConfigFile Marker;
+            Marker.Load(EngineRootDir / "PicoEngine.root");
+            LayoutEngineVersion = Marker.GetString("Engine", "Version", "");
+        }
     }
 
     if (ProjectFile.empty())
     {
         return true;
     }
-
     std::filesystem::path Candidate = ProjectFile;
     if (Candidate.is_relative())
     {
@@ -74,6 +124,31 @@ const std::filesystem::path& FPaths::GetExecutableDir()
 const std::filesystem::path& FPaths::GetEngineRootDir()
 {
     return EngineRootDir;
+}
+
+EEngineLayoutMode FPaths::GetEngineLayoutMode()
+{
+    return EngineLayoutMode;
+}
+
+const std::string& FPaths::GetLayoutEngineVersion()
+{
+    return LayoutEngineVersion;
+}
+
+bool FPaths::IsStaged()
+{
+    return EngineLayoutMode == EEngineLayoutMode::Staged;
+}
+
+const std::filesystem::path& FPaths::GetStageRootDir()
+{
+    return StageRootDir;
+}
+
+const std::string& FPaths::GetStageProjectName()
+{
+    return StageProjectName;
 }
 
 std::filesystem::path FPaths::GetEngineConfigDir()
@@ -196,7 +271,7 @@ std::filesystem::path FPaths::FindEngineRoot(const std::filesystem::path& StartD
     std::filesystem::path Directory = NormalizePath(StartDir);
     while (!Directory.empty())
     {
-        if (IsEngineRoot(Directory))
+        if (DetectEngineRoot(Directory) != EEngineLayoutMode::Unknown)
         {
             return Directory;
         }
@@ -211,7 +286,46 @@ std::filesystem::path FPaths::FindEngineRoot(const std::filesystem::path& StartD
     return {};
 }
 
-bool FPaths::IsEngineRoot(const std::filesystem::path& Directory)
+std::filesystem::path FPaths::FindStageRoot(const std::filesystem::path& StartDir)
+{
+    std::filesystem::path Directory = NormalizePath(StartDir);
+    while (!Directory.empty())
+    {
+        std::error_code ErrorCode;
+        if (std::filesystem::is_regular_file(
+                Directory / "PicoStage.manifest", ErrorCode))
+        {
+            return Directory;
+        }
+        const std::filesystem::path Parent = Directory.parent_path();
+        if (Parent == Directory)
+        {
+            break;
+        }
+        Directory = Parent;
+    }
+    return {};
+}
+
+EEngineLayoutMode FPaths::DetectEngineRoot(
+    const std::filesystem::path& Directory)
+{
+    if (Directory.empty())
+    {
+        return EEngineLayoutMode::Unknown;
+    }
+    if (IsDevelopmentEngineRoot(Directory))
+    {
+        return EEngineLayoutMode::Development;
+    }
+    if (IsInstalledEngineRoot(Directory))
+    {
+        return EEngineLayoutMode::Installed;
+    }
+    return EEngineLayoutMode::Unknown;
+}
+
+bool FPaths::IsDevelopmentEngineRoot(const std::filesystem::path& Directory)
 {
     std::error_code ErrorCode;
     return std::filesystem::is_regular_file(Directory / "CMakeLists.txt", ErrorCode)
@@ -221,6 +335,109 @@ bool FPaths::IsEngineRoot(const std::filesystem::path& Directory)
         && std::filesystem::is_regular_file(
             Directory / "Config" / "Pico.ini",
             ErrorCode);
+}
+
+bool FPaths::IsInstalledEngineRoot(const std::filesystem::path& Directory)
+{
+    std::error_code ErrorCode;
+    const std::filesystem::path Marker = Directory / "PicoEngine.root";
+    if (!std::filesystem::is_regular_file(Marker, ErrorCode)
+        || !std::filesystem::is_regular_file(
+            Directory / "Config" / "Pico.ini", ErrorCode))
+    {
+        return false;
+    }
+
+    FConfigFile Config;
+    return Config.Load(Marker)
+        && Config.GetString("Engine", "Name", "") == "Pico"
+        && !Config.GetString("Engine", "Version", "").empty()
+        && Config.GetInt("Engine", "LayoutVersion", 0) == 1;
+}
+
+bool FPaths::InitializeStage(
+    const std::filesystem::path& StageRoot,
+    const std::filesystem::path& RequestedProjectFile)
+{
+    StageRootDir = NormalizePath(StageRoot);
+    FConfigFile Manifest;
+    if (StageRootDir.empty()
+        || !Manifest.Load(StageRootDir / "PicoStage.manifest")
+        || Manifest.GetInt("Stage", "LayoutVersion", 0) != 1)
+    {
+        StageRootDir.clear();
+        return false;
+    }
+
+    const std::filesystem::path EngineRelativePath(
+        Manifest.GetString("Stage", "EngineRelativePath", ""));
+    const std::filesystem::path ProjectRelativePath(
+        Manifest.GetString("Stage", "ProjectRelativePath", ""));
+    const std::string ManifestEngineVersion =
+        Manifest.GetString("Stage", "EngineVersion", "");
+    const std::string ManifestProjectName =
+        Manifest.GetString("Stage", "ProjectName", "");
+    if (EngineRelativePath.empty()
+        || EngineRelativePath.is_absolute()
+        || ProjectRelativePath.empty()
+        || ProjectRelativePath.is_absolute()
+        || ManifestEngineVersion.empty()
+        || ManifestProjectName.empty())
+    {
+        StageRootDir.clear();
+        return false;
+    }
+
+    EngineRootDir = NormalizePath(StageRootDir / EngineRelativePath);
+    const std::filesystem::path ManifestProjectFile =
+        NormalizePath(StageRootDir / ProjectRelativePath);
+    if (!IsWithin(EngineRootDir, StageRootDir)
+        || !IsWithin(ManifestProjectFile, StageRootDir)
+        || !IsInstalledEngineRoot(EngineRootDir))
+    {
+        EngineRootDir.clear();
+        StageRootDir.clear();
+        return false;
+    }
+
+    FConfigFile EngineMarker;
+    EngineMarker.Load(EngineRootDir / "PicoEngine.root");
+    const std::string InstalledEngineVersion =
+        EngineMarker.GetString("Engine", "Version", "");
+    if (InstalledEngineVersion != ManifestEngineVersion)
+    {
+        EngineRootDir.clear();
+        StageRootDir.clear();
+        return false;
+    }
+
+    std::filesystem::path Candidate = ManifestProjectFile;
+    if (!RequestedProjectFile.empty())
+    {
+        Candidate = RequestedProjectFile;
+        if (Candidate.is_relative())
+        {
+            Candidate = StageRootDir / Candidate;
+        }
+        Candidate = NormalizePath(Candidate);
+    }
+
+    std::error_code ErrorCode;
+    if (!IsWithin(Candidate, StageRootDir)
+        || Candidate.extension() != ".pico"
+        || !std::filesystem::is_regular_file(Candidate, ErrorCode))
+    {
+        EngineRootDir.clear();
+        StageRootDir.clear();
+        return false;
+    }
+
+    EngineLayoutMode = EEngineLayoutMode::Staged;
+    LayoutEngineVersion = ManifestEngineVersion;
+    StageProjectName = ManifestProjectName;
+    ProjectFilePath = Candidate;
+    ProjectRootDir = NormalizePath(Candidate.parent_path());
+    return !ProjectRootDir.empty();
 }
 
 std::filesystem::path FPaths::NormalizePath(const std::filesystem::path& Path)

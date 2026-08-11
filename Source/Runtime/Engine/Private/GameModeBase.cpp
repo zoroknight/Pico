@@ -81,6 +81,28 @@ const PClass* PGameModeBase::GetPlayerControllerClass() const { return GetClassD
 const PClass* PGameModeBase::GetPlayerStateClass() const { return GetClassDefaults()->PlayerStateClass; }
 const PClass* PGameModeBase::GetGameStateClass() const { return GetClassDefaults()->GameStateClass; }
 PGameStateBase* PGameModeBase::GetGameState() const { return GameState.Get(); }
+EMatchState PGameModeBase::GetMatchState() const
+{
+    return GameState.Get() != nullptr
+        ? GameState->GetMatchState()
+        : EMatchState::EnteringMap;
+}
+
+bool PGameModeBase::HasMatchStarted() const
+{
+    const EMatchState State = GetMatchState();
+    return State == EMatchState::InProgress
+        || State == EMatchState::WaitingPostMatch
+        || State == EMatchState::LeavingMap;
+}
+
+bool PGameModeBase::HasMatchEnded() const
+{
+    const EMatchState State = GetMatchState();
+    return State == EMatchState::WaitingPostMatch
+        || State == EMatchState::LeavingMap
+        || State == EMatchState::Aborted;
+}
 
 PPlayerController* PGameModeBase::Login(PPlayer* NewPlayer)
 {
@@ -147,6 +169,12 @@ void PGameModeBase::PostLogin(PPlayerController*)
 {
 }
 
+void PGameModeBase::DispatchPostLogin(PPlayerController* NewPlayer)
+{
+    PostLogin(NewPlayer);
+    PostLoginEvent.Broadcast(NewPlayer);
+}
+
 bool PGameModeBase::HandleStartingNewPlayer(PPlayerController* NewPlayer)
 {
     return RestartPlayer(NewPlayer);
@@ -198,6 +226,10 @@ bool PGameModeBase::RestartPlayer(PController* NewPlayer)
     {
         PlayerState->SetIsSpectator(false);
     }
+    if (StartSpot != nullptr)
+    {
+        StartSpot->NotifyPlayerSpawned(NewPawn);
+    }
     return true;
 }
 
@@ -209,6 +241,10 @@ void PGameModeBase::Logout(PController* Exiting)
     }
 
     OnLogout(Exiting);
+    if (Exiting->IsA(PPlayerController::StaticClass()))
+    {
+        LogoutEvent.Broadcast(static_cast<PPlayerController*>(Exiting));
+    }
     PWorld* World = GetWorld();
     PPawn* Pawn = Exiting->GetPawn();
     Exiting->UnPossess();
@@ -235,6 +271,106 @@ void PGameModeBase::Logout(PController* Exiting)
         World->DestroyActor(PlayerState);
     }
     World->DestroyActor(Exiting);
+}
+
+void PGameModeBase::StartPlay()
+{
+    if (GetMatchState() == EMatchState::WaitingToStart
+        && ReadyToStartMatch())
+    {
+        StartMatch();
+    }
+}
+
+bool PGameModeBase::StartMatch()
+{
+    if (!SetMatchState(EMatchState::InProgress))
+    {
+        return false;
+    }
+    HandleMatchHasStarted();
+    return true;
+}
+
+bool PGameModeBase::EndMatch()
+{
+    if (!SetMatchState(EMatchState::WaitingPostMatch))
+    {
+        return false;
+    }
+    HandleMatchHasEnded();
+    return true;
+}
+
+bool PGameModeBase::AbortMatch()
+{
+    return SetMatchState(EMatchState::Aborted);
+}
+
+FOnGameModePlayerEvent& PGameModeBase::OnPostLoginEvent()
+{
+    return PostLoginEvent;
+}
+
+FOnGameModePlayerEvent& PGameModeBase::OnLogoutEvent()
+{
+    return LogoutEvent;
+}
+
+FOnGameModeMatchStateChanged& PGameModeBase::OnMatchStateChanged()
+{
+    return MatchStateChangedEvent;
+}
+
+bool PGameModeBase::ReadyToStartMatch() const
+{
+    return GetGameState() != nullptr
+        && !GetGameState()->GetPlayerStates().empty();
+}
+
+void PGameModeBase::HandleMatchHasStarted()
+{
+}
+
+void PGameModeBase::HandleMatchHasEnded()
+{
+}
+
+bool PGameModeBase::SetMatchState(EMatchState NewState)
+{
+    PGameStateBase* State = GameState.Get();
+    const EMatchState OldState = GetMatchState();
+    if (State == nullptr || !CanTransitionTo(NewState)
+        || !State->SetMatchState(NewState))
+    {
+        return false;
+    }
+    MatchStateChangedEvent.Broadcast(OldState, NewState);
+    return true;
+}
+
+bool PGameModeBase::CanTransitionTo(EMatchState NewState) const
+{
+    const EMatchState Current = GetMatchState();
+    if (Current == NewState)
+    {
+        return false;
+    }
+    if (NewState == EMatchState::LeavingMap)
+    {
+        return Current != EMatchState::LeavingMap;
+    }
+    if (NewState == EMatchState::Aborted)
+    {
+        return Current != EMatchState::LeavingMap
+            && Current != EMatchState::Aborted;
+    }
+    return (Current == EMatchState::EnteringMap
+            && NewState == EMatchState::WaitingToStart)
+        || (Current == EMatchState::WaitingToStart
+            && NewState == EMatchState::InProgress)
+        || (Current == EMatchState::InProgress
+            && NewState == EMatchState::WaitingPostMatch);
 }
 
 PPlayerStart* PGameModeBase::ChoosePlayerStart(PController*)
@@ -338,11 +474,22 @@ PGameStateBase* PGameModeBase::CreateGameState()
     GameState = Actor != nullptr && Actor->IsA(PGameStateBase::StaticClass())
         ? static_cast<PGameStateBase*>(Actor)
         : nullptr;
+    if (GameState.Get() != nullptr)
+    {
+        SetMatchState(EMatchState::WaitingToStart);
+    }
     return GameState.Get();
 }
 
 void PGameModeBase::BeginDestroy()
 {
+    if (GameState.Get() != nullptr)
+    {
+        SetMatchState(EMatchState::LeavingMap);
+    }
+    PostLoginEvent.Clear();
+    LogoutEvent.Clear();
+    MatchStateChangedEvent.Clear();
     GameState.Reset();
     PActor::BeginDestroy();
 }

@@ -80,6 +80,7 @@ public:
     std::size_t CompactInvalidBindings();
     const std::vector<FFunctionValueDescriptor>& GetParameters() const;
     std::vector<FDynamicDelegateBindingView> GetBindings() const;
+    bool IsFunctionCompatible(const PFunction& Function) const;
 
     FDynamicDelegateBroadcastReport Broadcast(
         std::span<const FFunctionValue> Arguments = {});
@@ -97,7 +98,6 @@ private:
         PObject* Target,
         FName FunctionName,
         bool bUnique);
-    bool IsFunctionCompatible(const PFunction& Function) const;
     bool AreArgumentsCompatible(std::span<const FFunctionValue> Arguments) const;
     FBinding* FindBinding(FDelegateHandle Handle);
     const FBinding* FindBinding(FDelegateHandle Handle) const;

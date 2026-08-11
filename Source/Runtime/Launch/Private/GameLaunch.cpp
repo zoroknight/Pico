@@ -4,9 +4,12 @@
 #include "Pico/Engine/GameInstance.h"
 #include "Pico/Engine/GameModeBase.h"
 #include "Pico/Engine/GameStateBase.h"
+#include "Pico/Engine/Level.h"
 #include "Pico/Engine/LocalPlayer.h"
+#include "Pico/Engine/MatchState.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerController.h"
+#include "Pico/Engine/PlayerStart.h"
 #include "Pico/Engine/PlayerState.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Render/SceneViewportRenderer.h"
@@ -55,6 +58,25 @@ struct FGameplayDebugPanel
         {
             LastPawnHandle = Pawn->GetHandle();
         }
+
+        Pico::PGameStateBase* GameState = World != nullptr
+            ? World->GetGameState()
+            : nullptr;
+        if (GameState != nullptr && GameState->GetMatchState() != LastMatchState)
+        {
+            Events.emplace_back(std::string("MatchState -> ")
+                + std::string(Pico::ToString(GameState->GetMatchState())));
+            LastMatchState = GameState->GetMatchState();
+        }
+
+        Pico::PPlayerStart* PlayerStart = FindPlayerStart(World);
+        if (PlayerStart != nullptr
+            && PlayerStart->GetSpawnEventCount() != LastSpawnEventCount)
+        {
+            Events.emplace_back("PlayerStart broadcast observed (count "
+                + std::to_string(PlayerStart->GetSpawnEventCount()) + ")");
+            LastSpawnEventCount = PlayerStart->GetSpawnEventCount();
+        }
     }
 
     void Draw(Pico::FGameEngine& GameEngine)
@@ -83,13 +105,20 @@ struct FGameplayDebugPanel
             : nullptr;
         Pico::PPawn* Pawn = Controller != nullptr ? Controller->GetPawn() : nullptr;
         Pico::PWorld* World = GameEngine.GetEngineLoop().GetWorld();
+        Pico::PGameModeBase* GameMode = World != nullptr
+            ? World->GetGameMode()
+            : nullptr;
+        Pico::PGameStateBase* GameState = World != nullptr
+            ? World->GetGameState()
+            : nullptr;
+        Pico::PPlayerStart* PlayerStart = FindPlayerStart(World);
 
         ImGui::TextUnformatted("Runtime object chain");
         DrawObject("GameInstance", GameInstance);
         DrawObject("LocalPlayer", LocalPlayer);
         DrawObject("World", World);
-        DrawObject("GameMode", World != nullptr ? World->GetGameMode() : nullptr);
-        DrawObject("GameState", World != nullptr ? World->GetGameState() : nullptr);
+        DrawObject("GameMode", GameMode);
+        DrawObject("GameState", GameState);
         DrawObject("PlayerController", Controller);
         DrawObject("PlayerState", PlayerState);
         DrawObject("Controlled Pawn", Pawn);
@@ -101,7 +130,42 @@ struct FGameplayDebugPanel
                 PlayerState->IsSpectator() ? "yes" : "no");
         }
 
+        if (GameState != nullptr)
+        {
+            ImGui::Text("Match: %s   Elapsed: %.2fs",
+                Pico::ToString(GameState->GetMatchState()),
+                GameState->GetElapsedMatchTime());
+        }
+        if (PlayerStart != nullptr)
+        {
+            ImGui::Text("PlayerStart bindings: %zu   broadcasts observed: %d",
+                PlayerStart->OnPlayerSpawned().Num(),
+                PlayerStart->GetSpawnEventCount());
+        }
+
         ImGui::Separator();
+        const Pico::EMatchState MatchState = GameMode != nullptr
+            ? GameMode->GetMatchState()
+            : Pico::EMatchState::Aborted;
+        const bool bCanStartMatch = GameMode != nullptr
+            && MatchState == Pico::EMatchState::WaitingToStart;
+        if (!bCanStartMatch) ImGui::BeginDisabled();
+        if (ImGui::Button("Start Match")) GameMode->StartMatch();
+        if (!bCanStartMatch) ImGui::EndDisabled();
+        ImGui::SameLine();
+        const bool bCanEndMatch = GameMode != nullptr
+            && MatchState == Pico::EMatchState::InProgress;
+        if (!bCanEndMatch) ImGui::BeginDisabled();
+        if (ImGui::Button("End Match")) GameMode->EndMatch();
+        if (!bCanEndMatch) ImGui::EndDisabled();
+        ImGui::SameLine();
+        const bool bCanAbortMatch = GameMode != nullptr
+            && MatchState != Pico::EMatchState::Aborted
+            && MatchState != Pico::EMatchState::LeavingMap;
+        if (!bCanAbortMatch) ImGui::BeginDisabled();
+        if (ImGui::Button("Abort Match")) GameMode->AbortMatch();
+        if (!bCanAbortMatch) ImGui::EndDisabled();
+
         const bool bCanRestart = World != nullptr
             && World->GetGameMode() != nullptr
             && Controller != nullptr;
@@ -171,6 +235,31 @@ struct FGameplayDebugPanel
     bool bVisible = true;
 
 private:
+    static Pico::PPlayerStart* FindPlayerStart(Pico::PWorld* World)
+    {
+        if (World == nullptr)
+        {
+            return nullptr;
+        }
+        for (Pico::PLevel* Level : World->GetLevels())
+        {
+            if (Level == nullptr)
+            {
+                continue;
+            }
+            for (Pico::PActor* Actor : Level->GetActors())
+            {
+                if (Actor != nullptr
+                    && Actor->IsA(Pico::PPlayerStart::StaticClass())
+                    && !Actor->IsPendingDestroy())
+                {
+                    return static_cast<Pico::PPlayerStart*>(Actor);
+                }
+            }
+        }
+        return nullptr;
+    }
+
     static void DrawObject(const char* Label, Pico::PObject* Object)
     {
         if (Object == nullptr)
@@ -227,6 +316,8 @@ private:
     Pico::FObjectHandle PlayerStateHandle;
     Pico::FObjectHandle PawnHandle;
     Pico::FObjectHandle LastPawnHandle;
+    Pico::EMatchState LastMatchState = Pico::EMatchState::EnteringMap;
+    int32_t LastSpawnEventCount = 0;
 };
 
 std::filesystem::path FindProjectFile(
@@ -235,6 +326,8 @@ std::filesystem::path FindProjectFile(
     const std::filesystem::path& DefaultProjectFile)
 {
     constexpr std::string_view ProjectPrefix = "-project=";
+    constexpr std::string_view StageRootPrefix = "-stageroot=";
+    bool bHasExplicitStageRoot = false;
     for (int Index = 1; Index < Argc; ++Index)
     {
         const std::string_view Argument = Argv[Index];
@@ -243,11 +336,36 @@ std::filesystem::path FindProjectFile(
             return std::filesystem::path(
                 std::string(Argument.substr(ProjectPrefix.size())));
         }
+        bHasExplicitStageRoot |= Argument.starts_with(StageRootPrefix);
         const std::filesystem::path PositionalPath { std::string(Argument) };
         if (!Argument.starts_with("-") && PositionalPath.extension() == ".pico")
         {
             return PositionalPath;
         }
+    }
+
+    if (bHasExplicitStageRoot)
+    {
+        return {};
+    }
+
+    std::error_code ErrorCode;
+    std::filesystem::path Directory = Argc > 0
+        ? std::filesystem::absolute(Argv[0], ErrorCode).parent_path()
+        : std::filesystem::path {};
+    while (!Directory.empty())
+    {
+        if (std::filesystem::is_regular_file(
+                Directory / "PicoStage.manifest", ErrorCode))
+        {
+            return {};
+        }
+        const std::filesystem::path Parent = Directory.parent_path();
+        if (Parent == Directory)
+        {
+            break;
+        }
+        Directory = Parent;
     }
     return DefaultProjectFile;
 }
