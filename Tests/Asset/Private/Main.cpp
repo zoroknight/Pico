@@ -2,6 +2,7 @@
 
 #include "Pico/Asset/AssetManager.h"
 #include "Pico/Asset/AssetRegistry.h"
+#include "Pico/Asset/CharacterProfile.h"
 #include "Pico/Asset/Material.h"
 #include "Pico/Asset/StaticMesh.h"
 #include "Pico/Asset/Texture.h"
@@ -80,6 +81,29 @@ void TestStaticMeshFormat(FTestRunner& Runner)
         !Pico::DeserializeStaticMesh(Unsupported, Loaded, &Error)
             && Error == Pico::EStaticMeshError::UnsupportedVersion,
         "Static mesh loading rejects unsupported format versions");
+}
+
+void TestCharacterProfile(FTestRunner& Runner)
+{
+    Pico::FCharacterProfileData Profile;
+    Pico::FAssetPath::TryParse("/Game/Characters/Knight.pskeletalmesh", Profile.SkeletalMesh);
+    Pico::FAssetPath::TryParse("/Game/Characters/Knight.panimset", Profile.AnimationSet);
+    Pico::FAssetPath::TryParse("/Game/Characters/Materials/Armor.pmat", Profile.MaterialOverrides[0]);
+    Pico::FAssetPath::TryParse("/Game/Characters/Materials/Cape.pmat", Profile.MaterialOverrides[7]);
+    const std::filesystem::path File = std::filesystem::temp_directory_path()
+        / "PicoCharacterProfileTest.pcharprofile";
+    Pico::FCharacterProfileData Loaded;
+    Pico::ECharacterProfileError Error = Pico::ECharacterProfileError::None;
+    Runner.Expect(
+        Pico::SaveCharacterProfileToFile(File, Profile, &Error)
+            && Pico::LoadCharacterProfileFromFile(File, Loaded, &Error)
+            && Loaded.SkeletalMesh == Profile.SkeletalMesh
+            && Loaded.AnimationSet == Profile.AnimationSet
+            && Loaded.MaterialOverrides[0] == Profile.MaterialOverrides[0]
+            && Loaded.MaterialOverrides[7] == Profile.MaterialOverrides[7],
+        "Character Profile round trips mesh, animation and all eight material slots");
+    std::error_code FileError;
+    std::filesystem::remove(File, FileError);
 }
 
 void TestTextureAndMaterialFormats(FTestRunner& Runner)
@@ -233,6 +257,7 @@ int main(int Argc, char** Argv)
     Pico::FPaths::Init(Argv0);
     FTestRunner Runner;
     TestStaticMeshFormat(Runner);
+    TestCharacterProfile(Runner);
     TestTextureAndMaterialFormats(Runner);
     TestAssetRegistry(Runner, Argv0);
     return Runner.Finish();

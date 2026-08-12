@@ -15,6 +15,10 @@ class PController : public PActor
 
 public:
     PPawn* GetPawn() const;
+    const FRotator& GetControlRotation() const;
+    void SetControlRotation(const FRotator& Rotation);
+    void AddYawInput(float Value);
+    void AddPitchInput(float Value);
     bool Possess(PPawn* InPawn);
     void UnPossess();
     FOnPossessedPawnChanged& OnPossessedPawnChanged();
@@ -28,6 +32,7 @@ protected:
 
 private:
     TWeakObjectPtr<PPawn> Pawn;
+    FRotator ControlRotation;
     FOnPossessedPawnChanged PossessedPawnChangedEvent;
 };
 }

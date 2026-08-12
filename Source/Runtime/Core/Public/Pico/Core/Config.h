@@ -22,6 +22,10 @@ public:
     bool GetBool(std::string_view Section, std::string_view Key, bool DefaultValue) const;
     std::vector<std::pair<std::string, std::string>> GetSectionEntries(
         std::string_view Section) const;
+    void SetString(std::string Section, std::string Key, std::string Value);
+    bool Remove(std::string_view Section, std::string_view Key);
+    bool RemoveSection(std::string_view Section);
+    bool Save(const std::filesystem::path& FilePath) const;
 
 private:
     using FSection = std::unordered_map<std::string, std::string>;

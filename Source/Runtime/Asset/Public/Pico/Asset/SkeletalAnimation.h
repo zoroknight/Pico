@@ -58,6 +58,7 @@ struct FSkeletalMeshData
     std::vector<FSkeletalMeshVertex> Vertices;
     std::vector<uint32> Indices;
     std::vector<FStaticMeshSection> Sections;
+    std::vector<FAssetPath> DefaultMaterials;
     FStaticMeshBounds Bounds;
 };
 
@@ -99,6 +100,40 @@ struct FAnimationClipData
     std::vector<FAnimationNotifyData> Notifies;
 };
 
+struct FAnimationSetData
+{
+    FAssetPath SkeletonAsset;
+    FAssetPath IdleAnimation;
+    FAssetPath WalkAnimation;
+    FAssetPath JumpAnimation;
+};
+
+struct FAnimationMontageSegment
+{
+    FAssetPath AnimationAsset;
+    float StartTime = 0.0f;
+    float EndTime = 0.0f;
+    float PlayRate = 1.0f;
+};
+
+struct FAnimationMontageSection
+{
+    std::string Name;
+    float StartTime = 0.0f;
+    std::string NextSection;
+};
+
+struct FAnimationMontageData
+{
+    FAssetPath SkeletonAsset;
+    std::string SlotName = "DefaultSlot";
+    float BlendInTime = 0.1f;
+    float BlendOutTime = 0.1f;
+    std::vector<FAnimationMontageSegment> Segments;
+    std::vector<FAnimationMontageSection> Sections;
+    std::vector<FAnimationNotifyData> Notifies;
+};
+
 struct FSkeletonPose
 {
     std::vector<FTransform> LocalTransforms;
@@ -124,6 +159,12 @@ bool ValidateAnimationClip(
     const FAnimationClipData& Clip,
     const FSkeletonData* Skeleton = nullptr,
     ESkeletalAssetError* OutError = nullptr);
+bool ValidateAnimationSet(
+    const FAnimationSetData& AnimationSet,
+    ESkeletalAssetError* OutError = nullptr);
+bool ValidateAnimationMontage(
+    const FAnimationMontageData& Montage,
+    ESkeletalAssetError* OutError = nullptr);
 
 bool SaveSkeletonToFile(const std::filesystem::path& FilePath, const FSkeletonData& Skeleton,
     ESkeletalAssetError* OutError = nullptr);
@@ -136,6 +177,14 @@ bool LoadSkeletalMeshFromFile(const std::filesystem::path& FilePath, FSkeletalMe
 bool SaveAnimationClipToFile(const std::filesystem::path& FilePath, const FAnimationClipData& Clip,
     ESkeletalAssetError* OutError = nullptr);
 bool LoadAnimationClipFromFile(const std::filesystem::path& FilePath, FAnimationClipData& OutClip,
+    ESkeletalAssetError* OutError = nullptr);
+bool SaveAnimationSetToFile(const std::filesystem::path& FilePath, const FAnimationSetData& AnimationSet,
+    ESkeletalAssetError* OutError = nullptr);
+bool LoadAnimationSetFromFile(const std::filesystem::path& FilePath, FAnimationSetData& OutAnimationSet,
+    ESkeletalAssetError* OutError = nullptr);
+bool SaveAnimationMontageToFile(const std::filesystem::path& FilePath, const FAnimationMontageData& Montage,
+    ESkeletalAssetError* OutError = nullptr);
+bool LoadAnimationMontageFromFile(const std::filesystem::path& FilePath, FAnimationMontageData& OutMontage,
     ESkeletalAssetError* OutError = nullptr);
 
 bool SampleAnimationClip(

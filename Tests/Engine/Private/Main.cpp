@@ -2860,6 +2860,12 @@ void TestGameplayFrameworkTypes(FTestRunner& Runner)
             && PlayerState->GetScore() == 12.5f
             && PlayerState->IsSpectator(),
         "Gameplay associations and public PlayerState data are internally consistent");
+    Controller->SetControlRotation(Pico::FRotator(120.0f, 370.0f, 15.0f));
+    Controller->AddPitchInput(-10.0f);
+    Controller->AddYawInput(20.0f);
+    Runner.Expect(
+        Controller->GetControlRotation().Equals(Pico::FRotator(75.0f, 30.0f, 0.0f)),
+        "Controller clamps pitch and normalizes its camera-relative ControlRotation");
 
     Controller->UnPossess();
     Runner.Expect(

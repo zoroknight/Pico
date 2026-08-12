@@ -42,7 +42,18 @@ namespace
 struct FWindowInputContext
 {
     Pico::FInputSystem* InputSystem = nullptr;
+    bool bMouseCaptured = false;
 };
+
+void SetMouseCaptured(GLFWwindow* Window, FWindowInputContext& Context, bool bCaptured)
+{
+    Context.bMouseCaptured = bCaptured;
+    glfwSetInputMode(Window, GLFW_CURSOR, bCaptured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+    if (glfwRawMouseMotionSupported())
+        glfwSetInputMode(Window, GLFW_RAW_MOUSE_MOTION, bCaptured ? GLFW_TRUE : GLFW_FALSE);
+    if (Context.InputSystem != nullptr) Context.InputSystem->SetFocused(false);
+    if (Context.InputSystem != nullptr) Context.InputSystem->SetFocused(true);
+}
 
 struct FGameplayDebugPanel
 {
@@ -590,7 +601,8 @@ void OnKey(GLFWwindow* Window, int Key, int, int Action, int)
     Context->InputSystem->SetKeyState(TranslateKey(Key), Action == GLFW_PRESS);
     if (Key == GLFW_KEY_ESCAPE && Action == GLFW_PRESS)
     {
-        glfwSetWindowShouldClose(Window, GLFW_TRUE);
+        if (Context->bMouseCaptured) SetMouseCaptured(Window, *Context, false);
+        else glfwSetWindowShouldClose(Window, GLFW_TRUE);
     }
 }
 
@@ -601,6 +613,8 @@ void OnMouseButton(GLFWwindow* Window, int Button, int Action, int)
     {
         Context->InputSystem->SetKeyState(
             TranslateMouseButton(Button), Action == GLFW_PRESS);
+        if (Button == GLFW_MOUSE_BUTTON_RIGHT && Action == GLFW_PRESS)
+            SetMouseCaptured(Window, *Context, true);
     }
 }
 
@@ -702,7 +716,7 @@ int RunPicoGame(
             ExitCode = GameEngine.Init();
         }
 
-        FWindowInputContext InputContext { &GameEngine.GetInputSystem() };
+        FWindowInputContext InputContext { &GameEngine.GetInputSystem(), false };
         glfwSetWindowUserPointer(Window, &InputContext);
         glfwSetKeyCallback(Window, &OnKey);
         glfwSetMouseButtonCallback(Window, &OnMouseButton);
@@ -745,8 +759,15 @@ int RunPicoGame(
                     static_cast<uint32>(Width),
                     static_cast<uint32>(Height));
                 FSceneView View;
-                TryBuildActiveCameraView(
-                    GameEngine.GetEngineLoop().GetWorld(), View, true);
+                PGameInstance* Instance = GameEngine.GetGameInstance();
+                PLocalPlayer* LocalPlayer = Instance != nullptr
+                    ? Instance->GetPrimaryLocalPlayer() : nullptr;
+                PPlayerController* Controller = LocalPlayer != nullptr
+                    ? LocalPlayer->GetPlayerController() : nullptr;
+                PPawn* ViewTarget = Controller != nullptr ? Controller->GetPawn() : nullptr;
+                if (!TryBuildActorCameraView(ViewTarget, View, true))
+                    TryBuildActiveCameraView(
+                        GameEngine.GetEngineLoop().GetWorld(), View, true);
                 Renderer.Render(
                     GameEngine.GetEngineLoop().GetWorld(),
                     GameEngine.GetEngineLoop().GetAssetRegistry(),

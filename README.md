@@ -42,12 +42,22 @@ The current implementation can:
   types behind `PicoPhysicsCore` handles and query contracts.
 - Play movement-driven Idle/Walk/Jump clips through native Skeleton, SkeletalMesh, AnimInstance,
   Pose, CPU skinning, and swept Root Motion boundaries without leaking Assimp or OpenGL types.
+- Use `.panimset` locomotion references and Montage Lite with one slot, segments, sections, notifies,
+  blend in/out, completion delegates, and root motion through the character movement boundary.
+- Inspect Montage play/stop/section jumps and events in Skeletal Preview, with four reflected per-section
+  material overrides available on SkeletalMeshComponent.
 - Inspect ground speed, animation state, movement mode, current clip, and playback time independently
   in the standalone `Gameplay Debug` panel, so grounded `Walking` movement can be distinguished from
   an `Idle` animation at zero velocity.
 - Import glTF/GLB or FBX from the Content Browser into a transient skeletal Preview World, inspect
   clips/reference pose with orbit, playback, speed, and timeline controls, then atomically create
   project-native assets without manually translating disk paths into `/Game` references.
+- Convert glTF PBR materials, embedded/external textures, and multi-material sections in the
+  developer-only import layer; persist default slot materials in `.pskeletalmesh` while retaining
+  reflected per-slot component overrides.
+- Edit Input and Gameplay defaults through `Edit -> Project Settings`, search project-native Actors
+  through the Actor Class picker, and select a generated `.pcharprofile` instead of editing Pawn CDOs
+  for every imported character.
 - Inspect the live Gameplay object chain, restart/destroy/repossess its Pawn, and reload the map from
   the standalone runtime's `Gameplay Debug` panel; inspect PlayerStart shape and validation in editor.
 - Create PlayerStart from the editor toolbar, review persistent green/yellow/red diagnostics in
@@ -139,7 +149,8 @@ The current implementation can:
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-Debug and Release configurations build successfully, and all sixteen CTest targets pass.
+Debug and Release configurations build successfully, all sixteen CTest targets pass, and the focused animation
+suite passes 13/13 assertions.
 
 ## Architecture
 
@@ -328,7 +339,7 @@ Start the game runtime without editor UI:
 .\Build\Debug\PicoSandboxGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
 
-The project runtime reads `[Game] DefaultMap` and the Action/Axis mappings in `[Input]` from
+The project runtime reads `[Game] DefaultMap`, Gameplay class/profile defaults, and the Action/Axis mappings in `[Input]` from
 `Config/Pico.ini`. `[Game] Executable` selects the project program used by editor Play.
 `-map=/Game/Maps/Example.pworld` overrides the default map, and `-frames=N` supports automated
 smoke runs. The generic `PicoGame` target remains available for projects without native code.
@@ -568,6 +579,8 @@ See:
 - [Character Movement](Docs/Month08_3_CharacterMovement.md)
 - [Skeletal Animation](Docs/Month08_4_SkeletalAnimation.md)
 - [Skeletal Asset Preview And Import](Docs/Month08_5_SkeletalAssetPreview.md)
+- [Montage Lite And Character Assembly](Docs/Month08_6_MontageAndCharacterAssembly.md)
+- [Character Import, Playable Pawn, And Project Settings](Docs/Month08_7_CharacterImportAndProjectSettings.md)
 - [Class Default Objects and Unified Construction](Docs/Month03_13_ClassDefaultObjects.md)
 - [Default Subobject Templates](Docs/Month03_14_DefaultSubobjects.md)
 - [Native Delegates and Weak Object Binding](Docs/Month03_15_NativeDelegates.md)
@@ -587,6 +600,13 @@ shared MoveComponent boundary. See [Movement Foundation](Docs/Month08_1_Movement
 [Jolt Physics Scene](Docs/Month08_2_JoltPhysics.md), and
 [Character Movement](Docs/Month08_3_CharacterMovement.md), and
 [Skeletal Animation](Docs/Month08_4_SkeletalAnimation.md).
+The editor can now author a persistent playable Pawn from a project Pawn class and Character Profile.
+Runtime login prefers that map instance through Auto Possess Player 0, while project defaults remain
+the fallback. Controller ControlRotation, mouse capture, SpringArm camera rotation, view-relative WASD,
+movement-facing rotation, and eight material overrides complete the third-person character assembly.
+PicoSandbox now opens a persistent Starter World with reusable cube/PBR assets, an authored floor,
+walls, a dynamic crate, PlayerStart, and scene lights. Component material overrides take precedence
+over Character Profile and imported mesh defaults; slots without mesh sections are shown as unused.
 The remaining learning path is:
 
 - Replication, RPC, transform synchronization, client prediction, and correction

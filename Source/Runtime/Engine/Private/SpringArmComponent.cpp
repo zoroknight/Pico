@@ -1,6 +1,8 @@
 #include "Pico/Engine/SpringArmComponent.h"
 
 #include "Pico/Object/Class.h"
+#include "Pico/Engine/Pawn.h"
+#include "Pico/Engine/Controller.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,12 +19,15 @@ bool PSpringArmComponent::RegisterProperties(PClass& Class)
     PICO_ADD_PROPERTY(Properties, TargetArmLength);
     PICO_ADD_PROPERTY(Properties, SocketOffset);
     PICO_ADD_PROPERTY(Properties, TargetOffset);
+    PICO_ADD_PROPERTY(Properties, bUsePawnControlRotation);
     return Class.AddProperties(std::move(Properties));
 }
 
 PSpringArmComponent::PSpringArmComponent(const FObjectConstructionParams& Params)
     : PSceneComponent(Params)
 {
+    PrimaryComponentTick.SetCanEverTick(true);
+    PrimaryComponentTick.SetTickGroup(ETickGroup::PostUpdateWork);
 }
 
 float PSpringArmComponent::GetTargetArmLength() const
@@ -56,6 +61,18 @@ void PSpringArmComponent::SetTargetOffset(const FVector3& InOffset)
 {
     TargetOffset = InOffset;
     SanitizeParameters();
+}
+bool PSpringArmComponent::UsesPawnControlRotation() const { return bUsePawnControlRotation; }
+void PSpringArmComponent::SetUsePawnControlRotation(bool bValue) { bUsePawnControlRotation = bValue; }
+
+void PSpringArmComponent::TickComponent(float)
+{
+    if (!bUsePawnControlRotation) return;
+    PActor* Owner = GetOwner();
+    PPawn* Pawn = Owner != nullptr && Owner->IsA(PPawn::StaticClass())
+        ? static_cast<PPawn*>(Owner) : nullptr;
+    PController* Controller = Pawn != nullptr ? Pawn->GetController() : nullptr;
+    if (Controller != nullptr) SetRelativeRotation(Controller->GetControlRotation());
 }
 
 FName PSpringArmComponent::GetEndpointSocketName()

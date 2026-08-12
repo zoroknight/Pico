@@ -112,19 +112,44 @@ int main()
     Pico::FSkeletonData LoadedSkeleton;
     Pico::FSkeletalMeshData LoadedMesh;
     Pico::FAnimationClipData LoadedClip;
+    Pico::FAnimationSetData AnimationSet;
+    AnimationSet.SkeletonAsset = Fixture.Mesh.SkeletonAsset;
+    Pico::FAssetPath::TryParse("/Game/Characters/Idle.panimation", AnimationSet.IdleAnimation);
+    Pico::FAssetPath::TryParse("/Game/Characters/Walk.panimation", AnimationSet.WalkAnimation);
+    Pico::FAssetPath::TryParse("/Game/Characters/Jump.panimation", AnimationSet.JumpAnimation);
+    Pico::FAnimationMontageData Montage;
+    Montage.SkeletonAsset = Fixture.Mesh.SkeletonAsset;
+    Montage.Segments = {
+        {AnimationSet.WalkAnimation, 0.0f, 1.0f, 1.0f},
+        {AnimationSet.JumpAnimation, 1.0f, 2.0f, 1.0f}};
+    Montage.Sections = {{"Start", 0.0f, "Finish"}, {"Finish", 1.0f, ""}};
+    Montage.Notifies = {{"Footstep", 0.25f, 0.25f}, {"ActionWindow", 0.5f, 1.5f}};
+    Pico::FAnimationSetData LoadedAnimationSet;
+    Pico::FAnimationMontageData LoadedMontage;
     Runner.Expect(
         Pico::SaveSkeletonToFile(Root / "Content/Characters/Test.pskeleton", Fixture.Skeleton)
             && Pico::SaveSkeletalMeshToFile(Root / "Content/Characters/Test.pskeletalmesh", Fixture.Mesh)
             && Pico::SaveAnimationClipToFile(Root / "Content/Characters/Idle.panimation", Fixture.Idle)
             && Pico::SaveAnimationClipToFile(Root / "Content/Characters/Walk.panimation", Fixture.Walk)
             && Pico::SaveAnimationClipToFile(Root / "Content/Characters/Jump.panimation", Fixture.Jump)
+            && Pico::SaveAnimationSetToFile(Root / "Content/Characters/Test.panimset", AnimationSet)
+            && Pico::SaveAnimationMontageToFile(Root / "Content/Characters/Test.pmontage", Montage)
             && Pico::LoadSkeletonFromFile(Root / "Content/Characters/Test.pskeleton", LoadedSkeleton)
             && Pico::LoadSkeletalMeshFromFile(Root / "Content/Characters/Test.pskeletalmesh", LoadedMesh)
             && Pico::LoadAnimationClipFromFile(Root / "Content/Characters/Walk.panimation", LoadedClip)
+            && Pico::LoadAnimationSetFromFile(Root / "Content/Characters/Test.panimset", LoadedAnimationSet)
+            && Pico::LoadAnimationMontageFromFile(Root / "Content/Characters/Test.pmontage", LoadedMontage)
             && LoadedSkeleton.Bones.size() == 2
             && LoadedMesh.Vertices.size() == 3
-            && LoadedClip.Name == "Walk",
-        "Native skeleton, skeletal mesh and animation files round trip from disk");
+            && LoadedClip.Name == "Walk"
+            && LoadedAnimationSet.WalkAnimation == AnimationSet.WalkAnimation
+            && LoadedMontage.Sections.size() == 2,
+        "Native skeleton, mesh, clip, AnimationSet and Montage files round trip from disk");
+    Pico::FAnimationMontageData InvalidMontage = Montage;
+    InvalidMontage.Sections.front().NextSection = "Missing";
+    Runner.Expect(
+        !Pico::ValidateAnimationMontage(InvalidMontage),
+        "Montage validation rejects a dangling next-section link");
     {
         std::ofstream ProjectFile(Root / "AnimationTests.pico");
         ProjectFile << "[Project]\nName=AnimationTests\nFileVersion=1\nEngineVersion=0.1.0\n";
@@ -168,6 +193,54 @@ int main()
                 && Instance->GetAnimationState() == Pico::EAnimationState::Jump,
             "AnimInstance selects states, supports preview seeking, and removes extracted Root Motion from the visual pose");
 
+        int CompletedCount = 0;
+        int InterruptedCount = 0;
+        int TriggerCount = 0;
+        int WindowBeginCount = 0;
+        int WindowEndCount = 0;
+        Instance->OnMontageEnded().AddLambda(
+            [&](Pico::EMontageEndReason Reason)
+            {
+                if (Reason == Pico::EMontageEndReason::Completed) ++CompletedCount;
+                if (Reason == Pico::EMontageEndReason::Interrupted) ++InterruptedCount;
+            });
+        Instance->OnMontageNotify().AddLambda(
+            [&](std::string_view Name, Pico::EMontageNotifyEvent Event)
+            {
+                if (Name == "Footstep" && Event == Pico::EMontageNotifyEvent::Trigger) ++TriggerCount;
+                if (Name == "ActionWindow" && Event == Pico::EMontageNotifyEvent::Begin) ++WindowBeginCount;
+                if (Name == "ActionWindow" && Event == Pico::EMontageNotifyEvent::End) ++WindowEndCount;
+            });
+        const auto RuntimeMontage = std::make_shared<Pico::FAnimationMontageData>(Montage);
+        const bool bMontagePlayed = Instance->PlayMontage(
+            RuntimeMontage,
+            {std::make_shared<Pico::FAnimationClipData>(Fixture.Walk),
+                std::make_shared<Pico::FAnimationClipData>(Fixture.Jump)});
+        Instance->SetExtractRootMotion(true);
+        Instance->Update(0.75f, 0.0f, false);
+        const bool bFirstSection = Instance->GetCurrentMontageSection() == "Start"
+            && TriggerCount == 1 && WindowBeginCount == 1
+            && !Instance->ConsumeExtractedRootMotion().Translation.IsNearlyZero();
+        const bool bJumped = Instance->JumpToSection("Finish")
+            && Instance->GetCurrentMontageSection() == "Finish";
+        Instance->Update(1.1f, 0.0f, false);
+        Instance->Update(0.11f, 0.0f, false);
+        Runner.Expect(
+            bMontagePlayed && bFirstSection && bJumped && !Instance->IsMontagePlaying()
+                && CompletedCount == 1 && WindowEndCount == 1,
+            "Montage dispatches notifies, jumps sections, extracts Root Motion and completes once");
+        Instance->PlayMontage(RuntimeMontage,
+            {std::make_shared<Pico::FAnimationClipData>(Fixture.Walk),
+                std::make_shared<Pico::FAnimationClipData>(Fixture.Jump)});
+        const bool bStopRequested =
+            Instance->StopMontage(Pico::EMontageEndReason::Interrupted);
+        Instance->Update(0.11f, 0.0f, false);
+        Runner.Expect(
+            bStopRequested
+                && !Instance->StopMontage(Pico::EMontageEndReason::Interrupted)
+                && InterruptedCount == 1,
+            "Montage interruption broadcasts exactly once");
+
         Pico::PActor* Actor = EngineLoop.GetWorld()->SpawnActor<Pico::PActor>("AssetDrivenActor");
         Pico::PSkeletalMeshComponent* Component = Actor != nullptr
             ? Actor->CreateComponent<Pico::PSkeletalMeshComponent>("SkeletalMesh")
@@ -176,10 +249,23 @@ int main()
         Pico::FAssetPath IdlePath;
         Pico::FAssetPath WalkPath;
         Pico::FAssetPath JumpPath;
+        Pico::FAssetPath AnimationSetPath;
+        Pico::FAssetPath MontagePath;
         Pico::FAssetPath::TryParse("/Game/Characters/Test.pskeletalmesh", MeshPath);
         Pico::FAssetPath::TryParse("/Game/Characters/Idle.panimation", IdlePath);
         Pico::FAssetPath::TryParse("/Game/Characters/Walk.panimation", WalkPath);
         Pico::FAssetPath::TryParse("/Game/Characters/Jump.panimation", JumpPath);
+        Pico::FAssetPath::TryParse("/Game/Characters/Test.panimset", AnimationSetPath);
+        Pico::FAssetPath::TryParse("/Game/Characters/Test.pmontage", MontagePath);
+        Pico::FAssetScanReport ScanReport;
+        EngineLoop.GetAssetRegistry().ScanProjectContent(&ScanReport);
+        const auto LoadedSetAsset = EngineLoop.GetAssetManager().LoadAnimationSet(
+            AnimationSetPath, EngineLoop.GetAssetRegistry());
+        const auto LoadedMontageAsset = EngineLoop.GetAssetManager().LoadAnimationMontage(
+            MontagePath, EngineLoop.GetAssetRegistry());
+        Runner.Expect(
+            LoadedSetAsset != nullptr && LoadedMontageAsset != nullptr,
+            "AssetRegistry and AssetManager discover and cache AnimationSet and Montage assets");
         const auto LoadedAssetMesh = EngineLoop.GetAssetManager().LoadSkeletalMesh(
             MeshPath, EngineLoop.GetAssetRegistry());
         const auto LoadedAssetSkeleton = LoadedAssetMesh != nullptr
@@ -193,6 +279,8 @@ int main()
         {
             Component->RegisterComponent();
             Component->SetSkeletalMeshAsset(MeshPath);
+            Component->SetAnimationSetAsset(AnimationSetPath);
+            Component->SetDefaultMontageAsset(MontagePath);
             Component->SetIdleAnimationAsset(IdlePath);
             Component->SetWalkAnimationAsset(WalkPath);
             Component->SetJumpAnimationAsset(JumpPath);

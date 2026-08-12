@@ -10,6 +10,7 @@
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerStart.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
@@ -608,6 +609,24 @@ void TestEditorCommandService(FTestRunner& Runner)
             && DuplicateStartValidation.Message.find("duplicate") != std::string::npos,
         "Play validation warns about duplicate PlayerStart IDs without blocking Standalone");
 
+    const Pico::FEditorCommandResult PlayableCharacterResult =
+        Commands.SpawnPlayableCharacter(Pico::PPawn::StaticClass(), {});
+    auto* PlayablePawn = Selection.Resolve() != nullptr
+            && Selection.Resolve()->IsA(Pico::PPawn::StaticClass())
+        ? static_cast<Pico::PPawn*>(Selection.Resolve()) : nullptr;
+    const Pico::FEditorCommandResult AuthoredPawnValidation =
+        Commands.ValidateGameplayForPlay();
+    Runner.Expect(
+        PlayableCharacterResult.bSucceeded
+            && PlayablePawn != nullptr
+            && PlayablePawn->GetAutoPossessPlayerIndex() == 0
+            && AuthoredPawnValidation.bSucceeded
+            && AuthoredPawnValidation.Message.find("authored Pawn") != std::string::npos,
+        "Playable Character creation authors and validates one Player 0 Pawn");
+    Runner.Expect(
+        !Commands.SpawnPlayableCharacter(Pico::PPawn::StaticClass(), {}).bSucceeded,
+        "Playable Character creation rejects a second Player 0 Pawn");
+
     EngineLoop.Exit();
     Runner.Expect(
         Pico::FObjectRegistry::GetObjectCount() == 0,
@@ -1000,7 +1019,7 @@ void TestEditorWorldDocument(FTestRunner& Runner)
     Pico::FAssetPath WorldAssetPath;
     Runner.Expect(
         Pico::FAssetPath::TryParse(
-            "/Game/Maps/EditorWorld.pworld", WorldAssetPath),
+            "/Game/Maps/StarterWorld.pworld", WorldAssetPath),
         "World asset path parses");
     const Pico::FEditorDocumentResult OpenResult = Document.Open(WorldAssetPath);
     Runner.Expect(

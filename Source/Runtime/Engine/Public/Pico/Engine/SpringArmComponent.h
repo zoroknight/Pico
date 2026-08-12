@@ -15,10 +15,13 @@ public:
     void SetSocketOffset(const FVector3& InOffset);
     const FVector3& GetTargetOffset() const;
     void SetTargetOffset(const FVector3& InOffset);
+    bool UsesPawnControlRotation() const;
+    void SetUsePawnControlRotation(bool bValue);
     static FName GetEndpointSocketName();
     bool DoesSocketExist(FName SocketName) const override;
     FTransform GetSocketTransform(FName SocketName) const override;
     void PostEditChangeProperty(const FPropertyChangedEvent& Event) override;
+    void TickComponent(float DeltaSeconds) override;
 
 protected:
     explicit PSpringArmComponent(const FObjectConstructionParams& Params);
@@ -30,5 +33,6 @@ private:
     float TargetArmLength = 300.0f;
     FVector3 SocketOffset = FVector3::ZeroVector;
     FVector3 TargetOffset = FVector3::ZeroVector;
+    bool bUsePawnControlRotation = false;
 };
 }

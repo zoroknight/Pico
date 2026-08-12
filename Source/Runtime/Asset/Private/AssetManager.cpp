@@ -223,9 +223,75 @@ std::shared_ptr<const FAnimationClipData> FAssetManager::LoadAnimationClip(
     return Loaded;
 }
 
+std::shared_ptr<const FAnimationSetData> FAssetManager::LoadAnimationSet(
+    const FAssetPath& AssetPath, const FAssetRegistry& Registry, ESkeletalAssetError* OutError)
+{
+    if (OutError != nullptr) *OutError = ESkeletalAssetError::None;
+    const FAssetRecord* Record = Registry.Find(AssetPath);
+    if (Record == nullptr || Record->Type != EAssetType::AnimationSet)
+    { if (OutError != nullptr) *OutError = ESkeletalAssetError::InvalidArgument; return {}; }
+    auto Found = std::find_if(AnimationSets.begin(), AnimationSets.end(),
+        [Record](const auto& Entry) { return Entry.AssetPath == Record->AssetPath; });
+    if (Found != AnimationSets.end() && Found->FileSize == Record->FileSize
+        && Found->LastWriteTime == Record->LastWriteTime) return Found->Data;
+    auto Loaded = std::make_shared<FAnimationSetData>();
+    if (!LoadAnimationSetFromFile(Record->FilePath, *Loaded, OutError)) return {};
+    if (Found != AnimationSets.end())
+        *Found = {Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded};
+    else AnimationSets.push_back({Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded});
+    return Loaded;
+}
+
+std::shared_ptr<const FAnimationMontageData> FAssetManager::LoadAnimationMontage(
+    const FAssetPath& AssetPath, const FAssetRegistry& Registry, ESkeletalAssetError* OutError)
+{
+    if (OutError != nullptr) *OutError = ESkeletalAssetError::None;
+    const FAssetRecord* Record = Registry.Find(AssetPath);
+    if (Record == nullptr || Record->Type != EAssetType::AnimationMontage)
+    { if (OutError != nullptr) *OutError = ESkeletalAssetError::InvalidArgument; return {}; }
+    auto Found = std::find_if(AnimationMontages.begin(), AnimationMontages.end(),
+        [Record](const auto& Entry) { return Entry.AssetPath == Record->AssetPath; });
+    if (Found != AnimationMontages.end() && Found->FileSize == Record->FileSize
+        && Found->LastWriteTime == Record->LastWriteTime) return Found->Data;
+    auto Loaded = std::make_shared<FAnimationMontageData>();
+    if (!LoadAnimationMontageFromFile(Record->FilePath, *Loaded, OutError)) return {};
+    if (Found != AnimationMontages.end())
+        *Found = {Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded};
+    else AnimationMontages.push_back({Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded});
+    return Loaded;
+}
+
+std::shared_ptr<const FCharacterProfileData> FAssetManager::LoadCharacterProfile(
+    const FAssetPath& AssetPath,
+    const FAssetRegistry& Registry,
+    ECharacterProfileError* OutError)
+{
+    if (OutError != nullptr) *OutError = ECharacterProfileError::None;
+    const FAssetRecord* Record = Registry.Find(AssetPath);
+    if (Record == nullptr || Record->Type != EAssetType::CharacterProfile)
+    {
+        if (OutError != nullptr) *OutError = ECharacterProfileError::InvalidArgument;
+        return {};
+    }
+    auto Found = std::find_if(CharacterProfiles.begin(), CharacterProfiles.end(),
+        [Record](const auto& Entry) { return Entry.AssetPath == Record->AssetPath; });
+    if (Found != CharacterProfiles.end() && Found->FileSize == Record->FileSize
+        && Found->LastWriteTime == Record->LastWriteTime) return Found->Data;
+    auto Loaded = std::make_shared<FCharacterProfileData>();
+    if (!LoadCharacterProfileFromFile(Record->FilePath, *Loaded, OutError)) return {};
+    if (Found != CharacterProfiles.end())
+        *Found = {Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded};
+    else CharacterProfiles.push_back(
+        {Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded});
+    return Loaded;
+}
+
 std::size_t FAssetManager::GetCachedSkeletonCount() const { return Skeletons.size(); }
 std::size_t FAssetManager::GetCachedSkeletalMeshCount() const { return SkeletalMeshes.size(); }
 std::size_t FAssetManager::GetCachedAnimationClipCount() const { return AnimationClips.size(); }
+std::size_t FAssetManager::GetCachedAnimationSetCount() const { return AnimationSets.size(); }
+std::size_t FAssetManager::GetCachedAnimationMontageCount() const { return AnimationMontages.size(); }
+std::size_t FAssetManager::GetCachedCharacterProfileCount() const { return CharacterProfiles.size(); }
 
 void FAssetManager::Invalidate(const FAssetPath& AssetPath)
 {
@@ -268,6 +334,9 @@ void FAssetManager::Invalidate(const FAssetPath& AssetPath)
     EraseAnimation(Skeletons);
     EraseAnimation(SkeletalMeshes);
     EraseAnimation(AnimationClips);
+    EraseAnimation(AnimationSets);
+    EraseAnimation(AnimationMontages);
+    EraseAnimation(CharacterProfiles);
 }
 
 void FAssetManager::Clear()
@@ -278,5 +347,8 @@ void FAssetManager::Clear()
     Skeletons.clear();
     SkeletalMeshes.clear();
     AnimationClips.clear();
+    AnimationSets.clear();
+    AnimationMontages.clear();
+    CharacterProfiles.clear();
 }
 }

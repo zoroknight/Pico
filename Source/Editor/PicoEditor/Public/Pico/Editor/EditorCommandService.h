@@ -13,6 +13,7 @@ namespace Pico
 {
 class FEngineLoop;
 class PActor;
+class PClass;
 class PSceneComponent;
 class PWorld;
 
@@ -42,6 +43,10 @@ public:
         std::function<void()> OnWorldChanged = {});
 
     FEditorCommandResult SpawnActor(bool bCubeActor);
+    FEditorCommandResult SpawnActor(const PClass* ActorClass);
+    FEditorCommandResult SpawnPlayableCharacter(
+        const PClass* PawnClass,
+        const FAssetPath& CharacterProfile);
     FEditorCommandResult SpawnPlayerStart();
     FEditorCommandResult ValidateGameplayForPlay() const;
     FEditorCommandResult SpawnComponentActor(EEditorSceneComponentType Type);

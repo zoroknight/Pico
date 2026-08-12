@@ -3,6 +3,7 @@
 #include <charconv>
 #include <cctype>
 #include <fstream>
+#include <algorithm>
 
 namespace Pico
 {
@@ -149,6 +150,56 @@ std::vector<std::pair<std::string, std::string>> FConfigFile::GetSectionEntries(
         Entries.emplace_back(Key, Value);
     }
     return Entries;
+}
+
+void FConfigFile::SetString(std::string Section, std::string Key, std::string Value)
+{
+    if (!Section.empty() && !Key.empty()) Sections[std::move(Section)][std::move(Key)] = std::move(Value);
+}
+
+bool FConfigFile::Remove(std::string_view Section, std::string_view Key)
+{
+    const auto FoundSection = Sections.find(std::string(Section));
+    return FoundSection != Sections.end() && FoundSection->second.erase(std::string(Key)) > 0;
+}
+
+bool FConfigFile::RemoveSection(std::string_view Section)
+{
+    return Sections.erase(std::string(Section)) > 0;
+}
+
+bool FConfigFile::Save(const std::filesystem::path& FilePath) const
+{
+    if (FilePath.empty()) return false;
+    std::error_code Error;
+    std::filesystem::create_directories(FilePath.parent_path(), Error);
+    if (Error) return false;
+    std::filesystem::path Temporary = FilePath;
+    Temporary += ".tmp";
+    std::ofstream File(Temporary, std::ios::trunc);
+    if (!File) return false;
+    std::vector<std::string> SectionNames;
+    SectionNames.reserve(Sections.size());
+    for (const auto& [Name, Entries] : Sections) SectionNames.push_back(Name);
+    std::sort(SectionNames.begin(), SectionNames.end());
+    for (const std::string& SectionName : SectionNames)
+    {
+        File << '[' << SectionName << "]\n";
+        std::vector<std::pair<std::string, std::string>> Entries(
+            Sections.at(SectionName).begin(), Sections.at(SectionName).end());
+        std::sort(Entries.begin(), Entries.end());
+        for (const auto& [Key, Value] : Entries) File << Key << '=' << Value << '\n';
+        File << '\n';
+    }
+    File.close();
+    if (!File) return false;
+    std::filesystem::rename(Temporary, FilePath, Error);
+    if (!Error) return true;
+    Error.clear();
+    std::filesystem::remove(FilePath, Error);
+    Error.clear();
+    std::filesystem::rename(Temporary, FilePath, Error);
+    return !Error;
 }
 
 std::string FConfigFile::Trim(std::string_view Text)

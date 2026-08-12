@@ -9,6 +9,7 @@
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/PointLightComponent.h"
+#include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerStart.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/SkeletalMeshComponent.h"
@@ -82,6 +83,7 @@ FEditorCommandResult FEditorCommandService::ValidateGameplayForPlay() const
 
     std::unordered_set<int32> PlayerStartIds;
     std::size_t PlayerStartCount = 0;
+    std::size_t AutoPossessPlayerZeroCount = 0;
     bool bHasDuplicateId = false;
     for (PLevel* Level : World->GetLevels())
     {
@@ -91,6 +93,11 @@ FEditorCommandResult FEditorCommandService::ValidateGameplayForPlay() const
         }
         for (PActor* Actor : Level->GetActors())
         {
+            if (Actor != nullptr && Actor->IsA(PPawn::StaticClass())
+                && static_cast<const PPawn*>(Actor)->GetAutoPossessPlayerIndex() == 0)
+            {
+                ++AutoPossessPlayerZeroCount;
+            }
             if (Actor == nullptr || !Actor->IsA(PPlayerStart::StaticClass()))
             {
                 continue;
@@ -108,6 +115,16 @@ FEditorCommandResult FEditorCommandService::ValidateGameplayForPlay() const
                 bHasDuplicateId = true;
             }
         }
+    }
+    if (AutoPossessPlayerZeroCount > 1)
+    {
+        return Failure(
+            "Multiple Pawns use Auto Possess Player 0; keep exactly one playable Pawn");
+    }
+    if (AutoPossessPlayerZeroCount == 1)
+    {
+        return Success(
+            "Gameplay validation passed (authored Pawn will be possessed by Player 0)");
     }
     if (PlayerStartCount == 0)
     {
@@ -392,6 +409,113 @@ FEditorCommandResult FEditorCommandService::SpawnActor(bool bCubeActor)
         return Failure("Could not commit create transaction: " + std::string(ToString(Error)));
     }
     return Success("Spawned " + Path);
+}
+
+FEditorCommandResult FEditorCommandService::SpawnActor(const PClass* ActorClass)
+{
+    if (ActorClass == nullptr || !ActorClass->IsChildOf(PActor::StaticClass())
+        || !ActorClass->CanConstruct())
+        return Failure("Selected class is not a constructible Actor class");
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    if (!BeginTransaction("Create " + ActorClass->GetName().ToString(), Error))
+        return Failure("Could not begin Actor class transaction");
+    PWorld* World = GetWorld();
+    PActor* Actor = nullptr;
+    do
+    {
+        Actor = World != nullptr ? World->SpawnActor(
+            ActorClass,
+            ActorClass->GetName().ToString() + "_" + std::to_string(NextActorNumber++)) : nullptr;
+    }
+    while (Actor == nullptr && NextActorNumber < 10000);
+    if (Actor == nullptr)
+    {
+        RollbackTransaction(Error);
+        return Failure("Could not spawn " + ActorClass->GetName().ToString());
+    }
+    Selection->Set(Actor);
+    if (!CommitTransaction(Error))
+        return Failure("Could not commit Actor class transaction: " + std::string(ToString(Error)));
+    return Success("Spawned " + Actor->GetPathName());
+}
+
+FEditorCommandResult FEditorCommandService::SpawnPlayableCharacter(
+    const PClass* PawnClass,
+    const FAssetPath& CharacterProfile)
+{
+    if (PawnClass == nullptr || !PawnClass->IsChildOf(PPawn::StaticClass())
+        || !PawnClass->CanConstruct())
+    {
+        return Failure("Selected class is not a constructible Pawn class");
+    }
+    if (CharacterProfile.IsValid()
+        && CharacterProfile.GetExtension() != ".pcharprofile")
+    {
+        return Failure("Selected asset is not a Character Profile");
+    }
+
+    PWorld* World = GetWorld();
+    if (World == nullptr) return Failure("Playable Character requires an active World");
+    for (PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr) continue;
+        for (PActor* Existing : Level->GetActors())
+        {
+            if (Existing != nullptr && Existing->IsA(PPawn::StaticClass())
+                && static_cast<PPawn*>(Existing)->GetAutoPossessPlayerIndex() == 0)
+            {
+                return Failure(
+                    "Player 0 already has an auto-possessed Pawn: "
+                    + Existing->GetName().ToString());
+            }
+        }
+    }
+
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    if (!BeginTransaction("Create Playable Character", Error))
+        return Failure("Could not begin Playable Character transaction");
+
+    PActor* Actor = nullptr;
+    do
+    {
+        Actor = World->SpawnActor(
+            PawnClass,
+            "PlayableCharacter_" + std::to_string(NextActorNumber++));
+    }
+    while (Actor == nullptr && NextActorNumber < 10000);
+    if (Actor == nullptr)
+    {
+        RollbackTransaction(Error);
+        return Failure("Could not spawn the selected Pawn class");
+    }
+
+    auto* Pawn = static_cast<PPawn*>(Actor);
+    Pawn->SetAutoPossessPlayerIndex(0);
+    if (CharacterProfile.IsValid())
+    {
+        PSkeletalMeshComponent* SkeletalMesh = nullptr;
+        for (PActorComponent* Component : Pawn->GetComponents())
+        {
+            if (Component != nullptr && Component->IsA(PSkeletalMeshComponent::StaticClass()))
+            {
+                SkeletalMesh = static_cast<PSkeletalMeshComponent*>(Component);
+                break;
+            }
+        }
+        if (SkeletalMesh == nullptr)
+        {
+            World->DestroyActor(Actor);
+            RollbackTransaction(Error);
+            return Failure("Selected Pawn class has no Skeletal Mesh Component");
+        }
+        SkeletalMesh->SetCharacterProfileAsset(CharacterProfile);
+    }
+
+    const std::string Path = Actor->GetPathName();
+    Selection->Set(Actor);
+    if (!CommitTransaction(Error))
+        return Failure("Could not commit Playable Character transaction");
+    return Success("Created playable character " + Path);
 }
 
 FEditorCommandResult FEditorCommandService::SpawnPlayerStart()

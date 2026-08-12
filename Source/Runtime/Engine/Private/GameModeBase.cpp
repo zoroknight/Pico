@@ -177,6 +177,29 @@ void PGameModeBase::DispatchPostLogin(PPlayerController* NewPlayer)
 
 bool PGameModeBase::HandleStartingNewPlayer(PPlayerController* NewPlayer)
 {
+    PWorld* World = GetWorld();
+    if (World != nullptr && NewPlayer != nullptr)
+    {
+        for (PLevel* Level : World->GetLevels())
+        {
+            if (Level == nullptr) continue;
+            for (PActor* Actor : Level->GetActors())
+            {
+                PPawn* Pawn = Actor != nullptr && Actor->IsA(PPawn::StaticClass())
+                    ? static_cast<PPawn*>(Actor) : nullptr;
+                if (Pawn != nullptr
+                    && !Pawn->IsPendingDestroy()
+                    && Pawn->GetAutoPossessPlayerIndex() == 0
+                    && Pawn->GetController() == nullptr)
+                {
+                    if (!NewPlayer->Possess(Pawn)) return false;
+                    if (PPlayerState* State = NewPlayer->GetPlayerState())
+                        State->SetIsSpectator(false);
+                    return true;
+                }
+            }
+        }
+    }
     return RestartPlayer(NewPlayer);
 }
 

@@ -1,8 +1,11 @@
 #include "PicoSandbox/SandboxGameMode.h"
 
 #include "Pico/Engine/CapsuleComponent.h"
-#include "Pico/Engine/CubeComponent.h"
+#include "Pico/Core/AssetPath.h"
+#include "Pico/Core/Config.h"
+#include "Pico/Core/Paths.h"
 #include "Pico/Engine/SkeletalMeshComponent.h"
+#include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/World.h"
 
@@ -112,18 +115,34 @@ Pico::PPawn* PSandboxGameMode::SpawnDefaultPawnFor(
     Pico::PPawn* Pawn = PGameModeBase::SpawnDefaultPawnFor(Controller, StartSpot);
     if (Pawn != nullptr)
     {
-        const FSampleAnimationSet AnimationSet = MakeSampleAnimationSet();
+        Pico::FConfigFile Config;
+        Config.Load(Pico::FPaths::GetProjectConfigFile("Pico.ini"));
+        Pico::FAssetPath ProfilePath;
+        const std::string ProfileText = Config.GetString("Game", "DefaultPawnProfile", "");
+        const bool bHasProfile = !ProfileText.empty()
+            && Pico::FAssetPath::TryParse(ProfileText, ProfilePath);
+        const FSampleAnimationSet AnimationSet = bHasProfile
+            ? FSampleAnimationSet {} : MakeSampleAnimationSet();
         for (Pico::PActorComponent* Component : Pawn->GetComponents())
         {
+            if (bHasProfile && Component != nullptr
+                && Component->IsA(Pico::PStaticMeshComponent::StaticClass()))
+            {
+                static_cast<Pico::PStaticMeshComponent*>(Component)->SetStaticMeshAsset({});
+            }
             if (Component != nullptr
                 && Component->IsA(Pico::PSkeletalMeshComponent::StaticClass()))
             {
-                static_cast<Pico::PSkeletalMeshComponent*>(Component)->SetRuntimeAnimationSet(
-                    AnimationSet.Skeleton,
-                    AnimationSet.Mesh,
-                    AnimationSet.Idle,
-                    AnimationSet.Walk,
-                    AnimationSet.Jump);
+                auto* SkeletalMesh = static_cast<Pico::PSkeletalMeshComponent*>(Component);
+                if (bHasProfile)
+                    SkeletalMesh->SetCharacterProfileAsset(ProfilePath);
+                else
+                    SkeletalMesh->SetRuntimeAnimationSet(
+                        AnimationSet.Skeleton,
+                        AnimationSet.Mesh,
+                        AnimationSet.Idle,
+                        AnimationSet.Walk,
+                        AnimationSet.Jump);
             }
         }
     }
@@ -145,42 +164,5 @@ Pico::PPawn* PSandboxGameMode::SpawnDefaultPawnFor(
 void PSandboxGameMode::BeginPlay()
 {
     PGameModeBase::BeginPlay();
-    Pico::PWorld* World = GetWorld();
-    if (World == nullptr) return;
-
-    const auto SpawnCube = [World](
-        const char* Name,
-        const Pico::FVector3& Location,
-        const Pico::FVector3& Extent,
-        const Pico::FVector3& Color,
-        Pico::EPhysicsBodyType BodyType,
-        bool bSensor)
-    {
-        Pico::PActor* Actor = World->SpawnActor<Pico::PActor>(Name);
-        Pico::PCubeComponent* Cube = Actor != nullptr
-            ? Actor->CreateComponent<Pico::PCubeComponent>("PhysicsCube")
-            : nullptr;
-        if (Actor == nullptr || Cube == nullptr || !Actor->SetRootComponent(Cube)) return;
-        Cube->SetExtent(Extent);
-        Cube->SetColor(Color);
-        Cube->SetWorldTransform(Pico::FTransform(Location));
-        Cube->SetPhysicsBodyType(BodyType);
-        Cube->SetSensor(bSensor);
-        Cube->SetCollisionEnabled(
-            bSensor
-                ? Pico::ECollisionEnabled::QueryOnly
-                : Pico::ECollisionEnabled::QueryAndPhysics);
-    };
-
-    SpawnCube("PhysicsFloor", {0.0f, 0.0f, -25.0f}, {600.0f, 600.0f, 25.0f},
-        {0.18f, 0.24f, 0.28f}, Pico::EPhysicsBodyType::Static, false);
-    SpawnCube("PhysicsWallNorth", {0.0f, 500.0f, 100.0f}, {600.0f, 25.0f, 100.0f},
-        {0.22f, 0.48f, 0.65f}, Pico::EPhysicsBodyType::Static, false);
-    SpawnCube("PhysicsWallEast", {500.0f, 0.0f, 100.0f}, {25.0f, 600.0f, 100.0f},
-        {0.22f, 0.48f, 0.65f}, Pico::EPhysicsBodyType::Static, false);
-    SpawnCube("DynamicCrate", {180.0f, 0.0f, 260.0f}, {45.0f, 45.0f, 45.0f},
-        {0.82f, 0.28f, 0.18f}, Pico::EPhysicsBodyType::Dynamic, false);
-    SpawnCube("TriggerZone", {0.0f, 260.0f, 70.0f}, {100.0f, 100.0f, 70.0f},
-        {0.15f, 0.75f, 0.40f}, Pico::EPhysicsBodyType::Static, true);
 }
 }

@@ -67,6 +67,13 @@ private:
         std::string Text;
     };
 
+    struct FInputMappingSetting
+    {
+        std::array<char, 64> Name {};
+        std::array<char, 160> Bindings {};
+        bool bAxis = false;
+    };
+
     PWorld* GetWorld() const;
     PObject* GetSelectedObject() const;
 
@@ -74,6 +81,9 @@ private:
     void DrawFileMenu();
     void DrawEditMenu();
     void DrawViewMenu();
+    void DrawProjectSettings();
+    void LoadProjectSettings();
+    void SaveProjectSettings();
     void DrawToolbar();
     void DrawViewport(float Width, float Height);
     void DrawStatusBar();
@@ -88,6 +98,8 @@ private:
     void UpdateGameProcess();
 
     void SpawnEmptyActor();
+    void DrawActorClassPicker();
+    void DrawPlayableCharacterCreator();
     void SpawnCubeActor();
     void SpawnPlayerStart();
     void SpawnComponentActor(EEditorSceneComponentType Type);
@@ -177,9 +189,19 @@ private:
     FSkeletalAssetEditor SkeletalAssetEditor;
     FEditorAssetWorkflowController AssetWorkflow;
     FProcessHandle GameProcess;
+    std::filesystem::path GameProcessLogFile;
     FAssetPath PendingWorldAssetPath;
     FObjectHandle RenameObjectHandle;
     std::array<char, 128> RenameBuffer {};
+    std::array<char, 128> ActorClassFilter {};
+    std::array<char, 128> PlayablePawnClassSetting {};
+    std::array<char, 260> PlayableCharacterProfileSetting {};
+    std::array<char, 260> DefaultMapSetting {};
+    std::array<char, 128> DefaultPawnClassSetting {};
+    std::array<char, 128> PlayerControllerClassSetting {};
+    std::array<char, 260> DefaultPawnProfileSetting {};
+    std::vector<FInputMappingSetting> InputMappingSettings;
+    float MouseSensitivitySetting = 0.12f;
     std::string InteractiveEditKey;
     std::string Status;
     std::string PendingPlayValidation;
@@ -198,6 +220,10 @@ private:
     bool bPendingPlayNeedsSave = false;
     bool bResetDockLayout = false;
     bool bOpenRenamePopup = false;
+    bool bOpenActorClassPicker = false;
+    bool bOpenPlayableCharacterCreator = false;
+    bool bProjectSettingsOpen = false;
+    bool bProjectSettingsLoaded = false;
     bool bPreviewSceneCamera = false;
     bool bOpenUnsavedChangesPopup = false;
     bool bShouldClose = false;

@@ -179,6 +179,7 @@ FProcessHandle FPlatformProcess::CreateProcess(
     const std::filesystem::path& Executable,
     const std::vector<std::string>& Arguments,
     const std::filesystem::path& WorkingDirectory,
+    const std::filesystem::path& OutputFile,
     std::string* OutError)
 {
     if (OutError != nullptr)
@@ -222,18 +223,44 @@ FProcessHandle FPlatformProcess::CreateProcess(
 
     STARTUPINFOW StartupInfo {};
     StartupInfo.cb = sizeof(StartupInfo);
+    HANDLE OutputHandle = INVALID_HANDLE_VALUE;
+    if (!OutputFile.empty())
+    {
+        std::error_code DirectoryError;
+        std::filesystem::create_directories(OutputFile.parent_path(), DirectoryError);
+        if (DirectoryError)
+        {
+            SetError(OutError, "Could not create process log directory");
+            return Result;
+        }
+        OutputHandle = CreateFileW(
+            std::filesystem::absolute(OutputFile).lexically_normal().wstring().c_str(),
+            GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (OutputHandle == INVALID_HANDLE_VALUE)
+        {
+            SetError(OutError, GetWindowsErrorMessage(GetLastError()));
+            return Result;
+        }
+        SetHandleInformation(OutputHandle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+        StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+        StartupInfo.hStdOutput = OutputHandle;
+        StartupInfo.hStdError = OutputHandle;
+        StartupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    }
     PROCESS_INFORMATION ProcessInformation {};
     const BOOL bCreated = CreateProcessW(
         ExecutablePath.c_str(),
         CommandLine.data(),
         nullptr,
         nullptr,
-        FALSE,
+        OutputHandle != INVALID_HANDLE_VALUE,
         CREATE_NEW_PROCESS_GROUP,
         nullptr,
         WorkingDirectoryPath.empty() ? nullptr : WorkingDirectoryPath.c_str(),
         &StartupInfo,
         &ProcessInformation);
+    if (OutputHandle != INVALID_HANDLE_VALUE) CloseHandle(OutputHandle);
     if (!bCreated)
     {
         SetError(OutError, GetWindowsErrorMessage(GetLastError()));
@@ -246,6 +273,7 @@ FProcessHandle FPlatformProcess::CreateProcess(
 #else
     (void)Arguments;
     (void)WorkingDirectory;
+    (void)OutputFile;
     SetError(OutError, "Process creation is not implemented on this platform");
 #endif
     return Result;

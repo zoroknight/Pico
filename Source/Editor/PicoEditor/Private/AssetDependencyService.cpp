@@ -1,7 +1,9 @@
 #include "Pico/Editor/AssetDependencyService.h"
 
 #include "Pico/Asset/AssetRegistry.h"
+#include "Pico/Asset/CharacterProfile.h"
 #include "Pico/Asset/Material.h"
+#include "Pico/Asset/SkeletalAnimation.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/Level.h"
@@ -128,13 +130,64 @@ std::vector<FAssetPath> FAssetDependencyService::GetAssetDependencies(
 {
     std::vector<FAssetPath> Dependencies;
     const FAssetRecord* Record = Registry.Find(AssetPath);
-    if (Record != nullptr && Record->Type == EAssetType::Material)
+    if (Record == nullptr) return Dependencies;
+    const auto Add = [&Dependencies](const FAssetPath& Path)
+    {
+        if (Path.IsValid()) Dependencies.push_back(Path);
+    };
+    if (Record->Type == EAssetType::Material)
     {
         FMaterialData Material;
         if (LoadMaterialFromFile(Record->FilePath, Material)
             && Material.BaseColorTexture.IsValid())
         {
             Dependencies.push_back(Material.BaseColorTexture);
+        }
+    }
+    else if (Record->Type == EAssetType::SkeletalMesh)
+    {
+        FSkeletalMeshData Mesh;
+        if (LoadSkeletalMeshFromFile(Record->FilePath, Mesh))
+        {
+            Add(Mesh.SkeletonAsset);
+            for (const FAssetPath& Material : Mesh.DefaultMaterials) Add(Material);
+        }
+    }
+    else if (Record->Type == EAssetType::AnimationClip)
+    {
+        FAnimationClipData Clip;
+        if (LoadAnimationClipFromFile(Record->FilePath, Clip)) Add(Clip.SkeletonAsset);
+    }
+    else if (Record->Type == EAssetType::AnimationSet)
+    {
+        FAnimationSetData Set;
+        if (LoadAnimationSetFromFile(Record->FilePath, Set))
+        {
+            Add(Set.SkeletonAsset);
+            Add(Set.IdleAnimation);
+            Add(Set.WalkAnimation);
+            Add(Set.JumpAnimation);
+        }
+    }
+    else if (Record->Type == EAssetType::AnimationMontage)
+    {
+        FAnimationMontageData Montage;
+        if (LoadAnimationMontageFromFile(Record->FilePath, Montage))
+        {
+            Add(Montage.SkeletonAsset);
+            for (const FAnimationMontageSegment& Segment : Montage.Segments)
+                Add(Segment.AnimationAsset);
+        }
+    }
+    else if (Record->Type == EAssetType::CharacterProfile)
+    {
+        FCharacterProfileData Profile;
+        if (LoadCharacterProfileFromFile(Record->FilePath, Profile))
+        {
+            Add(Profile.SkeletalMesh);
+            Add(Profile.AnimationSet);
+            Add(Profile.DefaultMontage);
+            for (const FAssetPath& Material : Profile.MaterialOverrides) Add(Material);
         }
     }
     return Dependencies;

@@ -4,6 +4,10 @@
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Render/SceneViewportRenderer.h"
 
+#if defined(PICO_EDITOR_WITH_SANDBOX)
+#include "PicoSandbox/SandboxModule.h"
+#endif
+
 #include <GLFW/glfw3.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
@@ -194,6 +198,12 @@ int main(int Argc, char** Argv)
         {
             ExitCode = EngineLoop.Init();
         }
+#if defined(PICO_EDITOR_WITH_SANDBOX)
+        if (ExitCode == 0 && !PicoSandbox::RegisterSandboxGameplayClasses())
+        {
+            throw std::runtime_error("project gameplay class registration failed");
+        }
+#endif
 
         if (ExitCode == 0)
         {

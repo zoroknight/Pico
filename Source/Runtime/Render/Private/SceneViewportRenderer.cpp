@@ -34,6 +34,21 @@
 
 namespace Pico
 {
+namespace
+{
+bool FillCameraView(const PCameraComponent* Camera, FSceneView& OutView)
+{
+    if (Camera == nullptr) return false;
+    OutView.Position = Camera->GetViewPosition();
+    OutView.Target = OutView.Position + Camera->GetViewForward();
+    OutView.Up = Camera->GetViewUp();
+    OutView.VerticalFieldOfViewDegrees = Camera->GetVerticalFieldOfViewDegrees();
+    OutView.NearPlane = Camera->GetNearPlane();
+    OutView.FarPlane = Camera->GetFarPlane();
+    return true;
+}
+}
+
 FMatrix4 BuildSceneProjectionMatrix(
     const FSceneView& View,
     float AspectRatio)
@@ -110,14 +125,7 @@ bool TryBuildActiveCameraView(
                     continue;
                 }
 
-                OutView.Position = Camera->GetViewPosition();
-                OutView.Target = OutView.Position + Camera->GetViewForward();
-                OutView.Up = Camera->GetViewUp();
-                OutView.VerticalFieldOfViewDegrees =
-                    Camera->GetVerticalFieldOfViewDegrees();
-                OutView.NearPlane = Camera->GetNearPlane();
-                OutView.FarPlane = Camera->GetFarPlane();
-                return true;
+                return FillCameraView(Camera, OutView);
             }
         }
     }
@@ -125,14 +133,26 @@ bool TryBuildActiveCameraView(
     {
         return false;
     }
-    OutView.Position = FallbackCamera->GetViewPosition();
-    OutView.Target = OutView.Position + FallbackCamera->GetViewForward();
-    OutView.Up = FallbackCamera->GetViewUp();
-    OutView.VerticalFieldOfViewDegrees =
-        FallbackCamera->GetVerticalFieldOfViewDegrees();
-    OutView.NearPlane = FallbackCamera->GetNearPlane();
-    OutView.FarPlane = FallbackCamera->GetFarPlane();
-    return true;
+    return FillCameraView(FallbackCamera, OutView);
+}
+
+bool TryBuildActorCameraView(
+    const PActor* ViewTarget,
+    FSceneView& OutView,
+    bool bAllowInactiveFallback)
+{
+    if (ViewTarget == nullptr) return false;
+    const PCameraComponent* Fallback = nullptr;
+    for (const PActorComponent* Component : ViewTarget->GetComponents())
+    {
+        const auto* Camera = Component != nullptr
+                && Component->IsA(PCameraComponent::StaticClass())
+            ? static_cast<const PCameraComponent*>(Component) : nullptr;
+        if (Camera == nullptr) continue;
+        if (Camera->IsActive()) return FillCameraView(Camera, OutView);
+        if (Fallback == nullptr) Fallback = Camera;
+    }
+    return bAllowInactiveFallback && FillCameraView(Fallback, OutView);
 }
 
 FSceneLighting GatherSceneLighting(const PWorld* World)
@@ -1405,6 +1425,7 @@ bool FSceneViewportRenderer::Render(
                 FMaterialData Material;
                 GLuint BaseColorTexture = 0;
                 bool bHasMaterial = false;
+                PSkeletalMeshComponent* SkeletalMeshComponent = nullptr;
                 FTransform ModelTransform = Primitive->GetWorldTransform();
                 if (Component->IsA(PCubeComponent::StaticClass()))
                 {
@@ -1443,23 +1464,12 @@ bool FSceneViewportRenderer::Render(
                 {
                     PSkeletalMeshComponent* SkeletalMesh =
                         static_cast<PSkeletalMeshComponent*>(Component);
+                    SkeletalMeshComponent = SkeletalMesh;
                     FImpl::FSkeletalMeshGpuResource* Resource =
                         GetSkeletalMeshResource(SkeletalMesh);
                     if (Resource == nullptr) continue;
                     glBindVertexArray(Resource->VertexArray);
                     IndexCount = Resource->IndexCount;
-                    const std::shared_ptr<const FMaterialData> LoadedMaterial =
-                        AssetManager.LoadMaterial(
-                            SkeletalMesh->GetMaterialAsset(), AssetRegistry);
-                    if (LoadedMaterial != nullptr)
-                    {
-                        bHasMaterial = true;
-                        Material = *LoadedMaterial;
-                        if (Material.BaseColorTexture.IsValid())
-                        {
-                            BaseColorTexture = GetTextureResource(Material.BaseColorTexture);
-                        }
-                    }
                 }
                 else
                 {
@@ -1467,24 +1477,54 @@ bool FSceneViewportRenderer::Render(
                 }
 
                 const FMatrix4 Model = ModelTransform.ToMatrix();
-                const FVector3 Color = bHasMaterial
-                    ? Material.BaseColor : Primitive->GetColor();
                 Impl->PickHandles.push_back(Primitive->GetHandle());
                 const GLuint PickingId =
                     static_cast<GLuint>(Impl->PickHandles.size());
                 glUniformMatrix4fv(ModelLocation, 1, GL_TRUE, Model.GetData());
-                glUniform3f(ColorLocation, Color.X, Color.Y, Color.Z);
-                glUniform1f(MetallicLocation, Material.Metallic);
-                glUniform1f(RoughnessLocation, Material.Roughness);
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, BaseColorTexture);
-                glUniform1i(UseTextureLocation, BaseColorTexture != 0 ? 1 : 0);
                 glUniform1ui(PickingIdLocation, PickingId);
-                glDrawElements(
-                    GL_TRIANGLES,
-                    IndexCount,
-                    GL_UNSIGNED_INT,
-                    nullptr);
+                const auto ApplyMaterial = [&](const FAssetPath& Path)
+                {
+                    Material = {};
+                    BaseColorTexture = 0;
+                    bHasMaterial = false;
+                    const auto Loaded = AssetManager.LoadMaterial(Path, AssetRegistry);
+                    if (Loaded != nullptr)
+                    {
+                        bHasMaterial = true;
+                        Material = *Loaded;
+                        if (Material.BaseColorTexture.IsValid())
+                            BaseColorTexture = GetTextureResource(Material.BaseColorTexture);
+                    }
+                    const FVector3 Color = bHasMaterial ? Material.BaseColor : Primitive->GetColor();
+                    glUniform3f(ColorLocation, Color.X, Color.Y, Color.Z);
+                    glUniform1f(MetallicLocation, Material.Metallic);
+                    glUniform1f(RoughnessLocation, Material.Roughness);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, BaseColorTexture);
+                    glUniform1i(UseTextureLocation, BaseColorTexture != 0 ? 1 : 0);
+                };
+                if (SkeletalMeshComponent != nullptr
+                    && !SkeletalMeshComponent->GetRenderData().Sections.empty())
+                {
+                    const auto& Sections = SkeletalMeshComponent->GetRenderData().Sections;
+                    for (std::size_t SectionIndex = 0; SectionIndex < Sections.size(); ++SectionIndex)
+                    {
+                        const FAssetPath& Override = SkeletalMeshComponent->GetMaterialOverride(SectionIndex);
+                        ApplyMaterial(Override.IsValid()
+                            ? Override : SkeletalMeshComponent->GetDefaultMaterial(SectionIndex));
+                        const FStaticMeshSection& Section = Sections[SectionIndex];
+                        glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(Section.IndexCount), GL_UNSIGNED_INT,
+                            reinterpret_cast<const void*>(static_cast<std::uintptr_t>(
+                                Section.FirstIndex * sizeof(uint32))));
+                    }
+                }
+                else
+                {
+                    ApplyMaterial(Component->IsA(PStaticMeshComponent::StaticClass())
+                        ? static_cast<PStaticMeshComponent*>(Component)->GetMaterialAsset()
+                        : FAssetPath {});
+                    glDrawElements(GL_TRIANGLES, IndexCount, GL_UNSIGNED_INT, nullptr);
+                }
 
                 const bool bSelected = std::find(
                         SelectedObjects.begin(),

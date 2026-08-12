@@ -20,6 +20,12 @@ bool MatchesType(EAssetType AssetType, EAssetReferenceType ReferenceType)
         return AssetType == EAssetType::SkeletalMesh;
     case EAssetReferenceType::AnimationClip:
         return AssetType == EAssetType::AnimationClip;
+    case EAssetReferenceType::AnimationSet:
+        return AssetType == EAssetType::AnimationSet;
+    case EAssetReferenceType::AnimationMontage:
+        return AssetType == EAssetType::AnimationMontage;
+    case EAssetReferenceType::CharacterProfile:
+        return AssetType == EAssetType::CharacterProfile;
     case EAssetReferenceType::Texture:
         return AssetType == EAssetType::Texture;
     case EAssetReferenceType::Material:
@@ -68,7 +74,11 @@ FAssetReferenceEditResult FAssetReferenceWidget::Draw(
 
     const std::string Preview = CurrentValue.IsValid()
         ? std::string(CurrentValue.ToString()) : std::string("<None>");
+    const float ComboWidth = std::max(ImGui::GetContentRegionAvail().x, 240.0f);
     ImGui::SetNextItemWidth(-1.0f);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(ComboWidth, 0.0f),
+        ImVec2(ComboWidth, 420.0f));
     if (ImGui::BeginCombo("##AssetReference", Preview.c_str()))
     {
         auto& SearchBuffer = SearchBuffers[Id];

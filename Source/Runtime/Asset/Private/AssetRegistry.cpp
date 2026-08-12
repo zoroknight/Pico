@@ -37,6 +37,9 @@ std::optional<EAssetType> GetAssetType(const std::filesystem::path& FilePath)
     if (Extension == ".pskeleton") return EAssetType::Skeleton;
     if (Extension == ".pskeletalmesh") return EAssetType::SkeletalMesh;
     if (Extension == ".panimation") return EAssetType::AnimationClip;
+    if (Extension == ".panimset") return EAssetType::AnimationSet;
+    if (Extension == ".pmontage") return EAssetType::AnimationMontage;
+    if (Extension == ".pcharprofile") return EAssetType::CharacterProfile;
     return std::nullopt;
 }
 
@@ -286,6 +289,9 @@ std::string_view ToString(EAssetType Type)
     case EAssetType::Skeleton: return "Skeleton";
     case EAssetType::SkeletalMesh: return "SkeletalMesh";
     case EAssetType::AnimationClip: return "AnimationClip";
+    case EAssetType::AnimationSet: return "AnimationSet";
+    case EAssetType::AnimationMontage: return "AnimationMontage";
+    case EAssetType::CharacterProfile: return "CharacterProfile";
     }
     return "Unknown";
 }

@@ -1,4 +1,5 @@
 #include "Pico/AssetImport/SkeletalAnimationImporter.h"
+#include "Pico/AssetImport/TextureImporter.h"
 
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
@@ -73,13 +74,13 @@ FMatrix4 ConvertMatrix(const aiMatrix4x4& Matrix, const FSkeletalImportOptions& 
 
 void CollectRequiredNodes(
     const aiScene& Scene,
-    std::unordered_set<std::string>& OutNames,
-    std::unordered_map<std::string, const aiNode*>& OutNodes)
+    std::unordered_set<const aiNode*>& OutRequiredNodes,
+    std::unordered_map<std::string, const aiNode*>& OutNodesByName)
 {
     const auto IndexNodes = [&](const auto& Self, const aiNode* Node) -> void
     {
         if (Node == nullptr) return;
-        OutNodes.emplace(Node->mName.C_Str(), Node);
+        OutNodesByName.emplace(Node->mName.C_Str(), Node);
         for (unsigned Index = 0; Index < Node->mNumChildren; ++Index)
             Self(Self, Node->mChildren[Index]);
     };
@@ -89,12 +90,15 @@ void CollectRequiredNodes(
         const aiMesh* Mesh = Scene.mMeshes[MeshIndex];
         for (unsigned BoneIndex = 0; BoneIndex < Mesh->mNumBones; ++BoneIndex)
         {
-            const std::string Name = Mesh->mBones[BoneIndex]->mName.C_Str();
-            const auto Found = OutNodes.find(Name);
-            const aiNode* Node = Found != OutNodes.end() ? Found->second : nullptr;
+            const aiBone* Bone = Mesh->mBones[BoneIndex];
+            const std::string Name = Bone->mName.C_Str();
+            const auto Found = OutNodesByName.find(Name);
+            const aiNode* Node = Bone->mNode != nullptr
+                ? Bone->mNode
+                : (Found != OutNodesByName.end() ? Found->second : nullptr);
             while (Node != nullptr)
             {
-                OutNames.insert(Node->mName.C_Str());
+                OutRequiredNodes.insert(Node);
                 Node = Node->mParent;
             }
         }
@@ -104,7 +108,7 @@ void CollectRequiredNodes(
 void BuildSkeletonRecursive(
     const aiNode* Node,
     int32 ParentIndex,
-    const std::unordered_set<std::string>& Required,
+    const std::unordered_set<const aiNode*>& Required,
     const FSkeletalImportOptions& Options,
     FSkeletonData& OutSkeleton,
     std::unordered_map<std::string, uint32>& OutBoneMap)
@@ -112,7 +116,7 @@ void BuildSkeletonRecursive(
     if (Node == nullptr) return;
     const std::string Name = Node->mName.C_Str();
     int32 CurrentParent = ParentIndex;
-    if (Required.contains(Name))
+    if (Required.contains(Node))
     {
         FSkeletonBone Bone;
         Bone.Name = Name;
@@ -134,6 +138,50 @@ std::string SanitizeFileName(std::string Name, std::size_t Index)
         if (!std::isalnum(static_cast<unsigned char>(Character)) && Character != '_' && Character != '-')
             Character = '_';
     return Name;
+}
+
+int32 ImportMaterialTexture(
+    const aiScene& Scene,
+    const aiString& TexturePath,
+    const std::filesystem::path& SourceFile,
+    std::string Name,
+    FSkeletalImportResult& Result)
+{
+    FTextureData Texture;
+    bool bImported = false;
+    if (const aiTexture* Embedded = Scene.GetEmbeddedTexture(TexturePath.C_Str()))
+    {
+        if (Embedded->mHeight == 0)
+        {
+            bImported = ImportTextureMemory(
+                std::span<const uint8>(
+                    reinterpret_cast<const uint8*>(Embedded->pcData), Embedded->mWidth),
+                Texture);
+        }
+        else
+        {
+            Texture.Width = Embedded->mWidth;
+            Texture.Height = Embedded->mHeight;
+            Texture.Pixels.reserve(static_cast<std::size_t>(Texture.Width) * Texture.Height * 4);
+            for (std::size_t Index = 0;
+                Index < static_cast<std::size_t>(Texture.Width) * Texture.Height; ++Index)
+            {
+                const aiTexel& Texel = Embedded->pcData[Index];
+                Texture.Pixels.insert(Texture.Pixels.end(), {Texel.r, Texel.g, Texel.b, Texel.a});
+            }
+            bImported = ValidateTexture(Texture);
+        }
+    }
+    else
+    {
+        bImported = ImportTexture(SourceFile.parent_path() / TexturePath.C_Str(), Texture);
+    }
+    if (!bImported) return -1;
+    FSkeletalImportResult::FImportedTexture Imported;
+    Imported.Name = SanitizeFileName(std::move(Name), Result.Textures.size());
+    Imported.Texture = std::move(Texture);
+    Result.Textures.push_back(std::move(Imported));
+    return static_cast<int32>(Result.Textures.size() - 1);
 }
 }
 
@@ -159,10 +207,11 @@ bool ImportSkeletalAnimation(
         SourceFile.string(),
         aiProcess_Triangulate
             | aiProcess_GenSmoothNormals
-            | aiProcess_JoinIdenticalVertices
-            | aiProcess_ImproveCacheLocality
-            | aiProcess_LimitBoneWeights
-            | aiProcess_ValidateDataStructure);
+              | aiProcess_JoinIdenticalVertices
+              | aiProcess_ImproveCacheLocality
+              | aiProcess_LimitBoneWeights
+              | aiProcess_PopulateArmatureData
+              | aiProcess_ValidateDataStructure);
     if (Scene == nullptr || Scene->mRootNode == nullptr)
     {
         Report(OutError, ESkeletalImportError::ImportFailed);
@@ -175,7 +224,32 @@ bool ImportSkeletalAnimation(
     }
 
     FSkeletalImportResult Result;
-    std::unordered_set<std::string> RequiredNodes;
+    Result.Materials.reserve(Scene->mNumMaterials);
+    for (unsigned MaterialIndex = 0; MaterialIndex < Scene->mNumMaterials; ++MaterialIndex)
+    {
+        const aiMaterial* SourceMaterial = Scene->mMaterials[MaterialIndex];
+        FSkeletalImportResult::FImportedMaterial Imported;
+        aiString MaterialName;
+        SourceMaterial->Get(AI_MATKEY_NAME, MaterialName);
+        Imported.Name = SanitizeFileName(MaterialName.C_Str(), MaterialIndex);
+        aiColor4D BaseColor(0.8f, 0.8f, 0.8f, 1.0f);
+        if (SourceMaterial->Get(AI_MATKEY_BASE_COLOR, BaseColor) != AI_SUCCESS)
+            SourceMaterial->Get(AI_MATKEY_COLOR_DIFFUSE, BaseColor);
+        Imported.Material.BaseColor = {BaseColor.r, BaseColor.g, BaseColor.b};
+        SourceMaterial->Get(AI_MATKEY_METALLIC_FACTOR, Imported.Material.Metallic);
+        SourceMaterial->Get(AI_MATKEY_ROUGHNESS_FACTOR, Imported.Material.Roughness);
+        aiString TexturePath;
+        if (SourceMaterial->GetTexture(aiTextureType_BASE_COLOR, 0, &TexturePath) == AI_SUCCESS
+            || SourceMaterial->GetTexture(aiTextureType_DIFFUSE, 0, &TexturePath) == AI_SUCCESS)
+        {
+            Imported.BaseColorTextureIndex = ImportMaterialTexture(
+                *Scene, TexturePath, SourceFile, Imported.Name + "_BaseColor", Result);
+            if (Imported.BaseColorTextureIndex < 0)
+                Result.Warnings.push_back("Could not decode BaseColor texture for " + Imported.Name);
+        }
+        Result.Materials.push_back(std::move(Imported));
+    }
+    std::unordered_set<const aiNode*> RequiredNodes;
     std::unordered_map<std::string, const aiNode*> Nodes;
     CollectRequiredNodes(*Scene, RequiredNodes, Nodes);
     if (RequiredNodes.empty())
@@ -291,7 +365,9 @@ bool ImportSkeletalAnimation(
         FStaticMeshSection Section;
         Section.FirstIndex = FirstIndex;
         Section.IndexCount = static_cast<uint32>(Result.Mesh.Indices.size()) - FirstIndex;
-        Section.MaterialSlotName = "Material_" + std::to_string(SourceMesh->mMaterialIndex);
+        Section.MaterialSlotName = SourceMesh->mMaterialIndex < Result.Materials.size()
+            ? Result.Materials[SourceMesh->mMaterialIndex].Name
+            : "Material_" + std::to_string(SourceMesh->mMaterialIndex);
         if (Section.IndexCount > 0) Result.Mesh.Sections.push_back(std::move(Section));
     }
     if (!ValidateSkeletalMesh(Result.Mesh, &Result.Skeleton))

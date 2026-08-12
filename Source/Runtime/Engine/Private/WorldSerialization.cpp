@@ -1183,7 +1183,7 @@ bool DeserializeWorldAsset(
                 OutError,
                 Archive.HasError()
                     ? EWorldSerializationError::InvalidArchive
-                    : EWorldSerializationError::PropertyLimitExceeded);
+                    : EWorldSerializationError::PropertyTypeMismatch);
             return false;
         }
         if (Version == 1)

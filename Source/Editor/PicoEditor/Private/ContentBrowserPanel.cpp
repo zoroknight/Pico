@@ -150,7 +150,7 @@ void FContentBrowserPanel::Draw(
     ImGui::SetNextItemWidth(120.0f);
     constexpr const char* Types[] = {
         "All Types", "World", "Static Mesh", "Texture", "Material",
-        "Skeleton", "Skeletal Mesh", "Animation"};
+        "Skeleton", "Skeletal Mesh", "Animation", "Character Profile"};
     ImGui::Combo("##AssetType", &TypeFilter, Types, static_cast<int>(std::size(Types)));
 
     if (ImGui::BeginTable("ContentBrowserLayout", 2, ImGuiTableFlags_Resizable))
@@ -215,10 +215,24 @@ void FContentBrowserPanel::SelectAllVisible(
 
 bool FContentBrowserPanel::PassesFilter(const FAssetRecord& Record) const
 {
-    if (TypeFilter > 0 && static_cast<int>(Record.Type) != TypeFilter - 1)
+    bool bMatchesType = true;
+    switch (TypeFilter)
     {
-        return false;
+    case 1: bMatchesType = Record.Type == EAssetType::World; break;
+    case 2: bMatchesType = Record.Type == EAssetType::StaticMesh; break;
+    case 3: bMatchesType = Record.Type == EAssetType::Texture; break;
+    case 4: bMatchesType = Record.Type == EAssetType::Material; break;
+    case 5: bMatchesType = Record.Type == EAssetType::Skeleton; break;
+    case 6: bMatchesType = Record.Type == EAssetType::SkeletalMesh; break;
+    case 7:
+        bMatchesType = Record.Type == EAssetType::AnimationClip
+            || Record.Type == EAssetType::AnimationSet
+            || Record.Type == EAssetType::AnimationMontage;
+        break;
+    case 8: bMatchesType = Record.Type == EAssetType::CharacterProfile; break;
+    default: break;
     }
+    if (!bMatchesType) return false;
     const std::string Search = ToLower(SearchBuffer.data());
     if (!Search.empty() && ToLower(Record.AssetPath.ToString()).find(Search) == std::string::npos)
     {
@@ -340,7 +354,9 @@ void FContentBrowserPanel::DrawAssetTable(
         else if (ImGui::IsItemHovered()
             && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
             && (Record.Type == EAssetType::SkeletalMesh
-                || Record.Type == EAssetType::AnimationClip))
+                || Record.Type == EAssetType::AnimationClip
+                || Record.Type == EAssetType::AnimationSet
+                || Record.Type == EAssetType::AnimationMontage))
         {
             OpenSkeletal(Record.AssetPath);
         }
@@ -399,7 +415,9 @@ void FContentBrowserPanel::DrawAssetTable(
                 if (ImGui::MenuItem("Assign to Selection")) Assign(Record.AssetPath);
             }
             else if (Record.Type == EAssetType::SkeletalMesh
-                || Record.Type == EAssetType::AnimationClip)
+                || Record.Type == EAssetType::AnimationClip
+                || Record.Type == EAssetType::AnimationSet
+                || Record.Type == EAssetType::AnimationMontage)
             {
                 if (ImGui::MenuItem("Open Preview")) OpenSkeletal(Record.AssetPath);
             }

@@ -20,7 +20,10 @@ enum class EAssetType
     Material,
     Skeleton,
     SkeletalMesh,
-    AnimationClip
+    AnimationClip,
+    AnimationSet,
+    AnimationMontage,
+    CharacterProfile
 };
 
 enum class EAssetScanError

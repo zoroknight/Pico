@@ -1,6 +1,7 @@
 #include "Pico/Engine/CharacterMovementComponent.h"
 
 #include "Pico/Engine/Character.h"
+#include "Pico/Engine/Controller.h"
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/World.h"
@@ -43,6 +44,8 @@ bool PCharacterMovementComponent::RegisterProperties(PClass& Class)
     PICO_ADD_PROPERTY(Properties, MaxSimulationDeltaTime);
     PICO_ADD_PROPERTY(Properties, MaxSimulationIterations);
     PICO_ADD_PROPERTY(Properties, PushImpulse);
+    PICO_ADD_PROPERTY(Properties, bOrientRotationToMovement);
+    PICO_ADD_PROPERTY(Properties, RotationRate);
     FPropertyMetadata RuntimeMetadata;
     RuntimeMetadata.Flags = EPropertyFlags::Transient | EPropertyFlags::ReadOnly;
     PICO_ADD_PROPERTY_METADATA(Properties, MovementModeValue, RuntimeMetadata);
@@ -156,6 +159,13 @@ void PCharacterMovementComponent::SetPushImpulse(float Value)
 {
     if (std::isfinite(Value) && Value >= 0.0f) PushImpulse = Value;
 }
+bool PCharacterMovementComponent::ShouldOrientRotationToMovement() const
+{ return bOrientRotationToMovement; }
+void PCharacterMovementComponent::SetOrientRotationToMovement(bool bValue)
+{ bOrientRotationToMovement = bValue; }
+float PCharacterMovementComponent::GetRotationRate() const { return RotationRate; }
+void PCharacterMovementComponent::SetRotationRate(float Value)
+{ if (std::isfinite(Value) && Value >= 0.0f) RotationRate = Value; }
 
 FCharacterMoveState PCharacterMovementComponent::CaptureMoveState() const
 {
@@ -426,6 +436,24 @@ void PCharacterMovementComponent::SimulateMovement(
         bJumpAvailable = false;
         RemainingTime -= StepDelta;
         ++LastSimulationIterations;
+    }
+
+    PCharacter* Character = GetCharacterOwner();
+    FVector3 Facing = Input.WorldInput;
+    Facing.Z = 0.0f;
+    if (Character != nullptr && !Facing.IsNearlyZero())
+    {
+        float TargetYaw = std::atan2(Facing.Y, Facing.X) * 180.0f / Pico::Pi;
+        FRotator Rotation = Character->GetActorRotation();
+        if (Character->UsesControllerRotationYaw() && Character->GetController() != nullptr)
+            TargetYaw = Character->GetController()->GetControlRotation().Yaw;
+        if (bOrientRotationToMovement || Character->UsesControllerRotationYaw())
+        {
+            const float DeltaYaw = FRotator::NormalizeAxis(TargetYaw - Rotation.Yaw);
+            Rotation.Yaw += std::clamp(
+                DeltaYaw, -RotationRate * DeltaSeconds, RotationRate * DeltaSeconds);
+            Character->SetActorRotation(Rotation);
+        }
     }
 }
 

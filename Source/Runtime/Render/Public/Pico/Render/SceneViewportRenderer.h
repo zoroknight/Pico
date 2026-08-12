@@ -15,6 +15,7 @@ namespace Pico
 class FAssetManager;
 class FAssetRegistry;
 class PWorld;
+class PActor;
 
 using FOpenGLProcedure = void (*)();
 using FOpenGLProcLoader = FOpenGLProcedure (*)(const char*);
@@ -61,6 +62,10 @@ FMatrix4 BuildSceneProjectionMatrix(
     float AspectRatio);
 bool TryBuildActiveCameraView(
     const PWorld* World,
+    FSceneView& OutView,
+    bool bAllowInactiveFallback = false);
+bool TryBuildActorCameraView(
+    const PActor* ViewTarget,
     FSceneView& OutView,
     bool bAllowInactiveFallback = false);
 FSceneLighting GatherSceneLighting(const PWorld* World);

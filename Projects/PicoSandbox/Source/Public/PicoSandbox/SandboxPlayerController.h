@@ -14,5 +14,6 @@ public:
 protected:
     explicit PSandboxPlayerController(
         const Pico::FObjectConstructionParams& Params);
+    void OnPossess(Pico::PPawn* Pawn) override;
 };
 }

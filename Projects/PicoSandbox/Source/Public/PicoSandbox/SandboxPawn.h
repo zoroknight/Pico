@@ -15,6 +15,7 @@ public:
 protected:
     explicit PSandboxPawn(const Pico::FObjectConstructionParams& Params);
     bool DefineDefaultSubobjects(Pico::FObjectInitializer& Initializer) override;
+    void PostLoad() override;
 
 };
 }

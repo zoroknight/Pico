@@ -7,13 +7,14 @@
 #include "Pico/Engine/GameModeBase.h"
 #include "Pico/Engine/GameModule.h"
 #include "Pico/Engine/CapsuleComponent.h"
+#include "Pico/Engine/CameraComponent.h"
 #include "Pico/Engine/Character.h"
 #include "Pico/Engine/CharacterMovementComponent.h"
 #include "Pico/Engine/LocalPlayer.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerController.h"
 #include "Pico/Engine/World.h"
-#include "Pico/Engine/StaticMeshComponent.h"
+#include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/AnimInstance.h"
 #include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Input/InputSystem.h"
@@ -160,13 +161,6 @@ int main()
                     == PicoSandbox::PSandboxPlayerController::StaticClass(),
             "Sandbox logs in its LocalPlayer and uses GameMode defaults to spawn and possess the project Pawn");
 
-        Pico::PObject* MeshObject = Pawn != nullptr
-            ? Pico::FindObject(Pawn, Pico::FName("SandboxPlayerMesh"))
-            : nullptr;
-        auto* Mesh = MeshObject != nullptr
-                && MeshObject->IsA(Pico::PStaticMeshComponent::StaticClass())
-            ? static_cast<Pico::PStaticMeshComponent*>(MeshObject)
-            : nullptr;
         auto* Movement = Pawn != nullptr
                 && Pawn->GetMovementComponent() != nullptr
                 && Pawn->GetMovementComponent()->IsA(
@@ -181,10 +175,14 @@ int main()
                 && AnimatedMeshObject->IsA(Pico::PSkeletalMeshComponent::StaticClass())
             ? static_cast<Pico::PSkeletalMeshComponent*>(AnimatedMeshObject)
             : nullptr;
+        Pico::PObject* CameraBoom = Pawn != nullptr
+            ? Pico::FindObject(Pawn, Pico::FName("CameraBoom")) : nullptr;
+        Pico::PObject* FollowCamera = Pawn != nullptr
+            ? Pico::FindObject(Pawn, Pico::FName("FollowCamera")) : nullptr;
         const bool bBaseDefaultsValid =
-            PicoSandbox::PSandboxPawn::StaticClass()->GetDefaultSubobjects().size() == 4
+            PicoSandbox::PSandboxPawn::StaticClass()->GetDefaultSubobjects().size() == 6
                 && Pawn != nullptr
-                && Pawn->GetComponents().size() == 4
+                && Pawn->GetComponents().size() == 6
                 && Pawn->GetRootComponent() != nullptr
                 && Pawn->GetRootComponent()->IsA(Pico::PCapsuleComponent::StaticClass())
                 && Pawn->GetRootComponent()->GetName()
@@ -193,14 +191,18 @@ int main()
                     ->GetCollisionEnabled() == Pico::ECollisionEnabled::QueryOnly
                 && static_cast<Pico::PCapsuleComponent*>(Pawn->GetRootComponent())
                     ->GetPhysicsBodyType() == Pico::EPhysicsBodyType::Kinematic
-                && Mesh != nullptr
-                && Mesh->GetAttachParent() == Pawn->GetRootComponent()
                 && Movement != nullptr
+                && AnimatedMesh != nullptr
+                && AnimatedMesh->GetAttachParent() == Pawn->GetRootComponent()
+                && CameraBoom != nullptr
+                && CameraBoom->IsA(Pico::PSpringArmComponent::StaticClass())
+                && FollowCamera != nullptr
+                && FollowCamera->IsA(Pico::PCameraComponent::StaticClass())
                 && Pico::HasAnyFlags(
-                    Mesh->GetFlags(), Pico::EObjectFlags::DefaultSubobject);
+                    AnimatedMesh->GetFlags(), Pico::EObjectFlags::DefaultSubobject);
         Runner.Expect(
             bBaseDefaultsValid,
-            "Sandbox Pawn materializes collision, static mesh, and Movement defaults");
+            "Sandbox Pawn materializes collision, skeletal mesh, Movement, SpringArm, and Camera defaults");
         Runner.Expect(
             AnimatedMesh != nullptr
                 && AnimatedMesh->GetAttachParent() == Pawn->GetRootComponent()
@@ -209,8 +211,8 @@ int main()
             "Sandbox Pawn materializes its animated mesh default subobject");
         Runner.Expect(
             AnimatedMesh != nullptr
-                && !AnimatedMesh->GetRenderData().Vertices.empty(),
-            "Sandbox GameMode configures the animated mesh before World BeginPlay");
+                && AnimatedMesh->GetCharacterProfileAsset().IsValid(),
+            "Sandbox GameMode configures the Character Profile before World BeginPlay");
 
         if (Pawn != nullptr)
         {
@@ -220,11 +222,23 @@ int main()
             Input.SetKeyState(Pico::EKey::W, true);
             GameEngine.GetEngineLoop().GetWorld()->Tick(0.1f);
             Input.EndFrame();
+            GameEngine.GetEngineLoop().GetWorld()->Tick(0.1f);
             Runner.Expect(
                 AnimatedMesh != nullptr
                     && AnimatedMesh->GetAnimInstance() != nullptr
+                    && !AnimatedMesh->GetRenderData().Vertices.empty()
                     && AnimatedMesh->GetAnimationState() == Pico::EAnimationState::Walk,
-                "World BeginPlay creates AnimInstance and movement selects Walk animation");
+                "World BeginPlay loads the Profile, creates AnimInstance, and selects Walk animation");
+            Pico::FAssetPath SlotFiveOverride;
+            Pico::FAssetPath::TryParse(
+                "/Game/Characters/Knight_Male/Materials/Red.pmat", SlotFiveOverride);
+            AnimatedMesh->SetMaterialOverride(5, SlotFiveOverride);
+            AnimatedMesh->SetCharacterProfileAsset(
+                AnimatedMesh->GetCharacterProfileAsset());
+            GameEngine.GetEngineLoop().GetWorld()->Tick(0.016f);
+            Runner.Expect(
+                AnimatedMesh->GetMaterialOverride(5) == SlotFiveOverride,
+                "Instance material slot 5 remains authoritative after the Character Profile reloads");
             Runner.Expect(
                 Pawn->GetPendingMovementInputVector().IsNearlyZero()
                     && !Pawn->GetLastMovementInputVector().IsNearlyZero(),

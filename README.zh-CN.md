@@ -21,10 +21,26 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - Jolt 使用固定 60 Hz、每个 World 帧最多四个子步，所有后端类型仍隔离在 `PicoPhysicsCore` 接口之后。
 - 通过原生 Skeleton、SkeletalMesh、AnimationClip、AnimInstance、Pose 与 CPU 蒙皮播放移动状态驱动的
   Idle/Walk/Jump，Root Motion 仍经 Sweep/MoveComponent 执行。
+- 通过 `.panimset` 统一引用 Skeleton 与 Idle/Walk/Jump，并以 `.pmontage`、单 Slot、Segment、Section、
+  Notify/NotifyWindow、淡入淡出和完成/中断委托实现 Montage Lite；Montage Root Motion 仍走角色移动碰撞链。
+- Skeletal Preview 的 Montage Lab 可直接播放、停止、跳转 Section，并观察时间、Notify 和结束原因；
+  SkeletalMeshComponent 提供八个可编辑材质槽，并根据骨骼网格实际 Section 数标记未使用槽位。
 - 在独立运行时的 `Gameplay Debug` 中分别查看地面速度、动画状态、移动模式、当前 Clip 和播放时间，
   因而可以明确区分“零速度时播放 Idle”和“角色仍处于地面 Walking 移动模式”。
 - 从 Content Browser 导入 glTF/GLB 或 FBX，先在独立临时 Preview World 中检查参考姿势、动画、时间轴
   和镜头，再由编辑器自动生成项目原生资产、内部 `/Game` 引用并刷新 AssetRegistry，无需手动复制文件。
+- glTF 导入会在独立 AssetImport 层转换 PBR 材质、嵌入/外部贴图和多材质 Section，生成 `.pmat/.ptex`；
+  `.pskeletalmesh` 保存默认槽材质，运行时仍可由组件按槽覆盖。
+- `Edit -> Project Settings` 可视化编辑 Action/Axis、鼠标灵敏度、默认地图、Pawn、PlayerController 和
+  默认 Character Profile；`Add -> Actor Class...` 可搜索项目原生 Actor 类。
+- 每次骨骼导入自动生成 `.pcharprofile`，集中引用 Mesh、AnimationSet、Montage 与材质槽；项目可切换
+  Profile 而无需修改 Pawn CDO。覆盖重导入会先备份旧资产，失败时整批恢复。
+- 编辑器可从项目 Pawn 类和 Character Profile 创建持久化可玩角色；运行时优先 Possess 地图中标记为
+  `Auto Possess Player 0` 的 Pawn，仅在地图没有可用 Pawn 时才使用项目默认类和 Profile 生成角色。
+- Controller 通过 ControlRotation、鼠标捕获和 SpringArm 驱动第三人称相机；WASD 使用相机朝向计算移动，
+  角色可随移动方向转身。组件材质覆盖优先于 Character Profile，Profile 又优先于导入网格默认材质。
+- PicoSandbox 默认打开持久化 `StarterWorld.pworld`，其中包含可复用的立方体网格/PBR 材质、地面、
+  三面墙、动态箱子、PlayerStart、方向光和点光；这些内容属于地图资产，不依赖 GameMode 临时生成。
 - 通过 `PClass` 和 `NewObject` 创建具有反射信息的原生 C++ 对象。
 - 为每个已注册类创建 CDO，通过继承的默认子对象模板声明固定对象图，并由统一构造链生成彼此独立的运行时实例。
 - 使用类型安全的 Native 单播与多播委托，通过带代数 Handle 弱绑定对象，并广播 Actor 生成和销毁事件。
@@ -100,7 +116,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
-Debug 和 Release 均可完整构建，十六个 CTest 目标全部通过。
+Debug 和 Release 均可完整构建，十六个 CTest 目标全部通过；动画聚焦测试为 13/13 断言通过。
 
 ## 架构
 
@@ -254,7 +270,8 @@ powershell -ExecutionPolicy Bypass -File .\Scripts\SetupWindows.ps1
 .\Build\Debug\PicoSandboxGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
 
-项目 Runtime 从 `Config/Pico.ini` 读取 `[Game] DefaultMap` 和 `[Input]` 中的 Action/Axis 映射，
+项目 Runtime 从 `Config/Pico.ini` 读取 `[Game] DefaultMap`、默认 Gameplay 类、Character Profile 和
+`[Input]` 中的 Action/Axis 映射，
 `[Game] Executable` 决定编辑器 Play 启动哪个项目程序。`-map=/Game/Maps/Example.pworld` 可以覆盖
 默认地图，自动冒烟测试可以附加 `-frames=N`；通用 `PicoGame` 仍可用于没有原生项目代码的项目。
 
@@ -445,6 +462,8 @@ private:
 - [PicoInspector Developer Sandbox 计划](Docs/PicoInspector_DeveloperSandbox_Plan.zh-CN.md)
 - [PicoInspector 可视化验收指南](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)
 - [PicoSandbox指南](Projects/PicoSandbox/README.md)
+- [Montage Lite 与人物装配](Docs/Month08_6_MontageAndCharacterAssembly.md)
+- [人物导入、场景可玩 Pawn 与项目设置](Docs/Month08_7_CharacterImportAndProjectSettings.md)
 - [MatchState、Gameplay 事件与编辑器绑定](Docs/Month07_4_MatchStateGameplayEventsAndBindings.md)
 - [Development、Installed 与 Staged 运行布局](Docs/Month07_5_DevelopmentInstalledAndStagedLayouts.md)
 - [第三个月编辑器视口](Docs/Month03_10_Editor3DViewport.md)
@@ -474,7 +493,9 @@ private:
 [Jolt Physics Scene](Docs/Month08_2_JoltPhysics.md) 和
 [Character Movement](Docs/Month08_3_CharacterMovement.md) 和
 [Skeletal Animation](Docs/Month08_4_SkeletalAnimation.md)、
-[Skeletal Asset Preview And Import](Docs/Month08_5_SkeletalAssetPreview.md)。后续学习路线为：
+[Skeletal Asset Preview And Import](Docs/Month08_5_SkeletalAssetPreview.md)、
+[Montage Lite 与人物装配](Docs/Month08_6_MontageAndCharacterAssembly.md)，以及
+[人物导入、场景可玩 Pawn 与项目设置](Docs/Month08_7_CharacterImportAndProjectSettings.md)。后续学习路线为：
 
 - Replication、RPC、Transform 同步、客户端预测与修正
 - Dedicated Server/广域网验证、Cook、Package 和可独立运行的 Windows 构建

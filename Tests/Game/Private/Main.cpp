@@ -16,6 +16,7 @@
 #include "Pico/Object/GarbageCollection.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectSystem.h"
+#include "PicoSandbox/SandboxModule.h"
 
 #include <filesystem>
 #include <string>
@@ -71,7 +72,8 @@ public:
     bool StartupModule() override
     {
         PTestGameInstance::Events.emplace_back("ModuleStartup");
-        return PTestGameInstance::RegisterClass();
+        return PicoSandbox::RegisterSandboxGameplayClasses()
+            && PTestGameInstance::RegisterClass();
     }
 
     const Pico::PClass* GetGameInstanceClass() const override

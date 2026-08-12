@@ -118,6 +118,7 @@ else()
 endif()
 
 add_library(PicoAsset STATIC
+    Source/Runtime/Asset/Private/CharacterProfile.cpp
     Source/Runtime/Asset/Private/AssetManager.cpp
     Source/Runtime/Asset/Private/AssetRegistry.cpp
     Source/Runtime/Asset/Private/Material.cpp
@@ -947,6 +948,10 @@ endif()
 include(CTest)
 
 add_subdirectory(Projects/PicoSandbox)
+
+# PicoGameTests intentionally loads the PicoSandbox project map, so it must know
+# every project class that may be authored into that map.
+target_link_libraries(PicoGameTests PRIVATE PicoSandboxModule)
 
 if(BUILD_TESTING)
     add_test(

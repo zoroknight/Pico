@@ -3,6 +3,7 @@
 
 #include "Pico/Asset/AssetManager.h"
 #include "Pico/Asset/AssetRegistry.h"
+#include "Pico/Asset/CharacterProfile.h"
 #include "Pico/Asset/SkeletalAnimation.h"
 #include "Pico/AssetImport/SkeletalAnimationImporter.h"
 #include "Pico/Core/Math/MathUtility.h"
@@ -95,6 +96,11 @@ struct FSkeletalAssetEditor::FImpl
     std::shared_ptr<const FSkeletalMeshData> Mesh;
     std::vector<std::shared_ptr<const FAnimationClipData>> Clips;
     std::vector<std::string> ClipLabels;
+    std::shared_ptr<const FAnimationMontageData> OpenedMontage;
+    std::vector<std::shared_ptr<const FAnimationClipData>> OpenedMontageClips;
+    FDelegateHandle MontageEndedHandle;
+    FDelegateHandle MontageNotifyHandle;
+    std::vector<std::string> MontageEvents;
     FSkeletalImportResult PendingImport;
     std::filesystem::path SourceFile;
     FAssetPath OpenedAssetPath;
@@ -110,6 +116,7 @@ struct FSkeletalAssetEditor::FImpl
     bool bPlaying = true;
     bool bReferencePose = false;
     bool bHasPendingImport = false;
+    bool bReplaceExistingAssets = false;
 
     ~FImpl()
     {
@@ -137,6 +144,16 @@ struct FSkeletalAssetEditor::FImpl
 
     void ResetPreviewWorld()
     {
+        if (PreviewComponent != nullptr)
+        {
+            if (PAnimInstance* Instance = PreviewComponent->GetAnimInstance())
+            {
+                Instance->OnMontageEnded().Remove(MontageEndedHandle);
+                Instance->OnMontageNotify().Remove(MontageNotifyHandle);
+            }
+        }
+        MontageEndedHandle = {};
+        MontageNotifyHandle = {};
         PreviewComponent = nullptr;
         if (PreviewWorld != nullptr)
         {
@@ -176,8 +193,36 @@ struct FSkeletalAssetEditor::FImpl
         }
         ApplySelectedAnimation();
         PreviewWorld->Tick(0.0001f);
+        BindMontageEvents();
         FocusMesh();
         return true;
+    }
+
+    void AddMontageEvent(std::string Event)
+    {
+        MontageEvents.push_back(std::move(Event));
+        if (MontageEvents.size() > 8) MontageEvents.erase(MontageEvents.begin());
+    }
+
+    void BindMontageEvents()
+    {
+        PAnimInstance* Instance = PreviewComponent != nullptr
+            ? PreviewComponent->GetAnimInstance() : nullptr;
+        if (Instance == nullptr) return;
+        MontageEndedHandle = Instance->OnMontageEnded().AddLambda(
+            [this](EMontageEndReason Reason)
+            {
+                const char* Text = Reason == EMontageEndReason::Completed ? "Completed"
+                    : (Reason == EMontageEndReason::Interrupted ? "Interrupted" : "Cancelled");
+                AddMontageEvent(std::string("Ended: ") + Text);
+            });
+        MontageNotifyHandle = Instance->OnMontageNotify().AddLambda(
+            [this](std::string_view Name, EMontageNotifyEvent Event)
+            {
+                const char* Text = Event == EMontageNotifyEvent::Trigger ? "Trigger"
+                    : (Event == EMontageNotifyEvent::Begin ? "Begin" : "End");
+                AddMontageEvent("Notify " + std::string(Name) + ": " + Text);
+            });
     }
 
     void FocusMesh()
@@ -213,6 +258,7 @@ struct FSkeletalAssetEditor::FImpl
         Clips = std::move(InClips);
         ClipLabels = std::move(InLabels);
         SelectedClip = 0;
+        MontageEvents.clear();
         bReferencePose = Clips.empty();
         bPlaying = true;
         bOpen = true;
@@ -243,6 +289,8 @@ struct FSkeletalAssetEditor::FImpl
         SourceFile = File;
         OpenedAssetPath = {};
         bHasPendingImport = true;
+        OpenedMontage.reset();
+        OpenedMontageClips.clear();
         CopyToBuffer("/Game/Characters/" + Name, DestinationFolder);
         CopyToBuffer(Name, AssetName);
 
@@ -264,6 +312,8 @@ struct FSkeletalAssetEditor::FImpl
     void OpenRegisteredAsset(const FAssetPath& AssetPath)
     {
         if (EngineLoop == nullptr) return;
+        OpenedMontage.reset();
+        OpenedMontageClips.clear();
         FAssetRegistry& Registry = EngineLoop->GetAssetRegistry();
         FAssetManager& Manager = EngineLoop->GetAssetManager();
         const FAssetRecord* Record = Registry.Find(AssetPath);
@@ -271,6 +321,8 @@ struct FSkeletalAssetEditor::FImpl
 
         std::shared_ptr<const FSkeletalMeshData> LoadedMesh;
         std::shared_ptr<const FAnimationClipData> RequestedClip;
+        std::vector<std::shared_ptr<const FAnimationClipData>> LoadedClips;
+        std::vector<std::string> Labels;
         FAssetPath SkeletonPath;
         if (Record->Type == EAssetType::SkeletalMesh)
         {
@@ -281,6 +333,55 @@ struct FSkeletalAssetEditor::FImpl
         {
             RequestedClip = Manager.LoadAnimationClip(AssetPath, Registry);
             if (RequestedClip != nullptr) SkeletonPath = RequestedClip->SkeletonAsset;
+            for (const FAssetRecord& Candidate : Registry.GetAssets())
+            {
+                if (Candidate.Type != EAssetType::SkeletalMesh) continue;
+                const auto CandidateMesh = Manager.LoadSkeletalMesh(Candidate.AssetPath, Registry);
+                if (CandidateMesh != nullptr && CandidateMesh->SkeletonAsset == SkeletonPath)
+                {
+                    LoadedMesh = CandidateMesh;
+                    break;
+                }
+            }
+        }
+        else if (Record->Type == EAssetType::AnimationSet)
+        {
+            const auto Set = Manager.LoadAnimationSet(AssetPath, Registry);
+            if (Set != nullptr)
+            {
+                SkeletonPath = Set->SkeletonAsset;
+                const std::array<std::pair<const char*, FAssetPath>, 3> Entries {{
+                    {"Idle", Set->IdleAnimation}, {"Walk", Set->WalkAnimation},
+                    {"Jump", Set->JumpAnimation}}};
+                for (const auto& [Label, Path] : Entries)
+                {
+                    if (auto Clip = Manager.LoadAnimationClip(Path, Registry))
+                    {
+                        LoadedClips.push_back(std::move(Clip));
+                        Labels.emplace_back(Label);
+                    }
+                }
+            }
+        }
+        else if (Record->Type == EAssetType::AnimationMontage)
+        {
+            OpenedMontage = Manager.LoadAnimationMontage(AssetPath, Registry);
+            if (OpenedMontage != nullptr)
+            {
+                SkeletonPath = OpenedMontage->SkeletonAsset;
+                for (const FAnimationMontageSegment& Segment : OpenedMontage->Segments)
+                {
+                    if (auto Clip = Manager.LoadAnimationClip(Segment.AnimationAsset, Registry))
+                    {
+                        LoadedClips.push_back(Clip);
+                        Labels.emplace_back(Segment.AnimationAsset.ToString());
+                    }
+                }
+                OpenedMontageClips = LoadedClips;
+            }
+        }
+        if (!LoadedMesh && SkeletonPath.IsValid())
+        {
             for (const FAssetRecord& Candidate : Registry.GetAssets())
             {
                 if (Candidate.Type != EAssetType::SkeletalMesh) continue;
@@ -303,9 +404,7 @@ struct FSkeletalAssetEditor::FImpl
             Report("Could not load the Skeleton referenced by the asset", true);
             return;
         }
-        std::vector<std::shared_ptr<const FAnimationClipData>> LoadedClips;
-        std::vector<std::string> Labels;
-        for (const FAssetRecord& Candidate : Registry.GetAssets())
+        if (LoadedClips.empty()) for (const FAssetRecord& Candidate : Registry.GetAssets())
         {
             if (Candidate.Type != EAssetType::AnimationClip) continue;
             const auto Clip = Manager.LoadAnimationClip(Candidate.AssetPath, Registry);
@@ -330,6 +429,38 @@ struct FSkeletalAssetEditor::FImpl
         SetPreviewData(
             LoadedSkeleton, LoadedMesh, std::move(LoadedClips), std::move(Labels));
         Report("Opened skeletal asset preview");
+    }
+
+    bool PlayPreviewMontage()
+    {
+        PAnimInstance* Instance = PreviewComponent != nullptr
+            ? PreviewComponent->GetAnimInstance() : nullptr;
+        if (Instance == nullptr || Clips.empty()) return false;
+        std::shared_ptr<const FAnimationMontageData> Montage = OpenedMontage;
+        std::vector<std::shared_ptr<const FAnimationClipData>> SegmentClips = OpenedMontageClips;
+        if (Montage == nullptr)
+        {
+            const auto& Clip = Clips[static_cast<std::size_t>(SelectedClip)];
+            if (Clip == nullptr || Clip->Duration <= KindaSmallNumber) return false;
+            auto Transient = std::make_shared<FAnimationMontageData>();
+            Transient->SkeletonAsset = Clip->SkeletonAsset;
+            FAssetPath PreviewClipPath;
+            FAssetPath::TryParse("/Game/__Preview/Selected.panimation", PreviewClipPath);
+            Transient->Segments.push_back({PreviewClipPath, 0.0f, Clip->Duration, 1.0f});
+            const float Half = Clip->Duration * 0.5f;
+            Transient->Sections = {{"Start", 0.0f, "Finish"}, {"Finish", Half, ""}};
+            Transient->Notifies = {
+                {"PreviewEvent", Clip->Duration * 0.25f, Clip->Duration * 0.25f},
+                {"PreviewWindow", Clip->Duration * 0.4f, Clip->Duration * 0.7f}};
+            Montage = std::move(Transient);
+            SegmentClips = {Clip};
+        }
+        MontageEvents.clear();
+        bPlaying = true;
+        const bool bPlayed = Instance->PlayMontage(
+            std::move(Montage), std::move(SegmentClips), PlaybackSpeed);
+        if (bPlayed) AddMontageEvent("Played: Start");
+        return bPlayed;
     }
 
     bool ImportToProject()
@@ -372,6 +503,81 @@ struct FSkeletalAssetEditor::FImpl
         }
 
         std::vector<std::pair<FAssetPath, std::filesystem::path>> Outputs;
+        FAnimationSetData GeneratedAnimationSet;
+        bool bGenerateAnimationSet = false;
+        FAssetPath AnimationSetPath;
+        const auto FindAnimation = [&Result, &AnimationPaths](std::string_view Token) -> FAssetPath
+        {
+            for (std::size_t Index = 0; Index < Result.Animations.size(); ++Index)
+            {
+                std::string Lower = Result.Animations[Index].Name;
+                std::transform(Lower.begin(), Lower.end(), Lower.begin(),
+                    [](unsigned char Character) { return static_cast<char>(std::tolower(Character)); });
+                if (Lower.find(Token) != std::string::npos) return AnimationPaths[Index];
+            }
+            return {};
+        };
+        GeneratedAnimationSet.SkeletonAsset = SkeletonPath;
+        GeneratedAnimationSet.IdleAnimation = FindAnimation("idle");
+        GeneratedAnimationSet.WalkAnimation = FindAnimation("walk");
+        GeneratedAnimationSet.JumpAnimation = FindAnimation("jump");
+        bGenerateAnimationSet = ValidateAnimationSet(GeneratedAnimationSet)
+            && MakeAssetPath(Folder, Name, ".panimset", AnimationSetPath);
+        std::vector<FAssetPath> TexturePaths(Result.Textures.size());
+        std::vector<std::filesystem::path> TextureFiles(Result.Textures.size());
+        for (std::size_t Index = 0; Index < Result.Textures.size(); ++Index)
+        {
+            if (!MakeAssetPath(Folder + "/Textures", Result.Textures[Index].Name, ".ptex", TexturePaths[Index])
+                || !ResolveContentPath(TexturePaths[Index], TextureFiles[Index]))
+            {
+                Report("Could not create an imported Texture destination", true);
+                return false;
+            }
+        }
+        std::vector<FAssetPath> MaterialPaths(Result.Materials.size());
+        std::vector<std::filesystem::path> MaterialFiles(Result.Materials.size());
+        for (std::size_t Index = 0; Index < Result.Materials.size(); ++Index)
+        {
+            auto& Imported = Result.Materials[Index];
+            if (!MakeAssetPath(Folder + "/Materials", Imported.Name, ".pmat", MaterialPaths[Index])
+                || !ResolveContentPath(MaterialPaths[Index], MaterialFiles[Index]))
+            {
+                Report("Could not create an imported Material destination", true);
+                return false;
+            }
+            if (Imported.BaseColorTextureIndex >= 0
+                && static_cast<std::size_t>(Imported.BaseColorTextureIndex) < TexturePaths.size())
+                Imported.Material.BaseColorTexture =
+                    TexturePaths[static_cast<std::size_t>(Imported.BaseColorTextureIndex)];
+        }
+        Result.Mesh.DefaultMaterials.clear();
+        Result.Mesh.DefaultMaterials.reserve(Result.Mesh.Sections.size());
+        for (const FStaticMeshSection& Section : Result.Mesh.Sections)
+        {
+            const auto Found = std::find_if(Result.Materials.begin(), Result.Materials.end(),
+                [&Section](const auto& Material) { return Material.Name == Section.MaterialSlotName; });
+            Result.Mesh.DefaultMaterials.push_back(Found != Result.Materials.end()
+                ? MaterialPaths[static_cast<std::size_t>(Found - Result.Materials.begin())]
+                : FAssetPath {});
+        }
+        FAssetPath CharacterProfilePath;
+        std::filesystem::path CharacterProfileFile;
+        if (!MakeAssetPath(Folder, Name, ".pcharprofile", CharacterProfilePath)
+            || !ResolveContentPath(CharacterProfilePath, CharacterProfileFile))
+        {
+            Report("Could not create a Character Profile destination", true);
+            return false;
+        }
+        FCharacterProfileData CharacterProfile;
+        CharacterProfile.SkeletalMesh = MeshPath;
+        CharacterProfile.AnimationSet = AnimationSetPath;
+        for (std::size_t Index = 0;
+             Index < CharacterProfile.MaterialOverrides.size()
+                 && Index < Result.Mesh.DefaultMaterials.size();
+             ++Index)
+        {
+            CharacterProfile.MaterialOverrides[Index] = Result.Mesh.DefaultMaterials[Index];
+        }
         std::filesystem::path SkeletonFile;
         std::filesystem::path MeshFile;
         if (!ResolveContentPath(SkeletonPath, SkeletonFile)
@@ -392,15 +598,52 @@ struct FSkeletalAssetEditor::FImpl
             }
             Outputs.emplace_back(ClipPath, std::move(ClipFile));
         }
+        if (bGenerateAnimationSet)
+        {
+            std::filesystem::path AnimationSetFile;
+            if (!ResolveContentPath(AnimationSetPath, AnimationSetFile))
+            {
+                Report("Could not resolve the AnimationSet destination", true);
+                return false;
+            }
+            Outputs.emplace_back(AnimationSetPath, std::move(AnimationSetFile));
+        }
+        for (std::size_t Index = 0; Index < TexturePaths.size(); ++Index)
+            Outputs.emplace_back(TexturePaths[Index], TextureFiles[Index]);
+        for (std::size_t Index = 0; Index < MaterialPaths.size(); ++Index)
+            Outputs.emplace_back(MaterialPaths[Index], MaterialFiles[Index]);
+        Outputs.emplace_back(CharacterProfilePath, CharacterProfileFile);
         std::error_code FileError;
         for (const auto& [AssetPath, FilePath] : Outputs)
         {
             if (EngineLoop->GetAssetRegistry().Find(AssetPath) != nullptr
                 || std::filesystem::exists(FilePath, FileError))
             {
-                Report("An asset already exists at " + std::string(AssetPath.ToString()), true);
+                if (!bReplaceExistingAssets)
+                {
+                    Report("An asset already exists at " + std::string(AssetPath.ToString())
+                        + "; enable Replace Existing Assets to reimport", true);
+                    return false;
+                }
+            }
+        }
+
+        std::vector<std::pair<std::filesystem::path, std::filesystem::path>> Backups;
+        for (const auto& [AssetPath, FilePath] : Outputs)
+        {
+            (void)AssetPath;
+            if (!std::filesystem::is_regular_file(FilePath, FileError)) continue;
+            const std::filesystem::path Backup = FilePath.string() + ".picoimport.bak";
+            std::filesystem::copy_file(
+                FilePath, Backup, std::filesystem::copy_options::overwrite_existing, FileError);
+            if (FileError)
+            {
+                for (const auto& [Original, ExistingBackup] : Backups)
+                    std::filesystem::remove(ExistingBackup, FileError);
+                Report("Could not back up existing assets before reimport", true);
                 return false;
             }
+            Backups.emplace_back(FilePath, Backup);
         }
 
         ESkeletalAssetError AssetError = ESkeletalAssetError::None;
@@ -411,14 +654,37 @@ struct FSkeletalAssetEditor::FImpl
             bSaved = SaveAnimationClipToFile(
                 Outputs[Index + 2].second, Result.Animations[Index], &AssetError);
         }
+        if (bSaved && bGenerateAnimationSet)
+        {
+            std::filesystem::path AnimationSetFile;
+            bSaved = ResolveContentPath(AnimationSetPath, AnimationSetFile)
+                && SaveAnimationSetToFile(AnimationSetFile, GeneratedAnimationSet, &AssetError);
+        }
+        for (std::size_t Index = 0; bSaved && Index < Result.Textures.size(); ++Index)
+            bSaved = SaveTextureToFile(TextureFiles[Index], Result.Textures[Index].Texture);
+        for (std::size_t Index = 0; bSaved && Index < Result.Materials.size(); ++Index)
+            bSaved = SaveMaterialToFile(MaterialFiles[Index], Result.Materials[Index].Material);
+        if (bSaved)
+            bSaved = SaveCharacterProfileToFile(CharacterProfileFile, CharacterProfile);
         if (!bSaved)
         {
             for (const auto& Output : Outputs)
             {
                 std::filesystem::remove(Output.second, FileError);
             }
+            for (const auto& [Original, Backup] : Backups)
+            {
+                std::filesystem::copy_file(
+                    Backup, Original, std::filesystem::copy_options::overwrite_existing, FileError);
+                std::filesystem::remove(Backup, FileError);
+            }
             Report("Could not save all skeletal assets; partial output was removed", true);
             return false;
+        }
+        for (const auto& [Original, Backup] : Backups)
+        {
+            (void)Original;
+            std::filesystem::remove(Backup, FileError);
         }
 
         FAssetScanReport ScanReport;
@@ -437,7 +703,10 @@ struct FSkeletalAssetEditor::FImpl
         bHasPendingImport = false;
         if (OnImported) OnImported(MeshPath);
         OpenRegisteredAsset(MeshPath);
-        Report("Imported skeletal assets to " + Folder);
+        Report("Imported skeletal assets to " + Folder
+            + (bGenerateAnimationSet ? " with AnimationSet" : " (assign an AnimationSet manually)")
+            + ", " + std::to_string(Result.Materials.size())
+            + " Material(s), and a Character Profile");
         return true;
     }
 
@@ -453,6 +722,9 @@ struct FSkeletalAssetEditor::FImpl
             if (ImGui::Button("Import To Project")) ImportToProject();
             ImGui::SameLine();
             ImGui::TextDisabled("Quick Preview is transient until imported");
+            ImGui::Checkbox("Replace Existing Assets", &bReplaceExistingAssets);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Backs up matching native assets and restores them if reimport fails");
         }
         else if (OpenedAssetPath.IsValid())
         {
@@ -503,6 +775,31 @@ struct FSkeletalAssetEditor::FImpl
                 ImGui::EndCombo();
             }
         }
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Montage Lab");
+        PAnimInstance* MontageInstance = PreviewComponent != nullptr
+            ? PreviewComponent->GetAnimInstance() : nullptr;
+        ImGui::BeginDisabled(MontageInstance == nullptr || Clips.empty());
+        if (ImGui::Button("Play Montage")) PlayPreviewMontage();
+        ImGui::SameLine();
+        if (ImGui::Button("Stop Montage") && MontageInstance != nullptr)
+            MontageInstance->StopMontage();
+        ImGui::SameLine();
+        if (ImGui::Button("Jump To Finish") && MontageInstance != nullptr)
+            MontageInstance->JumpToSection("Finish");
+        ImGui::EndDisabled();
+        if (MontageInstance != nullptr)
+        {
+            ImGui::Text("State: %s   Section: %s   Time: %.3f s",
+                MontageInstance->IsMontagePlaying() ? "Playing" : "Stopped",
+                MontageInstance->GetCurrentMontageSection().empty()
+                    ? "-" : std::string(MontageInstance->GetCurrentMontageSection()).c_str(),
+                MontageInstance->GetMontagePlaybackTime());
+        }
+        if (MontageEvents.empty()) ImGui::TextDisabled("Events: none");
+        for (const std::string& Event : MontageEvents)
+            ImGui::BulletText("%s", Event.c_str());
 
         PAnimInstance* AnimInstance = PreviewComponent != nullptr
             ? PreviewComponent->GetAnimInstance() : nullptr;

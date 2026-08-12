@@ -36,6 +36,11 @@ target_link_libraries(PicoSandboxModule
         PicoEngine
 )
 
+if(TARGET PicoEditor)
+    target_link_libraries(PicoEditor PRIVATE PicoSandboxModule)
+    target_compile_definitions(PicoEditor PRIVATE PICO_EDITOR_WITH_SANDBOX=1)
+endif()
+
 set_target_properties(PicoSandboxModule PROPERTIES FOLDER "Projects/PicoSandbox")
 
 add_executable(PicoSandboxGame

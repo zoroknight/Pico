@@ -71,6 +71,10 @@ public:
     void SetMaxSimulationIterations(int32 Value);
     float GetPushImpulse() const;
     void SetPushImpulse(float Value);
+    bool ShouldOrientRotationToMovement() const;
+    void SetOrientRotationToMovement(bool bValue);
+    float GetRotationRate() const;
+    void SetRotationRate(float Value);
 
     FCharacterMoveState CaptureMoveState() const;
     bool ApplyMoveState(const FCharacterMoveState& State);
@@ -100,6 +104,8 @@ private:
     float MaxSimulationDeltaTime = 1.0f / 30.0f;
     int32 MaxSimulationIterations = 4;
     float PushImpulse = 250.0f;
+    bool bOrientRotationToMovement = true;
+    float RotationRate = 540.0f;
     int32 MovementModeValue = static_cast<int32>(EMovementMode::Falling);
     int32 LastSimulationIterations = 0;
     FFindFloorResult CurrentFloor;

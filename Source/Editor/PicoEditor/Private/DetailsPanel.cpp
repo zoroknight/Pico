@@ -5,6 +5,7 @@
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/DynamicMulticastDelegate.h"
@@ -726,6 +727,21 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
         FAssetPath Value;
         if (Property->GetValue(Object, Value))
         {
+            if (Object->IsA(PSkeletalMeshComponent::StaticClass())
+                && PropertyName.starts_with("MaterialOverride"))
+            {
+                const auto* SkeletalMesh = static_cast<const PSkeletalMeshComponent*>(Object);
+                const std::size_t SlotCount = SkeletalMesh->GetMaterialSlotCount();
+                const std::string IndexText = PropertyName.substr(
+                    std::string("MaterialOverride").size());
+                const std::size_t SlotIndex = IndexText.empty()
+                    ? 0 : static_cast<std::size_t>(std::stoul(IndexText));
+                if (SlotCount > 0 && SlotIndex >= SlotCount)
+                {
+                    ImGui::TextDisabled("Unused (mesh has %zu slots)", SlotCount);
+                    break;
+                }
+            }
             const EAssetReferenceType ReferenceType =
                 Property->GetAssetReferenceType();
             if (ReferenceType == EAssetReferenceType::None

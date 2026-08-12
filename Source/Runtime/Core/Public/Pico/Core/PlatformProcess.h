@@ -37,7 +37,16 @@ public:
         const std::filesystem::path& Executable,
         const std::vector<std::string>& Arguments = {},
         const std::filesystem::path& WorkingDirectory = {},
+        const std::filesystem::path& OutputFile = {},
         std::string* OutError = nullptr);
+    static FProcessHandle CreateProcess(
+        const std::filesystem::path& Executable,
+        const std::vector<std::string>& Arguments,
+        const std::filesystem::path& WorkingDirectory,
+        std::string* OutError)
+    {
+        return CreateProcess(Executable, Arguments, WorkingDirectory, {}, OutError);
+    }
     static bool IsRunning(const FProcessHandle& Process);
     static bool WaitForExit(
         const FProcessHandle& Process,

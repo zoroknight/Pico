@@ -2,6 +2,9 @@
 
 #include "Pico/Engine/Pawn.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace Pico
 {
 PICO_DEFINE_CLASS(PController)
@@ -12,7 +15,29 @@ bool PController::RegisterProperties(PClass& Class)
     Metadata.Flags = EPropertyFlags::Transient | EPropertyFlags::Replicated;
     std::vector<PProperty> Properties;
     PICO_ADD_PROPERTY_METADATA(Properties, Pawn, Metadata);
+    PICO_ADD_PROPERTY_METADATA(Properties, ControlRotation, Metadata);
     return Class.AddProperties(std::move(Properties));
+}
+
+const FRotator& PController::GetControlRotation() const { return ControlRotation; }
+
+void PController::SetControlRotation(const FRotator& Rotation)
+{
+    ControlRotation = Rotation.GetNormalized();
+    ControlRotation.Pitch = std::clamp(ControlRotation.Pitch, -85.0f, 85.0f);
+    ControlRotation.Roll = 0.0f;
+}
+
+void PController::AddYawInput(float Value)
+{
+    if (std::isfinite(Value)) SetControlRotation(
+        {ControlRotation.Pitch, ControlRotation.Yaw + Value, 0.0f});
+}
+
+void PController::AddPitchInput(float Value)
+{
+    if (std::isfinite(Value)) SetControlRotation(
+        {ControlRotation.Pitch + Value, ControlRotation.Yaw, 0.0f});
 }
 
 PController::PController(const FObjectConstructionParams& Params)

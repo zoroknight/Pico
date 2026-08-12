@@ -3,6 +3,7 @@
 #include "Pico/Asset/Texture.h"
 
 #include <filesystem>
+#include <span>
 #include <string_view>
 
 namespace Pico
@@ -18,6 +19,10 @@ enum class ETextureImportError
 
 bool ImportTexture(
     const std::filesystem::path& SourceFile,
+    FTextureData& OutTexture,
+    ETextureImportError* OutError = nullptr);
+bool ImportTextureMemory(
+    std::span<const uint8> SourceData,
     FTextureData& OutTexture,
     ETextureImportError* OutError = nullptr);
 bool ImportTextureToFile(

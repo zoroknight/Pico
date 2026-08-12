@@ -11,12 +11,15 @@
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/Pawn.h"
+#include "Pico/Engine/PlayerController.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Render/SceneViewportRenderer.h"
 #include "Pico/Object/Class.h"
+#include "Pico/Object/ClassRegistry.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectName.h"
@@ -28,7 +31,9 @@
 #include <ImGuizmo.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -278,6 +283,9 @@ void FPicoEditorApp::Draw()
         bResetDockLayout = false;
     }
     DrawRenamePopup();
+    DrawActorClassPicker();
+    DrawPlayableCharacterCreator();
+    DrawProjectSettings();
     DrawUnsavedChangesPopup();
     DrawPlayValidationPopup();
     ImGui::End();
@@ -629,6 +637,14 @@ void FPicoEditorApp::DrawToolbar()
         if (ImGui::MenuItem("Empty Actor"))
         {
             SpawnEmptyActor();
+        }
+        if (ImGui::MenuItem("Actor Class..."))
+        {
+            bOpenActorClassPicker = true;
+        }
+        if (ImGui::MenuItem("Playable Character..."))
+        {
+            bOpenPlayableCharacterCreator = true;
         }
         if (ImGui::MenuItem("Cube"))
         {
@@ -983,6 +999,12 @@ void FPicoEditorApp::DrawEditMenu()
     {
         PasteClipboard();
     }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Project Settings..."))
+    {
+        bProjectSettingsOpen = true;
+        bProjectSettingsLoaded = false;
+    }
     ImGui::EndMenu();
 }
 
@@ -994,6 +1016,176 @@ void FPicoEditorApp::DrawViewMenu()
     }
     ImGui::MenuItem("Message Log", nullptr, &bMessageLogOpen);
     ImGui::EndMenu();
+}
+
+void FPicoEditorApp::LoadProjectSettings()
+{
+    FConfigFile Config;
+    Config.Load(FPaths::GetProjectConfigFile("Pico.ini"));
+    const auto CopySetting = [](auto& Buffer, const std::string& Value)
+    {
+        std::snprintf(Buffer.data(), Buffer.size(), "%s", Value.c_str());
+    };
+    CopySetting(DefaultMapSetting,
+        Config.GetString("Game", "DefaultMap", "/Game/Maps/EditorWorld.pworld"));
+    CopySetting(DefaultPawnClassSetting,
+        Config.GetString("Game", "DefaultPawnClass", "PSandboxPawn"));
+    CopySetting(PlayerControllerClassSetting,
+        Config.GetString("Game", "PlayerControllerClass", "PSandboxPlayerController"));
+    CopySetting(DefaultPawnProfileSetting,
+        Config.GetString("Game", "DefaultPawnProfile", ""));
+    MouseSensitivitySetting = static_cast<float>(
+        Config.GetDouble("Input", "MouseSensitivity", 0.12));
+    InputMappingSettings.clear();
+    auto Entries = Config.GetSectionEntries("Input");
+    std::sort(Entries.begin(), Entries.end());
+    for (const auto& [Key, Value] : Entries)
+    {
+        const bool bAxis = Key.starts_with("Axis.");
+        if (!bAxis && !Key.starts_with("Action.")) continue;
+        FInputMappingSetting Mapping;
+        Mapping.bAxis = bAxis;
+        CopySetting(Mapping.Name, Key.substr(Key.find('.') + 1));
+        CopySetting(Mapping.Bindings, Value);
+        InputMappingSettings.push_back(Mapping);
+    }
+    bProjectSettingsLoaded = true;
+}
+
+void FPicoEditorApp::SaveProjectSettings()
+{
+    FConfigFile Config;
+    const std::filesystem::path ConfigPath = FPaths::GetProjectConfigFile("Pico.ini");
+    Config.Load(ConfigPath);
+    Config.SetString("Game", "DefaultMap", DefaultMapSetting.data());
+    Config.SetString("Game", "DefaultPawnClass", DefaultPawnClassSetting.data());
+    Config.SetString("Game", "PlayerControllerClass", PlayerControllerClassSetting.data());
+    Config.SetString("Game", "DefaultPawnProfile", DefaultPawnProfileSetting.data());
+    Config.RemoveSection("Input");
+    Config.SetString("Input", "MouseSensitivity", std::to_string(MouseSensitivitySetting));
+    for (const FInputMappingSetting& Mapping : InputMappingSettings)
+    {
+        if (Mapping.Name[0] == '\0' || Mapping.Bindings[0] == '\0') continue;
+        Config.SetString(
+            "Input",
+            std::string(Mapping.bAxis ? "Axis." : "Action.") + Mapping.Name.data(),
+            Mapping.Bindings.data());
+    }
+    if (Config.Save(ConfigPath))
+        SetStatus("Project settings saved. They apply on the next Play launch.");
+    else
+        SetStatus("Could not save project settings: " + ConfigPath.string(), true);
+}
+
+void FPicoEditorApp::DrawProjectSettings()
+{
+    if (!bProjectSettingsOpen) return;
+    if (!bProjectSettingsLoaded) LoadProjectSettings();
+    ImGui::SetNextWindowSize(ImVec2(760.0f, 560.0f), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Project Settings", &bProjectSettingsOpen))
+    {
+        ImGui::End();
+        return;
+    }
+    if (ImGui::BeginTabBar("ProjectSettingsTabs"))
+    {
+        if (ImGui::BeginTabItem("Input"))
+        {
+            ImGui::SetNextItemWidth(180.0f);
+            ImGui::DragFloat("Mouse Sensitivity", &MouseSensitivitySetting, 0.005f, 0.01f, 5.0f, "%.3f");
+            ImGui::Separator();
+            ImGui::TextUnformatted("Mappings");
+            int RemoveIndex = -1;
+            for (std::size_t Index = 0; Index < InputMappingSettings.size(); ++Index)
+            {
+                FInputMappingSetting& Mapping = InputMappingSettings[Index];
+                ImGui::PushID(static_cast<int>(Index));
+                ImGui::SetNextItemWidth(90.0f);
+                const char* Types[] = {"Action", "Axis"};
+                int Type = Mapping.bAxis ? 1 : 0;
+                if (ImGui::Combo("##Type", &Type, Types, 2)) Mapping.bAxis = Type == 1;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(160.0f);
+                ImGui::InputText("##Name", Mapping.Name.data(), Mapping.Name.size());
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(-45.0f);
+                ImGui::InputTextWithHint(
+                    "##Bindings", Mapping.bAxis ? "W:1,S:-1" : "Space,Enter",
+                    Mapping.Bindings.data(), Mapping.Bindings.size());
+                ImGui::SameLine();
+                if (ImGui::SmallButton("X")) RemoveIndex = static_cast<int>(Index);
+                ImGui::PopID();
+            }
+            if (RemoveIndex >= 0)
+                InputMappingSettings.erase(InputMappingSettings.begin() + RemoveIndex);
+            if (ImGui::Button("Add Action")) InputMappingSettings.push_back({});
+            ImGui::SameLine();
+            if (ImGui::Button("Add Axis"))
+            {
+                FInputMappingSetting Mapping;
+                Mapping.bAxis = true;
+                InputMappingSettings.push_back(Mapping);
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Gameplay"))
+        {
+            const auto DrawAssetSetting = [this](
+                const char* Label,
+                auto& Buffer,
+                EAssetType Type,
+                bool bCanClear)
+            {
+                ImGui::SetNextItemWidth(-1.0f);
+                if (!ImGui::BeginCombo(Label, Buffer[0] != '\0' ? Buffer.data() : "None")) return;
+                if (bCanClear && ImGui::Selectable("None", Buffer[0] == '\0')) Buffer[0] = '\0';
+                if (EngineLoop != nullptr)
+                {
+                    for (const FAssetRecord& Record : EngineLoop->GetAssetRegistry().GetAssets())
+                    {
+                        if (Record.Type != Type) continue;
+                        const std::string Path(Record.AssetPath.ToString());
+                        const bool bSelected = Path == Buffer.data();
+                        if (ImGui::Selectable(Path.c_str(), bSelected))
+                            std::snprintf(Buffer.data(), Buffer.size(), "%s", Path.c_str());
+                    }
+                }
+                ImGui::EndCombo();
+            };
+            const auto DrawClassSetting = [](const char* Label, auto& Buffer, const PClass* BaseClass)
+            {
+                ImGui::SetNextItemWidth(-1.0f);
+                if (!ImGui::BeginCombo(Label, Buffer[0] != '\0' ? Buffer.data() : "None")) return;
+                auto Classes = FClassRegistry::GetClasses();
+                std::sort(Classes.begin(), Classes.end(), [](const PClass* Left, const PClass* Right)
+                    { return Left->GetName().ToString() < Right->GetName().ToString(); });
+                for (const PClass* Class : Classes)
+                {
+                    if (Class == nullptr || !Class->CanConstruct() || !Class->IsChildOf(BaseClass)) continue;
+                    const std::string Name = Class->GetName().ToString();
+                    const bool bSelected = Name == Buffer.data();
+                    if (ImGui::Selectable(Name.c_str(), bSelected))
+                        std::snprintf(Buffer.data(), Buffer.size(), "%s", Name.c_str());
+                }
+                ImGui::EndCombo();
+            };
+            DrawAssetSetting("Default Map", DefaultMapSetting, EAssetType::World, false);
+            DrawClassSetting("Default Pawn Class", DefaultPawnClassSetting, PPawn::StaticClass());
+            DrawClassSetting("Player Controller Class", PlayerControllerClassSetting,
+                PPlayerController::StaticClass());
+            DrawAssetSetting("Default Pawn Profile", DefaultPawnProfileSetting,
+                EAssetType::CharacterProfile, true);
+            ImGui::Spacing();
+            ImGui::TextDisabled("Defaults are used only when the map has no Player 0 auto-possessed Pawn.");
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    ImGui::Separator();
+    if (ImGui::Button("Save Settings")) SaveProjectSettings();
+    ImGui::SameLine();
+    if (ImGui::Button("Reload")) LoadProjectSettings();
+    ImGui::End();
 }
 
 void FPicoEditorApp::DrawStatusBar()
@@ -1294,8 +1486,21 @@ void FPicoEditorApp::LaunchGame(const std::string& ValidationMessage)
             true);
         return;
     }
+    std::error_code TimeError;
+    const auto GameWriteTime = std::filesystem::last_write_time(GameExecutable, TimeError);
+    const auto EditorWriteTime = std::filesystem::last_write_time(
+        FPaths::GetExecutablePath(), TimeError);
+    if (!TimeError && GameWriteTime < EditorWriteTime)
+    {
+        SetStatus(
+            "Project Runtime is older than PicoEditor. Build target '"
+                + GameExecutable.stem().string() + "' before Play.",
+            true);
+        return;
+    }
 
     std::string Error;
+    GameProcessLogFile = FPaths::GetProjectSavedDir() / "Logs" / "StandaloneGame.log";
     GameProcess = FPlatformProcess::CreateProcess(
         GameExecutable,
         {
@@ -1303,6 +1508,7 @@ void FPicoEditorApp::LaunchGame(const std::string& ValidationMessage)
             "-map=" + std::string(WorldDocument.GetAssetPath().ToString())
         },
         FPaths::GetEngineRootDir(),
+        GameProcessLogFile,
         &Error);
     if (!GameProcess.IsValid())
     {
@@ -1350,8 +1556,16 @@ void FPicoEditorApp::UpdateGameProcess()
     int ExitCode = 0;
     FPlatformProcess::WaitForExit(GameProcess, 0, &ExitCode);
     GameProcess.Reset();
+    std::string Detail;
+    if (ExitCode != 0 && std::filesystem::is_regular_file(GameProcessLogFile))
+    {
+        std::ifstream Log(GameProcessLogFile);
+        std::string Line;
+        while (std::getline(Log, Line)) if (!Line.empty()) Detail = Line;
+    }
     SetStatus(
-        "Standalone game exited with code " + std::to_string(ExitCode),
+        "Standalone game exited with code " + std::to_string(ExitCode)
+            + (Detail.empty() ? "" : ": " + Detail),
         ExitCode != 0);
 }
 
@@ -1359,6 +1573,138 @@ void FPicoEditorApp::SpawnEmptyActor()
 {
     FinishInteractiveEdit();
     ApplyCommandResult(CommandService.SpawnActor(false));
+}
+
+void FPicoEditorApp::DrawActorClassPicker()
+{
+    if (bOpenActorClassPicker)
+    {
+        ImGui::OpenPopup("Add Actor Class");
+        bOpenActorClassPicker = false;
+    }
+    if (!ImGui::BeginPopupModal("Add Actor Class", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    ImGui::SetNextItemWidth(420.0f);
+    ImGui::InputTextWithHint("##ActorClassFilter", "Search Actor classes",
+        ActorClassFilter.data(), ActorClassFilter.size());
+    std::string Filter(ActorClassFilter.data());
+    std::transform(Filter.begin(), Filter.end(), Filter.begin(),
+        [](unsigned char Character) { return static_cast<char>(std::tolower(Character)); });
+    ImGui::BeginChild("ActorClassList", ImVec2(420.0f, 300.0f), true);
+    auto Classes = FClassRegistry::GetClasses();
+    std::sort(Classes.begin(), Classes.end(), [](const PClass* Left, const PClass* Right)
+        { return Left->GetName().ToString() < Right->GetName().ToString(); });
+    for (const PClass* Class : Classes)
+    {
+        if (Class == nullptr || !Class->CanConstruct() || !Class->IsChildOf(PActor::StaticClass())) continue;
+        const std::string Name = Class->GetName().ToString();
+        std::string Lower = Name;
+        std::transform(Lower.begin(), Lower.end(), Lower.begin(),
+            [](unsigned char Character) { return static_cast<char>(std::tolower(Character)); });
+        if (!Filter.empty() && Lower.find(Filter) == std::string::npos) continue;
+        if (ImGui::Selectable(Name.c_str()))
+        {
+            FinishInteractiveEdit();
+            ApplyCommandResult(CommandService.SpawnActor(Class));
+            ImGui::CloseCurrentPopup();
+        }
+    }
+    ImGui::EndChild();
+    if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
+void FPicoEditorApp::DrawPlayableCharacterCreator()
+{
+    if (bOpenPlayableCharacterCreator)
+    {
+        if (PlayablePawnClassSetting[0] == '\0')
+        {
+            for (const PClass* Class : FClassRegistry::GetClasses())
+            {
+                if (Class != nullptr && Class->CanConstruct()
+                    && Class->IsChildOf(PPawn::StaticClass()))
+                {
+                    const std::string Name = Class->GetName().ToString();
+                    if (Name == "PSandboxPawn" || PlayablePawnClassSetting[0] == '\0')
+                        std::snprintf(PlayablePawnClassSetting.data(),
+                            PlayablePawnClassSetting.size(), "%s", Name.c_str());
+                    if (Name == "PSandboxPawn") break;
+                }
+            }
+        }
+        ImGui::OpenPopup("Create Playable Character");
+        bOpenPlayableCharacterCreator = false;
+    }
+    if (!ImGui::BeginPopupModal(
+            "Create Playable Character", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    ImGui::SetNextItemWidth(520.0f);
+    if (ImGui::BeginCombo("Pawn Class", PlayablePawnClassSetting.data()))
+    {
+        auto Classes = FClassRegistry::GetClasses();
+        std::sort(Classes.begin(), Classes.end(), [](const PClass* Left, const PClass* Right)
+            { return Left->GetName().ToString() < Right->GetName().ToString(); });
+        for (const PClass* Class : Classes)
+        {
+            if (Class == nullptr || !Class->CanConstruct()
+                || !Class->IsChildOf(PPawn::StaticClass())) continue;
+            const std::string Name = Class->GetName().ToString();
+            if (ImGui::Selectable(Name.c_str(), Name == PlayablePawnClassSetting.data()))
+                std::snprintf(PlayablePawnClassSetting.data(),
+                    PlayablePawnClassSetting.size(), "%s", Name.c_str());
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SetNextItemWidth(520.0f);
+    const char* ProfilePreview = PlayableCharacterProfileSetting[0] != '\0'
+        ? PlayableCharacterProfileSetting.data() : "None";
+    if (ImGui::BeginCombo("Character Profile", ProfilePreview))
+    {
+        if (ImGui::Selectable("None", PlayableCharacterProfileSetting[0] == '\0'))
+            PlayableCharacterProfileSetting[0] = '\0';
+        if (EngineLoop != nullptr)
+        {
+            for (const FAssetRecord& Record : EngineLoop->GetAssetRegistry().GetAssets())
+            {
+                if (Record.Type != EAssetType::CharacterProfile) continue;
+                const std::string Path(Record.AssetPath.ToString());
+                if (ImGui::Selectable(Path.c_str(), Path == PlayableCharacterProfileSetting.data()))
+                    std::snprintf(PlayableCharacterProfileSetting.data(),
+                        PlayableCharacterProfileSetting.size(), "%s", Path.c_str());
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::TextDisabled("The created Pawn is saved in the map and auto-possessed by Player 0.");
+    ImGui::Separator();
+    if (ImGui::Button("Create"))
+    {
+        const PClass* SelectedClass = nullptr;
+        for (const PClass* Class : FClassRegistry::GetClasses())
+        {
+            if (Class != nullptr
+                && Class->GetName().ToString() == PlayablePawnClassSetting.data())
+            {
+                SelectedClass = Class;
+                break;
+            }
+        }
+        FAssetPath Profile;
+        if (PlayableCharacterProfileSetting[0] != '\0')
+            FAssetPath::TryParse(PlayableCharacterProfileSetting.data(), Profile);
+        FinishInteractiveEdit();
+        FEditorCommandResult Result =
+            CommandService.SpawnPlayableCharacter(SelectedClass, Profile);
+        const bool bSucceeded = Result.bSucceeded;
+        ApplyCommandResult(std::move(Result));
+        if (bSucceeded) ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
 }
 
 void FPicoEditorApp::SpawnCubeActor()

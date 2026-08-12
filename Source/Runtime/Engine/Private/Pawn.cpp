@@ -16,8 +16,16 @@ bool PPawn::RegisterProperties(PClass& Class)
     Metadata.Flags = EPropertyFlags::Transient | EPropertyFlags::Replicated;
     std::vector<PProperty> Properties;
     PICO_ADD_PROPERTY_METADATA(Properties, Controller, Metadata);
+    PICO_ADD_PROPERTY(Properties, AutoPossessPlayerIndex);
+    PICO_ADD_PROPERTY(Properties, bUseControllerRotationYaw);
     return Class.AddProperties(std::move(Properties));
 }
+
+int32 PPawn::GetAutoPossessPlayerIndex() const { return AutoPossessPlayerIndex; }
+void PPawn::SetAutoPossessPlayerIndex(int32 PlayerIndex)
+{ AutoPossessPlayerIndex = PlayerIndex == 0 ? 0 : -1; }
+bool PPawn::UsesControllerRotationYaw() const { return bUseControllerRotationYaw; }
+void PPawn::SetUseControllerRotationYaw(bool bValue) { bUseControllerRotationYaw = bValue; }
 
 PPawn::PPawn(const FObjectConstructionParams& Params)
     : PActor(Params)

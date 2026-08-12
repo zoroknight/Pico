@@ -1,0 +1,11 @@
+[Character]
+AnimationSet=/Game/Characters/Knight_Male/Knight_Male.panimset
+DefaultMontage=
+SkeletalMesh=/Game/Characters/Knight_Male/Knight_Male.pskeletalmesh
+
+[Materials]
+Slot0=/Game/Characters/Knight_Male/Materials/Skin.pmat
+Slot1=/Game/Characters/Knight_Male/Materials/Armor.pmat
+Slot2=/Game/Characters/Knight_Male/Materials/Armor_Dark.pmat
+Slot3=/Game/Characters/Knight_Male/Materials/Detail.pmat
+

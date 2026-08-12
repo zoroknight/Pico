@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Pico/Asset/AssetRegistry.h"
+#include "Pico/Asset/CharacterProfile.h"
 #include "Pico/Asset/Material.h"
 #include "Pico/Asset/SkeletalAnimation.h"
 #include "Pico/Asset/StaticMesh.h"
@@ -38,12 +39,27 @@ public:
         const FAssetPath& AssetPath,
         const FAssetRegistry& Registry,
         ESkeletalAssetError* OutError = nullptr);
+    std::shared_ptr<const FAnimationSetData> LoadAnimationSet(
+        const FAssetPath& AssetPath,
+        const FAssetRegistry& Registry,
+        ESkeletalAssetError* OutError = nullptr);
+    std::shared_ptr<const FAnimationMontageData> LoadAnimationMontage(
+        const FAssetPath& AssetPath,
+        const FAssetRegistry& Registry,
+        ESkeletalAssetError* OutError = nullptr);
+    std::shared_ptr<const FCharacterProfileData> LoadCharacterProfile(
+        const FAssetPath& AssetPath,
+        const FAssetRegistry& Registry,
+        ECharacterProfileError* OutError = nullptr);
     std::size_t GetCachedStaticMeshCount() const;
     std::size_t GetCachedTextureCount() const;
     std::size_t GetCachedMaterialCount() const;
     std::size_t GetCachedSkeletonCount() const;
     std::size_t GetCachedSkeletalMeshCount() const;
     std::size_t GetCachedAnimationClipCount() const;
+    std::size_t GetCachedAnimationSetCount() const;
+    std::size_t GetCachedAnimationMontageCount() const;
+    std::size_t GetCachedCharacterProfileCount() const;
     void Invalidate(const FAssetPath& AssetPath);
     void Clear();
 
@@ -87,5 +103,8 @@ private:
     std::vector<TAnimationCacheEntry<FSkeletonData>> Skeletons;
     std::vector<TAnimationCacheEntry<FSkeletalMeshData>> SkeletalMeshes;
     std::vector<TAnimationCacheEntry<FAnimationClipData>> AnimationClips;
+    std::vector<TAnimationCacheEntry<FAnimationSetData>> AnimationSets;
+    std::vector<TAnimationCacheEntry<FAnimationMontageData>> AnimationMontages;
+    std::vector<TAnimationCacheEntry<FCharacterProfileData>> CharacterProfiles;
 };
 }

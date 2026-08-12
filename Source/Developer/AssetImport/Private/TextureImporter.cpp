@@ -14,23 +14,10 @@ void Report(ETextureImportError* OutError, ETextureImportError Error)
 {
     if (OutError != nullptr) *OutError = Error;
 }
-}
 
-bool ImportTexture(
-    const std::filesystem::path& SourceFile,
-    FTextureData& OutTexture,
-    ETextureImportError* OutError)
+bool BuildTexture(stbi_uc* Pixels, int Width, int Height,
+    FTextureData& OutTexture, ETextureImportError* OutError)
 {
-    Report(OutError, ETextureImportError::None);
-    if (SourceFile.empty())
-    {
-        Report(OutError, ETextureImportError::InvalidArgument);
-        return false;
-    }
-    int Width = 0;
-    int Height = 0;
-    int SourceChannels = 0;
-    stbi_uc* Pixels = stbi_load(SourceFile.string().c_str(), &Width, &Height, &SourceChannels, 4);
     if (Pixels == nullptr || Width <= 0 || Height <= 0)
     {
         if (Pixels != nullptr) stbi_image_free(Pixels);
@@ -56,6 +43,45 @@ bool ImportTexture(
     }
     OutTexture = std::move(Texture);
     return true;
+}
+}
+
+bool ImportTexture(
+    const std::filesystem::path& SourceFile,
+    FTextureData& OutTexture,
+    ETextureImportError* OutError)
+{
+    Report(OutError, ETextureImportError::None);
+    if (SourceFile.empty())
+    {
+        Report(OutError, ETextureImportError::InvalidArgument);
+        return false;
+    }
+    int Width = 0;
+    int Height = 0;
+    int SourceChannels = 0;
+    stbi_uc* Pixels = stbi_load(SourceFile.string().c_str(), &Width, &Height, &SourceChannels, 4);
+    return BuildTexture(Pixels, Width, Height, OutTexture, OutError);
+}
+
+bool ImportTextureMemory(
+    std::span<const uint8> SourceData,
+    FTextureData& OutTexture,
+    ETextureImportError* OutError)
+{
+    Report(OutError, ETextureImportError::None);
+    if (SourceData.empty() || SourceData.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+    {
+        Report(OutError, ETextureImportError::InvalidArgument);
+        return false;
+    }
+    int Width = 0;
+    int Height = 0;
+    int SourceChannels = 0;
+    stbi_uc* Pixels = stbi_load_from_memory(
+        SourceData.data(), static_cast<int>(SourceData.size()),
+        &Width, &Height, &SourceChannels, 4);
+    return BuildTexture(Pixels, Width, Height, OutTexture, OutError);
 }
 
 bool ImportTextureToFile(

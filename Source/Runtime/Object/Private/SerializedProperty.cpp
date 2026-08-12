@@ -110,6 +110,11 @@ bool SerializePropertyValue(FArchive& Archive, FSerializedPropertyRecord& Proper
         Archive.SerializeString(Value);
         if (Archive.IsLoading() && !Archive.HasError())
         {
+            if (Value.empty())
+            {
+                Property.AssetPathValue = {};
+                break;
+            }
             FAssetPath ParsedPath;
             if (!FAssetPath::TryParse(Value, ParsedPath))
             {

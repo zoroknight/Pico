@@ -14,6 +14,10 @@ class PPawn : public PActor
 
 public:
     PController* GetController() const;
+    int32 GetAutoPossessPlayerIndex() const;
+    void SetAutoPossessPlayerIndex(int32 PlayerIndex);
+    bool UsesControllerRotationYaw() const;
+    void SetUseControllerRotationYaw(bool bValue);
     virtual PPawnMovementComponent* GetMovementComponent() const;
     void AddMovementInput(
         const FVector3& WorldDirection,
@@ -37,5 +41,7 @@ private:
     TWeakObjectPtr<PController> Controller;
     FVector3 PendingMovementInputVector = FVector3::ZeroVector;
     FVector3 LastMovementInputVector = FVector3::ZeroVector;
+    int32 AutoPossessPlayerIndex = -1;
+    bool bUseControllerRotationYaw = false;
 };
 }

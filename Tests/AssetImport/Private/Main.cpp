@@ -125,9 +125,12 @@ void TestSkeletalImport(FTestRunner& Runner)
             && Pico::ValidateSkeleton(GltfResult.Skeleton)
             && Pico::ValidateSkeletalMesh(GltfResult.Mesh, &GltfResult.Skeleton)
             && !GltfResult.Animations.empty()
+            && !GltfResult.Materials.empty()
+            && !GltfResult.Mesh.Sections.empty()
+            && !GltfResult.Mesh.Sections.front().MaterialSlotName.empty()
             && Pico::ValidateAnimationClip(
                 GltfResult.Animations.front(), &GltfResult.Skeleton),
-        "Assimp imports an animated glTF skin into validated Pico native data");
+        "Assimp imports an animated glTF skin with named material slots");
 
     const auto Suffix = std::chrono::steady_clock::now().time_since_epoch().count();
     const std::filesystem::path Root = std::filesystem::temp_directory_path()

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <fstream>
 #include <limits>
+#include <set>
 #include <system_error>
 #include <utility>
 
@@ -15,13 +16,18 @@ namespace
 constexpr uint32 SkeletonMagic = 0x4c4b5350;
 constexpr uint32 SkeletalMeshMagic = 0x4d4b5350;
 constexpr uint32 AnimationMagic = 0x4d4e4150;
+constexpr uint32 AnimationSetMagic = 0x54455350;
+constexpr uint32 AnimationMontageMagic = 0x474d4150;
 constexpr uint32 FormatVersion = 1;
+constexpr uint32 SkeletalMeshFormatVersion = 2;
 constexpr uint32 MaxBones = 1024;
 constexpr uint32 MaxVertices = 16 * 1024 * 1024;
 constexpr uint32 MaxIndices = 64 * 1024 * 1024;
 constexpr uint32 MaxTracks = 4096;
 constexpr uint32 MaxKeys = 16 * 1024 * 1024;
 constexpr uint32 MaxNotifies = 64 * 1024;
+constexpr uint32 MaxMontageSegments = 4096;
+constexpr uint32 MaxMontageSections = 4096;
 constexpr uint32 MaxString = 4096;
 constexpr std::size_t MaxFileSize = 512ull * 1024ull * 1024ull;
 
@@ -206,12 +212,13 @@ bool LoadBytes(const std::filesystem::path& FilePath, std::vector<uint8>& OutDat
     return true;
 }
 
-bool WriteHeader(FWriter& Writer, uint32 Magic)
+bool WriteHeader(FWriter& Writer, uint32 Magic, uint32 Version = FormatVersion)
 {
-    Writer.U32(Magic); Writer.U32(FormatVersion); return true;
+    Writer.U32(Magic); Writer.U32(Version); return true;
 }
 
-bool ReadHeader(FReader& Reader, uint32 Expected, ESkeletalAssetError* OutError)
+bool ReadHeader(FReader& Reader, uint32 Expected, ESkeletalAssetError* OutError,
+    uint32 MaximumVersion = FormatVersion, uint32* OutVersion = nullptr)
 {
     uint32 Magic = 0;
     uint32 Version = 0;
@@ -219,10 +226,11 @@ bool ReadHeader(FReader& Reader, uint32 Expected, ESkeletalAssetError* OutError)
     {
         Report(OutError, ESkeletalAssetError::InvalidArchive); return false;
     }
-    if (Version != FormatVersion)
+    if (Version == 0 || Version > MaximumVersion)
     {
         Report(OutError, ESkeletalAssetError::UnsupportedVersion); return false;
     }
+    if (OutVersion != nullptr) *OutVersion = Version;
     return true;
 }
 
@@ -331,7 +339,7 @@ bool ValidateSkeletalMesh(const FSkeletalMeshData& Mesh, const FSkeletonData* Sk
 {
     Report(OutError, ESkeletalAssetError::None);
     if (!Mesh.SkeletonAsset.IsValid() || Mesh.Vertices.empty() || Mesh.Indices.empty()
-        || Mesh.Sections.empty() || Mesh.Indices.size() % 3 != 0)
+          || Mesh.Sections.empty() || Mesh.Indices.size() % 3 != 0)
     {
         Report(OutError, ESkeletalAssetError::InvalidData); return false;
     }
@@ -380,6 +388,15 @@ bool ValidateSkeletalMesh(const FSkeletalMeshData& Mesh, const FSkeletonData* Sk
     {
         Report(OutError, ESkeletalAssetError::InvalidData); return false;
     }
+    if (!Mesh.DefaultMaterials.empty() && Mesh.DefaultMaterials.size() != Mesh.Sections.size())
+    {
+        Report(OutError, ESkeletalAssetError::InvalidData); return false;
+    }
+    for (const FAssetPath& Material : Mesh.DefaultMaterials)
+        if (Material.IsValid() && Material.GetExtension() != ".pmat")
+        {
+            Report(OutError, ESkeletalAssetError::InvalidData); return false;
+        }
     return true;
 }
 
@@ -437,6 +454,85 @@ bool ValidateAnimationClip(const FAnimationClipData& Clip, const FSkeletonData* 
     return true;
 }
 
+bool ValidateAnimationSet(const FAnimationSetData& AnimationSet, ESkeletalAssetError* OutError)
+{
+    Report(OutError, ESkeletalAssetError::None);
+    if (!AnimationSet.SkeletonAsset.IsValid()
+        || !AnimationSet.IdleAnimation.IsValid()
+        || !AnimationSet.WalkAnimation.IsValid()
+        || !AnimationSet.JumpAnimation.IsValid())
+    {
+        Report(OutError, ESkeletalAssetError::InvalidData);
+        return false;
+    }
+    return true;
+}
+
+bool ValidateAnimationMontage(const FAnimationMontageData& Montage, ESkeletalAssetError* OutError)
+{
+    Report(OutError, ESkeletalAssetError::None);
+    if (!Montage.SkeletonAsset.IsValid() || Montage.SlotName.empty()
+        || Montage.SlotName.size() > MaxString || !Finite(Montage.BlendInTime)
+        || !Finite(Montage.BlendOutTime) || Montage.BlendInTime < 0.0f
+        || Montage.BlendOutTime < 0.0f || Montage.Segments.empty()
+        || Montage.Segments.size() > MaxMontageSegments
+        || Montage.Sections.empty() || Montage.Sections.size() > MaxMontageSections
+        || Montage.Notifies.size() > MaxNotifies)
+    {
+        Report(OutError, ESkeletalAssetError::InvalidData);
+        return false;
+    }
+    float Duration = 0.0f;
+    float PreviousEnd = 0.0f;
+    for (const FAnimationMontageSegment& Segment : Montage.Segments)
+    {
+        if (!Segment.AnimationAsset.IsValid() || !Finite(Segment.StartTime)
+            || !Finite(Segment.EndTime) || !Finite(Segment.PlayRate)
+            || Segment.StartTime < 0.0f || Segment.EndTime <= Segment.StartTime
+            || Segment.PlayRate <= 0.0f || Segment.StartTime < PreviousEnd)
+        {
+            Report(OutError, ESkeletalAssetError::InvalidData);
+            return false;
+        }
+        PreviousEnd = Segment.EndTime;
+        Duration = std::max(Duration, Segment.EndTime);
+    }
+    std::set<std::string> Names;
+    float PreviousStart = -1.0f;
+    for (const FAnimationMontageSection& Section : Montage.Sections)
+    {
+        if (Section.Name.empty() || Section.Name.size() > MaxString
+            || !Finite(Section.StartTime) || Section.StartTime < 0.0f
+            || Section.StartTime >= Duration || Section.StartTime <= PreviousStart
+            || !Names.insert(Section.Name).second)
+        {
+            Report(OutError, ESkeletalAssetError::InvalidData);
+            return false;
+        }
+        PreviousStart = Section.StartTime;
+    }
+    for (const FAnimationMontageSection& Section : Montage.Sections)
+    {
+        if (!Section.NextSection.empty() && !Names.contains(Section.NextSection))
+        {
+            Report(OutError, ESkeletalAssetError::InvalidData);
+            return false;
+        }
+    }
+    for (const FAnimationNotifyData& Notify : Montage.Notifies)
+    {
+        if (Notify.Name.empty() || Notify.Name.size() > MaxString
+            || !Finite(Notify.BeginTime) || !Finite(Notify.EndTime)
+            || Notify.BeginTime < 0.0f || Notify.EndTime < Notify.BeginTime
+            || Notify.EndTime > Duration)
+        {
+            Report(OutError, ESkeletalAssetError::InvalidData);
+            return false;
+        }
+    }
+    return true;
+}
+
 bool SaveSkeletonToFile(const std::filesystem::path& FilePath, const FSkeletonData& Skeleton,
     ESkeletalAssetError* OutError)
 {
@@ -471,7 +567,7 @@ bool SaveSkeletalMeshToFile(const std::filesystem::path& FilePath, const FSkelet
     ESkeletalAssetError* OutError)
 {
     if (!ValidateSkeletalMesh(Mesh, nullptr, OutError)) return false;
-    FWriter Writer; WriteHeader(Writer, SkeletalMeshMagic);
+    FWriter Writer; WriteHeader(Writer, SkeletalMeshMagic, SkeletalMeshFormatVersion);
     if (!Writer.String(Mesh.SkeletonAsset.ToString())) return false;
     Writer.U32(static_cast<uint32>(Mesh.Vertices.size())); Writer.U32(static_cast<uint32>(Mesh.Indices.size()));
     Writer.U32(static_cast<uint32>(Mesh.Sections.size())); Writer.Vector3(Mesh.Bounds.Min); Writer.Vector3(Mesh.Bounds.Max);
@@ -487,6 +583,9 @@ bool SaveSkeletalMeshToFile(const std::filesystem::path& FilePath, const FSkelet
         Writer.U32(Section.FirstIndex); Writer.U32(Section.IndexCount);
         if (!Writer.String(Section.MaterialSlotName)) return false;
     }
+    Writer.U32(static_cast<uint32>(Mesh.DefaultMaterials.size()));
+    for (const FAssetPath& Material : Mesh.DefaultMaterials)
+        if (!Writer.String(Material.ToString())) return false;
     return SaveBytes(FilePath, Writer.Take(), OutError);
 }
 
@@ -494,7 +593,8 @@ bool LoadSkeletalMeshFromFile(const std::filesystem::path& FilePath, FSkeletalMe
     ESkeletalAssetError* OutError)
 {
     std::vector<uint8> Data; if (!LoadBytes(FilePath, Data, OutError)) return false;
-    FReader Reader(Data); if (!ReadHeader(Reader, SkeletalMeshMagic, OutError)) return false;
+    FReader Reader(Data); uint32 Version = 0;
+    if (!ReadHeader(Reader, SkeletalMeshMagic, OutError, SkeletalMeshFormatVersion, &Version)) return false;
     std::string SkeletonPath; uint32 Vertices = 0, Indices = 0, Sections = 0;
     if (!Reader.String(SkeletonPath) || !Reader.U32(Vertices) || !Reader.U32(Indices) || !Reader.U32(Sections)
         || Vertices == 0 || Vertices > MaxVertices || Indices == 0 || Indices > MaxIndices || Sections == 0)
@@ -516,6 +616,19 @@ bool LoadSkeletalMeshFromFile(const std::filesystem::path& FilePath, FSkeletalMe
     for (FStaticMeshSection& Section : Value.Sections)
         if (!Reader.U32(Section.FirstIndex) || !Reader.U32(Section.IndexCount) || !Reader.String(Section.MaterialSlotName))
         { Report(OutError, ESkeletalAssetError::InvalidArchive); return false; }
+    if (Version >= 2)
+    {
+        uint32 MaterialCount = 0;
+        if (!Reader.U32(MaterialCount) || (MaterialCount != 0 && MaterialCount != Sections))
+        { Report(OutError, ESkeletalAssetError::InvalidArchive); return false; }
+        Value.DefaultMaterials.resize(MaterialCount);
+        for (FAssetPath& Material : Value.DefaultMaterials)
+        {
+            std::string Path;
+            if (!Reader.String(Path) || (!Path.empty() && !FAssetPath::TryParse(Path, Material)))
+            { Report(OutError, ESkeletalAssetError::InvalidArchive); return false; }
+        }
+    }
     if (Reader.Remaining() != 0) { Report(OutError, ESkeletalAssetError::TrailingData); return false; }
     if (!ValidateSkeletalMesh(Value, nullptr, OutError)) return false;
     OutMesh = std::move(Value); return true;
@@ -577,6 +690,97 @@ bool LoadAnimationClipFromFile(const std::filesystem::path& FilePath, FAnimation
     if (Reader.Remaining() != 0) { Report(OutError, ESkeletalAssetError::TrailingData); return false; }
     if (!ValidateAnimationClip(Value, nullptr, OutError)) return false;
     OutClip = std::move(Value); return true;
+}
+
+bool SaveAnimationSetToFile(const std::filesystem::path& FilePath,
+    const FAnimationSetData& AnimationSet, ESkeletalAssetError* OutError)
+{
+    if (!ValidateAnimationSet(AnimationSet, OutError)) return false;
+    FWriter Writer; WriteHeader(Writer, AnimationSetMagic);
+    if (!Writer.String(AnimationSet.SkeletonAsset.ToString())
+        || !Writer.String(AnimationSet.IdleAnimation.ToString())
+        || !Writer.String(AnimationSet.WalkAnimation.ToString())
+        || !Writer.String(AnimationSet.JumpAnimation.ToString())) return false;
+    return SaveBytes(FilePath, Writer.Take(), OutError);
+}
+
+bool LoadAnimationSetFromFile(const std::filesystem::path& FilePath,
+    FAnimationSetData& OutAnimationSet, ESkeletalAssetError* OutError)
+{
+    std::vector<uint8> Data; if (!LoadBytes(FilePath, Data, OutError)) return false;
+    FReader Reader(Data); if (!ReadHeader(Reader, AnimationSetMagic, OutError)) return false;
+    std::string Skeleton, Idle, Walk, Jump;
+    FAnimationSetData Value;
+    if (!Reader.String(Skeleton) || !Reader.String(Idle) || !Reader.String(Walk)
+        || !Reader.String(Jump) || Reader.Remaining() != 0
+        || !FAssetPath::TryParse(Skeleton, Value.SkeletonAsset)
+        || !FAssetPath::TryParse(Idle, Value.IdleAnimation)
+        || !FAssetPath::TryParse(Walk, Value.WalkAnimation)
+        || !FAssetPath::TryParse(Jump, Value.JumpAnimation))
+    { Report(OutError, ESkeletalAssetError::InvalidArchive); return false; }
+    if (!ValidateAnimationSet(Value, OutError)) return false;
+    OutAnimationSet = std::move(Value); return true;
+}
+
+bool SaveAnimationMontageToFile(const std::filesystem::path& FilePath,
+    const FAnimationMontageData& Montage, ESkeletalAssetError* OutError)
+{
+    if (!ValidateAnimationMontage(Montage, OutError)) return false;
+    FWriter Writer; WriteHeader(Writer, AnimationMontageMagic);
+    if (!Writer.String(Montage.SkeletonAsset.ToString()) || !Writer.String(Montage.SlotName)) return false;
+    Writer.Float(Montage.BlendInTime); Writer.Float(Montage.BlendOutTime);
+    Writer.U32(static_cast<uint32>(Montage.Segments.size()));
+    Writer.U32(static_cast<uint32>(Montage.Sections.size()));
+    Writer.U32(static_cast<uint32>(Montage.Notifies.size()));
+    for (const FAnimationMontageSegment& Segment : Montage.Segments)
+    {
+        if (!Writer.String(Segment.AnimationAsset.ToString())) return false;
+        Writer.Float(Segment.StartTime); Writer.Float(Segment.EndTime); Writer.Float(Segment.PlayRate);
+    }
+    for (const FAnimationMontageSection& Section : Montage.Sections)
+    {
+        if (!Writer.String(Section.Name) || !Writer.String(Section.NextSection)) return false;
+        Writer.Float(Section.StartTime);
+    }
+    for (const FAnimationNotifyData& Notify : Montage.Notifies)
+    {
+        if (!Writer.String(Notify.Name)) return false;
+        Writer.Float(Notify.BeginTime); Writer.Float(Notify.EndTime);
+    }
+    return SaveBytes(FilePath, Writer.Take(), OutError);
+}
+
+bool LoadAnimationMontageFromFile(const std::filesystem::path& FilePath,
+    FAnimationMontageData& OutMontage, ESkeletalAssetError* OutError)
+{
+    std::vector<uint8> Data; if (!LoadBytes(FilePath, Data, OutError)) return false;
+    FReader Reader(Data); if (!ReadHeader(Reader, AnimationMontageMagic, OutError)) return false;
+    std::string Skeleton; uint32 Segments = 0, Sections = 0, Notifies = 0;
+    FAnimationMontageData Value;
+    if (!Reader.String(Skeleton) || !Reader.String(Value.SlotName)
+        || !Reader.Float(Value.BlendInTime) || !Reader.Float(Value.BlendOutTime)
+        || !Reader.U32(Segments) || !Reader.U32(Sections) || !Reader.U32(Notifies)
+        || Segments == 0 || Segments > MaxMontageSegments
+        || Sections == 0 || Sections > MaxMontageSections || Notifies > MaxNotifies
+        || !FAssetPath::TryParse(Skeleton, Value.SkeletonAsset))
+    { Report(OutError, ESkeletalAssetError::InvalidArchive); return false; }
+    Value.Segments.resize(Segments); Value.Sections.resize(Sections); Value.Notifies.resize(Notifies);
+    for (FAnimationMontageSegment& Segment : Value.Segments)
+    {
+        std::string Animation;
+        if (!Reader.String(Animation) || !Reader.Float(Segment.StartTime)
+            || !Reader.Float(Segment.EndTime) || !Reader.Float(Segment.PlayRate)
+            || !FAssetPath::TryParse(Animation, Segment.AnimationAsset)) return false;
+    }
+    for (FAnimationMontageSection& Section : Value.Sections)
+        if (!Reader.String(Section.Name) || !Reader.String(Section.NextSection)
+            || !Reader.Float(Section.StartTime)) return false;
+    for (FAnimationNotifyData& Notify : Value.Notifies)
+        if (!Reader.String(Notify.Name) || !Reader.Float(Notify.BeginTime)
+            || !Reader.Float(Notify.EndTime)) return false;
+    if (Reader.Remaining() != 0) { Report(OutError, ESkeletalAssetError::TrailingData); return false; }
+    if (!ValidateAnimationMontage(Value, OutError)) return false;
+    OutMontage = std::move(Value); return true;
 }
 
 bool BuildReferencePose(const FSkeletonData& Skeleton, FSkeletonPose& OutPose)

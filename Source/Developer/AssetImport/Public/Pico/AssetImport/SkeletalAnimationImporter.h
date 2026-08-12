@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Pico/Asset/SkeletalAnimation.h"
+#include "Pico/Asset/Material.h"
+#include "Pico/Asset/Texture.h"
 
 #include <filesystem>
 #include <string>
@@ -31,9 +33,23 @@ struct FSkeletalImportOptions
 
 struct FSkeletalImportResult
 {
+    struct FImportedTexture
+    {
+        std::string Name;
+        FTextureData Texture;
+    };
+    struct FImportedMaterial
+    {
+        std::string Name;
+        FMaterialData Material;
+        int32 BaseColorTextureIndex = -1;
+    };
+
     FSkeletonData Skeleton;
     FSkeletalMeshData Mesh;
     std::vector<FAnimationClipData> Animations;
+    std::vector<FImportedTexture> Textures;
+    std::vector<FImportedMaterial> Materials;
     std::vector<std::string> Warnings;
 };
 
