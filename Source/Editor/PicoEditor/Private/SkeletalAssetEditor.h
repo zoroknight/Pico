@@ -28,6 +28,8 @@ public:
     void OpenImport();
     void OpenAsset(const FAssetPath& AssetPath);
     void Draw();
+    bool IsOpen() const;
+    FAssetPath GetOpenedAsset() const;
 
 private:
     struct FImpl;

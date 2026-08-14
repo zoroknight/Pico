@@ -926,4 +926,14 @@ void FSkeletalAssetEditor::Draw()
     }
     ImGui::End();
 }
+
+bool FSkeletalAssetEditor::IsOpen() const
+{
+    return Impl->bOpen;
+}
+
+FAssetPath FSkeletalAssetEditor::GetOpenedAsset() const
+{
+    return Impl->bOpen ? Impl->OpenedAssetPath : FAssetPath {};
+}
 }

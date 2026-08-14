@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include <Windows.h>
 #include <commdlg.h>
+#include <shobjidl.h>
 #endif
 
 #include <algorithm>
@@ -10,6 +11,76 @@
 
 namespace Pico
 {
+std::optional<std::filesystem::path> OpenProjectFileDialog()
+{
+#if defined(_WIN32)
+    std::array<wchar_t, 32768> Buffer {};
+    OPENFILENAMEW Dialog {};
+    Dialog.lStructSize = sizeof(Dialog);
+    Dialog.hwndOwner = GetActiveWindow();
+    Dialog.lpstrFilter = L"Pico Project (*.pico)\0*.pico\0All Files (*.*)\0*.*\0\0";
+    Dialog.lpstrFile = Buffer.data();
+    Dialog.nMaxFile = static_cast<DWORD>(Buffer.size());
+    Dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    Dialog.lpstrDefExt = L"pico";
+    if (GetOpenFileNameW(&Dialog) != FALSE)
+    {
+        return std::filesystem::path(Buffer.data());
+    }
+#endif
+    return std::nullopt;
+}
+
+std::optional<std::filesystem::path> OpenProjectFolderDialog()
+{
+#if defined(_WIN32)
+    const HRESULT InitializeResult = CoInitializeEx(
+        nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    const bool bUninitialize = SUCCEEDED(InitializeResult);
+    IFileOpenDialog* Dialog = nullptr;
+    const HRESULT CreateResult = CoCreateInstance(
+        CLSID_FileOpenDialog,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&Dialog));
+    std::optional<std::filesystem::path> Result;
+    if (SUCCEEDED(CreateResult) && Dialog != nullptr)
+    {
+        DWORD Options = 0;
+        if (SUCCEEDED(Dialog->GetOptions(&Options)))
+        {
+            Dialog->SetOptions(
+                Options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+        }
+        Dialog->SetTitle(L"Select Pico Project Folder");
+        if (SUCCEEDED(Dialog->Show(GetActiveWindow())))
+        {
+            IShellItem* Item = nullptr;
+            if (SUCCEEDED(Dialog->GetResult(&Item)) && Item != nullptr)
+            {
+                PWSTR FileSystemPath = nullptr;
+                if (SUCCEEDED(Item->GetDisplayName(
+                        SIGDN_FILESYSPATH, &FileSystemPath))
+                    && FileSystemPath != nullptr)
+                {
+                    Result = std::filesystem::path(FileSystemPath);
+                    CoTaskMemFree(FileSystemPath);
+                }
+                Item->Release();
+            }
+        }
+        Dialog->Release();
+    }
+    if (bUninitialize)
+    {
+        CoUninitialize();
+    }
+    return Result;
+#else
+    return std::nullopt;
+#endif
+}
+
 std::optional<std::filesystem::path> OpenObjFileDialog()
 {
 #if defined(_WIN32)

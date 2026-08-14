@@ -1,5 +1,7 @@
 #include "PicoEditorApp.h"
+#include "NativeFileDialog.h"
 
+#include "Pico/Editor/EditorProjectManager.h"
 #include "Pico/Core/Paths.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/ActorBlueprint.h"
@@ -19,17 +21,14 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
 namespace
 {
-#ifndef PICO_DEFAULT_PROJECT_FILE
-#define PICO_DEFAULT_PROJECT_FILE ""
-#endif
-
-std::filesystem::path FindProjectFile(int Argc, char** Argv)
+std::filesystem::path FindProjectSelection(int Argc, char** Argv)
 {
     constexpr std::string_view ProjectPrefix = "-project=";
     for (int Index = 1; Index < Argc; ++Index)
@@ -43,13 +42,12 @@ std::filesystem::path FindProjectFile(int Argc, char** Argv)
 
         const std::filesystem::path PositionalPath =
             std::filesystem::path(std::string(Argument));
-        if (!Argument.starts_with("-") && PositionalPath.extension() == ".pico")
+        if (!Argument.starts_with("-"))
         {
             return PositionalPath;
         }
     }
-
-    return std::filesystem::path(PICO_DEFAULT_PROJECT_FILE);
+    return {};
 }
 
 float FindUiScale(int Argc, char** Argv)
@@ -99,6 +97,163 @@ void ApplyEditorStyle(float Scale)
     Style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.13f, 0.34f, 0.31f, 1.0f);
     Style.ScaleAllSizes(Scale);
 }
+
+void PresentImGuiFrame(GLFWwindow* Window, const ImGuiIO& IO)
+{
+    ImGui::Render();
+    int FramebufferWidth = 0;
+    int FramebufferHeight = 0;
+    glfwGetFramebufferSize(Window, &FramebufferWidth, &FramebufferHeight);
+    glViewport(0, 0, FramebufferWidth, FramebufferHeight);
+    glClearColor(0.045f, 0.05f, 0.055f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    glfwSwapBuffers(Window);
+    if ((IO.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0)
+    {
+        GLFWwindow* BackupContext = glfwGetCurrentContext();
+        ImGui::UpdatePlatformWindows();
+        ImGui::RenderPlatformWindowsDefault();
+        glfwMakeContextCurrent(BackupContext);
+    }
+}
+
+std::optional<std::filesystem::path> RunProjectBrowser(
+    GLFWwindow* Window,
+    Pico::FEditorProjectHistory& History,
+    const std::filesystem::path& SettingsFile,
+    std::string InitialMessage)
+{
+    std::optional<std::filesystem::path> SelectedProject;
+    int SelectedRecent = History.GetRecentProjects().empty() ? -1 : 0;
+    std::string Message = std::move(InitialMessage);
+    glfwSetWindowTitle(Window, "Pico Project Browser");
+    while (!SelectedProject.has_value() && !glfwWindowShouldClose(Window))
+    {
+        glfwPollEvents();
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        const ImGuiViewport* Viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(
+            Viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(760.0f, 500.0f), ImGuiCond_Always);
+        ImGui::Begin(
+            "Pico Project Browser",
+            nullptr,
+            ImGuiWindowFlags_NoCollapse
+                | ImGuiWindowFlags_NoResize
+                | ImGuiWindowFlags_NoDocking);
+        ImGui::TextUnformatted("Pico");
+        ImGui::TextDisabled("Open a project descriptor or a folder containing one .pico file");
+        ImGui::Separator();
+        ImGui::TextUnformatted("Recent Projects");
+
+        const auto& RecentProjects = History.GetRecentProjects();
+        if (RecentProjects.empty())
+        {
+            ImGui::TextDisabled("No recent projects");
+            ImGui::Dummy(ImVec2(0.0f, 250.0f));
+        }
+        else if (ImGui::BeginTable(
+                     "RecentProjects", 2,
+                     ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH
+                         | ImGuiTableFlags_ScrollY,
+                     ImVec2(0.0f, 285.0f)))
+        {
+            ImGui::TableSetupColumn("Project", ImGuiTableColumnFlags_WidthFixed, 190.0f);
+            ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableHeadersRow();
+            for (std::size_t Index = 0; Index < RecentProjects.size(); ++Index)
+            {
+                const std::filesystem::path& Project = RecentProjects[Index];
+                ImGui::PushID(static_cast<int>(Index));
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                const bool bSelected = SelectedRecent == static_cast<int>(Index);
+                if (ImGui::Selectable(
+                        Project.stem().string().c_str(), bSelected,
+                        ImGuiSelectableFlags_SpanAllColumns
+                            | ImGuiSelectableFlags_AllowDoubleClick))
+                {
+                    SelectedRecent = static_cast<int>(Index);
+                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                    {
+                        SelectedProject = Project;
+                    }
+                }
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(Project.string().c_str());
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+
+        if (!Message.empty())
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.38f, 0.30f, 1.0f));
+            ImGui::TextWrapped("%s", Message.c_str());
+            ImGui::PopStyleColor();
+        }
+        else
+        {
+            ImGui::TextDisabled("One editor process hosts one project.");
+        }
+
+        const auto ResolveSelection = [&](const std::filesystem::path& Selection)
+        {
+            const Pico::FEditorProjectResolution Resolution =
+                Pico::ResolveEditorProjectPath(Selection);
+            if (Resolution.IsResolved())
+            {
+                SelectedProject = Resolution.ProjectFile;
+                Message.clear();
+            }
+            else
+            {
+                Message = Resolution.Message;
+            }
+        };
+
+        ImGui::BeginDisabled(
+            SelectedRecent < 0
+            || SelectedRecent >= static_cast<int>(RecentProjects.size()));
+        if (ImGui::Button("Open Selected"))
+        {
+            SelectedProject = RecentProjects[static_cast<std::size_t>(SelectedRecent)];
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Remove"))
+        {
+            const std::filesystem::path Removed =
+                RecentProjects[static_cast<std::size_t>(SelectedRecent)];
+            History.Remove(Removed);
+            History.Save(SettingsFile);
+            SelectedRecent = History.GetRecentProjects().empty() ? -1 : 0;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Open Project File..."))
+        {
+            if (const auto File = Pico::OpenProjectFileDialog()) ResolveSelection(*File);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Browse Folder..."))
+        {
+            if (const auto Folder = Pico::OpenProjectFolderDialog()) ResolveSelection(*Folder);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Exit"))
+        {
+            glfwSetWindowShouldClose(Window, GLFW_TRUE);
+        }
+        ImGui::End();
+
+        PresentImGuiFrame(Window, ImGui::GetIO());
+    }
+    return SelectedProject;
+}
 }
 
 int main(int Argc, char** Argv)
@@ -133,6 +288,11 @@ int main(int Argc, char** Argv)
     bool bImGuiOpenGLInitialized = false;
     bool bRendererInitialized = false;
     std::string LayoutIniPath;
+    Pico::FEditorProjectHistory ProjectHistory;
+    const std::filesystem::path EditorSettingsFile =
+        Pico::GetEditorUserSettingsFile();
+    ProjectHistory.Load(EditorSettingsFile);
+    bool bProjectChosen = false;
     int ExitCode = 1;
 
     try
@@ -174,15 +334,43 @@ int main(int Argc, char** Argv)
             throw std::runtime_error("ImGui OpenGL backend initialization failed");
         }
 
-        bRendererInitialized = ViewportRenderer.Initialize(&LoadOpenGLProcedure);
-        if (!bRendererInitialized)
+        std::filesystem::path ProjectFile;
+        std::string ProjectMessage;
+        const std::filesystem::path RequestedProject =
+            FindProjectSelection(Argc, Argv);
+        if (!RequestedProject.empty())
         {
-            throw std::runtime_error("Scene viewport renderer initialization failed");
+            const Pico::FEditorProjectResolution Resolution =
+                Pico::ResolveEditorProjectPath(RequestedProject);
+            ProjectFile = Resolution.ProjectFile;
+            ProjectMessage = Resolution.Message;
         }
-
-        const std::filesystem::path ProjectFile = FindProjectFile(Argc, Argv);
-        ExitCode = EngineLoop.PreInit(Argc, Argv, ProjectFile);
-        if (ExitCode == 0)
+        if (ProjectFile.empty())
+        {
+            const std::optional<std::filesystem::path> BrowserSelection =
+                RunProjectBrowser(
+                    Window, ProjectHistory, EditorSettingsFile,
+                    std::move(ProjectMessage));
+            if (BrowserSelection.has_value())
+            {
+                ProjectFile = *BrowserSelection;
+            }
+        }
+        bProjectChosen = !ProjectFile.empty();
+        if (!bProjectChosen)
+        {
+            ExitCode = 0;
+        }
+        if (bProjectChosen)
+        {
+            bRendererInitialized = ViewportRenderer.Initialize(&LoadOpenGLProcedure);
+            if (!bRendererInitialized)
+            {
+                throw std::runtime_error("Scene viewport renderer initialization failed");
+            }
+            ExitCode = EngineLoop.PreInit(Argc, Argv, ProjectFile);
+        }
+        if (bProjectChosen && ExitCode == 0)
         {
             std::filesystem::path LayoutPath;
             if (Pico::FPaths::TryGetProjectWritePath(
@@ -199,24 +387,27 @@ int main(int Argc, char** Argv)
                 }
             }
         }
-        if (ExitCode == 0)
+        if (bProjectChosen && ExitCode == 0)
         {
             ExitCode = EngineLoop.Init();
         }
 #if defined(PICO_EDITOR_WITH_SANDBOX)
-        if (ExitCode == 0 && !PicoSandbox::RegisterSandboxGameplayClasses())
+        if (bProjectChosen && ExitCode == 0
+            && !PicoSandbox::RegisterSandboxGameplayClasses())
         {
             throw std::runtime_error("project gameplay class registration failed");
         }
 #endif
-        if (ExitCode == 0
+        if (bProjectChosen && ExitCode == 0
             && !Pico::CompileProjectActorBlueprints(EngineLoop.GetAssetRegistry()))
         {
             throw std::runtime_error("project Actor Blueprint compilation failed");
         }
 
-        if (ExitCode == 0)
+        if (bProjectChosen && ExitCode == 0)
         {
+            ProjectHistory.Add(ProjectFile);
+            ProjectHistory.Save(EditorSettingsFile);
             Pico::FPicoEditorApp App(&EngineLoop, &ViewportRenderer, Window);
             while (!EngineLoop.ShouldExit())
             {
@@ -234,22 +425,7 @@ int main(int Argc, char** Argv)
 
                 App.Draw();
 
-                ImGui::Render();
-                int FramebufferWidth = 0;
-                int FramebufferHeight = 0;
-                glfwGetFramebufferSize(Window, &FramebufferWidth, &FramebufferHeight);
-                glViewport(0, 0, FramebufferWidth, FramebufferHeight);
-                glClearColor(0.045f, 0.05f, 0.055f, 1.0f);
-                glClear(GL_COLOR_BUFFER_BIT);
-                ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-                glfwSwapBuffers(Window);
-                if ((IO.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0)
-                {
-                    GLFWwindow* BackupContext = glfwGetCurrentContext();
-                    ImGui::UpdatePlatformWindows();
-                    ImGui::RenderPlatformWindowsDefault();
-                    glfwMakeContextCurrent(BackupContext);
-                }
+                PresentImGuiFrame(Window, IO);
                 if (App.ShouldClose())
                 {
                     break;

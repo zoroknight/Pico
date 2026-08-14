@@ -7,7 +7,7 @@ Pico 是一个以学习为目的、参考 Unreal Engine 架构设计的小型 C+
 
 Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小而清晰，同时保留可以完整运行和继续扩展的架构边界。
 
-![Pico 编辑器在独立游戏窗口中运行当前世界](Docs/Images/PicoEditorStandalonePlay.png)
+![Pico 编辑器场景工作区与恢复的骨骼资产预览](Docs/Images/PicoEditorSkeletalWorkspace.png)
 
 ## 当前状态
 
@@ -37,6 +37,8 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   与原生组件的反射属性覆盖编译为生成 `PClass`、CDO 和默认子对象模板，并在关卡中放置和持久化该类型。
 - Actor Blueprint 使用编辑器同进程的独立系统窗口；其预览提供带箭头的局部 XYZ 轴，主编辑器视口提供
   可关闭的世界原点轴线与右上角方向控件，并支持按住方向控件拖动视角。
+- 无参数启动时进入项目浏览器，支持最近项目、选择 `.pico` 或只包含一个描述符的项目文件夹，并按项目
+  恢复最后打开的 World、Actor Blueprint 和 Skeletal Preview。
 - 将骨骼模型最终变换拆为 Actor World、Component Relative 和 Character Profile Visual 三层，使源模型
   朝向修正不再改变碰撞、移动参考系或未来需要同步的角色朝向。
 - 按 UE 第三人称模板拆分旋转职责：`DoMove` 以 ControlRotation Yaw 生成世界 Forward/Right 输入，
@@ -267,6 +269,9 @@ powershell -ExecutionPolicy Bypass -File .\Scripts\SetupWindows.ps1
 .\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
 
+直接启动不带参数的 `PicoEditor.exe` 会进入 Project Browser。它接受 `.pico` 文件或只包含一个描述符的
+项目文件夹，并恢复该项目上次的编辑器会话。
+
 编辑器默认最大化，默认 UI 缩放为 `1.4`。需要更大的界面时可以指定：
 
 ```powershell
@@ -483,6 +488,7 @@ private:
 - [角色控制、第三人称模板与摄像机策略](Docs/Month08_8_CharacterControlAndCameraPolicy.md)
 - [Data-Only Actor Blueprint 与角色装配编辑器](Docs/Month08_9_DataOnlyActorBlueprint.md)
 - [编辑器视口方向与独立资产窗口](Docs/Month08_10_EditorViewportOrientation.md)
+- [项目浏览器与编辑器会话恢复](Docs/Month08_11_ProjectBrowserAndEditorSession.md)
 - [MatchState、Gameplay 事件与编辑器绑定](Docs/Month07_4_MatchStateGameplayEventsAndBindings.md)
 - [Development、Installed 与 Staged 运行布局](Docs/Month07_5_DevelopmentInstalledAndStagedLayouts.md)
 - [第三个月编辑器视口](Docs/Month03_10_Editor3DViewport.md)

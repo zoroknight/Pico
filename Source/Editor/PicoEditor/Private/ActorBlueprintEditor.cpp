@@ -602,4 +602,14 @@ void FActorBlueprintEditor::Draw()
     Impl->DrawCreatePopup();
     Impl->DrawEditor();
 }
+
+bool FActorBlueprintEditor::IsOpen() const
+{
+    return Impl->bOpen;
+}
+
+FAssetPath FActorBlueprintEditor::GetOpenedAsset() const
+{
+    return Impl->bOpen ? Impl->OpenedAsset : FAssetPath {};
+}
 }

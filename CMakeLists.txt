@@ -593,12 +593,14 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Private/EditorAssetService.cpp
         Source/Editor/PicoEditor/Private/EditorCommandService.cpp
         Source/Editor/PicoEditor/Private/EditorPropertyService.cpp
+        Source/Editor/PicoEditor/Private/EditorProjectManager.cpp
         Source/Editor/PicoEditor/Private/EditorSceneClipboard.cpp
         Source/Editor/PicoEditor/Private/EditorSelection.cpp
         Source/Editor/PicoEditor/Private/EditorTransformService.cpp
         Source/Editor/PicoEditor/Private/EditorTransactionManager.cpp
         Source/Editor/PicoEditor/Private/EditorWorldDocument.cpp
         Source/Editor/PicoEditor/Public/Pico/Editor/EditorPropertyService.h
+        Source/Editor/PicoEditor/Public/Pico/Editor/EditorProjectManager.h
         Source/Editor/PicoEditor/Public/Pico/Editor/AssetDependencyService.h
     )
 
@@ -688,13 +690,8 @@ if(PICO_BUILD_INSPECTOR)
             PicoAssetImport
     )
 
-    target_compile_definitions(PicoEditor
-        PRIVATE
-            PICO_DEFAULT_PROJECT_FILE="${PICO_ROOT_DIR}/Projects/PicoSandbox/PicoSandbox.pico"
-    )
-
     if(WIN32)
-        target_link_libraries(PicoEditor PRIVATE comdlg32)
+        target_link_libraries(PicoEditor PRIVATE comdlg32 ole32 shell32)
     endif()
 
     set_target_properties(PicoEditor PROPERTIES

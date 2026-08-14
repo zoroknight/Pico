@@ -764,6 +764,10 @@ P2P/NAT 穿透和商业级拥塞控制。对应概念保留扩展点，但不得
 Actor Blueprint 以编辑器同进程的独立原生窗口打开，并用带箭头的局部轴明确 Actor `+X/+Y/+Z`。
 Standalone Play 仍保持独立游戏进程，不能与资产编辑器的平台窗口生命周期混为一谈。
 
+项目入口与会话恢复也已完成：无参数启动进入 Project Browser，用户级设置保存最近 8 个 `.pico`；
+项目级 `Saved/Editor/EditorSession.ini` 恢复最后 World、Actor Blueprint 与 Skeletal Preview。项目切换
+通过新 PicoEditor 进程完成，不在已注册项目类、CDO 和 Game Module 的进程内热替换项目。
+
 PicoSandbox 已增加持久化 `StarterWorld` 与 `/Game/StarterContent` 基础网格/材质。地面、墙、动态箱子、PlayerStart 和灯光属于关卡场景对象，不再由 GameMode 在 BeginPlay 临时生成；这保证编辑器预览、Standalone、网络复制与未来 Cook/Package 使用同一份 World 数据。
 
 目标：产出仓库外可运行的公网双人 Demo。

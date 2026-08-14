@@ -80,6 +80,9 @@ private:
 
     void HandleShortcuts();
     void DrawFileMenu();
+    void OpenProject(bool bSelectFolder);
+    void PerformOpenProject();
+    void SaveEditorSession(bool bForce = false);
     void DrawEditMenu();
     void DrawViewMenu();
     void DrawProjectSettings();
@@ -191,6 +194,7 @@ private:
     FActorBlueprintEditor ActorBlueprintEditor;
     FEditorAssetWorkflowController AssetWorkflow;
     FProcessHandle GameProcess;
+    std::filesystem::path PendingProjectFile;
     std::filesystem::path GameProcessLogFile;
     FAssetPath PendingWorldAssetPath;
     FObjectHandle RenameObjectHandle;
@@ -231,5 +235,6 @@ private:
     bool bShouldClose = false;
     int PendingDocumentAction = 0;
     std::string WindowTitle;
+    std::string SavedSessionFingerprint;
 };
 }

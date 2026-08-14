@@ -1,4 +1,5 @@
 #include "Pico/Editor/EditorCommandService.h"
+#include "Pico/Editor/EditorProjectManager.h"
 #include "Pico/Editor/EditorSceneClipboard.h"
 #include "Pico/Editor/EditorSelection.h"
 #include "Pico/Editor/EditorTransformService.h"
@@ -27,12 +28,81 @@
 #include "TestRunner.h"
 
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace
 {
+void TestEditorProjectManager(FTestRunner& Runner)
+{
+    const std::filesystem::path Root =
+        std::filesystem::temp_directory_path()
+        / "PicoEditorProjectManagerTests";
+    std::error_code Error;
+    std::filesystem::remove_all(Root, Error);
+    std::filesystem::create_directories(Root, Error);
+    const std::filesystem::path ProjectFile = Root / "LearningProject.pico";
+    {
+        std::ofstream File(ProjectFile);
+        File << "[Project]\nName=LearningProject\nFileVersion=1\n";
+    }
+
+    Pico::FEditorProjectResolution Resolution =
+        Pico::ResolveEditorProjectPath(Root);
+    Runner.Expect(
+        Resolution.IsResolved()
+            && Resolution.ProjectFile.filename() == ProjectFile.filename(),
+        "A folder containing one .pico descriptor resolves to that project");
+
+    const std::filesystem::path SecondProject = Root / "Second.pico";
+    {
+        std::ofstream File(SecondProject);
+        File << "[Project]\nName=Second\nFileVersion=1\n";
+    }
+    Resolution = Pico::ResolveEditorProjectPath(Root);
+    Runner.Expect(
+        !Resolution.IsResolved() && Resolution.Candidates.size() == 2,
+        "A folder containing multiple descriptors requires an explicit project file");
+
+    const std::filesystem::path SettingsFile = Root / "EditorSettings.ini";
+    Pico::FEditorProjectHistory History;
+    History.Add(ProjectFile);
+    History.Add(SecondProject);
+    History.Add(ProjectFile);
+    Runner.Expect(
+        History.GetRecentProjects().size() == 2
+            && History.GetRecentProjects().front().filename()
+                == ProjectFile.filename()
+            && History.Save(SettingsFile),
+        "Recent project history de-duplicates and preserves most-recent order");
+    Pico::FEditorProjectHistory LoadedHistory;
+    Runner.Expect(
+        LoadedHistory.Load(SettingsFile)
+            && LoadedHistory.GetRecentProjects().size() == 2
+            && LoadedHistory.GetRecentProjects().front().filename()
+                == ProjectFile.filename(),
+        "Recent project history round trips through user settings");
+
+    Pico::FEditorSessionState Session;
+    Pico::FAssetPath::TryParse(
+        "/Game/Maps/StarterWorld.pworld", Session.LastWorld);
+    Pico::FAssetPath::TryParse(
+        "/Game/Characters/BP_Knight.pblueprint",
+        Session.OpenActorBlueprint);
+    const std::filesystem::path SessionFile = Root / "EditorSession.ini";
+    Pico::FEditorSessionState LoadedSession;
+    Runner.Expect(
+        Session.Save(SessionFile)
+            && LoadedSession.Load(SessionFile)
+            && LoadedSession.LastWorld == Session.LastWorld
+            && LoadedSession.OpenActorBlueprint == Session.OpenActorBlueprint,
+        "Editor session restores the last World and open Actor Blueprint");
+
+    std::filesystem::remove_all(Root, Error);
+}
+
 void TestViewportRenderOptionDefaults(FTestRunner& Runner)
 {
     const Pico::FSceneViewportRenderOptions Options;
@@ -1096,6 +1166,7 @@ void TestEditorWorldDocument(FTestRunner& Runner)
 int main()
 {
     FTestRunner Runner;
+    TestEditorProjectManager(Runner);
     TestViewportRenderOptionDefaults(Runner);
     TestEditorCommandService(Runner);
     TestEditorTransactions(Runner);

@@ -9,7 +9,7 @@ serialization, worlds, actors, components, transforms, editor tooling, and rende
 Pico is not intended to compete with production engines. It deliberately keeps each system small
 enough to study while preserving clear ownership boundaries and an end-to-end runtime.
 
-![Pico Editor playing the current world in a standalone game window](Docs/Images/PicoEditorStandalonePlay.png)
+![Pico Editor scene workspace with a restored skeletal asset preview](Docs/Images/PicoEditorSkeletalWorkspace.png)
 
 ## Current State
 
@@ -63,6 +63,8 @@ The current implementation can:
   templates, then spawn or persist that stable generated class in a World.
 - Open the Actor Blueprint editor as a separate native platform window, use arrowed local axes in its
   preview, and inspect or rotate the main editor view with optional world axes and an orientation gizmo.
+- Launch into a project browser when no descriptor is supplied, keep user-level recent projects, accept
+  either a `.pico` file or its containing folder, and restore each project's last World and open asset editors.
 - Compose skeletal rendering from Actor world, component-relative, and Character Profile visual
   transforms so source-axis correction does not alter collision, movement, or future replicated facing.
 - Match the UE third-person template's rotation ownership: `DoMove` converts ControlRotation yaw into
@@ -337,6 +339,9 @@ Start the editor:
 .\Build\Debug\PicoEditor.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
 
+Starting `PicoEditor.exe` without arguments opens the Project Browser. It accepts a `.pico` file or a
+folder containing exactly one descriptor, and restores the project's previous editor session.
+
 The editor starts maximized. Its default UI scale is `1.4`; override it when needed:
 
 ```powershell
@@ -601,6 +606,7 @@ See:
 - [Character Control And Camera Policy](Docs/Month08_8_CharacterControlAndCameraPolicy.md)
 - [Data-Only Actor Blueprint And Character Assembly](Docs/Month08_9_DataOnlyActorBlueprint.md)
 - [Editor Viewport Orientation And Native Asset Windows](Docs/Month08_10_EditorViewportOrientation.md)
+- [Project Browser And Editor Session Restore](Docs/Month08_11_ProjectBrowserAndEditorSession.md)
 - [Class Default Objects and Unified Construction](Docs/Month03_13_ClassDefaultObjects.md)
 - [Default Subobject Templates](Docs/Month03_14_DefaultSubobjects.md)
 - [Native Delegates and Weak Object Binding](Docs/Month03_15_NativeDelegates.md)

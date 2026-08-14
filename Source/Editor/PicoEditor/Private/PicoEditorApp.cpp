@@ -6,6 +6,7 @@
 #include "Pico/Core/Config.h"
 #include "Pico/Core/PlatformProcess.h"
 #include "Pico/Core/Math/MathUtility.h"
+#include "Pico/Editor/EditorProjectManager.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/ActorBlueprint.h"
@@ -36,6 +37,7 @@
 #include <cctype>
 #include <cstdint>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -50,6 +52,7 @@ enum EDocumentAction
     DocumentActionNone,
     DocumentActionNew,
     DocumentActionOpen,
+    DocumentActionOpenProject,
     DocumentActionExit
 };
 
@@ -208,21 +211,42 @@ FPicoEditorApp::FPicoEditorApp(
             "StartupMap",
             Config.GetString("Game", "DefaultMap", ""))
         : std::string {};
-    FAssetPath StartupAssetPath;
-    if (FAssetPath::TryParse(StartupMap, StartupAssetPath))
+    std::filesystem::path SessionPath;
+    FEditorSessionState Session;
+    const bool bHasSessionPath = FPaths::TryGetProjectWritePath(
+        EProjectWriteRoot::Saved,
+        "Editor/EditorSession.ini",
+        SessionPath);
+    const bool bHasSession = bHasSessionPath && Session.Load(SessionPath);
+    bool bOpenedWorld = false;
+    if (bHasSession && Session.LastWorld.IsValid())
     {
-        FEditorDocumentResult OpenResult = WorldDocument.Open(StartupAssetPath);
-        SetStatus(std::move(OpenResult.Message), !OpenResult.bSucceeded);
+        FEditorDocumentResult OpenResult = WorldDocument.Open(Session.LastWorld);
+        bOpenedWorld = OpenResult.bSucceeded;
+        SetStatus(
+            bOpenedWorld
+                ? "Restored editor session World "
+                    + std::string(Session.LastWorld.ToString())
+                : "Could not restore the previous World; using StartupMap",
+            false,
+            !bOpenedWorld);
         if (OpenResult.bSucceeded)
         {
             FinishDocumentChange();
         }
-        else
+    }
+    FAssetPath StartupAssetPath;
+    if (!bOpenedWorld && FAssetPath::TryParse(StartupMap, StartupAssetPath))
+    {
+        FEditorDocumentResult OpenResult = WorldDocument.Open(StartupAssetPath);
+        bOpenedWorld = OpenResult.bSucceeded;
+        SetStatus(std::move(OpenResult.Message), !OpenResult.bSucceeded);
+        if (bOpenedWorld)
         {
-            Select(GetWorld());
+            FinishDocumentChange();
         }
     }
-    else
+    if (!bOpenedWorld)
     {
         PWorld* World = GetWorld();
         Select(World);
@@ -230,11 +254,21 @@ FPicoEditorApp::FPicoEditorApp(
             World != nullptr ? "New editor World is ready" : "No active editor World",
             World == nullptr);
     }
+    if (bHasSession && Session.OpenSkeletalAsset.IsValid())
+    {
+        SkeletalAssetEditor.OpenAsset(Session.OpenSkeletalAsset);
+    }
+    if (bHasSession && Session.OpenActorBlueprint.IsValid())
+    {
+        ActorBlueprintEditor.OpenAsset(Session.OpenActorBlueprint);
+    }
+    SaveEditorSession(true);
     UpdateWindowTitle();
 }
 
 FPicoEditorApp::~FPicoEditorApp()
 {
+    SaveEditorSession(true);
     StopGame(false);
 }
 
@@ -487,6 +521,7 @@ void FPicoEditorApp::Draw()
     }
 
     ProcessDeferredActions();
+    SaveEditorSession();
     UpdateWindowTitle();
 }
 
@@ -940,6 +975,15 @@ void FPicoEditorApp::DrawFileMenu()
         return;
     }
 
+    if (ImGui::MenuItem("Open Project..."))
+    {
+        OpenProject(false);
+    }
+    if (ImGui::MenuItem("Open Project Folder..."))
+    {
+        OpenProject(true);
+    }
+    ImGui::Separator();
     if (ImGui::MenuItem("New World", "Ctrl+N"))
     {
         NewWorld();
@@ -1430,6 +1474,7 @@ void FPicoEditorApp::DrawUnsavedChangesPopup()
     {
         PendingDocumentAction = DocumentActionNone;
         PendingWorldAssetPath = {};
+        PendingProjectFile.clear();
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
@@ -2041,8 +2086,92 @@ void FPicoEditorApp::ContinueDocumentAction(int Action)
     {
     case DocumentActionNew: PerformNewWorld(); break;
     case DocumentActionOpen: PerformOpenWorld(); break;
+    case DocumentActionOpenProject: PerformOpenProject(); break;
     case DocumentActionExit: bShouldClose = true; break;
     default: break;
+    }
+}
+
+void FPicoEditorApp::OpenProject(bool bSelectFolder)
+{
+    const std::optional<std::filesystem::path> DialogSelection = bSelectFolder
+        ? OpenProjectFolderDialog()
+        : OpenProjectFileDialog();
+    if (!DialogSelection.has_value())
+    {
+        return;
+    }
+    const FEditorProjectResolution Resolution =
+        ResolveEditorProjectPath(*DialogSelection);
+    if (!Resolution.IsResolved())
+    {
+        SetStatus(Resolution.Message, true);
+        return;
+    }
+    if (Resolution.ProjectFile == FPaths::GetProjectFile())
+    {
+        SetStatus("The selected project is already open");
+        return;
+    }
+    PendingProjectFile = Resolution.ProjectFile;
+    RequestDocumentAction(DocumentActionOpenProject);
+}
+
+void FPicoEditorApp::PerformOpenProject()
+{
+    if (PendingProjectFile.empty())
+    {
+        return;
+    }
+    SaveEditorSession(true);
+    StopGame(false);
+    std::string Error;
+    FProcessHandle NewEditor = FPlatformProcess::CreateProcess(
+        FPaths::GetExecutablePath(),
+        {PendingProjectFile.string()},
+        FPaths::GetEngineRootDir(),
+        &Error);
+    if (!NewEditor.IsValid())
+    {
+        SetStatus("Could not open project: " + Error, true);
+        PendingProjectFile.clear();
+        return;
+    }
+    PendingProjectFile.clear();
+    bShouldClose = true;
+}
+
+void FPicoEditorApp::SaveEditorSession(bool bForce)
+{
+    FEditorSessionState Session;
+    if (WorldDocument.HasAssetPath())
+    {
+        Session.LastWorld = WorldDocument.GetAssetPath();
+    }
+    if (ActorBlueprintEditor.IsOpen())
+    {
+        Session.OpenActorBlueprint = ActorBlueprintEditor.GetOpenedAsset();
+    }
+    if (SkeletalAssetEditor.IsOpen())
+    {
+        Session.OpenSkeletalAsset = SkeletalAssetEditor.GetOpenedAsset();
+    }
+    const std::string Fingerprint =
+        std::string(Session.LastWorld.ToString()) + "|"
+        + std::string(Session.OpenActorBlueprint.ToString()) + "|"
+        + std::string(Session.OpenSkeletalAsset.ToString());
+    if (!bForce && Fingerprint == SavedSessionFingerprint)
+    {
+        return;
+    }
+    std::filesystem::path SessionPath;
+    if (FPaths::TryGetProjectWritePath(
+            EProjectWriteRoot::Saved,
+            "Editor/EditorSession.ini",
+            SessionPath)
+        && Session.Save(SessionPath))
+    {
+        SavedSessionFingerprint = Fingerprint;
     }
 }
 
