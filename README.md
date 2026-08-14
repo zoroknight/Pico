@@ -58,6 +58,16 @@ The current implementation can:
 - Edit Input and Gameplay defaults through `Edit -> Project Settings`, search project-native Actors
   through the Actor Class picker, and select a generated `.pcharprofile` instead of editing Pawn CDOs
   for every imported character.
+- Author `.pblueprint` Data-Only Actor types in a dedicated Components/Preview/Details editor; compile
+  reflected Actor and native-component overrides into a generated `PClass`, CDO, and default-subobject
+  templates, then spawn or persist that stable generated class in a World.
+- Open the Actor Blueprint editor as a separate native platform window, use arrowed local axes in its
+  preview, and inspect or rotate the main editor view with optional world axes and an orientation gizmo.
+- Compose skeletal rendering from Actor world, component-relative, and Character Profile visual
+  transforms so source-axis correction does not alter collision, movement, or future replicated facing.
+- Match the UE third-person template's rotation ownership: `DoMove` converts ControlRotation yaw into
+  world-space forward/right input, CharacterMovement turns the Actor toward movement, and SpringArm
+  evaluates an independent camera target rotation instead of writing ControlRotation into its relative transform.
 - Inspect the live Gameplay object chain, restart/destroy/repossess its Pawn, and reload the map from
   the standalone runtime's `Gameplay Debug` panel; inspect PlayerStart shape and validation in editor.
 - Create PlayerStart from the editor toolbar, review persistent green/yellow/red diagnostics in
@@ -339,6 +349,13 @@ Start the game runtime without editor UI:
 .\Build\Debug\PicoSandboxGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
 
+After changing shared Engine/Render code, rebuild both the editor and project runtime before Play.
+The editor intentionally rejects an older `PicoSandboxGame.exe` instead of mixing binary versions:
+
+```powershell
+cmake --build Build --config Release --target PicoEditor PicoSandboxGame --parallel 8
+```
+
 The project runtime reads `[Game] DefaultMap`, Gameplay class/profile defaults, and the Action/Axis mappings in `[Input]` from
 `Config/Pico.ini`. `[Game] Executable` selects the project program used by editor Play.
 `-map=/Game/Maps/Example.pworld` overrides the default map, and `-frames=N` supports automated
@@ -581,6 +598,9 @@ See:
 - [Skeletal Asset Preview And Import](Docs/Month08_5_SkeletalAssetPreview.md)
 - [Montage Lite And Character Assembly](Docs/Month08_6_MontageAndCharacterAssembly.md)
 - [Character Import, Playable Pawn, And Project Settings](Docs/Month08_7_CharacterImportAndProjectSettings.md)
+- [Character Control And Camera Policy](Docs/Month08_8_CharacterControlAndCameraPolicy.md)
+- [Data-Only Actor Blueprint And Character Assembly](Docs/Month08_9_DataOnlyActorBlueprint.md)
+- [Editor Viewport Orientation And Native Asset Windows](Docs/Month08_10_EditorViewportOrientation.md)
 - [Class Default Objects and Unified Construction](Docs/Month03_13_ClassDefaultObjects.md)
 - [Default Subobject Templates](Docs/Month03_14_DefaultSubobjects.md)
 - [Native Delegates and Weak Object Binding](Docs/Month03_15_NativeDelegates.md)
@@ -607,6 +627,9 @@ movement-facing rotation, and eight material overrides complete the third-person
 PicoSandbox now opens a persistent Starter World with reusable cube/PBR assets, an authored floor,
 walls, a dynamic crate, PlayerStart, and scene lights. Component material overrides take precedence
 over Character Profile and imported mesh defaults; slots without mesh sections are shown as unused.
+The Data-Only Actor Blueprint editor now separates reusable Actor/component defaults from level
+instances and gives PicoSandbox a generated default Pawn class. Event Graph behavior remains the
+later PicoGraph milestone rather than being coupled to this assembly workflow.
 The remaining learning path is:
 
 - Replication, RPC, transform synchronization, client prediction, and correction

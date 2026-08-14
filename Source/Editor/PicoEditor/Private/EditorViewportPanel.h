@@ -72,6 +72,8 @@ private:
     float CameraNearPlane = 1.0f;
     float CameraFarPlane = 10000.0f;
     bool bCameraCaptured = false;
+    bool bDrawWorldAxes = true;
+    bool bDrawOrientationGizmo = true;
     bool bIgnoreGizmoUntilRelease = false;
     bool bTransformChanged = false;
     FEditorTransformService* ActiveTransformService = nullptr;

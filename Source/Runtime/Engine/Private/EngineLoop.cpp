@@ -13,6 +13,7 @@
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/AnimInstance.h"
 #include "Pico/Engine/CameraComponent.h"
+#include "Pico/Engine/CameraActor.h"
 #include "Pico/Engine/CapsuleComponent.h"
 #include "Pico/Engine/Character.h"
 #include "Pico/Engine/CharacterMovementComponent.h"
@@ -329,6 +330,7 @@ int FEngineLoop::Init()
         || !PStaticMeshComponent::RegisterClass()
         || !PSkeletalMeshComponent::RegisterClass()
         || !PActor::RegisterClass()
+        || !PCameraActor::RegisterClass()
         || !PPawn::RegisterClass()
         || !PCharacter::RegisterClass()
         || !PController::RegisterClass()

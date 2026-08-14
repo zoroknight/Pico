@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Pico/Core/AssetPath.h"
+#include "Pico/Core/Math/Transform.h"
 
 #include <array>
 #include <filesystem>
@@ -23,6 +24,7 @@ struct FCharacterProfileData
     FAssetPath AnimationSet;
     FAssetPath DefaultMontage;
     std::array<FAssetPath, 8> MaterialOverrides;
+    FTransform MeshTransform;
 };
 
 bool ValidateCharacterProfile(

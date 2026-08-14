@@ -556,6 +556,12 @@ void TestRotationMath(FTestRunner& Runner)
         Yaw90.RotateVector(Pico::FVector3::ForwardVector).Equals(Pico::FVector3::RightVector),
         "Positive yaw rotates forward toward right");
 
+    const Pico::FQuat PitchUp = Pico::FRotator(-90.0f, 0.0f, 0.0f).Quaternion();
+    Runner.Expect(
+        PitchUp.RotateVector(Pico::FVector3::ForwardVector).Equals(
+            Pico::FVector3::UpVector),
+        "Negative pitch rotates forward toward up");
+
     const Pico::FRotator SourceRotation(10.0f, 45.0f, 20.0f);
     const Pico::FRotator RoundTripRotation = SourceRotation.Quaternion().Rotator();
     Runner.Expect(

@@ -2,6 +2,7 @@
 
 #include "Pico/Core/Paths.h"
 #include "Pico/Engine/EngineLoop.h"
+#include "Pico/Engine/ActorBlueprint.h"
 #include "Pico/Render/SceneViewportRenderer.h"
 
 #if defined(PICO_EDITOR_WITH_SANDBOX)
@@ -140,7 +141,9 @@ int main(int Argc, char** Argv)
         ImGui::CreateContext();
         bImGuiContextCreated = true;
         ImGuiIO& IO = ImGui::GetIO();
-        IO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+        IO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard
+            | ImGuiConfigFlags_DockingEnable
+            | ImGuiConfigFlags_ViewportsEnable;
         IO.IniFilename = nullptr;
         const float UiScale = FindUiScale(Argc, Argv);
         const std::filesystem::path InterfaceFont = "C:/Windows/Fonts/segoeui.ttf";
@@ -157,6 +160,8 @@ int main(int Argc, char** Argv)
             IO.FontDefault = IO.Fonts->AddFontDefault(&FontConfig);
         }
         ApplyEditorStyle(UiScale);
+        ImGui::GetStyle().WindowRounding = 0.0f;
+        ImGui::GetStyle().Colors[ImGuiCol_WindowBg].w = 1.0f;
 
         bImGuiGlfwInitialized = ImGui_ImplGlfw_InitForOpenGL(Window, true);
         if (!bImGuiGlfwInitialized)
@@ -204,6 +209,11 @@ int main(int Argc, char** Argv)
             throw std::runtime_error("project gameplay class registration failed");
         }
 #endif
+        if (ExitCode == 0
+            && !Pico::CompileProjectActorBlueprints(EngineLoop.GetAssetRegistry()))
+        {
+            throw std::runtime_error("project Actor Blueprint compilation failed");
+        }
 
         if (ExitCode == 0)
         {
@@ -233,6 +243,13 @@ int main(int Argc, char** Argv)
                 glClear(GL_COLOR_BUFFER_BIT);
                 ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
                 glfwSwapBuffers(Window);
+                if ((IO.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0)
+                {
+                    GLFWwindow* BackupContext = glfwGetCurrentContext();
+                    ImGui::UpdatePlatformWindows();
+                    ImGui::RenderPlatformWindowsDefault();
+                    glfwMakeContextCurrent(BackupContext);
+                }
                 if (App.ShouldClose())
                 {
                     break;

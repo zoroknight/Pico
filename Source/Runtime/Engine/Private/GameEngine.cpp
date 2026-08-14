@@ -9,6 +9,7 @@
 #include "Pico/Engine/GameModule.h"
 #include "Pico/Engine/GameModeBase.h"
 #include "Pico/Engine/World.h"
+#include "Pico/Engine/ActorBlueprint.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ObjectGlobals.h"
 
@@ -83,6 +84,26 @@ int FGameEngine::Init()
             return 1;
         }
         bModuleStarted = true;
+    }
+
+    EActorBlueprintError BlueprintError = EActorBlueprintError::None;
+    if (!CompileProjectActorBlueprints(
+            EngineLoop.GetAssetRegistry(), &BlueprintError))
+    {
+        PICO_LOG(
+            LogEngine,
+            Error,
+            "Game Init failed to compile Actor Blueprints (error={})",
+            ToString(BlueprintError));
+        return 1;
+    }
+    if (GameModule != nullptr && !GameModule->PostActorBlueprintCompile())
+    {
+        PICO_LOG(
+            LogEngine,
+            Error,
+            "Game Init failed to configure gameplay after Actor Blueprint compilation");
+        return 1;
     }
 
     if (!CreateGameInstance())

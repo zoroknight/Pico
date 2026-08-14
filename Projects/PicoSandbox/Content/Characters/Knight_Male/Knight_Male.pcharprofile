@@ -3,6 +3,11 @@ AnimationSet=/Game/Characters/Knight_Male/Knight_Male.panimset
 DefaultMontage=
 SkeletalMesh=/Game/Characters/Knight_Male/Knight_Male.pskeletalmesh
 
+[Visual]
+MeshLocation=0,0,-96
+MeshRotation=0,180,0
+MeshScale=1,1,1
+
 [Materials]
 Slot0=/Game/Characters/Knight_Male/Materials/Skin.pmat
 Slot1=/Game/Characters/Knight_Male/Materials/Armor.pmat

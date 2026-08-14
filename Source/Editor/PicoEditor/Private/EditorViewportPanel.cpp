@@ -22,6 +22,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -50,6 +51,98 @@ std::string MakeTransformDescription(
         break;
     }
     return std::string(Verb) + " " + std::to_string(TargetCount) + " Object(s)";
+}
+
+struct FOrientationGizmoResult
+{
+    bool bConsumesMouse = false;
+};
+
+FVector3 BuildCameraForward(float YawDegrees, float PitchDegrees)
+{
+    const float Yaw = DegreesToRadians(YawDegrees);
+    const float Pitch = DegreesToRadians(PitchDegrees);
+    const float CosPitch = std::cos(Pitch);
+    return FVector3(
+        CosPitch * std::cos(Yaw),
+        CosPitch * std::sin(Yaw),
+        std::sin(Pitch));
+}
+
+FOrientationGizmoResult DrawOrientationGizmo(
+    const ImVec2& ItemMin,
+    const ImVec2& ItemMax,
+    bool bDisabled,
+    float& CameraYawDegrees,
+    float& CameraPitchDegrees)
+{
+    constexpr float Size = 104.0f;
+    constexpr float Padding = 12.0f;
+    const ImVec2 TopLeft(ItemMax.x - Size - Padding, ItemMin.y + Padding);
+    const ImVec2 SavedCursor = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(TopLeft);
+    ImGui::InvisibleButton("##ViewportOrientationGizmo", ImVec2(Size, Size));
+    const bool bHovered = ImGui::IsItemHovered();
+    const bool bActive = ImGui::IsItemActive();
+    if (!bDisabled && bActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+    {
+        const ImVec2 Delta = ImGui::GetIO().MouseDelta;
+        CameraYawDegrees -= Delta.x * 0.35f;
+        CameraPitchDegrees = std::clamp(
+            CameraPitchDegrees - Delta.y * 0.35f, -89.0f, 89.0f);
+    }
+
+    ImDrawList* DrawList = ImGui::GetWindowDrawList();
+    const ImVec2 Center(TopLeft.x + Size * 0.5f, TopLeft.y + Size * 0.5f);
+    DrawList->AddCircleFilled(
+        Center, Size * 0.45f,
+        IM_COL32(18, 22, 25, bDisabled ? 125 : (bHovered ? 225 : 190)), 32);
+    DrawList->AddCircle(
+        Center, Size * 0.45f,
+        IM_COL32(115, 125, 132, bDisabled ? 90 : 180), 32, 1.0f);
+
+    const FVector3 Forward = BuildCameraForward(
+        CameraYawDegrees, CameraPitchDegrees);
+    const FVector3 Right = FVector3::Cross(
+        Forward, FVector3::UpVector).GetSafeNormal();
+    const FVector3 Up = FVector3::Cross(Right, Forward).GetSafeNormal();
+    struct FAxis
+    {
+        FVector3 Direction;
+        ImU32 Color;
+        const char* Label;
+    };
+    const std::array<FAxis, 3> Axes {{
+        {FVector3::ForwardVector, IM_COL32(245, 68, 58, 255), "X"},
+        {FVector3::RightVector, IM_COL32(55, 218, 92, 255), "Y"},
+        {FVector3::UpVector, IM_COL32(65, 130, 245, 255), "Z"}
+    }};
+    constexpr float Radius = 34.0f;
+    for (const FAxis& Axis : Axes)
+    {
+        const ImVec2 Direction(
+            FVector3::Dot(Axis.Direction, Right),
+            -FVector3::Dot(Axis.Direction, Up));
+        const ImVec2 Positive(
+            Center.x + Direction.x * Radius,
+            Center.y + Direction.y * Radius);
+        const ImVec2 Negative(
+            Center.x - Direction.x * Radius,
+            Center.y - Direction.y * Radius);
+        const ImU32 DimColor = (Axis.Color & IM_COL32(255, 255, 255, 0))
+            | IM_COL32(0, 0, 0, bDisabled ? 45 : 90);
+        DrawList->AddLine(Negative, Center, DimColor, 2.0f);
+        DrawList->AddLine(Center, Positive, Axis.Color, 3.0f);
+        DrawList->AddCircleFilled(Positive, 9.0f, Axis.Color, 16);
+        const ImVec2 TextSize = ImGui::CalcTextSize(Axis.Label);
+        DrawList->AddText(
+            ImVec2(Positive.x - TextSize.x * 0.5f,
+                Positive.y - TextSize.y * 0.5f),
+            IM_COL32(245, 248, 250, bDisabled ? 130 : 255),
+            Axis.Label);
+    }
+    ImGui::SetCursorScreenPos(SavedCursor);
+    return {bHovered || bActive};
 }
 }
 
@@ -97,13 +190,8 @@ void FEditorViewportPanel::Draw(
     const uint32 RenderHeight = static_cast<uint32>(std::clamp(
         Available.y * IO.DisplayFramebufferScale.y, 64.0f, 4096.0f));
 
-    const float YawRadians = DegreesToRadians(CameraYawDegrees);
-    const float PitchRadians = DegreesToRadians(CameraPitchDegrees);
-    const float CosPitch = std::cos(PitchRadians);
-    const FVector3 Forward(
-        CosPitch * std::cos(YawRadians),
-        CosPitch * std::sin(YawRadians),
-        std::sin(PitchRadians));
+    const FVector3 Forward = BuildCameraForward(
+        CameraYawDegrees, CameraPitchDegrees);
     FSceneView View;
     View.Position = CameraPosition;
     View.Target = CameraPosition + Forward;
@@ -113,13 +201,16 @@ void FEditorViewportPanel::Draw(
     {
         TryBuildActiveCameraView(World, View);
     }
+    FSceneViewportRenderOptions RenderOptions;
+    RenderOptions.bDrawWorldAxes = bDrawWorldAxes;
     if (!Renderer->Resize(RenderWidth, RenderHeight)
         || !Renderer->Render(
             World,
             AssetRegistry,
             AssetManager,
             View,
-            Selection.GetHandles()))
+            Selection.GetHandles(),
+            RenderOptions))
     {
         ImGui::TextDisabled("Viewport render failed");
         return;
@@ -138,6 +229,32 @@ void FEditorViewportPanel::Draw(
     const float ItemHeight = std::max(ItemMax.y - ItemMin.y, 1.0f);
     const bool bHovered = ImGui::IsItemHovered();
 
+    const ImVec2 SavedCursor = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(ImVec2(ItemMin.x + 10.0f, ItemMin.y + 10.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(18, 22, 25, 210));
+    ImGui::BeginChild(
+        "ViewportShowFlags", ImVec2(214.0f, 34.0f), true,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::Checkbox("Axes", &bDrawWorldAxes);
+    ImGui::SameLine();
+    ImGui::Checkbox("Orientation", &bDrawOrientationGizmo);
+    const bool bShowFlagsHovered = ImGui::IsWindowHovered();
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    ImGui::SetCursorScreenPos(SavedCursor);
+
+    FOrientationGizmoResult OrientationResult;
+    if (bDrawOrientationGizmo)
+    {
+        OrientationResult = DrawOrientationGizmo(
+            ItemMin, ItemMax, bUseSceneCamera,
+            CameraYawDegrees, CameraPitchDegrees);
+    }
+    const bool bOverlayConsumesMouse =
+        bShowFlagsHovered || OrientationResult.bConsumesMouse;
+
     PObject* PrimarySelection = Selection.Resolve();
     if (PrimarySelection != nullptr
         && PrimarySelection->IsA(PPlayerStart::StaticClass()))
@@ -146,7 +263,7 @@ void FEditorViewportPanel::Draw(
         const std::string Label = "Player Start "
             + std::to_string(PlayerStart->GetPlayerStartId());
         ImGui::GetWindowDrawList()->AddText(
-            ImVec2(ItemMin.x + 12.0f, ItemMin.y + 12.0f),
+            ImVec2(ItemMin.x + 12.0f, ItemMin.y + 52.0f),
             IM_COL32(70, 245, 145, 255),
             Label.c_str());
     }
@@ -222,7 +339,8 @@ void FEditorViewportPanel::Draw(
         bTransformChanged = false;
     }
 
-    const bool bGizmoConsumesMouse = bIgnoreGizmoUntilRelease
+    const bool bGizmoConsumesMouse = bOverlayConsumesMouse
+        || bIgnoreGizmoUntilRelease
         || GizmoResult.bIsOver
         || GizmoResult.bIsUsing
         || TransformService.IsManipulating();

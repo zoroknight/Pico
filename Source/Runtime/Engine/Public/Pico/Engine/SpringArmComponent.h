@@ -17,11 +17,17 @@ public:
     void SetTargetOffset(const FVector3& InOffset);
     bool UsesPawnControlRotation() const;
     void SetUsePawnControlRotation(bool bValue);
+    bool InheritsPitch() const;
+    void SetInheritPitch(bool bValue);
+    bool InheritsYaw() const;
+    void SetInheritYaw(bool bValue);
+    bool InheritsRoll() const;
+    void SetInheritRoll(bool bValue);
+    FRotator GetTargetRotation() const;
     static FName GetEndpointSocketName();
     bool DoesSocketExist(FName SocketName) const override;
     FTransform GetSocketTransform(FName SocketName) const override;
     void PostEditChangeProperty(const FPropertyChangedEvent& Event) override;
-    void TickComponent(float DeltaSeconds) override;
 
 protected:
     explicit PSpringArmComponent(const FObjectConstructionParams& Params);
@@ -34,5 +40,8 @@ private:
     FVector3 SocketOffset = FVector3::ZeroVector;
     FVector3 TargetOffset = FVector3::ZeroVector;
     bool bUsePawnControlRotation = false;
+    bool bInheritPitch = true;
+    bool bInheritYaw = true;
+    bool bInheritRoll = true;
 };
 }

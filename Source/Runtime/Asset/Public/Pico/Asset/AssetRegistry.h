@@ -23,7 +23,8 @@ enum class EAssetType
     AnimationClip,
     AnimationSet,
     AnimationMontage,
-    CharacterProfile
+    CharacterProfile,
+    ActorBlueprint
 };
 
 enum class EAssetScanError

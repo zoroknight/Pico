@@ -2,6 +2,7 @@
 
 #include "Pico/Engine/Character.h"
 #include "Pico/Engine/CharacterMovementComponent.h"
+#include "Pico/Engine/Controller.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/PrimitiveComponent.h"
@@ -182,6 +183,34 @@ int main()
     Runner.Expect(
         StatesNearlyEqual(FirstReplay, Movement->CaptureMoveState()),
         "The same Character state and input sequence replay to the same result");
+
+    Pico::PController* Controller = World->SpawnActor<Pico::PController>("Controller");
+    Movement->ApplyMoveState(ReplayStart);
+    Character->SetActorRotation({0.0f, 170.0f, 0.0f});
+    Movement->SetOrientRotationToMovement(false);
+    Movement->SetUseControllerDesiredRotation(true);
+    Movement->SetRotationRate(60.0f);
+    if (Controller != nullptr)
+    {
+        Controller->Possess(Character);
+        Controller->SetControlRotation({0.0f, -170.0f, 0.0f});
+    }
+    Movement->SimulateMovement({}, 0.1f);
+    Runner.Expect(
+        Controller != nullptr
+            && Character->GetActorRotation().Yaw > 170.0f
+            && Character->GetActorRotation().Yaw < 180.0f,
+        "Controller desired rotation works without movement input and follows the shortest yaw path");
+    Character->SetUseControllerRotationYaw(true);
+    Controller->SetControlRotation({0.0f, 45.0f, 0.0f});
+    Movement->SimulateMovement({}, 1.0f / 60.0f);
+    Runner.Expect(
+        Character->GetActorRotation().Equals({0.0f, 45.0f, 0.0f}, 0.01f),
+        "Pawn controller yaw directly drives actor yaw when enabled");
+    Character->SetUseControllerRotationYaw(false);
+    Movement->SetUseControllerDesiredRotation(false);
+    Movement->SetOrientRotationToMovement(true);
+    Movement->SetRotationRate(540.0f);
 
     Movement->ApplyMoveState(ReplayStart);
     Movement->SimulateMovement(WalkInput, 1.0f);

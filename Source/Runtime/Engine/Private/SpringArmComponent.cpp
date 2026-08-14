@@ -20,14 +20,15 @@ bool PSpringArmComponent::RegisterProperties(PClass& Class)
     PICO_ADD_PROPERTY(Properties, SocketOffset);
     PICO_ADD_PROPERTY(Properties, TargetOffset);
     PICO_ADD_PROPERTY(Properties, bUsePawnControlRotation);
+    PICO_ADD_PROPERTY(Properties, bInheritPitch);
+    PICO_ADD_PROPERTY(Properties, bInheritYaw);
+    PICO_ADD_PROPERTY(Properties, bInheritRoll);
     return Class.AddProperties(std::move(Properties));
 }
 
 PSpringArmComponent::PSpringArmComponent(const FObjectConstructionParams& Params)
     : PSceneComponent(Params)
 {
-    PrimaryComponentTick.SetCanEverTick(true);
-    PrimaryComponentTick.SetTickGroup(ETickGroup::PostUpdateWork);
 }
 
 float PSpringArmComponent::GetTargetArmLength() const
@@ -64,15 +65,30 @@ void PSpringArmComponent::SetTargetOffset(const FVector3& InOffset)
 }
 bool PSpringArmComponent::UsesPawnControlRotation() const { return bUsePawnControlRotation; }
 void PSpringArmComponent::SetUsePawnControlRotation(bool bValue) { bUsePawnControlRotation = bValue; }
+bool PSpringArmComponent::InheritsPitch() const { return bInheritPitch; }
+void PSpringArmComponent::SetInheritPitch(bool bValue) { bInheritPitch = bValue; }
+bool PSpringArmComponent::InheritsYaw() const { return bInheritYaw; }
+void PSpringArmComponent::SetInheritYaw(bool bValue) { bInheritYaw = bValue; }
+bool PSpringArmComponent::InheritsRoll() const { return bInheritRoll; }
+void PSpringArmComponent::SetInheritRoll(bool bValue) { bInheritRoll = bValue; }
 
-void PSpringArmComponent::TickComponent(float)
+FRotator PSpringArmComponent::GetTargetRotation() const
 {
-    if (!bUsePawnControlRotation) return;
-    PActor* Owner = GetOwner();
-    PPawn* Pawn = Owner != nullptr && Owner->IsA(PPawn::StaticClass())
-        ? static_cast<PPawn*>(Owner) : nullptr;
-    PController* Controller = Pawn != nullptr ? Pawn->GetController() : nullptr;
-    if (Controller != nullptr) SetRelativeRotation(Controller->GetControlRotation());
+    FRotator DesiredRotation = GetWorldTransform().Rotation.Rotator();
+    const PActor* Owner = GetOwner();
+    const PPawn* Pawn = Owner != nullptr && Owner->IsA(PPawn::StaticClass())
+        ? static_cast<const PPawn*>(Owner) : nullptr;
+    const PController* Controller = Pawn != nullptr ? Pawn->GetController() : nullptr;
+    if (bUsePawnControlRotation && Controller != nullptr)
+    {
+        DesiredRotation = Controller->GetControlRotation();
+    }
+
+    const FRotator RelativeRotation = GetRelativeRotation();
+    if (!bInheritPitch) DesiredRotation.Pitch = RelativeRotation.Pitch;
+    if (!bInheritYaw) DesiredRotation.Yaw = RelativeRotation.Yaw;
+    if (!bInheritRoll) DesiredRotation.Roll = RelativeRotation.Roll;
+    return DesiredRotation.GetNormalized();
 }
 
 FName PSpringArmComponent::GetEndpointSocketName()
@@ -93,6 +109,7 @@ FTransform PSpringArmComponent::GetSocketTransform(FName SocketName) const
     {
         return SocketTransform;
     }
+    SocketTransform.Rotation = GetTargetRotation().Quaternion();
     const FVector3 ArmOffset = SocketTransform.Rotation.RotateVector(
         FVector3::ForwardVector * -TargetArmLength + SocketOffset);
     SocketTransform.Translation += TargetOffset + ArmOffset;

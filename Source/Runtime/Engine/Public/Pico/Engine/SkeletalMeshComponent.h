@@ -22,6 +22,10 @@ public:
     const FAssetPath& GetSkeletalMeshAsset() const;
     const FAssetPath& GetCharacterProfileAsset() const;
     void SetCharacterProfileAsset(const FAssetPath& AssetPath);
+    bool UsesCharacterProfileVisualTransform() const;
+    void SetUseCharacterProfileVisualTransform(bool bValue);
+    const FTransform& GetCharacterProfileVisualTransform() const;
+    FTransform GetVisualWorldTransform() const;
     void SetSkeletalMeshAsset(const FAssetPath& AssetPath);
     const FAssetPath& GetMaterialAsset() const;
     void SetMaterialAsset(const FAssetPath& AssetPath);
@@ -71,6 +75,7 @@ private:
 
     FAssetPath SkeletalMeshAsset;
     FAssetPath CharacterProfileAsset;
+    bool bUseCharacterProfileVisualTransform = true;
     FAssetPath MaterialAsset;
     FAssetPath MaterialOverride0;
     FAssetPath MaterialOverride1;
@@ -92,6 +97,7 @@ private:
     std::shared_ptr<const FAnimationClipData> RuntimeJump;
     std::shared_ptr<const FAnimationSetData> RuntimeAnimationSet;
     std::array<FAssetPath, 8> RuntimeProfileMaterials;
+    FTransform CharacterProfileVisualTransform;
     FSkinnedMeshRenderData RenderData;
     FObjectHandle AnimInstanceHandle;
     bool bEnableRootMotion = false;

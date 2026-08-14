@@ -627,7 +627,19 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
         if (Property->GetValue(Object, Value))
         {
             FEditorControlState State;
-            State.IncludeLastItem(ImGui::InputInt("##Value", &Value));
+            if (PropertyName == "MovementReferenceValue")
+            {
+                static const char* Items[] = {
+                    "Control Rotation (Third Person)",
+                    "Actor Rotation (Character Relative)",
+                    "World Axes"
+                };
+                State.IncludeLastItem(ImGui::Combo("##Value", &Value, Items, 3));
+            }
+            else
+            {
+                State.IncludeLastItem(ImGui::InputInt("##Value", &Value));
+            }
             ApplyValue(
                 State,
                 [Object, Property, Value]()

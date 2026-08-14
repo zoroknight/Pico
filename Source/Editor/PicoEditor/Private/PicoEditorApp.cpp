@@ -8,6 +8,8 @@
 #include "Pico/Core/Math/MathUtility.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/ActorBlueprint.h"
+#include "Pico/Engine/CameraActor.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
@@ -159,6 +161,23 @@ FPicoEditorApp::FPicoEditorApp(
         [this](std::string Message, bool bError)
         {
             SetStatus(std::move(Message), bError);
+        },
+        [this](const FAssetPath& AssetPath)
+        {
+            AssetSelection.Select(AssetPath);
+            ContentBrowserPanel.FocusAsset(
+                EngineLoop->GetAssetRegistry(), AssetSelection, AssetPath);
+        })
+    , ActorBlueprintEditor(
+        InEngineLoop,
+        [this](std::string Message, bool bError)
+        {
+            SetStatus(std::move(Message), bError);
+        },
+        [this](const FAssetPath& AssetPath)
+        {
+            const PClass* Class = FindActorBlueprintGeneratedClass(AssetPath);
+            ApplyCommandResult(CommandService.SpawnActor(Class));
         },
         [this](const FAssetPath& AssetPath)
         {
@@ -398,6 +417,7 @@ void FPicoEditorApp::Draw()
             [this]() { SkeletalAssetEditor.OpenImport(); },
             [this]() { AssetWorkflow.OpenTextureImport(); },
             [this]() { AssetWorkflow.OpenCreateMaterial(); },
+            [this]() { ActorBlueprintEditor.OpenCreate(); },
             [this]() { AssetWorkflow.RefreshRegistry(); },
             [this](const FAssetPath& AssetPath)
             {
@@ -427,6 +447,10 @@ void FPicoEditorApp::Draw()
             },
             [this](const FAssetPath& AssetPath)
             {
+                ActorBlueprintEditor.OpenAsset(AssetPath);
+            },
+            [this](const FAssetPath& AssetPath)
+            {
                 const FAssetPath StablePath = AssetPath;
                 CommandQueue.Enqueue(
                     [this, StablePath]()
@@ -447,6 +471,7 @@ void FPicoEditorApp::Draw()
 
     AssetWorkflow.Draw();
     SkeletalAssetEditor.Draw();
+    ActorBlueprintEditor.Draw();
 
     if (bCancelInteractiveEditRequested)
     {
@@ -656,7 +681,9 @@ void FPicoEditorApp::DrawToolbar()
         }
         if (ImGui::MenuItem("Camera"))
         {
-            SpawnComponentActor(EEditorSceneComponentType::Camera);
+            FinishInteractiveEdit();
+            ApplyCommandResult(
+                CommandService.SpawnActor(PCameraActor::StaticClass()));
         }
         if (ImGui::MenuItem("Spring Arm"))
         {

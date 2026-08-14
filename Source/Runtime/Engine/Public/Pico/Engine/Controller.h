@@ -22,6 +22,7 @@ public:
     bool Possess(PPawn* InPawn);
     void UnPossess();
     FOnPossessedPawnChanged& OnPossessedPawnChanged();
+    void BeginPlay() override;
 
 protected:
     explicit PController(const FObjectConstructionParams& Params);

@@ -71,6 +71,7 @@ void FContentBrowserPanel::Draw(
     FAction ImportSkeletal,
     FAction ImportTexture,
     FAction CreateMaterial,
+    FAction CreateActorBlueprint,
     FAction Refresh,
     FAssetAction Reimport,
     FAssetAction ReimportWithOptions,
@@ -78,6 +79,7 @@ void FContentBrowserPanel::Draw(
     FAssetAction RenameAsset,
     FAssetAction EditMaterial,
     FAssetAction OpenSkeletal,
+    FAssetAction OpenActorBlueprint,
     FAssetAction OpenWorld,
     FAssetAction Create,
     FAssetAction Assign,
@@ -102,6 +104,11 @@ void FContentBrowserPanel::Draw(
     if (ImGui::Button("Create Material"))
     {
         CreateMaterial();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Create Actor Blueprint"))
+    {
+        CreateActorBlueprint();
     }
     ImGui::SameLine();
     const FAssetRecord* Selected = Selection.Resolve(Registry);
@@ -150,7 +157,8 @@ void FContentBrowserPanel::Draw(
     ImGui::SetNextItemWidth(120.0f);
     constexpr const char* Types[] = {
         "All Types", "World", "Static Mesh", "Texture", "Material",
-        "Skeleton", "Skeletal Mesh", "Animation", "Character Profile"};
+        "Skeleton", "Skeletal Mesh", "Animation", "Character Profile",
+        "Actor Blueprint"};
     ImGui::Combo("##AssetType", &TypeFilter, Types, static_cast<int>(std::size(Types)));
 
     if (ImGui::BeginTable("ContentBrowserLayout", 2, ImGuiTableFlags_Resizable))
@@ -169,6 +177,7 @@ void FContentBrowserPanel::Draw(
             RenameAsset,
             EditMaterial,
             OpenSkeletal,
+            OpenActorBlueprint,
             OpenWorld,
             Create,
             Assign,
@@ -230,6 +239,7 @@ bool FContentBrowserPanel::PassesFilter(const FAssetRecord& Record) const
             || Record.Type == EAssetType::AnimationMontage;
         break;
     case 8: bMatchesType = Record.Type == EAssetType::CharacterProfile; break;
+    case 9: bMatchesType = Record.Type == EAssetType::ActorBlueprint; break;
     default: break;
     }
     if (!bMatchesType) return false;
@@ -280,6 +290,7 @@ void FContentBrowserPanel::DrawAssetTable(
     const FAssetAction& RenameAsset,
     const FAssetAction& EditMaterial,
     const FAssetAction& OpenSkeletal,
+    const FAssetAction& OpenActorBlueprint,
     const FAssetAction& OpenWorld,
     const FAssetAction& Create,
     const FAssetAction& Assign,
@@ -360,6 +371,12 @@ void FContentBrowserPanel::DrawAssetTable(
         {
             OpenSkeletal(Record.AssetPath);
         }
+        else if (ImGui::IsItemHovered()
+            && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
+            && Record.Type == EAssetType::ActorBlueprint)
+        {
+            OpenActorBlueprint(Record.AssetPath);
+        }
         if (ImGui::BeginDragDropSource())
         {
             const std::string Path(Record.AssetPath.ToString());
@@ -369,6 +386,11 @@ void FContentBrowserPanel::DrawAssetTable(
         }
         if (ImGui::BeginPopupContextItem())
         {
+            if (Record.Type == EAssetType::ActorBlueprint
+                && ImGui::MenuItem("Open Actor Blueprint"))
+            {
+                OpenActorBlueprint(Record.AssetPath);
+            }
             if (Record.Type == EAssetType::World
                 && ImGui::MenuItem("Open World"))
             {

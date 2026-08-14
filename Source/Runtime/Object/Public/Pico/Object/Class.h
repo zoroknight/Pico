@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -57,6 +58,10 @@ public:
             InConstructor,
             Detail::GetNativeTypeToken<TObject>());
     }
+
+    static std::unique_ptr<PClass> CreateDynamicDerived(
+        FName InName,
+        const PClass* InSuperClass);
 
     FName GetName() const;
     const PClass* GetSuperClass() const;

@@ -1,0 +1,38 @@
+#pragma once
+
+#include "Pico/Core/AssetPath.h"
+
+#include <functional>
+#include <memory>
+#include <string>
+
+namespace Pico
+{
+class FEngineLoop;
+
+class FActorBlueprintEditor
+{
+public:
+    using FStatus = std::function<void(std::string, bool)>;
+    using FSpawnInLevel = std::function<void(const FAssetPath&)>;
+    using FAssetCreated = std::function<void(const FAssetPath&)>;
+
+    FActorBlueprintEditor(
+        FEngineLoop* EngineLoop,
+        FStatus SetStatus,
+        FSpawnInLevel SpawnInLevel,
+        FAssetCreated AssetCreated);
+    ~FActorBlueprintEditor();
+
+    FActorBlueprintEditor(const FActorBlueprintEditor&) = delete;
+    FActorBlueprintEditor& operator=(const FActorBlueprintEditor&) = delete;
+
+    void OpenCreate();
+    void OpenAsset(const FAssetPath& AssetPath);
+    void Draw();
+
+private:
+    struct FImpl;
+    std::unique_ptr<FImpl> Impl;
+};
+}

@@ -90,6 +90,10 @@ void TestCharacterProfile(FTestRunner& Runner)
     Pico::FAssetPath::TryParse("/Game/Characters/Knight.panimset", Profile.AnimationSet);
     Pico::FAssetPath::TryParse("/Game/Characters/Materials/Armor.pmat", Profile.MaterialOverrides[0]);
     Pico::FAssetPath::TryParse("/Game/Characters/Materials/Cape.pmat", Profile.MaterialOverrides[7]);
+    Profile.MeshTransform = Pico::FTransform(
+        Pico::FRotator(0.0f, 180.0f, 0.0f),
+        Pico::FVector3(0.0f, 0.0f, -96.0f),
+        Pico::FVector3::OneVector);
     const std::filesystem::path File = std::filesystem::temp_directory_path()
         / "PicoCharacterProfileTest.pcharprofile";
     Pico::FCharacterProfileData Loaded;
@@ -99,9 +103,10 @@ void TestCharacterProfile(FTestRunner& Runner)
             && Pico::LoadCharacterProfileFromFile(File, Loaded, &Error)
             && Loaded.SkeletalMesh == Profile.SkeletalMesh
             && Loaded.AnimationSet == Profile.AnimationSet
+            && Loaded.MeshTransform.Equals(Profile.MeshTransform)
             && Loaded.MaterialOverrides[0] == Profile.MaterialOverrides[0]
             && Loaded.MaterialOverrides[7] == Profile.MaterialOverrides[7],
-        "Character Profile round trips mesh, animation and all eight material slots");
+        "Character Profile round trips mesh, visual transform, animation, and all eight material slots");
     std::error_code FileError;
     std::filesystem::remove(File, FileError);
 }

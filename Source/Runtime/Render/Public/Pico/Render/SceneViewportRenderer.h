@@ -30,6 +30,13 @@ struct FSceneView
     float FarPlane = 10000.0f;
 };
 
+struct FSceneViewportRenderOptions
+{
+    bool bDrawGrid = true;
+    bool bDrawWorldAxes = false;
+    bool bDrawComponentVisualizations = true;
+};
+
 struct FDirectionalLightData
 {
     bool bEnabled = false;
@@ -88,7 +95,7 @@ public:
         FAssetManager& AssetManager,
         const FSceneView& View,
         std::span<const FObjectHandle> SelectedObjects = {},
-        bool bDrawComponentVisualizations = true);
+        const FSceneViewportRenderOptions& Options = {});
     bool PresentToBackBuffer(uint32 Width, uint32 Height) const;
     FObjectHandle Pick(uint32 X, uint32 Y) const;
 

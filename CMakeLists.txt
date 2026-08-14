@@ -368,10 +368,12 @@ else()
 endif()
 
 add_library(PicoEngine STATIC
+    Source/Runtime/Engine/Private/ActorBlueprint.cpp
     Source/Runtime/Engine/Private/AnimInstance.cpp
     Source/Runtime/Engine/Private/Actor.cpp
     Source/Runtime/Engine/Private/ActorComponent.cpp
     Source/Runtime/Engine/Private/CameraComponent.cpp
+    Source/Runtime/Engine/Private/CameraActor.cpp
     Source/Runtime/Engine/Private/CapsuleComponent.cpp
     Source/Runtime/Engine/Private/Character.cpp
     Source/Runtime/Engine/Private/CharacterMovementComponent.cpp
@@ -644,6 +646,8 @@ if(PICO_BUILD_INSPECTOR)
     set_target_properties(PicoInspector PROPERTIES FOLDER "Programs")
 
     add_executable(PicoEditor
+        Source/Editor/PicoEditor/Private/ActorBlueprintEditor.cpp
+        Source/Editor/PicoEditor/Private/ActorBlueprintEditor.h
         Source/Editor/PicoEditor/Private/AssetReferenceWidget.cpp
         Source/Editor/PicoEditor/Private/AssetReferenceWidget.h
         Source/Editor/PicoEditor/Private/ContentBrowserPanel.cpp
@@ -952,6 +956,7 @@ add_subdirectory(Projects/PicoSandbox)
 # PicoGameTests intentionally loads the PicoSandbox project map, so it must know
 # every project class that may be authored into that map.
 target_link_libraries(PicoGameTests PRIVATE PicoSandboxModule)
+target_link_libraries(PicoEditorTests PRIVATE PicoSandboxModule)
 
 if(BUILD_TESTING)
     add_test(

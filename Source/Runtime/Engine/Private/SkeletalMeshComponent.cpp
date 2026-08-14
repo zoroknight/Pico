@@ -23,6 +23,7 @@ bool PSkeletalMeshComponent::RegisterProperties(PClass& Class)
 {
     std::vector<PProperty> Properties;
     PICO_ADD_ASSET_PROPERTY(Properties, CharacterProfileAsset, CharacterProfile);
+    PICO_ADD_PROPERTY(Properties, bUseCharacterProfileVisualTransform);
     PICO_ADD_ASSET_PROPERTY(Properties, SkeletalMeshAsset, SkeletalMesh);
     PICO_ADD_ASSET_PROPERTY(Properties, MaterialAsset, Material);
     PICO_ADD_ASSET_PROPERTY(Properties, MaterialOverride0, Material);
@@ -54,6 +55,14 @@ const FAssetPath& PSkeletalMeshComponent::GetSkeletalMeshAsset() const { return 
 const FAssetPath& PSkeletalMeshComponent::GetCharacterProfileAsset() const { return CharacterProfileAsset; }
 void PSkeletalMeshComponent::SetCharacterProfileAsset(const FAssetPath& AssetPath)
 { CharacterProfileAsset = AssetPath; InvalidateConfiguredAssets(); }
+bool PSkeletalMeshComponent::UsesCharacterProfileVisualTransform() const
+{ return bUseCharacterProfileVisualTransform; }
+void PSkeletalMeshComponent::SetUseCharacterProfileVisualTransform(bool bValue)
+{ bUseCharacterProfileVisualTransform = bValue; InvalidateConfiguredAssets(); }
+const FTransform& PSkeletalMeshComponent::GetCharacterProfileVisualTransform() const
+{ return CharacterProfileVisualTransform; }
+FTransform PSkeletalMeshComponent::GetVisualWorldTransform() const
+{ return CharacterProfileVisualTransform * GetWorldTransform(); }
 void PSkeletalMeshComponent::SetSkeletalMeshAsset(const FAssetPath& AssetPath)
 { SkeletalMeshAsset = AssetPath; InvalidateConfiguredAssets(); }
 const FAssetPath& PSkeletalMeshComponent::GetMaterialAsset() const { return MaterialAsset; }
@@ -128,6 +137,7 @@ void PSkeletalMeshComponent::InvalidateConfiguredAssets()
     RuntimeWalk.reset();
     RuntimeJump.reset();
     RuntimeProfileMaterials = {};
+    CharacterProfileVisualTransform = FTransform::Identity;
     RenderData = {};
 }
 
@@ -202,6 +212,17 @@ bool PSkeletalMeshComponent::LoadConfiguredAssets()
         AnimationSetAsset = Profile->AnimationSet;
         DefaultMontageAsset = Profile->DefaultMontage;
         RuntimeProfileMaterials = Profile->MaterialOverrides;
+        if (bUseCharacterProfileVisualTransform)
+        {
+            // Older worlds persisted the profile transform directly on the
+            // component. Remove that duplicate before composing the new
+            // asset-space visual layer.
+            if (GetRelativeTransform().Equals(Profile->MeshTransform))
+            {
+                SetRelativeTransform(FTransform::Identity);
+            }
+            CharacterProfileVisualTransform = Profile->MeshTransform;
+        }
     }
     if (!SkeletalMeshAsset.IsValid()) return false;
 

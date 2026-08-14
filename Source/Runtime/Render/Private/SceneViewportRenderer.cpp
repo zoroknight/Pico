@@ -506,6 +506,9 @@ struct FSceneViewportRenderer::FImpl
     GLuint GridVertexArray = 0;
     GLuint GridVertexBuffer = 0;
     GLsizei GridVertexCount = 0;
+    GLuint WorldAxesVertexArray = 0;
+    GLuint WorldAxesVertexBuffer = 0;
+    GLsizei WorldAxesVertexCount = 0;
     GLuint ComponentVisualizationVertexArray = 0;
     GLuint ComponentVisualizationVertexBuffer = 0;
     std::vector<FStaticMeshGpuResource> StaticMeshes;
@@ -742,6 +745,36 @@ void main()
             6 * sizeof(float),
             reinterpret_cast<const void*>(3 * sizeof(float)));
 
+        constexpr float AxisExtent = 1000.0f;
+        constexpr std::array<float, 36> WorldAxesVertices {
+            -AxisExtent, 0.0f, 0.0f, 0.72f, 0.08f, 0.06f,
+             AxisExtent, 0.0f, 0.0f, 1.00f, 0.16f, 0.12f,
+            0.0f, -AxisExtent, 0.0f, 0.08f, 0.60f, 0.14f,
+            0.0f,  AxisExtent, 0.0f, 0.16f, 1.00f, 0.28f,
+            0.0f, 0.0f, -AxisExtent, 0.08f, 0.24f, 0.72f,
+            0.0f, 0.0f,  AxisExtent, 0.16f, 0.45f, 1.00f
+        };
+        WorldAxesVertexCount = static_cast<GLsizei>(WorldAxesVertices.size() / 6);
+        glGenVertexArrays(1, &WorldAxesVertexArray);
+        glBindVertexArray(WorldAxesVertexArray);
+        glGenBuffers(1, &WorldAxesVertexBuffer);
+        glBindBuffer(GL_ARRAY_BUFFER, WorldAxesVertexBuffer);
+        glBufferData(
+            GL_ARRAY_BUFFER,
+            static_cast<std::ptrdiff_t>(WorldAxesVertices.size() * sizeof(float)),
+            WorldAxesVertices.data(),
+            GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1,
+            3,
+            GL_FLOAT,
+            GL_FALSE,
+            6 * sizeof(float),
+            reinterpret_cast<const void*>(3 * sizeof(float)));
+
         glGenVertexArrays(1, &CubeOutlineVertexArray);
         glBindVertexArray(CubeOutlineVertexArray);
         glBindBuffer(GL_ARRAY_BUFFER, CubeVertexBuffer);
@@ -946,6 +979,16 @@ void FSceneViewportRenderer::Shutdown()
         glDeleteVertexArrays(1, &Impl->GridVertexArray);
         Impl->GridVertexArray = 0;
     }
+    if (Impl->WorldAxesVertexBuffer != 0)
+    {
+        glDeleteBuffers(1, &Impl->WorldAxesVertexBuffer);
+        Impl->WorldAxesVertexBuffer = 0;
+    }
+    if (Impl->WorldAxesVertexArray != 0)
+    {
+        glDeleteVertexArrays(1, &Impl->WorldAxesVertexArray);
+        Impl->WorldAxesVertexArray = 0;
+    }
     if (Impl->CubeIndexBuffer != 0)
     {
         glDeleteBuffers(1, &Impl->CubeIndexBuffer);
@@ -1107,7 +1150,7 @@ bool FSceneViewportRenderer::Render(
     FAssetManager& AssetManager,
     const FSceneView& View,
     std::span<const FObjectHandle> SelectedObjects,
-    bool bDrawComponentVisualizations)
+    const FSceneViewportRenderOptions& Options)
 {
     if (!Impl->bInitialized || Impl->Framebuffer == 0 || World == nullptr)
     {
@@ -1215,9 +1258,24 @@ bool FSceneViewportRenderer::Render(
     }
     glUniform1i(LightingLocation, 0);
     glUniform1ui(PickingIdLocation, 0);
-    glBindVertexArray(Impl->GridVertexArray);
-    glLineWidth(1.0f);
-    glDrawArrays(GL_LINES, 0, Impl->GridVertexCount);
+    if (Options.bDrawGrid)
+    {
+        glBindVertexArray(Impl->GridVertexArray);
+        glLineWidth(1.0f);
+        glDrawArrays(GL_LINES, 0, Impl->GridVertexCount);
+    }
+    if (Options.bDrawWorldAxes)
+    {
+        glBindVertexArray(Impl->WorldAxesVertexArray);
+        glLineWidth(2.5f);
+        glUniform3f(ColorLocation, 0.95f, 0.08f, 0.06f);
+        glDrawArrays(GL_LINES, 0, 2);
+        glUniform3f(ColorLocation, 0.08f, 0.85f, 0.16f);
+        glDrawArrays(GL_LINES, 2, 2);
+        glUniform3f(ColorLocation, 0.08f, 0.30f, 0.95f);
+        glDrawArrays(GL_LINES, 4, 2);
+        glLineWidth(1.0f);
+    }
 
     glUniform1i(LightingLocation, 1);
 
@@ -1464,6 +1522,7 @@ bool FSceneViewportRenderer::Render(
                 {
                     PSkeletalMeshComponent* SkeletalMesh =
                         static_cast<PSkeletalMeshComponent*>(Component);
+                    ModelTransform = SkeletalMesh->GetVisualWorldTransform();
                     SkeletalMeshComponent = SkeletalMesh;
                     FImpl::FSkeletalMeshGpuResource* Resource =
                         GetSkeletalMeshResource(SkeletalMesh);
@@ -1574,7 +1633,7 @@ bool FSceneViewportRenderer::Render(
         }
     }
 
-    if (bDrawComponentVisualizations)
+    if (Options.bDrawComponentVisualizations)
     {
         glUniformMatrix4fv(ModelLocation, 1, GL_TRUE, Identity.GetData());
         glUniform1i(UseTextureLocation, 0);

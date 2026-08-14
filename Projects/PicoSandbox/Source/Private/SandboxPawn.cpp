@@ -12,10 +12,36 @@
 
 namespace PicoSandbox
 {
+const char* ToString(EMovementReference Reference)
+{
+    switch (Reference)
+    {
+    case EMovementReference::ControlRotation: return "ControlRotation";
+    case EMovementReference::ActorRotation: return "ActorRotation";
+    case EMovementReference::World: return "World";
+    }
+    return "Unknown";
+}
+
 PSandboxPawn::PSandboxPawn(const Pico::FObjectConstructionParams& Params)
     : PCharacter(Params)
 {
     PrimaryActorTick.SetCanEverTick(false);
+}
+
+EMovementReference PSandboxPawn::GetMovementReference() const
+{
+    if (MovementReferenceValue < static_cast<Pico::int32>(EMovementReference::ControlRotation)
+        || MovementReferenceValue > static_cast<Pico::int32>(EMovementReference::World))
+    {
+        return EMovementReference::ControlRotation;
+    }
+    return static_cast<EMovementReference>(MovementReferenceValue);
+}
+
+void PSandboxPawn::SetMovementReference(EMovementReference Reference)
+{
+    MovementReferenceValue = static_cast<Pico::int32>(Reference);
 }
 
 bool PSandboxPawn::DefineDefaultSubobjects(Pico::FObjectInitializer& Initializer)
@@ -45,8 +71,6 @@ bool PSandboxPawn::DefineDefaultSubobjects(Pico::FObjectInitializer& Initializer
 
     LegacyMesh->SetVisible(false);
     LegacyMesh->SetCollisionEnabled(Pico::ECollisionEnabled::NoCollision);
-    AnimatedMesh->SetRelativeLocation({0.0f, 0.0f, -96.0f});
-    AnimatedMesh->SetRelativeRotation({0.0f, 180.0f, 0.0f});
     CameraBoom->SetTargetArmLength(420.0f);
     CameraBoom->SetTargetOffset({0.0f, 0.0f, 90.0f});
     CameraBoom->SetRelativeRotation({-15.0f, 0.0f, 0.0f});
@@ -71,6 +95,7 @@ bool PSandboxPawn::DefineDefaultSubobjects(Pico::FObjectInitializer& Initializer
 void PSandboxPawn::PostLoad()
 {
     PCharacter::PostLoad();
+    SetMovementReference(GetMovementReference());
     Pico::PObject* Object = Pico::FindObject(this, Pico::FName("SandboxPlayerMesh"));
     if (Object != nullptr && Object->IsA(Pico::PStaticMeshComponent::StaticClass()))
     {

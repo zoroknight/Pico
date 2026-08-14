@@ -571,6 +571,10 @@ struct FSkeletalAssetEditor::FImpl
         FCharacterProfileData CharacterProfile;
         CharacterProfile.SkeletalMesh = MeshPath;
         CharacterProfile.AnimationSet = AnimationSetPath;
+        CharacterProfile.MeshTransform = FTransform(
+            FRotator(0.0f, 180.0f, 0.0f),
+            FVector3(0.0f, 0.0f, -96.0f),
+            FVector3::OneVector);
         for (std::size_t Index = 0;
              Index < CharacterProfile.MaterialOverrides.size()
                  && Index < Result.Mesh.DefaultMaterials.size();
@@ -850,6 +854,8 @@ struct FSkeletalAssetEditor::FImpl
         View.Position = ViewTarget + Direction * ViewDistance;
         View.NearPlane = std::max(ViewDistance * 0.001f, 0.01f);
         View.FarPlane = std::max(ViewDistance * 20.0f, 1000.0f);
+        FSceneViewportRenderOptions RenderOptions;
+        RenderOptions.bDrawComponentVisualizations = false;
         if (!Renderer->Resize(Width, Height)
             || !Renderer->Render(
                 PreviewWorld,
@@ -857,7 +863,7 @@ struct FSkeletalAssetEditor::FImpl
                 EngineLoop->GetAssetManager(),
                 View,
                 {},
-                false))
+                RenderOptions))
         {
             ImGui::TextDisabled("Preview render failed");
             return;

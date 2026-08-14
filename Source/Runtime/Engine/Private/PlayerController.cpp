@@ -2,6 +2,7 @@
 
 #include "Pico/Engine/PlayerState.h"
 #include "Pico/Engine/Player.h"
+#include "Pico/Engine/Pawn.h"
 
 namespace Pico
 {
@@ -15,6 +16,7 @@ bool PPlayerController::RegisterProperties(PClass& Class)
     PICO_ADD_PROPERTY_METADATA(Properties, PlayerState, Metadata);
     Metadata.Flags = EPropertyFlags::Transient;
     PICO_ADD_PROPERTY_METADATA(Properties, Player, Metadata);
+    PICO_ADD_PROPERTY_METADATA(Properties, ViewTarget, Metadata);
     return Class.AddProperties(std::move(Properties));
 }
 
@@ -32,6 +34,35 @@ PPlayerState* PPlayerController::GetPlayerState() const
 PPlayer* PPlayerController::GetPlayer() const
 {
     return Player.Get();
+}
+
+PActor* PPlayerController::GetViewTarget() const
+{
+    if (PActor* ExplicitTarget = ViewTarget.Get(); ExplicitTarget != nullptr
+        && !ExplicitTarget->IsPendingDestroy()
+        && !ExplicitTarget->IsBeginningDestroy())
+    {
+        return ExplicitTarget;
+    }
+    return GetPawn();
+}
+
+bool PPlayerController::SetViewTarget(PActor* InViewTarget)
+{
+    if (InViewTarget != nullptr
+        && (InViewTarget->GetWorld() != GetWorld()
+            || InViewTarget->IsPendingDestroy()
+            || InViewTarget->IsBeginningDestroy()))
+    {
+        return false;
+    }
+    ViewTarget = InViewTarget;
+    return true;
+}
+
+void PPlayerController::ClearViewTarget()
+{
+    ViewTarget.Reset();
 }
 
 bool PPlayerController::SetPlayerState(PPlayerState* InPlayerState)
@@ -74,6 +105,7 @@ void PPlayerController::OnUnPossess(PPawn*)
 
 void PPlayerController::BeginDestroy()
 {
+    ViewTarget.Reset();
     SetPlayer(nullptr);
     PlayerState.Reset();
     PController::BeginDestroy();

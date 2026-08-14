@@ -8,6 +8,23 @@
 
 namespace Pico
 {
+std::unique_ptr<PClass> PClass::CreateDynamicDerived(
+    FName InName,
+    const PClass* InSuperClass)
+{
+    if (InName.IsNone() || InSuperClass == nullptr
+        || !InSuperClass->CanConstruct())
+    {
+        return {};
+    }
+    return std::unique_ptr<PClass>(new PClass(
+        InName,
+        InSuperClass,
+        InSuperClass->Size,
+        InSuperClass->Constructor,
+        InSuperClass->NativeTypeToken));
+}
+
 PClass::PClass(FName InName, const PClass* InSuperClass, std::size_t InSize, FConstructFunction InConstructor)
     : PClass(InName, InSuperClass, InSize, InConstructor, nullptr)
 {

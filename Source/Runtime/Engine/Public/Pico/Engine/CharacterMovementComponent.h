@@ -73,6 +73,8 @@ public:
     void SetPushImpulse(float Value);
     bool ShouldOrientRotationToMovement() const;
     void SetOrientRotationToMovement(bool bValue);
+    bool UsesControllerDesiredRotation() const;
+    void SetUseControllerDesiredRotation(bool bValue);
     float GetRotationRate() const;
     void SetRotationRate(float Value);
 
@@ -105,6 +107,7 @@ private:
     int32 MaxSimulationIterations = 4;
     float PushImpulse = 250.0f;
     bool bOrientRotationToMovement = true;
+    bool bUseControllerDesiredRotation = false;
     float RotationRate = 540.0f;
     int32 MovementModeValue = static_cast<int32>(EMovementMode::Falling);
     int32 LastSimulationIterations = 0;

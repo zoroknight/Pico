@@ -134,9 +134,9 @@ Pico::PPawn* PSandboxGameMode::SpawnDefaultPawnFor(
                 && Component->IsA(Pico::PSkeletalMeshComponent::StaticClass()))
             {
                 auto* SkeletalMesh = static_cast<Pico::PSkeletalMeshComponent*>(Component);
-                if (bHasProfile)
+                if (bHasProfile && !SkeletalMesh->GetCharacterProfileAsset().IsValid())
                     SkeletalMesh->SetCharacterProfileAsset(ProfilePath);
-                else
+                else if (!SkeletalMesh->GetCharacterProfileAsset().IsValid())
                     SkeletalMesh->SetRuntimeAnimationSet(
                         AnimationSet.Skeleton,
                         AnimationSet.Mesh,

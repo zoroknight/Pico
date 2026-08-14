@@ -6,6 +6,7 @@
 #include "DetailsPanel.h"
 #include "SceneOutlinerPanel.h"
 #include "SkeletalAssetEditor.h"
+#include "ActorBlueprintEditor.h"
 
 #include "Pico/Core/Math/Vector3.h"
 #include "Pico/Core/PlatformProcess.h"
@@ -187,6 +188,7 @@ private:
     FDetailsPanel DetailsPanel;
     FContentBrowserPanel ContentBrowserPanel;
     FSkeletalAssetEditor SkeletalAssetEditor;
+    FActorBlueprintEditor ActorBlueprintEditor;
     FEditorAssetWorkflowController AssetWorkflow;
     FProcessHandle GameProcess;
     std::filesystem::path GameProcessLogFile;

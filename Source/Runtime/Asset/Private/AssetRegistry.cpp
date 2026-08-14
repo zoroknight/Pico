@@ -40,6 +40,7 @@ std::optional<EAssetType> GetAssetType(const std::filesystem::path& FilePath)
     if (Extension == ".panimset") return EAssetType::AnimationSet;
     if (Extension == ".pmontage") return EAssetType::AnimationMontage;
     if (Extension == ".pcharprofile") return EAssetType::CharacterProfile;
+    if (Extension == ".pblueprint") return EAssetType::ActorBlueprint;
     return std::nullopt;
 }
 
@@ -292,6 +293,7 @@ std::string_view ToString(EAssetType Type)
     case EAssetType::AnimationSet: return "AnimationSet";
     case EAssetType::AnimationMontage: return "AnimationMontage";
     case EAssetType::CharacterProfile: return "CharacterProfile";
+    case EAssetType::ActorBlueprint: return "ActorBlueprint";
     }
     return "Unknown";
 }

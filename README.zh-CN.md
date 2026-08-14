@@ -33,6 +33,15 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   `.pskeletalmesh` 保存默认槽材质，运行时仍可由组件按槽覆盖。
 - `Edit -> Project Settings` 可视化编辑 Action/Axis、鼠标灵敏度、默认地图、Pawn、PlayerController 和
   默认 Character Profile；`Add -> Actor Class...` 可搜索项目原生 Actor 类。
+- 通过独立的 Components/Preview/Details 窗口创建和编辑 `.pblueprint` Data-Only Actor 类型，将 Actor
+  与原生组件的反射属性覆盖编译为生成 `PClass`、CDO 和默认子对象模板，并在关卡中放置和持久化该类型。
+- Actor Blueprint 使用编辑器同进程的独立系统窗口；其预览提供带箭头的局部 XYZ 轴，主编辑器视口提供
+  可关闭的世界原点轴线与右上角方向控件，并支持按住方向控件拖动视角。
+- 将骨骼模型最终变换拆为 Actor World、Component Relative 和 Character Profile Visual 三层，使源模型
+  朝向修正不再改变碰撞、移动参考系或未来需要同步的角色朝向。
+- 按 UE 第三人称模板拆分旋转职责：`DoMove` 以 ControlRotation Yaw 生成世界 Forward/Right 输入，
+  CharacterMovement 让 Actor 朝移动方向转身，SpringArm 独立计算 Camera TargetRotation，不再把
+  ControlRotation 写入相对 Transform；固定鼠标按 S 时角色转身而镜头 Yaw 保持不变。
 - 每次骨骼导入自动生成 `.pcharprofile`，集中引用 Mesh、AnimationSet、Montage 与材质槽；项目可切换
   Profile 而无需修改 Pawn CDO。覆盖重导入会先备份旧资产，失败时整批恢复。
 - 编辑器可从项目 Pawn 类和 Character Profile 创建持久化可玩角色；运行时优先 Possess 地图中标记为
@@ -270,6 +279,13 @@ powershell -ExecutionPolicy Bypass -File .\Scripts\SetupWindows.ps1
 .\Build\Debug\PicoSandboxGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
 
+修改共享 Engine/Render 代码后，Play 前应同时重建编辑器和项目 Runtime。编辑器会主动拒绝比自身更旧的
+`PicoSandboxGame.exe`，避免混用不同版本的二进制：
+
+```powershell
+cmake --build Build --config Release --target PicoEditor PicoSandboxGame --parallel 8
+```
+
 项目 Runtime 从 `Config/Pico.ini` 读取 `[Game] DefaultMap`、默认 Gameplay 类、Character Profile 和
 `[Input]` 中的 Action/Axis 映射，
 `[Game] Executable` 决定编辑器 Play 启动哪个项目程序。`-map=/Game/Maps/Example.pworld` 可以覆盖
@@ -464,6 +480,9 @@ private:
 - [PicoSandbox指南](Projects/PicoSandbox/README.md)
 - [Montage Lite 与人物装配](Docs/Month08_6_MontageAndCharacterAssembly.md)
 - [人物导入、场景可玩 Pawn 与项目设置](Docs/Month08_7_CharacterImportAndProjectSettings.md)
+- [角色控制、第三人称模板与摄像机策略](Docs/Month08_8_CharacterControlAndCameraPolicy.md)
+- [Data-Only Actor Blueprint 与角色装配编辑器](Docs/Month08_9_DataOnlyActorBlueprint.md)
+- [编辑器视口方向与独立资产窗口](Docs/Month08_10_EditorViewportOrientation.md)
 - [MatchState、Gameplay 事件与编辑器绑定](Docs/Month07_4_MatchStateGameplayEventsAndBindings.md)
 - [Development、Installed 与 Staged 运行布局](Docs/Month07_5_DevelopmentInstalledAndStagedLayouts.md)
 - [第三个月编辑器视口](Docs/Month03_10_Editor3DViewport.md)
@@ -495,7 +514,10 @@ private:
 [Skeletal Animation](Docs/Month08_4_SkeletalAnimation.md)、
 [Skeletal Asset Preview And Import](Docs/Month08_5_SkeletalAssetPreview.md)、
 [Montage Lite 与人物装配](Docs/Month08_6_MontageAndCharacterAssembly.md)，以及
-[人物导入、场景可玩 Pawn 与项目设置](Docs/Month08_7_CharacterImportAndProjectSettings.md)。后续学习路线为：
+[人物导入、场景可玩 Pawn 与项目设置](Docs/Month08_7_CharacterImportAndProjectSettings.md)、
+[角色控制、第三人称模板与摄像机策略](Docs/Month08_8_CharacterControlAndCameraPolicy.md) 和
+[Data-Only Actor Blueprint 与角色装配编辑器](Docs/Month08_9_DataOnlyActorBlueprint.md)。Data-Only Blueprint
+负责可复用的 Actor/组件默认值和生成类；行为节点仍属于后续 PicoGraph，不与当前装配工作流耦合。后续学习路线为：
 
 - Replication、RPC、Transform 同步、客户端预测与修正
 - Dedicated Server/广域网验证、Cook、Package 和可独立运行的 Windows 构建

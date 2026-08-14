@@ -2,8 +2,9 @@
 
 本文档是 Pico 后续开发的长期基准，用于避免因对话上下文压缩、计划迭代或项目月份混淆而遗忘关键目标。
 
-计划中的“月份”均指项目开发月份，不是自然月。项目第 5 月主线已经验收完成，当前先执行 3～5 天的
-Montage Lite 收尾阶段，随后进入项目第 6 月网络主线；已经完成的工作只记录为基线，不重复列入剩余任务。
+计划中的“月份”均指项目开发月份，不是自然月。项目第 5 月主线与 Montage Lite/人物装配已经验收完成；
+进入项目第 6 月网络主线前的角色控制与摄像机策略加固已经完成。已经完成的工作只记录为基线，
+不重复列入剩余任务。
 
 ## 项目目标
 
@@ -35,6 +36,14 @@ Pico 是一个以学习 Unreal Engine 5 源码和完整游戏引擎链路为主�
 - 编辑器绿色 Play、红色 Stop 和独立 Game World 进程。
 - Game Module、GameInstance、通用 `PicoGameRuntime` 和项目专属 `PicoSandboxGame` Target。
 - `PCharacter`、Capsule 和 CharacterMovement：Controller -> 输入缓存 -> 确定性移动模拟 -> MoveComponent。
+- 第三人称模板基础链：ControlRotation 驱动 SpringArm，WASD 转换为世界移动意图，角色按移动方向平滑转身。
+- UE 风格 SpringArm TargetRotation：ControlRotation 与组件 RelativeRotation 分离，支持 Pitch/Yaw/Roll
+  继承开关；角色转身只移动摄像机跟随原点，不改变自由视角 Camera Yaw。
+- `ControlRotation/ActorRotation/World` 移动参考系、FreeLook/Strafe、UE 风格旋转优先级、CameraActor 与 ViewTarget。
+- `.pblueprint` Data-Only Actor 资产、动态生成 `PClass`、独立 CDO/默认子对象模板、场景生成类身份，以及
+  Components/Preview/Details 角色装配编辑器。
+- Actor World、Component Relative、Character Profile Visual 三层 Transform；模型源坐标修正不污染
+  Gameplay/Physics/Replication 使用的 Actor Transform。
 - `PicoPhysicsCore/PicoPhysicsJolt` 后端隔离、固定 60 Hz 物理步、查询、Trigger、动态刚体和角色推动。
 - Pico 原生 Skeleton/SkeletalMesh/AnimationClip、AnimInstance、CPU 蒙皮、Idle/Walk/Jump 和可碰撞 Root Motion。
 - Assimp glTF/GLB 与实验性 FBX 骨骼导入、命令行导入工具，以及独立临时 Preview World 中的动画预览。
@@ -42,7 +51,10 @@ Pico 是一个以学习 Unreal Engine 5 源码和完整游戏引擎链路为主�
 - Dynamic Multicast Delegate、签名校验、弱目标清理，以及 `.pworld` v4 稳定引用和动态绑定恢复。
 - 反射属性 Pre/Post 变化通知、ValueSet/Interactive/Load/UndoRedo 来源和 PicoInspector 可视化实验。
 
-项目输入由 PlayerController 转换为世界空间移动意图，Pawn 只缓存输入，MovementComponent 消费后经统一移动函数修改 Transform。Jolt、Root Motion 和网络移动不得新增旁路。
+项目输入由 PlayerController/Gameplay Policy 转换为世界空间移动意图，Pawn 只缓存输入，MovementComponent
+消费后经统一移动函数修改 Transform。输入参考系属于 Gameplay 策略，不写死在 Engine；Jolt、Root Motion
+和网络移动不得新增旁路。详细设计见
+[`Month08_8_CharacterControlAndCameraPolicy.md`](Month08_8_CharacterControlAndCameraPolicy.md)。
 
 ## 固定架构决策
 
@@ -88,6 +100,8 @@ Loopback -> 本机多进程 -> 局域网 -> 网络模拟 -> 公网 Dedicated Ser
 - GAS 只实现 Mini GAS，不复制完整 GameplayTask、TargetActor 和复杂 Effect Aggregator。
 - 可视化脚本第一版只实现 `PicoGraph Lite` Event Graph、受限节点、编译和字节码 VM；完整 UE Blueprint、
   Kismet、热重载和调试器不进入 MVP。
+- 已完成的 Data-Only Actor Blueprint 是“资产 -> GeneratedClass -> CDO/组件模板 -> 实例”的数据层，
+  不等同于 PicoGraph；PicoGraph 后续复用这条生成类链，只增加行为图和执行表示。
 
 ### 长期扩展边界
 
@@ -746,6 +760,10 @@ P2P/NAT 穿透和商业级拥塞控制。对应概念保留扩展点，但不得
 
 进入网络主线前的人物装配缺口已经关闭：地图可以持久保存一个 `Auto Possess Player 0` 的可玩 Pawn；编辑器提供 Pawn Class/Profile 创建器和 Project Settings 资源选择器；运行时具备 ControlRotation、鼠标第三人称视角、视角相对移动、移动朝向旋转与 8 槽材质覆写。网络实现应复制 Pawn/Actor 的权威 Transform 和 Controller 的必要视角状态，不复制仅用于修正源资产坐标的 SkeletalMesh Relative Transform。
 
+编辑器观察与装配体验也已经完成一次加固：主视口具有可关闭的世界 XYZ 原点轴线和可拖拽方向控件；
+Actor Blueprint 以编辑器同进程的独立原生窗口打开，并用带箭头的局部轴明确 Actor `+X/+Y/+Z`。
+Standalone Play 仍保持独立游戏进程，不能与资产编辑器的平台窗口生命周期混为一谈。
+
 PicoSandbox 已增加持久化 `StarterWorld` 与 `/Game/StarterContent` 基础网格/材质。地面、墙、动态箱子、PlayerStart 和灯光属于关卡场景对象，不再由 GameMode 在 BeginPlay 临时生成；这保证编辑器预览、Standalone、网络复制与未来 Cook/Package 使用同一份 World 数据。
 
 目标：产出仓库外可运行的公网双人 Demo。
@@ -868,10 +886,10 @@ Delay / WaitGameplayEvent
 Log
 ```
 
-第一阶段只让已有原生 Actor 通过 `PScriptComponent` 挂载 Graph。第二阶段可选实现
-`PGraphGeneratedClass + CDO + DefaultSubobject Templates`，使 Graph 定义可放置的新 Actor 类型；进入第二
-阶段前必须先证明运行时动态类注册、父类失效、CDO 重建、实例默认值和 `.pworld` 引用修复不会破坏现有
-原生类路径。
+第一阶段只让已有原生 Actor 或已完成的 Data-Only Actor Blueprint 通过 `PScriptComponent` 挂载 Graph。
+动态类注册、GeneratedClass、独立 CDO、默认子对象模板、实例默认值和 `.pworld` 类身份已经由
+`.pblueprint` 纵向切片验证；PicoGraph 必须复用这条链，并在其上增加脚本组件/行为类数据，不能创建第二套
+生成类和对象构造系统。蓝图继承、父类失效传播和运行时热重载仍需在进入多层生成类继承前单独验证。
 
 首版明确不实现完整 Kismet Compiler、Blueprint Interface、Macro/Function Library、任意递归、无界循环、
 Construction Script、AnimGraph、节点热重载、Nativization、完整断点/单步调试、多人协作图编辑和任意

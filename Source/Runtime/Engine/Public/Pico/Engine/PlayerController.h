@@ -7,6 +7,7 @@ namespace Pico
 {
 class PPlayerState;
 class PPlayer;
+class PActor;
 
 class PPlayerController : public PController
 {
@@ -15,6 +16,9 @@ class PPlayerController : public PController
 public:
     PPlayerState* GetPlayerState() const;
     PPlayer* GetPlayer() const;
+    PActor* GetViewTarget() const;
+    bool SetViewTarget(PActor* InViewTarget);
+    void ClearViewTarget();
 
 protected:
     explicit PPlayerController(const FObjectConstructionParams& Params);
@@ -30,5 +34,6 @@ private:
 
     TObjectPtr<PPlayerState> PlayerState;
     TWeakObjectPtr<PPlayer> Player;
+    TWeakObjectPtr<PActor> ViewTarget;
 };
 }

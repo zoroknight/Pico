@@ -6,6 +6,8 @@
 #include "Pico/Editor/EditorWorldDocument.h"
 
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/ActorBlueprint.h"
+#include "Pico/Engine/CameraActor.h"
 #include "Pico/Engine/CameraComponent.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
@@ -21,6 +23,7 @@
 #include "Pico/Object/ObjectRegistry.h"
 #include "Pico/Object/Property.h"
 #include "Pico/Render/SceneViewportRenderer.h"
+#include "PicoSandbox/SandboxModule.h"
 #include "TestRunner.h"
 
 #include <filesystem>
@@ -30,6 +33,16 @@
 
 namespace
 {
+void TestViewportRenderOptionDefaults(FTestRunner& Runner)
+{
+    const Pico::FSceneViewportRenderOptions Options;
+    Runner.Expect(
+        Options.bDrawGrid
+            && !Options.bDrawWorldAxes
+            && Options.bDrawComponentVisualizations,
+        "Viewport render options keep editor-only world axes opt-in");
+}
+
 Pico::PObject* FindWorldObjectByPath(
     Pico::PWorld* World,
     std::string_view Path)
@@ -548,6 +561,16 @@ void TestEditorCommandService(FTestRunner& Runner)
             && ActiveCameraView.Position.Equals(Camera->GetViewPosition()),
         "The renderer resolves the active Camera from the runtime scene");
 
+    const Pico::FEditorCommandResult SpawnCameraActor =
+        Commands.SpawnActor(Pico::PCameraActor::StaticClass());
+    Runner.Expect(
+        SpawnCameraActor.bSucceeded
+            && Selection.Resolve() != nullptr
+            && Selection.Resolve()->IsA(Pico::PCameraActor::StaticClass())
+            && static_cast<Pico::PCameraActor*>(Selection.Resolve())
+                ->GetCameraComponent() != nullptr,
+        "The Actor class workflow creates a ready-to-use CameraActor");
+
     Runner.Expect(
         Commands.SpawnComponentActor(
             Pico::EEditorSceneComponentType::DirectionalLight).bSucceeded
@@ -1010,10 +1033,18 @@ void TestEditorWorldDocument(FTestRunner& Runner)
         "Projects/PicoSandbox/PicoSandbox.pico";
 
     Pico::FEngineLoop EngineLoop;
+    const bool bInitialized = EngineLoop.PreInit(2, Arguments, ProjectFile) == 0
+        && EngineLoop.Init() == 0;
     Runner.Expect(
-        EngineLoop.PreInit(2, Arguments, ProjectFile) == 0
-            && EngineLoop.Init() == 0,
+        bInitialized,
         "Editor document test initializes a project World");
+    Runner.Expect(
+        bInitialized && PicoSandbox::RegisterSandboxGameplayClasses(),
+        "Editor document test registers the active project's gameplay classes");
+    Runner.Expect(
+        bInitialized
+            && Pico::CompileProjectActorBlueprints(EngineLoop.GetAssetRegistry()),
+        "Editor document test compiles project Actor Blueprints before opening Worlds");
 
     Pico::FEditorWorldDocument Document(&EngineLoop);
     Pico::FAssetPath WorldAssetPath;
@@ -1065,6 +1096,7 @@ void TestEditorWorldDocument(FTestRunner& Runner)
 int main()
 {
     FTestRunner Runner;
+    TestViewportRenderOptionDefaults(Runner);
     TestEditorCommandService(Runner);
     TestEditorTransactions(Runner);
     TestEditorWorldDocument(Runner);

@@ -141,6 +141,7 @@ struct FGameplayDebugPanel
         DrawObject("GameMode", GameMode);
         DrawObject("GameState", GameState);
         DrawObject("PlayerController", Controller);
+        DrawObject("ViewTarget", Controller != nullptr ? Controller->GetViewTarget() : nullptr);
         DrawObject("PlayerState", PlayerState);
         DrawObject("Controlled Pawn", Pawn);
         if (PlayerState != nullptr)
@@ -182,6 +183,11 @@ struct FGameplayDebugPanel
                 Pending.X, Pending.Y, Pending.Z);
             ImGui::Text("Last input: %.3f  %.3f  %.3f",
                 LastInput.X, LastInput.Y, LastInput.Z);
+            const Pico::FRotator ActorRotation = Pawn->GetActorRotation();
+            const Pico::FRotator ControlRotation = Controller != nullptr
+                ? Controller->GetControlRotation() : Pico::FRotator::ZeroRotator;
+            ImGui::Text("Actor yaw: %.1f   Control yaw: %.1f   pitch: %.1f",
+                ActorRotation.Yaw, ControlRotation.Yaw, ControlRotation.Pitch);
         }
         if (Movement != nullptr)
         {
@@ -228,6 +234,15 @@ struct FGameplayDebugPanel
                     ? "yes"
                     : "no",
                 CharacterMovement->GetLastSimulationIterations());
+            ImGui::Text("Rotation policy: %s   Rate: %.1f deg/s",
+                Character != nullptr && Character->UsesControllerRotationYaw()
+                    ? "Controller Yaw"
+                    : CharacterMovement->ShouldOrientRotationToMovement()
+                        ? "Orient to Movement"
+                        : CharacterMovement->UsesControllerDesiredRotation()
+                            ? "Controller Desired"
+                            : "Keep Actor Yaw",
+                CharacterMovement->GetRotationRate());
         }
 
         Pico::PSkeletalMeshComponent* SkeletalMesh = nullptr;
@@ -764,17 +779,20 @@ int RunPicoGame(
                     ? Instance->GetPrimaryLocalPlayer() : nullptr;
                 PPlayerController* Controller = LocalPlayer != nullptr
                     ? LocalPlayer->GetPlayerController() : nullptr;
-                PPawn* ViewTarget = Controller != nullptr ? Controller->GetPawn() : nullptr;
+                PActor* ViewTarget = Controller != nullptr ? Controller->GetViewTarget() : nullptr;
                 if (!TryBuildActorCameraView(ViewTarget, View, true))
                     TryBuildActiveCameraView(
                         GameEngine.GetEngineLoop().GetWorld(), View, true);
+                FSceneViewportRenderOptions RenderOptions;
+                RenderOptions.bDrawGrid = false;
+                RenderOptions.bDrawComponentVisualizations = false;
                 Renderer.Render(
                     GameEngine.GetEngineLoop().GetWorld(),
                     GameEngine.GetEngineLoop().GetAssetRegistry(),
                     GameEngine.GetEngineLoop().GetAssetManager(),
                     View,
                     {},
-                    false);
+                    RenderOptions);
                 Renderer.PresentToBackBuffer(
                     static_cast<uint32>(Width),
                     static_cast<uint32>(Height));

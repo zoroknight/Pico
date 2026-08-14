@@ -25,10 +25,11 @@ class FPicoSandboxGameModule final : public Pico::IGameModule
 public:
     bool StartupModule() override
     {
-        if (!RegisterSandboxGameplayClasses())
-        {
-            return false;
-        }
+        return RegisterSandboxGameplayClasses();
+    }
+
+    bool PostActorBlueprintCompile() override
+    {
         Pico::FConfigFile Config;
         Config.Load(Pico::FPaths::GetProjectConfigFile("Pico.ini"));
         const auto ResolveClass = [&Config](

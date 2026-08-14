@@ -100,6 +100,15 @@ FOnPossessedPawnChanged& PController::OnPossessedPawnChanged()
     return PossessedPawnChangedEvent;
 }
 
+void PController::BeginPlay()
+{
+    PActor::BeginPlay();
+    if (PPawn* PossessedPawn = GetPawn())
+    {
+        PossessedPawn->RefreshMovementTickPrerequisites();
+    }
+}
+
 bool PController::SetPawn(PPawn* InPawn)
 {
     if (InPawn != nullptr && InPawn->GetWorld() != GetWorld())

@@ -5,6 +5,7 @@
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/CameraComponent.h"
+#include "Pico/Engine/CameraActor.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/DirectionalLightComponent.h"
 #include "Pico/Engine/EngineLoop.h"
@@ -3252,6 +3253,75 @@ void TestCameraSpringArmSockets(FTestRunner& Runner)
             && RestoredCamera->GetViewPosition().Equals(
                 Pico::FVector3(-195.0f, 20.0f, 60.0f), 0.001f),
         "World replacement restores the socket name and Camera transform");
+
+    World = EngineLoop.GetWorld();
+    Pico::PPlayerController* Controller =
+        World->SpawnActor<Pico::PPlayerController>("ViewController");
+    Pico::PPawn* Pawn = World->SpawnActor<Pico::PPawn>("ViewPawn");
+    Pico::PCameraActor* FixedCamera =
+        World->SpawnActor<Pico::PCameraActor>("FixedCamera");
+    Runner.Expect(
+        Controller != nullptr && Pawn != nullptr && FixedCamera != nullptr
+            && FixedCamera->GetCameraComponent() != nullptr
+            && Controller->Possess(Pawn)
+            && Controller->SetViewTarget(FixedCamera)
+            && Controller->GetViewTarget() == FixedCamera,
+        "PlayerController selects a persistent CameraActor as an explicit ViewTarget");
+    if (FixedCamera != nullptr) FixedCamera->Destroy();
+    Runner.Expect(
+        Controller != nullptr && Controller->GetViewTarget() == Pawn,
+        "A destroyed explicit ViewTarget safely falls back to the possessed Pawn");
+
+    Pico::PPawn* OrbitPawn = World->SpawnActor<Pico::PPawn>("OrbitPawn");
+    Pico::PSceneComponent* OrbitRoot = OrbitPawn != nullptr
+        ? OrbitPawn->CreateComponent<Pico::PSceneComponent>("OrbitRoot") : nullptr;
+    Pico::PSpringArmComponent* OrbitBoom = OrbitPawn != nullptr
+        ? OrbitPawn->CreateComponent<Pico::PSpringArmComponent>("OrbitBoom") : nullptr;
+    Pico::PCameraComponent* OrbitCamera = OrbitPawn != nullptr
+        ? OrbitPawn->CreateComponent<Pico::PCameraComponent>("OrbitCamera") : nullptr;
+    Pico::PPlayerController* OrbitController =
+        World->SpawnActor<Pico::PPlayerController>("OrbitController");
+    const bool bOrbitRigCreated = OrbitPawn != nullptr
+        && OrbitRoot != nullptr
+        && OrbitBoom != nullptr
+        && OrbitCamera != nullptr
+        && OrbitController != nullptr
+        && OrbitPawn->SetRootComponent(OrbitRoot)
+        && OrbitBoom->AttachToComponent(
+            OrbitRoot, Pico::EAttachmentTransformRule::KeepRelative)
+        && OrbitCamera->AttachToComponent(
+            OrbitBoom,
+            Pico::EAttachmentTransformRule::KeepRelative,
+            Pico::PSpringArmComponent::GetEndpointSocketName())
+        && OrbitController->Possess(OrbitPawn);
+    Runner.Expect(
+        bOrbitRigCreated,
+        "A possessed Pawn creates a third-person SpringArm camera rig");
+    if (bOrbitRigCreated)
+    {
+        OrbitBoom->SetUsePawnControlRotation(true);
+        OrbitBoom->SetTargetArmLength(400.0f);
+        OrbitController->SetControlRotation(Pico::FRotator(-15.0f, 35.0f, 0.0f));
+        const Pico::FVector3 InitialCameraForward = OrbitCamera->GetViewForward();
+        const Pico::FVector3 InitialCameraPosition = OrbitCamera->GetViewPosition();
+        OrbitPawn->SetActorRotation(Pico::FRotator(0.0f, -145.0f, 0.0f));
+        Runner.Expect(
+            OrbitBoom->GetRelativeRotation().Equals(Pico::FRotator::ZeroRotator)
+                && OrbitBoom->GetTargetRotation().Equals(
+                    OrbitController->GetControlRotation(), 0.001f)
+                && OrbitCamera->GetViewForward().Equals(
+                    InitialCameraForward, 0.001f)
+                && OrbitCamera->GetViewPosition().Equals(
+                    InitialCameraPosition, 0.001f),
+            "Pawn turning does not rotate a control-driven third-person camera");
+
+        OrbitBoom->SetInheritYaw(false);
+        OrbitBoom->SetRelativeRotation(Pico::FRotator(-10.0f, 12.0f, 0.0f));
+        Runner.Expect(
+            std::abs(Pico::FRotator::NormalizeAxis(
+                OrbitBoom->GetTargetRotation().Yaw - 12.0f)) < 0.001f,
+            "SpringArm inheritance switches can override individual control-rotation axes");
+    }
 
     EngineLoop.Exit();
 }

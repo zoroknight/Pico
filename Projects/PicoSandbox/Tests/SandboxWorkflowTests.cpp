@@ -14,8 +14,10 @@
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerController.h"
 #include "Pico/Engine/World.h"
+#include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/AnimInstance.h"
+#include "Pico/Engine/ActorBlueprint.h"
 #include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Input/InputSystem.h"
 #include "Pico/Object/ObjectGlobals.h"
@@ -28,6 +30,7 @@
 #include "PicoSandbox/SandboxPlayerController.h"
 #include "PicoSandbox/SandboxSession.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 
@@ -115,6 +118,77 @@ int main()
         Runner.Expect(
             GameEngine.Init() == 0,
             "Sandbox module starts before the default map is loaded");
+        Pico::FAssetPath KnightBlueprintPath;
+        Pico::FAssetPath::TryParse(
+            "/Game/Characters/BP_Knight.pblueprint", KnightBlueprintPath);
+        Pico::FAssetPath KnightProfilePath;
+        Pico::FAssetPath::TryParse(
+            "/Game/Characters/Knight_Male/Knight_Male.pcharprofile",
+            KnightProfilePath);
+        const Pico::PClass* KnightBlueprintClass =
+            Pico::FindActorBlueprintGeneratedClass(KnightBlueprintPath);
+        Runner.Expect(
+            KnightBlueprintClass != nullptr
+                && KnightBlueprintClass->IsChildOf(
+                    PicoSandbox::PSandboxPawn::StaticClass())
+                && KnightBlueprintClass->GetDefaultObject() != nullptr,
+            "Actor Blueprint compiles a reflected generated class with its own CDO");
+        const Pico::FDefaultSubobjectRecord* KnightMeshTemplate = nullptr;
+        if (KnightBlueprintClass != nullptr)
+        {
+            for (const Pico::FDefaultSubobjectRecord& Record
+                 : KnightBlueprintClass->GetDefaultSubobjects())
+            {
+                if (Record.Name == Pico::FName("SandboxAnimatedMesh"))
+                {
+                    KnightMeshTemplate = &Record;
+                    break;
+                }
+            }
+        }
+        Runner.Expect(
+            KnightMeshTemplate != nullptr
+                && KnightMeshTemplate->Template != nullptr
+                && static_cast<Pico::PSkeletalMeshComponent*>(
+                    KnightMeshTemplate->Template.get())
+                    ->GetCharacterProfileAsset() == KnightProfilePath,
+            "Actor Blueprint applies reflected component overrides to generated defaults");
+        Pico::PWorld* BlueprintWorld = GameEngine.GetEngineLoop().GetWorld();
+        Pico::FActorSpawnParameters BlueprintSpawn;
+        BlueprintSpawn.Name = Pico::FName("BlueprintKnightTest");
+        Pico::PActor* BlueprintKnight = BlueprintWorld != nullptr
+            && KnightBlueprintClass != nullptr
+            ? BlueprintWorld->SpawnActor(KnightBlueprintClass, BlueprintSpawn)
+            : nullptr;
+        Pico::PObject* BlueprintMesh = BlueprintKnight != nullptr
+            ? Pico::FindObject(
+                BlueprintKnight, Pico::FName("SandboxAnimatedMesh"))
+            : nullptr;
+        Runner.Expect(
+            BlueprintKnight != nullptr
+                && BlueprintKnight->GetClass() == KnightBlueprintClass
+                && BlueprintMesh != nullptr
+                && BlueprintMesh->IsA(Pico::PSkeletalMeshComponent::StaticClass())
+                && static_cast<Pico::PSkeletalMeshComponent*>(BlueprintMesh)
+                    ->GetCharacterProfileAsset() == KnightProfilePath,
+            "SpawnActor materializes the generated Blueprint CDO and component templates");
+        Pico::FWorldAssetData BlueprintWorldData;
+        const bool bCapturedBlueprintClass = BlueprintWorld != nullptr
+            && Pico::CaptureWorld(*BlueprintWorld, BlueprintWorldData)
+            && std::any_of(
+                BlueprintWorldData.Objects.begin(),
+                BlueprintWorldData.Objects.end(),
+                [KnightBlueprintClass](const Pico::FSceneObjectRecord& Record)
+                {
+                    return KnightBlueprintClass != nullptr
+                        && Record.ObjectName == "BlueprintKnightTest"
+                        && Record.ClassName
+                            == KnightBlueprintClass->GetName().ToString();
+                });
+        Runner.Expect(
+            bCapturedBlueprintClass,
+            "World serialization records the stable generated Blueprint class identity");
+        if (BlueprintKnight != nullptr) BlueprintWorld->DestroyActor(BlueprintKnight);
         Runner.Expect(
             Pico::FClassRegistry::FindClass(Pico::FName("PSandboxPawn"))
                 == PicoSandbox::PSandboxPawn::StaticClass()
@@ -156,10 +230,10 @@ int main()
                 && GameMode->GetClass()
                     == PicoSandbox::PSandboxGameMode::StaticClass()
                 && GameMode->GetDefaultPawnClass()
-                    == PicoSandbox::PSandboxPawn::StaticClass()
+                    == KnightBlueprintClass
                 && GameMode->GetPlayerControllerClass()
                     == PicoSandbox::PSandboxPlayerController::StaticClass(),
-            "Sandbox logs in its LocalPlayer and uses GameMode defaults to spawn and possess the project Pawn");
+            "Sandbox logs in its LocalPlayer and resolves the generated Blueprint as its default Pawn class");
 
         auto* Movement = Pawn != nullptr
                 && Pawn->GetMovementComponent() != nullptr
@@ -175,10 +249,16 @@ int main()
                 && AnimatedMeshObject->IsA(Pico::PSkeletalMeshComponent::StaticClass())
             ? static_cast<Pico::PSkeletalMeshComponent*>(AnimatedMeshObject)
             : nullptr;
-        Pico::PObject* CameraBoom = Pawn != nullptr
+        Pico::PObject* CameraBoomObject = Pawn != nullptr
             ? Pico::FindObject(Pawn, Pico::FName("CameraBoom")) : nullptr;
-        Pico::PObject* FollowCamera = Pawn != nullptr
+        auto* CameraBoom = CameraBoomObject != nullptr
+                && CameraBoomObject->IsA(Pico::PSpringArmComponent::StaticClass())
+            ? static_cast<Pico::PSpringArmComponent*>(CameraBoomObject) : nullptr;
+        Pico::PObject* FollowCameraObject = Pawn != nullptr
             ? Pico::FindObject(Pawn, Pico::FName("FollowCamera")) : nullptr;
+        auto* FollowCamera = FollowCameraObject != nullptr
+                && FollowCameraObject->IsA(Pico::PCameraComponent::StaticClass())
+            ? static_cast<Pico::PCameraComponent*>(FollowCameraObject) : nullptr;
         const bool bBaseDefaultsValid =
             PicoSandbox::PSandboxPawn::StaticClass()->GetDefaultSubobjects().size() == 6
                 && Pawn != nullptr
@@ -195,9 +275,7 @@ int main()
                 && AnimatedMesh != nullptr
                 && AnimatedMesh->GetAttachParent() == Pawn->GetRootComponent()
                 && CameraBoom != nullptr
-                && CameraBoom->IsA(Pico::PSpringArmComponent::StaticClass())
                 && FollowCamera != nullptr
-                && FollowCamera->IsA(Pico::PCameraComponent::StaticClass())
                 && Pico::HasAnyFlags(
                     AnimatedMesh->GetFlags(), Pico::EObjectFlags::DefaultSubobject);
         Runner.Expect(
@@ -229,6 +307,18 @@ int main()
                     && !AnimatedMesh->GetRenderData().Vertices.empty()
                     && AnimatedMesh->GetAnimationState() == Pico::EAnimationState::Walk,
                 "World BeginPlay loads the Profile, creates AnimInstance, and selects Walk animation");
+            Runner.Expect(
+                AnimatedMesh != nullptr
+                    && AnimatedMesh->UsesCharacterProfileVisualTransform()
+                    && AnimatedMesh->GetCharacterProfileVisualTransform().Translation.Equals(
+                        Pico::FVector3(0.0f, 0.0f, -96.0f), 0.01f)
+                    && AnimatedMesh->GetCharacterProfileVisualTransform().Rotation.Rotator().Equals(
+                        Pico::FRotator(0.0f, 180.0f, 0.0f), 0.01f)
+                    && AnimatedMesh->GetVisualWorldTransform().Equals(
+                        AnimatedMesh->GetCharacterProfileVisualTransform()
+                            * AnimatedMesh->GetWorldTransform(),
+                        0.01f),
+                "Character Profile composes its asset visual transform without overwriting the component transform");
             Pico::FAssetPath SlotFiveOverride;
             Pico::FAssetPath::TryParse(
                 "/Game/Characters/Knight_Male/Materials/Red.pmat", SlotFiveOverride);
@@ -253,6 +343,70 @@ int main()
                 Movement != nullptr
                     && !Movement->GetVelocity().IsNearlyZero(),
                 "Sandbox movement input produces velocity");
+            Runner.Expect(
+                Movement != nullptr
+                    && Movement->ShouldOrientRotationToMovement()
+                    && !Movement->UsesControllerDesiredRotation()
+                    && !Pawn->UsesControllerRotationYaw()
+                    && Pawn->GetMovementReference()
+                        == PicoSandbox::EMovementReference::ControlRotation,
+                "Sandbox defaults match the UE third-person free-look control policy");
+
+            Input.BeginFrame();
+            Input.SetKeyState(Pico::EKey::W, false);
+            Controller->SetControlRotation(Pico::FRotator(-15.0f, 25.0f, 0.0f));
+            Pawn->SetActorRotation(Pico::FRotator(0.0f, 25.0f, 0.0f));
+            const Pico::FVector3 CameraForwardBeforeReverse =
+                FollowCamera != nullptr
+                    ? FollowCamera->GetViewForward() : Pico::FVector3::ZeroVector;
+            Input.SetKeyState(Pico::EKey::S, true);
+            GameEngine.GetEngineLoop().GetWorld()->Tick(0.1f);
+            Input.EndFrame();
+            Runner.Expect(
+                FollowCamera != nullptr
+                    && CameraBoom != nullptr
+                    && CameraBoom->GetTargetRotation().Equals(
+                        Controller->GetControlRotation(), 0.001f)
+                    && FollowCamera->GetViewForward().Equals(
+                        CameraForwardBeforeReverse, 0.001f)
+                    && std::abs(Pico::FRotator::NormalizeAxis(
+                        Pawn->GetActorRotation().Yaw - 25.0f)) > 1.0f,
+                "Pressing S turns the Character toward camera-relative reverse without rotating the camera");
+            Input.BeginFrame();
+            Input.SetKeyState(Pico::EKey::S, false);
+            Input.EndFrame();
+
+            const Pico::FQuat HorizontalViewRotation = Pico::FQuat::FromRotator(
+                Pico::FRotator(0.0f, Controller->GetControlRotation().Yaw, 0.0f));
+            const Pico::FVector3 ExpectedCameraRight = Pico::FVector3::Cross(
+                HorizontalViewRotation.RotateVector(Pico::FVector3::ForwardVector),
+                Pico::FVector3::UpVector).GetSafeNormal();
+            Input.BeginFrame();
+            Input.SetKeyState(Pico::EKey::D, true);
+            GameEngine.GetEngineLoop().GetWorld()->Tick(1.0f / 60.0f);
+            Input.EndFrame();
+            Runner.Expect(
+                Pawn->GetLastMovementInputVector().Equals(
+                    ExpectedCameraRight, 0.001f),
+                "Pressing D produces the same screen-right basis used by the camera view");
+            Input.BeginFrame();
+            Input.SetKeyState(Pico::EKey::D, false);
+            Input.EndFrame();
+
+            Input.BeginFrame();
+            Input.SetKeyState(Pico::EKey::MouseRight, true);
+            GameEngine.GetEngineLoop().GetWorld()->Tick(1.0f / 60.0f);
+            Input.EndFrame();
+            Runner.Expect(
+                Controller->GetControlMode()
+                        == PicoSandbox::ECharacterControlMode::Strafe
+                    && Movement != nullptr
+                    && !Movement->ShouldOrientRotationToMovement()
+                    && Movement->UsesControllerDesiredRotation(),
+                "Aim switches the runtime policy to controller-facing Strafe mode");
+            Input.BeginFrame();
+            Input.SetKeyState(Pico::EKey::MouseRight, false);
+            Input.EndFrame();
             Runner.Expect(
                 Movement != nullptr
                     && Movement->GetMovementMode()

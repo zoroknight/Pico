@@ -367,6 +367,7 @@ std::size_t FInputSystem::GetKeyIndex(EKey Key)
 void FInputSystem::AddDefaultMappingsForMissingNames()
 {
     if (!ActionMappings.contains("Jump")) AddActionMapping("Jump", EKey::Space);
+    if (!ActionMappings.contains("Aim")) AddActionMapping("Aim", EKey::MouseRight);
     if (!AxisMappings.contains("MoveForward"))
     {
         AddAxisMapping("MoveForward", { EInputAxisSource::Key, EKey::W, 1.0f });
