@@ -70,6 +70,10 @@ The current implementation can:
 - Match the UE third-person template's rotation ownership: `DoMove` converts ControlRotation yaw into
   world-space forward/right input, CharacterMovement turns the Actor toward movement, and SpringArm
   evaluates an independent camera target rotation instead of writing ControlRotation into its relative transform.
+- Clamp reflected Controller view pitch to configurable limits (`-75` to `+55` degrees in Sandbox),
+  and retract SpringArm through an optional UE-style sphere sweep with a configurable probe size.
+- Show smoothed FPS/frame time in the editor through `View -> Frame Rate`, while Game and packaged
+  executables use the Windows GUI subsystem and do not open a separate console window.
 - Inspect the live Gameplay object chain, restart/destroy/repossess its Pawn, and reload the map from
   the standalone runtime's `Gameplay Debug` panel; inspect PlayerStart shape and validation in editor.
 - Create PlayerStart from the editor toolbar, review persistent green/yellow/red diagnostics in
@@ -117,6 +121,11 @@ The current implementation can:
   markers, strict relative paths, version checks, and optional `-engineroot`/`-stageroot` overrides.
 - Run the Release Sandbox from an external Stage with no `Source`, `CMakeLists.txt`, repository
   working directory, or explicit project argument; the manifest locates Engine, project, and assets.
+- Package a saved project through the standalone `PicoPackager` or the editor File menu into an
+  atomic Windows Development Stage, driven by a target receipt, native-asset contributors,
+  validation, a file report, and an optional repository-external smoke test.
+- Explicitly replace a stable package name or create a side-by-side custom Stage; unique internal
+  staging directories are cleaned after success or failure without damaging the last good package.
 - Represent persistent references with validated `/Game/...` asset paths instead of machine-specific
   disk paths.
 - Deterministically scan native `.pworld`, `.pmesh`, `.ptex`, and `.pmat` files into a project asset
@@ -161,7 +170,7 @@ The current implementation can:
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-Debug and Release configurations build successfully, all sixteen CTest targets pass, and the focused animation
+Debug and Release configurations build successfully, all seventeen CTest targets pass, and the focused animation
 suite passes 13/13 assertions.
 
 ## Architecture
@@ -355,7 +364,8 @@ Start the game runtime without editor UI:
 ```
 
 After changing shared Engine/Render code, rebuild both the editor and project runtime before Play.
-The editor intentionally rejects an older `PicoSandboxGame.exe` instead of mixing binary versions:
+Compatibility is checked through project/Engine versions and actual startup rather than file
+timestamps, because an up-to-date CMake target may legitimately be older than a rebuilt editor:
 
 ```powershell
 cmake --build Build --config Release --target PicoEditor PicoSandboxGame --parallel 8
@@ -406,9 +416,12 @@ Camera-rig parameter reference:
 | Spring Arm | `TargetArmLength` | Distance from the arm origin to `SpringEndpoint` along local `-X`. |
 | Spring Arm | `TargetOffset` | World-space offset applied to the arm origin. |
 | Spring Arm | `SocketOffset` | Arm-local offset applied at `SpringEndpoint`, useful for over-shoulder cameras. |
+| Spring Arm | `Do Collision Test` | Enables the camera-path collision sweep; disabling it always uses the ideal arm length. |
+| Spring Arm | `Probe Size` | Radius of the camera collision sphere; Sandbox defaults to `12`. |
 
 An attached Camera normally keeps an identity Relative Transform and lets the Spring Arm control
-distance, rotation, and offset. Collision retraction and camera lag are not implemented yet.
+distance, rotation, offset, and collision retraction. The sweep ignores PrimitiveComponents owned by
+the same Actor so the character does not retract its own camera. Camera lag is not implemented yet.
 - Select a `.pmesh` in Content Browser, then use `Add > Static Mesh` or double-click the asset to
   create an Actor. `Ctrl` toggles assets, `Shift` selects a range, and `Ctrl+A` selects every asset
   visible under the current folder, search, and type filters.
@@ -526,6 +539,16 @@ Build and test Release:
 powershell -ExecutionPolicy Bypass -File .\Scripts\SetupWindows.ps1 -Configuration Release
 ```
 
+Build and package PicoSandbox as a Windows Development Stage:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\PackageProject.ps1
+```
+
+The output is `Projects/PicoSandbox/Saved/StagedBuilds/PicoSandbox-Windows-Development`.
+Pass `-StageName PicoSandbox_TestPackage` for a side-by-side test package. Updating an existing stable
+name from the editor requires explicit `Replace Package` confirmation.
+
 Open Pico in Visual Studio:
 
 ```text
@@ -607,6 +630,8 @@ See:
 - [Data-Only Actor Blueprint And Character Assembly](Docs/Month08_9_DataOnlyActorBlueprint.md)
 - [Editor Viewport Orientation And Native Asset Windows](Docs/Month08_10_EditorViewportOrientation.md)
 - [Project Browser And Editor Session Restore](Docs/Month08_11_ProjectBrowserAndEditorSession.md)
+- [Initial Windows Development Packaging](Docs/Month08_12_InitialPackaging.md)
+- [Runtime Window, FPS, and Third-Person Camera Polish](Docs/Month08_13_RuntimeCameraAndWindowPolish.md)
 - [Class Default Objects and Unified Construction](Docs/Month03_13_ClassDefaultObjects.md)
 - [Default Subobject Templates](Docs/Month03_14_DefaultSubobjects.md)
 - [Native Delegates and Weak Object Binding](Docs/Month03_15_NativeDelegates.md)
@@ -639,7 +664,7 @@ later PicoGraph milestone rather than being coupled to this assembly workflow.
 The remaining learning path is:
 
 - Replication, RPC, transform synchronization, client prediction, and correction
-- Dedicated-server/WAN validation, Cook, Package, and a standalone Windows build
+- Dedicated-server/WAN validation, dependency-pruned Cook, Shipping, and clean-machine packaging
 - A compact `PicoTask` worker pool and game-thread dispatcher for asynchronous Cook, build, and AI
   work while runtime objects remain game-thread-owned
 - A compact Gameplay Ability System with AbilityTask, followed by AI tools and an Agent workflow

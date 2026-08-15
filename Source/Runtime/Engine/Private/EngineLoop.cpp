@@ -640,6 +640,16 @@ float FEngineLoop::GetDeltaSeconds() const
     return static_cast<float>(FrameTimer.GetDeltaSeconds());
 }
 
+double FEngineLoop::GetAverageFrameTimeMS() const
+{
+    return FrameTimer.GetAverageFrameTimeMS();
+}
+
+double FEngineLoop::GetAverageFPS() const
+{
+    return FrameTimer.GetAverageFPS();
+}
+
 PWorld* FEngineLoop::GetWorld() const
 {
     PObject* Object = ResolveObject(WorldHandle);

@@ -3,6 +3,7 @@
 #include "Pico/Core/GameThread.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/Class.h"
+#include "Pico/Object/Property.h"
 
 #include <algorithm>
 #include <cmath>
@@ -18,8 +19,25 @@ bool PPrimitiveComponent::RegisterProperties(PClass& Class)
     std::vector<PProperty> Properties;
     PICO_ADD_PROPERTY(Properties, bVisible);
     PICO_ADD_PROPERTY(Properties, Color);
-    PICO_ADD_PROPERTY(Properties, CollisionEnabledValue);
-    PICO_ADD_PROPERTY(Properties, PhysicsBodyTypeValue);
+    FPropertyMetadata CollisionMetadata;
+    CollisionMetadata.DisplayName = "Collision Enabled";
+    CollisionMetadata.EnumOptions = {
+        {static_cast<int32>(ECollisionEnabled::NoCollision), "No Collision"},
+        {static_cast<int32>(ECollisionEnabled::QueryOnly), "Query Only"},
+        {static_cast<int32>(ECollisionEnabled::PhysicsOnly), "Physics Only"},
+        {static_cast<int32>(ECollisionEnabled::QueryAndPhysics), "Query And Physics"}
+    };
+    PICO_ADD_PROPERTY_METADATA(
+        Properties, CollisionEnabledValue, CollisionMetadata);
+    FPropertyMetadata BodyTypeMetadata;
+    BodyTypeMetadata.DisplayName = "Physics Body Type";
+    BodyTypeMetadata.EnumOptions = {
+        {static_cast<int32>(EPhysicsBodyType::Static), "Static"},
+        {static_cast<int32>(EPhysicsBodyType::Kinematic), "Kinematic"},
+        {static_cast<int32>(EPhysicsBodyType::Dynamic), "Dynamic"}
+    };
+    PICO_ADD_PROPERTY_METADATA(
+        Properties, PhysicsBodyTypeValue, BodyTypeMetadata);
     PICO_ADD_PROPERTY(Properties, bSimulatePhysics);
     PICO_ADD_PROPERTY(Properties, bSensor);
     PICO_ADD_PROPERTY(Properties, bUseGravity);
@@ -88,7 +106,14 @@ bool PPrimitiveComponent::IsSimulatingPhysics() const { return bSimulatePhysics;
 void PPrimitiveComponent::SetSimulatePhysics(bool bValue)
 {
     bSimulatePhysics = bValue;
-    if (bValue) PhysicsBodyTypeValue = static_cast<int32>(EPhysicsBodyType::Dynamic);
+    if (bValue)
+    {
+        PhysicsBodyTypeValue = static_cast<int32>(EPhysicsBodyType::Dynamic);
+    }
+    else if (PhysicsBodyTypeValue == static_cast<int32>(EPhysicsBodyType::Dynamic))
+    {
+        PhysicsBodyTypeValue = static_cast<int32>(EPhysicsBodyType::Kinematic);
+    }
     RecreatePhysicsState();
 }
 
@@ -225,5 +250,69 @@ void PPrimitiveComponent::DispatchPhysicsEvent(
     {
         ComponentHitEvent.Broadcast(Other, Event);
     }
+}
+
+void PPrimitiveComponent::PostEditChangeProperty(
+    const FPropertyChangedEvent& Event)
+{
+    PSceneComponent::PostEditChangeProperty(Event);
+    if (Event.Property == nullptr)
+    {
+        return;
+    }
+
+    const FName PropertyName = Event.Property->GetName();
+    if (PropertyName == FName("PhysicsBodyTypeValue"))
+    {
+        PhysicsBodyTypeValue = std::clamp(
+            PhysicsBodyTypeValue,
+            static_cast<int32>(EPhysicsBodyType::Static),
+            static_cast<int32>(EPhysicsBodyType::Dynamic));
+        bSimulatePhysics =
+            PhysicsBodyTypeValue == static_cast<int32>(EPhysicsBodyType::Dynamic);
+    }
+    else if (PropertyName == FName("bSimulatePhysics"))
+    {
+        if (bSimulatePhysics)
+        {
+            PhysicsBodyTypeValue = static_cast<int32>(EPhysicsBodyType::Dynamic);
+        }
+        else if (PhysicsBodyTypeValue
+            == static_cast<int32>(EPhysicsBodyType::Dynamic))
+        {
+            PhysicsBodyTypeValue = static_cast<int32>(EPhysicsBodyType::Kinematic);
+        }
+    }
+
+    CollisionEnabledValue = std::clamp(
+        CollisionEnabledValue,
+        static_cast<int32>(ECollisionEnabled::NoCollision),
+        static_cast<int32>(ECollisionEnabled::QueryAndPhysics));
+    Mass = std::isfinite(Mass) && Mass > 0.0f ? Mass : 1.0f;
+    if (PropertyName == FName("CollisionEnabledValue")
+        || PropertyName == FName("PhysicsBodyTypeValue")
+        || PropertyName == FName("bSimulatePhysics")
+        || PropertyName == FName("bSensor")
+        || PropertyName == FName("bUseGravity")
+        || PropertyName == FName("Mass"))
+    {
+        RecreatePhysicsState();
+    }
+}
+
+void PPrimitiveComponent::PostLoad()
+{
+    PSceneComponent::PostLoad();
+    CollisionEnabledValue = std::clamp(
+        CollisionEnabledValue,
+        static_cast<int32>(ECollisionEnabled::NoCollision),
+        static_cast<int32>(ECollisionEnabled::QueryAndPhysics));
+    PhysicsBodyTypeValue = std::clamp(
+        PhysicsBodyTypeValue,
+        static_cast<int32>(EPhysicsBodyType::Static),
+        static_cast<int32>(EPhysicsBodyType::Dynamic));
+    bSimulatePhysics =
+        PhysicsBodyTypeValue == static_cast<int32>(EPhysicsBodyType::Dynamic);
+    Mass = std::isfinite(Mass) && Mass > 0.0f ? Mass : 1.0f;
 }
 }

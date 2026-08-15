@@ -62,6 +62,16 @@ set_target_properties(PicoSandboxGame PROPERTIES
     FOLDER "Projects/PicoSandbox"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>"
     VS_DPI_AWARE "PerMonitor"
+    WIN32_EXECUTABLE TRUE
+)
+
+if(MSVC)
+    target_link_options(PicoSandboxGame PRIVATE "/ENTRY:mainCRTStartup")
+endif()
+
+file(GENERATE
+    OUTPUT "${CMAKE_BINARY_DIR}/$<CONFIG>/PicoSandboxGame.targetreceipt"
+    CONTENT "[Target]\nName=PicoSandboxGame\nType=Game\nPlatform=Windows\nConfiguration=$<CONFIG>\nEngineVersion=${PROJECT_VERSION}\nExecutable=$<TARGET_FILE_NAME:PicoSandboxGame>\n\n[RuntimeDependencies]\n"
 )
 
 add_executable(PicoSandboxDemo

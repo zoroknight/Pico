@@ -49,6 +49,12 @@ bool PCharacterMovementComponent::RegisterProperties(PClass& Class)
     PICO_ADD_PROPERTY(Properties, RotationRate);
     FPropertyMetadata RuntimeMetadata;
     RuntimeMetadata.Flags = EPropertyFlags::Transient | EPropertyFlags::ReadOnly;
+    RuntimeMetadata.DisplayName = "Movement Mode";
+    RuntimeMetadata.EnumOptions = {
+        {static_cast<int32>(EMovementMode::None), "None"},
+        {static_cast<int32>(EMovementMode::Walking), "Walking"},
+        {static_cast<int32>(EMovementMode::Falling), "Falling"}
+    };
     PICO_ADD_PROPERTY_METADATA(Properties, MovementModeValue, RuntimeMetadata);
     return Class.AddProperties(std::move(Properties));
 }
@@ -213,7 +219,14 @@ bool PCharacterMovementComponent::FindFloor(FFindFloorResult& OutFloor) const
     const PSceneComponent* Component = GetUpdatedComponent();
     PWorld* World = GetWorld();
     IWorldCollisionQuery* Query = World != nullptr ? World->GetCollisionQuery() : nullptr;
-    if (Component == nullptr || Query == nullptr) return false;
+    if (Component == nullptr || Query == nullptr
+        || (Component->IsA(PPrimitiveComponent::StaticClass())
+            && !HasQueryCollision(
+                static_cast<const PPrimitiveComponent*>(Component)
+                    ->GetCollisionEnabled())))
+    {
+        return false;
+    }
 
     const FTransform Transform = Component->GetWorldTransform();
     FCollisionQueryParams Params;

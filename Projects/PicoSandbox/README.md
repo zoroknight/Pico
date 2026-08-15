@@ -55,6 +55,20 @@ cmake --build Build --config Debug --parallel
 ctest --test-dir Build -C Debug --output-on-failure
 ```
 
+Create a self-contained Windows Development Stage from the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\PackageProject.ps1
+```
+
+The editor exposes the same pipeline through
+`File -> Package Project -> Windows (Development)`.
+
+The default Stage is `PicoSandbox-Windows-Development`. Enable `Replace Package` to update that
+stable output, or enter another Package Name to create a side-by-side Stage. The PowerShell entry
+supports the same choice with `-StageName PicoSandbox_TestPackage`. A packaged Game uses the Windows
+GUI subsystem and therefore opens no separate console window.
+
 ## Example Types
 
 `PSandboxEntity` declares inherited project state:
@@ -168,6 +182,13 @@ Run `PicoSandboxGame` and use these controls:
 | `Reload Map` | Preserve GameInstance/LocalPlayer and rebuild World-owned Gameplay objects |
 | `Start/End/Abort Match` | Exercise legal MatchState transitions and observe the GameState clock |
 
+Mouse input changes ControlRotation while the Sandbox Controller clamps pitch to `-75..+55`
+degrees. The possessed character turns toward camera-relative movement, while the camera yaw remains
+independent. Select the playable character's `CameraBoom` in PicoEditor to toggle `Do Collision Test`
+or change `Probe Size`; with collision enabled, placing a wall between the character and camera
+retracts the arm instead of letting the wall hide the character. `View -> Frame Rate` toggles the
+editor's FPS/frame-time readout.
+
 To verify persistent dynamic events, select a PlayerStart Actor in PicoEditor and bind
 `OnPlayerSpawnedEvent` to that PlayerStart's `RecordPlayerSpawn` function under
 `Events & Bindings`. Save and Play. `Gameplay Debug` displays the restored binding count and the
@@ -179,6 +200,8 @@ MatchState and editor binding acceptance is documented in
 [`Docs/Month07_4_MatchStateGameplayEventsAndBindings.md`](../../Docs/Month07_4_MatchStateGameplayEventsAndBindings.md).
 Character movement and its F1 diagnostics are documented in
 [`Docs/Month08_3_CharacterMovement.md`](../../Docs/Month08_3_CharacterMovement.md).
+Runtime window and camera acceptance is documented in
+[`Docs/Month08_13_RuntimeCameraAndWindowPolish.md`](../../Docs/Month08_13_RuntimeCameraAndWindowPolish.md).
 
 ## Persistence Asset
 

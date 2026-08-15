@@ -2,6 +2,7 @@
 
 #include "Pico/Engine/Character.h"
 #include "Pico/Engine/CharacterMovementComponent.h"
+#include "Pico/Engine/CapsuleComponent.h"
 #include "Pico/Engine/Controller.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
@@ -249,6 +250,21 @@ int main()
                 Crate->GetPhysicsBodyHandle(), CrateState)
             && CrateState.LinearVelocity.X > 0.0f,
         "Character impact pushes a Dynamic body through the physics interface");
+
+    Pico::FCharacterMoveState NoCollisionStart = Movement->CaptureMoveState();
+    NoCollisionStart.Transform.Translation = {200.0f, 0.0f, 96.0f};
+    NoCollisionStart.Velocity = Pico::FVector3::ZeroVector;
+    NoCollisionStart.MovementMode = Pico::EMovementMode::Falling;
+    Movement->ApplyMoveState(NoCollisionStart);
+    Character->GetCapsuleComponent()->SetCollisionEnabled(
+        Pico::ECollisionEnabled::NoCollision);
+    Pico::FCharacterMoveInput NoCollisionMove;
+    NoCollisionMove.RootMotionDelta.Translation = {200.0f, 0.0f, 0.0f};
+    Movement->SimulateMovement(NoCollisionMove, 1.0f / 60.0f);
+    Runner.Expect(
+        Character->GetActorLocation().X > 390.0f
+            && !Movement->GetCurrentFloor().bBlockingHit,
+        "NoCollision disables Character movement sweeps and floor queries");
 
     EngineLoop.Exit();
     return Runner.Finish();

@@ -12,13 +12,27 @@ PICO_DEFINE_CLASS(PGameStateBase)
 
 bool PGameStateBase::RegisterProperties(PClass& Class)
 {
-    FPropertyMetadata Metadata;
-    Metadata.Flags = EPropertyFlags::Transient
+    FPropertyMetadata MatchStateMetadata;
+    MatchStateMetadata.Flags = EPropertyFlags::Transient
         | EPropertyFlags::Replicated
         | EPropertyFlags::ReadOnly;
+    MatchStateMetadata.DisplayName = "Match State";
+    MatchStateMetadata.EnumOptions = {
+        {static_cast<int32>(EMatchState::EnteringMap), "Entering Map"},
+        {static_cast<int32>(EMatchState::WaitingToStart), "Waiting To Start"},
+        {static_cast<int32>(EMatchState::InProgress), "In Progress"},
+        {static_cast<int32>(EMatchState::WaitingPostMatch), "Waiting Post Match"},
+        {static_cast<int32>(EMatchState::LeavingMap), "Leaving Map"},
+        {static_cast<int32>(EMatchState::Aborted), "Aborted"}
+    };
     std::vector<PProperty> Properties;
-    PICO_ADD_PROPERTY_METADATA(Properties, MatchStateValue, Metadata);
-    PICO_ADD_PROPERTY_METADATA(Properties, ElapsedMatchTime, Metadata);
+    PICO_ADD_PROPERTY_METADATA(
+        Properties, MatchStateValue, MatchStateMetadata);
+    FPropertyMetadata ElapsedTimeMetadata;
+    ElapsedTimeMetadata.Flags = MatchStateMetadata.Flags;
+    ElapsedTimeMetadata.DisplayName = "Elapsed Match Time";
+    PICO_ADD_PROPERTY_METADATA(
+        Properties, ElapsedMatchTime, ElapsedTimeMetadata);
     return Class.AddProperties(std::move(Properties));
 }
 

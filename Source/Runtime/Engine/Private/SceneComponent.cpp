@@ -2,6 +2,7 @@
 
 #include "Pico/Core/GameThread.h"
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ObjectGlobals.h"
@@ -261,8 +262,12 @@ bool PSceneComponent::MoveComponent(
     FHitResult Hit;
     Hit.Reset(Start, End);
 
-    const bool bShouldSweep = bSweep && Teleport == ETeleportType::None
-        && !Delta.IsNearlyZero();
+    const bool bQueryCollisionEnabled =
+        !IsA(PPrimitiveComponent::StaticClass())
+        || HasQueryCollision(
+            static_cast<const PPrimitiveComponent*>(this)->GetCollisionEnabled());
+    const bool bShouldSweep = bSweep && bQueryCollisionEnabled
+        && Teleport == ETeleportType::None && !Delta.IsNearlyZero();
     if (bShouldSweep)
     {
         PWorld* World = GetWorld();

@@ -94,9 +94,28 @@ add_library(PicoCore STATIC
     Source/Runtime/Core/Private/Name.cpp
     Source/Runtime/Core/Private/Paths.cpp
     Source/Runtime/Core/Private/PlatformProcess.cpp
+    Source/Runtime/Core/Private/PlatformTextInput.cpp
     Source/Runtime/Core/Private/ProjectDescriptor.cpp
     Source/Runtime/Core/Private/Time.cpp
 )
+
+add_library(PicoPackaging STATIC
+    Source/Developer/Packaging/Private/Packaging.cpp
+)
+
+target_include_directories(PicoPackaging
+    PUBLIC
+        Source/Developer/Packaging/Public
+)
+
+target_link_libraries(PicoPackaging PUBLIC PicoCore)
+set_target_properties(PicoPackaging PROPERTIES FOLDER "Pico/Developer")
+
+if(MSVC)
+    target_compile_options(PicoPackaging PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoPackaging PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 target_include_directories(PicoCore
     PUBLIC
@@ -108,6 +127,10 @@ target_compile_definitions(PicoCore
         PICO_PROJECT_NAME="${PROJECT_NAME}"
         PICO_VERSION="${PROJECT_VERSION}"
 )
+
+if(WIN32)
+    target_link_libraries(PicoCore PRIVATE imm32)
+endif()
 
 set_target_properties(PicoCore PROPERTIES FOLDER "Pico")
 
@@ -438,6 +461,19 @@ add_executable(PicoAssetTool
     Source/Programs/PicoAssetTool/Private/Main.cpp
 )
 
+add_executable(PicoPackager
+    Source/Programs/PicoPackager/Private/Main.cpp
+)
+
+target_link_libraries(PicoPackager PRIVATE PicoPackaging)
+set_target_properties(PicoPackager PROPERTIES FOLDER "Programs")
+
+if(MSVC)
+    target_compile_options(PicoPackager PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoPackager PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 target_link_libraries(PicoAssetTool PRIVATE PicoAssetImport PicoEngine)
 set_target_properties(PicoAssetTool PROPERTIES FOLDER "Programs")
 
@@ -562,7 +598,12 @@ target_compile_definitions(PicoGame
 set_target_properties(PicoGame PROPERTIES
     FOLDER "Programs"
     VS_DPI_AWARE "PerMonitor"
+    WIN32_EXECUTABLE TRUE
 )
+
+if(MSVC)
+    target_link_options(PicoGame PRIVATE "/ENTRY:mainCRTStartup")
+endif()
 
 if(MSVC)
     target_compile_options(PicoGame PRIVATE /W4 /permissive-)
@@ -743,6 +784,20 @@ endif()
 add_executable(PicoCoreTests
     Tests/Core/Private/Main.cpp
 )
+
+add_executable(PicoPackagingTests
+    Tests/Packaging/Private/Main.cpp
+)
+
+target_include_directories(PicoPackagingTests PRIVATE Tests/Common)
+target_link_libraries(PicoPackagingTests PRIVATE PicoPackaging)
+set_target_properties(PicoPackagingTests PROPERTIES FOLDER "Tests/Packaging")
+
+if(MSVC)
+    target_compile_options(PicoPackagingTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoPackagingTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 target_include_directories(PicoCoreTests PRIVATE Tests/Common)
 
@@ -965,6 +1020,7 @@ if(BUILD_TESTING)
             -P ${PICO_ROOT_DIR}/Tests/HeaderTool/RunHeaderToolTests.cmake
     )
     add_test(NAME PicoCoreTests COMMAND PicoCoreTests)
+    add_test(NAME PicoPackagingTests COMMAND PicoPackagingTests)
     add_test(NAME PicoAssetTests COMMAND PicoAssetTests)
     add_test(NAME PicoAssetImportTests COMMAND PicoAssetImportTests)
     add_test(NAME PicoObjectTests COMMAND PicoObjectTests)
@@ -981,6 +1037,9 @@ if(BUILD_TESTING)
         add_test(NAME PicoEditorAssetTests COMMAND PicoEditorAssetTests)
     endif()
     set_tests_properties(PicoCoreTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoPackagingTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoAssetTests PROPERTIES

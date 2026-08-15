@@ -30,6 +30,7 @@ PSandboxPlayerController::PSandboxPlayerController(
     const Pico::FObjectConstructionParams& Params)
     : PPlayerController(Params)
 {
+    SetViewPitchLimits(-75.0f, 55.0f);
 }
 
 void PSandboxPlayerController::OnPossess(Pico::PPawn* InPawn)

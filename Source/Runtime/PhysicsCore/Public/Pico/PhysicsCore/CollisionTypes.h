@@ -26,6 +26,18 @@ enum class ECollisionEnabled : uint8
     QueryAndPhysics
 };
 
+constexpr bool HasQueryCollision(ECollisionEnabled CollisionEnabled)
+{
+    return CollisionEnabled == ECollisionEnabled::QueryOnly
+        || CollisionEnabled == ECollisionEnabled::QueryAndPhysics;
+}
+
+constexpr bool HasPhysicsCollision(ECollisionEnabled CollisionEnabled)
+{
+    return CollisionEnabled == ECollisionEnabled::PhysicsOnly
+        || CollisionEnabled == ECollisionEnabled::QueryAndPhysics;
+}
+
 enum class EPhysicsBodyType : uint8
 {
     Static,

@@ -44,6 +44,10 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 按 UE 第三人称模板拆分旋转职责：`DoMove` 以 ControlRotation Yaw 生成世界 Forward/Right 输入，
   CharacterMovement 让 Actor 朝移动方向转身，SpringArm 独立计算 Camera TargetRotation，不再把
   ControlRotation 写入相对 Transform；固定鼠标按 S 时角色转身而镜头 Yaw 保持不变。
+- Controller 提供可反射的俯仰角上下限，Sandbox 默认限制为 `-75` 到 `+55` 度；SpringArm 参考 UE 的
+  球形 Sweep 在墙壁、地板或天花板前回缩，并可通过 `Do Collision Test` 和 `Probe Size` 独立配置。
+- 编辑器顶部可显示平滑后的 FPS 与帧耗时，通过 `View -> Frame Rate` 开关；Game 与打包 EXE 使用 Windows
+  GUI 子系统，正常启动不再伴随独立控制台窗口。
 - 每次骨骼导入自动生成 `.pcharprofile`，集中引用 Mesh、AnimationSet、Montage 与材质槽；项目可切换
   Profile 而无需修改 Pawn CDO。覆盖重导入会先备份旧资产，失败时整批恢复。
 - 编辑器可从项目 Pawn 类和 Character Profile 创建持久化可玩角色；运行时优先 Possess 地图中标记为
@@ -89,6 +93,10 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   并支持严格的 `-engineroot`、`-stageroot` 显式覆盖，不再要求打包目录携带源码树。
 - Release Sandbox 已通过仓库外 Stage 探针：不携带 `Source`、`CMakeLists.txt`、仓库工作目录或显式项目参数，
   仍能由 Manifest 定位 Engine、项目和资产并正常运行。
+- 可以通过独立 `PicoPackager` 或编辑器 File 菜单生成原子替换的 Windows Development Stage；Target Receipt、
+  原生资产 Contributor、校验、文件报告和可选的仓库外冒烟测试共同组成第一版打包链路。
+- 打包窗口支持自定义 Package Name 和显式 `Replace Package`：稳定名称用于更新已有包，自定义名称用于并列输出；
+  唯一内部 Stage 工作目录会在成功或失败后清理，失败不会破坏上一次可用包。
 - 使用经过校验的 `/Game/...` 资产路径保存持久引用，不把本机磁盘路径写入对象或场景。
 - 确定性扫描项目中的 `.pworld`、`.pmesh`、`.ptex` 和 `.pmat` 原生文件，并通过支持
   大小写不敏感查询和刷新的资产注册表提供元数据。
@@ -127,7 +135,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
-Debug 和 Release 均可完整构建，十六个 CTest 目标全部通过；动画聚焦测试为 13/13 断言通过。
+Debug 和 Release 均可完整构建，十七个 CTest 目标全部通过；动画聚焦测试为 13/13 断言通过。
 
 ## 架构
 
@@ -284,8 +292,8 @@ powershell -ExecutionPolicy Bypass -File .\Scripts\SetupWindows.ps1
 .\Build\Debug\PicoSandboxGame.exe .\Projects\PicoSandbox\PicoSandbox.pico
 ```
 
-修改共享 Engine/Render 代码后，Play 前应同时重建编辑器和项目 Runtime。编辑器会主动拒绝比自身更旧的
-`PicoSandboxGame.exe`，避免混用不同版本的二进制：
+修改共享 Engine/Render 代码后，Play 前应同时重建编辑器和项目 Runtime。兼容性由项目/Engine 版本与实际
+启动结果判断，不再比较文件时间戳，因为 CMake 判定无需重链接的 Runtime 完全可能早于刚重建的编辑器：
 
 ```powershell
 cmake --build Build --config Release --target PicoEditor PicoSandboxGame --parallel 8
@@ -328,9 +336,11 @@ GameWorld
 | Spring Arm | `TargetArmLength` | 从起点沿局部 `-X` 到 `SpringEndpoint` 的距离。 |
 | Spring Arm | `TargetOffset` | 施加在弹簧臂起点上的世界空间偏移。 |
 | Spring Arm | `SocketOffset` | 施加在末端的弹簧臂局部偏移，适合越肩相机。 |
+| Spring Arm | `Do Collision Test` | 是否对相机路径执行碰撞 Sweep；关闭后始终使用理想臂长。 |
+| Spring Arm | `Probe Size` | 相机碰撞探针球半径；Sandbox 默认值为 `12`。 |
 
-挂到弹簧臂后的 Camera 通常保持单位 Relative Transform，由 Spring Arm 统一控制距离、旋转和
-偏移。当前版本尚未实现碰撞回缩和 Camera Lag。
+挂到弹簧臂后的 Camera 通常保持单位 Relative Transform，由 Spring Arm 统一控制距离、旋转、偏移和
+碰撞回缩。Sweep 会忽略所属 Actor 的 PrimitiveComponent，避免角色自身把相机推近；Camera Lag 尚未实现。
 - 在 Content Browser 中选择 `.pmesh`，再使用 `Add > Static Mesh` 或双击资产创建 Actor；
   `Ctrl` 可切换多选，`Shift` 可范围选择，`Ctrl+A` 会选择当前目录、搜索和类型过滤结果中的全部资产。
 - 使用 `Import OBJ` 检查源模型，并选择 Auto、Centimeters、Meters、Millimeters、Normalize
@@ -429,6 +439,16 @@ ctest --test-dir Build -C Debug --output-on-failure
 powershell -ExecutionPolicy Bypass -File .\Scripts\SetupWindows.ps1 -Configuration Release
 ```
 
+构建并打包 PicoSandbox Windows Development Stage：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Scripts\PackageProject.ps1
+```
+
+输出位于 `Projects/PicoSandbox/Saved/StagedBuilds/PicoSandbox-Windows-Development`。
+使用 `-StageName PicoSandbox_TestPackage` 可生成并列测试包；更新同名包时，编辑器要求显式启用
+`Replace Package`，以免误删已有成功输出。
+
 在 Visual Studio 中打开 Pico：
 
 ```text
@@ -489,6 +509,8 @@ private:
 - [Data-Only Actor Blueprint 与角色装配编辑器](Docs/Month08_9_DataOnlyActorBlueprint.md)
 - [编辑器视口方向与独立资产窗口](Docs/Month08_10_EditorViewportOrientation.md)
 - [项目浏览器与编辑器会话恢复](Docs/Month08_11_ProjectBrowserAndEditorSession.md)
+- [初步 Windows Development 打包](Docs/Month08_12_InitialPackaging.md)
+- [运行窗口、FPS 与第三人称相机加固](Docs/Month08_13_RuntimeCameraAndWindowPolish.md)
 - [MatchState、Gameplay 事件与编辑器绑定](Docs/Month07_4_MatchStateGameplayEventsAndBindings.md)
 - [Development、Installed 与 Staged 运行布局](Docs/Month07_5_DevelopmentInstalledAndStagedLayouts.md)
 - [第三个月编辑器视口](Docs/Month03_10_Editor3DViewport.md)
@@ -526,7 +548,7 @@ private:
 负责可复用的 Actor/组件默认值和生成类；行为节点仍属于后续 PicoGraph，不与当前装配工作流耦合。后续学习路线为：
 
 - Replication、RPC、Transform 同步、客户端预测与修正
-- Dedicated Server/广域网验证、Cook、Package 和可独立运行的 Windows 构建
+- Dedicated Server/广域网验证、依赖裁剪 Cook、Shipping 与全新电脑打包验收
 - 精简的 `PicoTask` Worker Pool 与 Game Thread Dispatcher，用于异步 Cook、构建和 AI 请求；运行时对象仍由 Game Thread 修改
 - 精简版 Gameplay Ability System 与 AbilityTask，随后接入 AI 工具和 Agent 工作流
 

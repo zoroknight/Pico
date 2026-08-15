@@ -9,7 +9,9 @@
 
 #include <cstddef>
 #include <memory>
+#include <string>
 #include <type_traits>
+#include <vector>
 
 namespace Pico
 {
@@ -106,6 +108,14 @@ struct FPropertyMetadata
     EPropertyFlags Flags =
         EPropertyFlags::Editable | EPropertyFlags::Serializable;
     EAssetReferenceType AssetReferenceType = EAssetReferenceType::None;
+    std::string DisplayName;
+
+    struct FEnumOption
+    {
+        int32 Value = 0;
+        std::string DisplayName;
+    };
+    std::vector<FEnumOption> EnumOptions;
 };
 
 constexpr std::size_t GetPropertyTypeSize(EPropertyType Type)

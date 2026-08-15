@@ -45,9 +45,11 @@ public:
     void DispatchPhysicsEvent(
         PPrimitiveComponent* Other,
         const FPhysicsContactEvent& Event);
+    void PostEditChangeProperty(const FPropertyChangedEvent& Event) override;
 
 protected:
     explicit PPrimitiveComponent(const FObjectConstructionParams& Params);
+    void PostLoad() override;
     void OnRegister() override;
     void OnUnregister() override;
     void OnWorldTransformChanged(ETeleportType Teleport) override;

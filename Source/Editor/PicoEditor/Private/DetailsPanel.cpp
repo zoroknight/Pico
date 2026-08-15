@@ -16,6 +16,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cctype>
 #include <string>
 #include <utility>
 #include <vector>
@@ -44,6 +45,84 @@ struct FEditorControlState
         bActive |= Other.bActive;
     }
 };
+
+std::string MakePropertyDisplayName(const PProperty& Property)
+{
+    if (!Property.GetMetadata().DisplayName.empty())
+    {
+        return Property.GetMetadata().DisplayName;
+    }
+
+    std::string Source = Property.GetName().ToString();
+    if (Property.GetType() == EPropertyType::Bool
+        && Source.size() > 1
+        && Source[0] == 'b'
+        && std::isupper(static_cast<unsigned char>(Source[1])) != 0)
+    {
+        Source.erase(Source.begin());
+    }
+    if (Property.GetType() == EPropertyType::Int32
+        && Source == "MovementReferenceValue")
+    {
+        Source = "MovementReference";
+    }
+
+    std::string Result;
+    Result.reserve(Source.size() + 8);
+    for (std::size_t Index = 0; Index < Source.size(); ++Index)
+    {
+        const unsigned char Current = static_cast<unsigned char>(Source[Index]);
+        const unsigned char Previous = Index > 0
+            ? static_cast<unsigned char>(Source[Index - 1]) : 0;
+        const unsigned char Next = Index + 1 < Source.size()
+            ? static_cast<unsigned char>(Source[Index + 1]) : 0;
+        const bool bWordBoundary = Index > 0
+            && ((std::isupper(Current) != 0
+                    && (std::islower(Previous) != 0
+                        || (Next != 0 && std::islower(Next) != 0)))
+                || (std::isdigit(Current) != 0 && std::isdigit(Previous) == 0)
+                || (std::isdigit(Current) == 0 && std::isdigit(Previous) != 0));
+        if (bWordBoundary && !Result.empty() && Result.back() != ' ')
+        {
+            Result.push_back(' ');
+        }
+        Result.push_back(static_cast<char>(Current));
+    }
+    return Result;
+}
+
+const std::vector<FPropertyMetadata::FEnumOption>& GetEnumOptions(
+    const PProperty& Property)
+{
+    if (!Property.GetMetadata().EnumOptions.empty())
+    {
+        return Property.GetMetadata().EnumOptions;
+    }
+    static const std::vector<FPropertyMetadata::FEnumOption>
+        MovementReferenceOptions {
+            {0, "Control Rotation (Third Person)"},
+            {1, "Actor Rotation (Character Relative)"},
+            {2, "World Axes"}
+        };
+    static const std::vector<FPropertyMetadata::FEnumOption> EmptyOptions;
+    return Property.GetName() == FName("MovementReferenceValue")
+        ? MovementReferenceOptions : EmptyOptions;
+}
+
+std::string GetEnumValueDisplayName(
+    int32 Value,
+    const std::vector<FPropertyMetadata::FEnumOption>& Options)
+{
+    const auto Found = std::find_if(
+        Options.begin(), Options.end(),
+        [Value](const FPropertyMetadata::FEnumOption& Option)
+        {
+            return Option.Value == Value;
+        });
+    return Found != Options.end()
+        ? Found->DisplayName
+        : "Unknown (" + std::to_string(Value) + ")";
+}
 
 PWorld* FindOwningWorld(PObject* Object)
 {
@@ -581,10 +660,11 @@ void FDetailsPanel::DrawEventBindings(
 void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Property)
 {
     const std::string PropertyName = Property->GetName().ToString();
+    const std::string DisplayName = MakePropertyDisplayName(*Property);
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(PropertyName.c_str());
+    ImGui::TextUnformatted(DisplayName.c_str());
     ImGui::TableSetColumnIndex(1);
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::PushID(Property);
@@ -627,14 +707,31 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
         if (Property->GetValue(Object, Value))
         {
             FEditorControlState State;
-            if (PropertyName == "MovementReferenceValue")
+            const std::vector<FPropertyMetadata::FEnumOption>& Options =
+                GetEnumOptions(*Property);
+            if (!Options.empty())
             {
-                static const char* Items[] = {
-                    "Control Rotation (Third Person)",
-                    "Actor Rotation (Character Relative)",
-                    "World Axes"
-                };
-                State.IncludeLastItem(ImGui::Combo("##Value", &Value, Items, 3));
+                const std::string Preview =
+                    GetEnumValueDisplayName(Value, Options);
+                if (ImGui::BeginCombo("##Value", Preview.c_str()))
+                {
+                    for (const FPropertyMetadata::FEnumOption& Option : Options)
+                    {
+                        const bool bSelected = Option.Value == Value;
+                        if (ImGui::Selectable(
+                                Option.DisplayName.c_str(), bSelected))
+                        {
+                            Value = Option.Value;
+                            State.bChanged = true;
+                            State.bActivated = true;
+                        }
+                        if (bSelected)
+                        {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
             }
             else
             {

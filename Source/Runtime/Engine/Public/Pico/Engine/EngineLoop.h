@@ -32,6 +32,8 @@ public:
 
     bool ShouldExit() const;
     float GetDeltaSeconds() const;
+    double GetAverageFrameTimeMS() const;
+    double GetAverageFPS() const;
     PWorld* GetWorld() const;
     FAssetRegistry& GetAssetRegistry();
     const FAssetRegistry& GetAssetRegistry() const;

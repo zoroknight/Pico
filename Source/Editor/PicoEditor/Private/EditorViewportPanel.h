@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Pico/Core/Math/Vector3.h"
+#include "Pico/Core/PlatformTextInput.h"
 
 #include <functional>
 #include <string>
@@ -65,6 +66,7 @@ private:
 
     FSceneViewportRenderer* Renderer = nullptr;
     GLFWwindow* Window = nullptr;
+    FPlatformTextInputContext TextInputContext;
     FVector3 CameraPosition = FVector3(530.0f, -530.0f, 400.0f);
     float CameraYawDegrees = 135.0f;
     float CameraPitchDegrees = -28.0f;

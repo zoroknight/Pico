@@ -1,5 +1,7 @@
 #include "Pico/Launch/GameLaunch.h"
 
+#include "Pico/Core/Platform.h"
+#include "Pico/Core/PlatformTextInput.h"
 #include "Pico/Engine/GameEngine.h"
 #include "Pico/Engine/GameInstance.h"
 #include "Pico/Engine/GameModeBase.h"
@@ -24,6 +26,16 @@
 #include "Pico/PhysicsCore/WorldCollisionQuery.h"
 
 #include <GLFW/glfw3.h>
+#if PICO_PLATFORM_WINDOWS
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#endif
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <imgui.h>
@@ -39,9 +51,26 @@
 
 namespace
 {
+void* GetNativeWindowHandle(GLFWwindow* Window)
+{
+#if PICO_PLATFORM_WINDOWS
+    return Window != nullptr ? glfwGetWin32Window(Window) : nullptr;
+#else
+    (void)Window;
+    return nullptr;
+#endif
+}
+
 struct FWindowInputContext
 {
+    FWindowInputContext(Pico::FInputSystem* InInputSystem, void* NativeWindow)
+        : InputSystem(InInputSystem)
+        , TextInputContext(NativeWindow)
+    {
+    }
+
     Pico::FInputSystem* InputSystem = nullptr;
+    Pico::FPlatformTextInputContext TextInputContext;
     bool bMouseCaptured = false;
 };
 
@@ -654,10 +683,15 @@ void OnScroll(GLFWwindow* Window, double, double YOffset)
 void OnFocus(GLFWwindow* Window, int Focused)
 {
     FWindowInputContext* Context = GetInputContext(Window);
-    if (Context != nullptr && Context->InputSystem != nullptr)
+    if (Context == nullptr)
+    {
+        return;
+    }
+    if (Context->InputSystem != nullptr)
     {
         Context->InputSystem->SetFocused(Focused == GLFW_TRUE);
     }
+    Context->TextInputContext.SetTextInputEnabled(Focused != GLFW_TRUE);
 }
 }
 
@@ -731,7 +765,9 @@ int RunPicoGame(
             ExitCode = GameEngine.Init();
         }
 
-        FWindowInputContext InputContext { &GameEngine.GetInputSystem(), false };
+        FWindowInputContext InputContext(
+            &GameEngine.GetInputSystem(), GetNativeWindowHandle(Window));
+        InputContext.TextInputContext.SetTextInputEnabled(false);
         glfwSetWindowUserPointer(Window, &InputContext);
         glfwSetKeyCallback(Window, &OnKey);
         glfwSetMouseButtonCallback(Window, &OnMouseButton);

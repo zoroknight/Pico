@@ -2,7 +2,9 @@
 
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/CubeComponent.h"
+#include "Pico/Engine/CameraComponent.h"
 #include "Pico/Engine/EngineLoop.h"
+#include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/TickFunction.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
@@ -194,6 +196,37 @@ int main()
             && SweepHit.Time > 0.0f
             && SweepHit.Time < 1.0f,
         "Sweep reports the earliest blocking wall with normalized hit time");
+
+    Pico::PActor* CameraRig = World->SpawnActor<Pico::PActor>("CameraRig");
+    Pico::PSpringArmComponent* CameraBoom = CameraRig != nullptr
+        ? CameraRig->CreateComponent<Pico::PSpringArmComponent>("CameraBoom")
+        : nullptr;
+    Pico::PCameraComponent* FollowCamera = CameraRig != nullptr
+        ? CameraRig->CreateComponent<Pico::PCameraComponent>("FollowCamera")
+        : nullptr;
+    const bool bCameraRigCreated = CameraRig != nullptr
+        && CameraBoom != nullptr
+        && FollowCamera != nullptr
+        && CameraRig->SetRootComponent(CameraBoom)
+        && FollowCamera->AttachToComponent(
+            CameraBoom,
+            Pico::EAttachmentTransformRule::KeepRelative,
+            Pico::PSpringArmComponent::GetEndpointSocketName());
+    Runner.Expect(bCameraRigCreated, "Physics test creates a SpringArm Camera rig");
+    if (bCameraRigCreated)
+    {
+        CameraRig->SetActorLocation({300.0f, 0.0f, 75.0f});
+        CameraBoom->SetTargetArmLength(400.0f);
+        CameraBoom->SetProbeSize(12.0f);
+        CameraBoom->SetCollisionTestEnabled(true);
+        const float RetractedX = FollowCamera->GetViewPosition().X;
+        CameraBoom->SetCollisionTestEnabled(false);
+        const float UnfixedX = FollowCamera->GetViewPosition().X;
+        Runner.Expect(
+            RetractedX > -100.0f && RetractedX < 300.0f
+                && std::abs(UnfixedX + 100.0f) < 0.001f,
+            "Jolt wall Sweep retracts the Camera and the per-component toggle restores full arm length");
+    }
 
     std::vector<Pico::FOverlapResult> Overlaps;
     Runner.Expect(

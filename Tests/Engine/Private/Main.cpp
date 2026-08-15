@@ -26,6 +26,7 @@
 #include "Pico/Engine/TickTaskManager.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
+#include "Pico/PhysicsCore/WorldCollisionQuery.h"
 #include "Pico/Object/GarbageCollection.h"
 #include "Pico/Object/DynamicMulticastDelegate.h"
 #include "Pico/Object/ObjectGlobals.h"
@@ -44,6 +45,32 @@
 
 namespace
 {
+class FSpringArmCollisionQuery final : public Pico::IWorldCollisionQuery
+{
+public:
+    bool Sweep(
+        const Pico::FCollisionShape& Shape,
+        const Pico::FVector3& Start,
+        const Pico::FVector3& End,
+        const Pico::FQuat&,
+        const Pico::FCollisionQueryParams& Params,
+        Pico::FHitResult& OutHit) const override
+    {
+        bWasCalled = true;
+        LastProbeRadius = Shape.Radius;
+        bHasSelfFilter = Params.MovingObject.IsValid();
+        OutHit.Reset(Start, End);
+        OutHit.bBlockingHit = true;
+        OutHit.Time = 0.5f;
+        OutHit.Location = Start + (End - Start) * OutHit.Time;
+        return true;
+    }
+
+    mutable bool bWasCalled = false;
+    mutable bool bHasSelfFilter = false;
+    mutable float LastProbeRadius = 0.0f;
+};
+
 class PCountingActor : public Pico::PActor
 {
     PICO_DECLARE_CLASS(PCountingActor, Pico::PActor)
@@ -1512,6 +1539,40 @@ void TestPrimitiveComponentSceneData(FTestRunner& Runner)
             Cube->GetExtent().Equals(Pico::FVector3(50.0f)),
             "A cube component starts with a fifty-unit half extent");
 
+        const Pico::PProperty* CollisionProperty =
+            Pico::PPrimitiveComponent::StaticClass()->FindProperty(
+                Pico::FName("CollisionEnabledValue"));
+        const Pico::PProperty* BodyTypeProperty =
+            Pico::PPrimitiveComponent::StaticClass()->FindProperty(
+                Pico::FName("PhysicsBodyTypeValue"));
+        Runner.Expect(
+            CollisionProperty != nullptr
+                && CollisionProperty->GetMetadata().DisplayName
+                    == "Collision Enabled"
+                && CollisionProperty->GetMetadata().EnumOptions.size() == 4
+                && BodyTypeProperty != nullptr
+                && BodyTypeProperty->GetMetadata().EnumOptions.size() == 3,
+            "Primitive collision enums expose editor presentation metadata");
+        World->Tick(1.0f / 60.0f);
+        Runner.Expect(
+            CollisionProperty != nullptr
+                && CollisionProperty->SetValue(
+                    Cube,
+                    static_cast<Pico::int32>(
+                        Pico::ECollisionEnabled::QueryAndPhysics))
+                && Cube->GetCollisionEnabled()
+                    == Pico::ECollisionEnabled::QueryAndPhysics
+                && Cube->GetPhysicsBodyHandle().IsValid(),
+            "A reflected collision edit immediately recreates the physics body");
+        Runner.Expect(
+            CollisionProperty != nullptr
+                && CollisionProperty->SetValue(
+                    Cube,
+                    static_cast<Pico::int32>(
+                        Pico::ECollisionEnabled::NoCollision))
+                && !Cube->GetPhysicsBodyHandle().IsValid(),
+            "Disabling collision through reflection immediately removes the body");
+
         Pico::FAssetPath MeshPath;
         Pico::FAssetPath::TryParse("/Game/Meshes/Robot.pmesh", MeshPath);
         StaticMesh->SetStaticMeshAsset(MeshPath);
@@ -2867,6 +2928,13 @@ void TestGameplayFrameworkTypes(FTestRunner& Runner)
     Runner.Expect(
         Controller->GetControlRotation().Equals(Pico::FRotator(75.0f, 30.0f, 0.0f)),
         "Controller clamps pitch and normalizes its camera-relative ControlRotation");
+    Controller->SetViewPitchLimits(-75.0f, 55.0f);
+    Controller->SetControlRotation(Pico::FRotator(80.0f, 30.0f, 0.0f));
+    Runner.Expect(
+        Controller->GetViewPitchMin() == -75.0f
+            && Controller->GetViewPitchMax() == 55.0f
+            && Controller->GetControlRotation().Pitch == 55.0f,
+        "Controller exposes configurable UE-style view pitch limits");
 
     Controller->UnPossess();
     Runner.Expect(
@@ -3214,6 +3282,24 @@ void TestCameraSpringArmSockets(FTestRunner& Runner)
             Camera->GetAttachSocketName()
                 == Pico::PSpringArmComponent::GetEndpointSocketName(),
             "The Camera retains its named attachment socket");
+
+        FSpringArmCollisionQuery CollisionQuery;
+        World->SetCollisionQuery(&CollisionQuery);
+        SpringArm->SetCollisionTestEnabled(true);
+        SpringArm->SetProbeSize(12.0f);
+        Runner.Expect(
+            Camera->GetViewPosition().Equals(
+                Pico::FVector3(-45.0f, 10.0f, 55.0f), 0.001f)
+                && CollisionQuery.bWasCalled
+                && CollisionQuery.bHasSelfFilter
+                && std::abs(CollisionQuery.LastProbeRadius - 12.0f) < 0.001f,
+            "SpringArm sphere-sweeps toward the desired Camera location and retracts on a hit");
+        SpringArm->SetCollisionTestEnabled(false);
+        Runner.Expect(
+            Camera->GetViewPosition().Equals(
+                Pico::FVector3(-195.0f, 20.0f, 60.0f), 0.001f),
+            "SpringArm collision retraction can be disabled per component");
+        World->SetCollisionQuery(nullptr);
     }
 
     Pico::FWorldAssetData Data;

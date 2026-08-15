@@ -23,6 +23,10 @@ public:
     void SetInheritYaw(bool bValue);
     bool InheritsRoll() const;
     void SetInheritRoll(bool bValue);
+    bool IsCollisionTestEnabled() const;
+    void SetCollisionTestEnabled(bool bValue);
+    float GetProbeSize() const;
+    void SetProbeSize(float InSize);
     FRotator GetTargetRotation() const;
     static FName GetEndpointSocketName();
     bool DoesSocketExist(FName SocketName) const override;
@@ -43,5 +47,7 @@ private:
     bool bInheritPitch = true;
     bool bInheritYaw = true;
     bool bInheritRoll = true;
+    bool bDoCollisionTest = true;
+    float ProbeSize = 12.0f;
 };
 }

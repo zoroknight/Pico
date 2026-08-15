@@ -2,6 +2,7 @@
 #include "EditorTransformGizmo.h"
 
 #include "Pico/Core/Math/MathUtility.h"
+#include "Pico/Core/Platform.h"
 #include "Pico/Asset/AssetManager.h"
 #include "Pico/Asset/AssetRegistry.h"
 #include "Pico/Editor/EditorSelection.h"
@@ -19,6 +20,16 @@
 #include "Pico/Render/SceneViewportRenderer.h"
 
 #include <GLFW/glfw3.h>
+#if PICO_PLATFORM_WINDOWS
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#endif
 #include <imgui.h>
 
 #include <algorithm>
@@ -31,6 +42,16 @@ namespace Pico
 {
 namespace
 {
+void* GetNativeWindowHandle(GLFWwindow* Window)
+{
+#if PICO_PLATFORM_WINDOWS
+    return Window != nullptr ? glfwGetWin32Window(Window) : nullptr;
+#else
+    (void)Window;
+    return nullptr;
+#endif
+}
+
 std::string MakeTransformDescription(
     EEditorTransformMode Mode,
     std::size_t TargetCount)
@@ -151,6 +172,7 @@ FEditorViewportPanel::FEditorViewportPanel(
     GLFWwindow* InWindow)
     : Renderer(InRenderer)
     , Window(InWindow)
+    , TextInputContext(GetNativeWindowHandle(InWindow))
 {
 }
 
@@ -392,6 +414,7 @@ void FEditorViewportPanel::Draw(
     if (bCameraCaptured
         && (bUseSceneCamera
             || Window == nullptr
+            || IO.WantTextInput
             || glfwGetWindowAttrib(Window, GLFW_FOCUSED) == GLFW_FALSE
             || glfwGetMouseButton(Window, GLFW_MOUSE_BUTTON_RIGHT) != GLFW_PRESS))
     {
@@ -601,6 +624,7 @@ void FEditorViewportPanel::BeginCameraCapture()
         return;
     }
     bCameraCaptured = true;
+    TextInputContext.SetTextInputEnabled(false);
     glfwSetInputMode(Window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     if (glfwRawMouseMotionSupported() == GLFW_TRUE)
     {
@@ -620,6 +644,7 @@ void FEditorViewportPanel::EndCameraCapture()
         glfwSetInputMode(Window, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
     }
     glfwSetInputMode(Window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    TextInputContext.SetTextInputEnabled(true);
     bCameraCaptured = false;
 }
 }

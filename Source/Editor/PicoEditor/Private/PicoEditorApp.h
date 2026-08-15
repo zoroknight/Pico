@@ -100,6 +100,9 @@ private:
     void LaunchGame(const std::string& ValidationMessage);
     void StopGame(bool bUpdateStatus = true);
     void UpdateGameProcess();
+    void DrawPackageProjectPopup();
+    void StartPackageProject();
+    void UpdatePackageProcess();
 
     void SpawnEmptyActor();
     void DrawActorClassPicker();
@@ -194,8 +197,11 @@ private:
     FActorBlueprintEditor ActorBlueprintEditor;
     FEditorAssetWorkflowController AssetWorkflow;
     FProcessHandle GameProcess;
+    FProcessHandle PackageProcess;
     std::filesystem::path PendingProjectFile;
     std::filesystem::path GameProcessLogFile;
+    std::filesystem::path PackageProcessLogFile;
+    std::filesystem::path PackageOutputDirectory;
     FAssetPath PendingWorldAssetPath;
     FObjectHandle RenameObjectHandle;
     std::array<char, 128> RenameBuffer {};
@@ -206,6 +212,8 @@ private:
     std::array<char, 128> DefaultPawnClassSetting {};
     std::array<char, 128> PlayerControllerClassSetting {};
     std::array<char, 260> DefaultPawnProfileSetting {};
+    std::array<char, 520> PackageOutputRootSetting {};
+    std::array<char, 260> PackageNameSetting {};
     std::vector<FInputMappingSetting> InputMappingSettings;
     float MouseSensitivitySetting = 0.12f;
     std::string InteractiveEditKey;
@@ -219,6 +227,7 @@ private:
     bool bStatusIsError = false;
     bool bStatusIsWarning = false;
     bool bMessageLogOpen = true;
+    bool bShowFrameRate = true;
     bool bFocusMessageLog = false;
     bool bOpenPlayValidationPopup = false;
     bool bPendingPlayBlocked = false;
@@ -228,6 +237,8 @@ private:
     bool bOpenRenamePopup = false;
     bool bOpenActorClassPicker = false;
     bool bOpenPlayableCharacterCreator = false;
+    bool bOpenPackageProjectPopup = false;
+    bool bPackageSmokeTest = true;
     bool bProjectSettingsOpen = false;
     bool bProjectSettingsLoaded = false;
     bool bPreviewSceneCamera = false;

@@ -9,6 +9,7 @@
 #include "Pico/Core/Name.h"
 #include "Pico/Core/Paths.h"
 #include "Pico/Core/PlatformProcess.h"
+#include "Pico/Core/PlatformTextInput.h"
 #include "Pico/Core/ProjectDescriptor.h"
 #include "Pico/Core/Time.h"
 
@@ -19,6 +20,7 @@
 #include <string>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace
@@ -174,6 +176,31 @@ void TestDelegates(FTestRunner& Runner)
             && SurvivorCalls == 1
             && ThrowingDelegate.Num() == 1,
         "An exception restores broadcast state and preserves surviving listeners");
+}
+
+void TestPlatformTextInput(FTestRunner& Runner)
+{
+    Pico::FPlatformTextInputContext TextInput;
+    Runner.Expect(
+        TextInput.IsTextInputEnabled(),
+        "Platform text input starts enabled");
+
+    TextInput.SetTextInputEnabled(false);
+    TextInput.SetTextInputEnabled(false);
+    Runner.Expect(
+        !TextInput.IsTextInputEnabled(),
+        "Platform text input disable is idempotent");
+
+    Pico::FPlatformTextInputContext MovedTextInput(std::move(TextInput));
+    Runner.Expect(
+        !MovedTextInput.IsTextInputEnabled()
+            && TextInput.IsTextInputEnabled(),
+        "Platform text input moves disabled-window ownership safely");
+
+    MovedTextInput.SetTextInputEnabled(true);
+    Runner.Expect(
+        MovedTextInput.IsTextInputEnabled(),
+        "Platform text input restores the previous input context");
 }
 
 void TestAssetPath(FTestRunner& Runner)
@@ -638,6 +665,7 @@ int main(int Argc, char** Argv)
 
     FTestRunner Runner;
     TestDelegates(Runner);
+    TestPlatformTextInput(Runner);
     TestAssetPath(Runner);
     TestCommandLine(Runner);
     TestConfig(Runner);

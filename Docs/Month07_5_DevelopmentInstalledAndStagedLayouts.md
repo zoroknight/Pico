@@ -103,6 +103,8 @@ It was launched from outside Stage with no project argument. Runtime logged `lay
 13 assets and `EditorWorld.pworld`, ticked two frames, and exited with code zero. The Stage contained
 neither `Source` nor `CMakeLists.txt`.
 
-This task establishes path and identity rules only. Cook dependency discovery, automated Stage
-generation, receipts, archives, Development/Shipping profiles, and the editor Package command remain
-in the planned packaging milestone.
+The initial automated Windows Development package now builds on these path rules. Target Receipts,
+native-asset collection, atomic Stage replacement, validation, PackageReport, the editor Package
+command, and a repository-external smoke test are described in
+[Initial Windows Development Packaging](Month08_12_InitialPackaging.md). Dependency-pruned Cook,
+true Shipping profiles, Client/Server targets, archives, and clean-machine verification remain.

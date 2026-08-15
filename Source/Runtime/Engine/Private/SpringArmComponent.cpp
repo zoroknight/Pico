@@ -1,8 +1,11 @@
 #include "Pico/Engine/SpringArmComponent.h"
 
 #include "Pico/Object/Class.h"
+#include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/Controller.h"
+#include "Pico/Engine/World.h"
+#include "Pico/PhysicsCore/WorldCollisionQuery.h"
 
 #include <algorithm>
 #include <cmath>
@@ -23,6 +26,11 @@ bool PSpringArmComponent::RegisterProperties(PClass& Class)
     PICO_ADD_PROPERTY(Properties, bInheritPitch);
     PICO_ADD_PROPERTY(Properties, bInheritYaw);
     PICO_ADD_PROPERTY(Properties, bInheritRoll);
+    FPropertyMetadata Metadata;
+    Metadata.DisplayName = "Do Collision Test";
+    PICO_ADD_PROPERTY_METADATA(Properties, bDoCollisionTest, Metadata);
+    Metadata.DisplayName = "Probe Size";
+    PICO_ADD_PROPERTY_METADATA(Properties, ProbeSize, Metadata);
     return Class.AddProperties(std::move(Properties));
 }
 
@@ -71,6 +79,14 @@ bool PSpringArmComponent::InheritsYaw() const { return bInheritYaw; }
 void PSpringArmComponent::SetInheritYaw(bool bValue) { bInheritYaw = bValue; }
 bool PSpringArmComponent::InheritsRoll() const { return bInheritRoll; }
 void PSpringArmComponent::SetInheritRoll(bool bValue) { bInheritRoll = bValue; }
+bool PSpringArmComponent::IsCollisionTestEnabled() const { return bDoCollisionTest; }
+void PSpringArmComponent::SetCollisionTestEnabled(bool bValue) { bDoCollisionTest = bValue; }
+float PSpringArmComponent::GetProbeSize() const { return ProbeSize; }
+void PSpringArmComponent::SetProbeSize(float InSize)
+{
+    ProbeSize = InSize;
+    SanitizeParameters();
+}
 
 FRotator PSpringArmComponent::GetTargetRotation() const
 {
@@ -110,9 +126,44 @@ FTransform PSpringArmComponent::GetSocketTransform(FName SocketName) const
         return SocketTransform;
     }
     SocketTransform.Rotation = GetTargetRotation().Quaternion();
+    const FVector3 ArmOrigin = SocketTransform.Translation + TargetOffset;
     const FVector3 ArmOffset = SocketTransform.Rotation.RotateVector(
         FVector3::ForwardVector * -TargetArmLength + SocketOffset);
-    SocketTransform.Translation += TargetOffset + ArmOffset;
+    const FVector3 DesiredLocation = ArmOrigin + ArmOffset;
+    SocketTransform.Translation = DesiredLocation;
+
+    PWorld* World = GetWorld();
+    IWorldCollisionQuery* Query = World != nullptr ? World->GetCollisionQuery() : nullptr;
+    if (bDoCollisionTest && TargetArmLength > 0.0f && ProbeSize > 0.0f
+        && Query != nullptr)
+    {
+        FCollisionQueryParams Params;
+        Params.MovingObject = GetHandle();
+        Params.bIgnoreSensors = true;
+        if (const PActor* Owner = GetOwner())
+        {
+            for (PActorComponent* Component : Owner->GetComponents())
+            {
+                if (Component != nullptr
+                    && Component->IsA(PPrimitiveComponent::StaticClass()))
+                {
+                    Params.IgnoredObjects.push_back(Component->GetHandle());
+                }
+            }
+        }
+        FHitResult Hit;
+        if (Query->Sweep(
+                FCollisionShape::MakeSphere(ProbeSize),
+                ArmOrigin,
+                DesiredLocation,
+                FQuat::Identity,
+                Params,
+                Hit)
+            && Hit.bBlockingHit)
+        {
+            SocketTransform.Translation = Hit.Location;
+        }
+    }
     return SocketTransform;
 }
 
@@ -139,5 +190,7 @@ void PSpringArmComponent::SanitizeParameters()
     if (!std::isfinite(TargetOffset.X)) TargetOffset.X = 0.0f;
     if (!std::isfinite(TargetOffset.Y)) TargetOffset.Y = 0.0f;
     if (!std::isfinite(TargetOffset.Z)) TargetOffset.Z = 0.0f;
+    if (!std::isfinite(ProbeSize)) ProbeSize = 12.0f;
+    ProbeSize = std::max(ProbeSize, 0.0f);
 }
 }

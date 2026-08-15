@@ -297,8 +297,8 @@ CDO / ObjectInitializer
 | RPC 方向、Role、Ownership 和参数校验 | 第 6 月第 3 周 | Gameplay 网络交互前 | 非法客户端调用被拒绝且没有副作用 |
 | 客户端预测、服务器重演与纠错 | 第 6 月第 4 周 | 网络模拟和公网验证前 | 高延迟下可预测、Ack、Correction 和重演 |
 | `PicoTask` Worker Pool、Dispatcher、取消和安全关闭 | 第 7 月第 3 周前半 | 异步 Cook、构建和 AI 请求前 | Worker 只产生纯数据，Game Thread 应用对象结果，退出时无遗留线程 |
-| Cook/Stage 和仓库外 Runtime 布局 | 第 7 月第 3 周后半 | Package 前 | EXE、Config、Content、项目模块和第三方库形成完整 Stage |
-| Development/Shipping Package | 第 7 月第 4 周 | AI Build/Package 工具前 | 独立程序不依赖源码、编辑器或仓库目录 |
+| 依赖裁剪 Cook 与正式 Stage | 第 7 月第 3 周后半；Development Stage V1 已完成 | 正式 Package 前 | 从当前全量原生资产 Stage 升级为地图根依赖闭包；EXE、Config、Content、项目模块和第三方库完整 |
+| Shipping、Client/Server Package | 第 7 月第 4 周；单机 Development Package V1 已完成 | AI Build/Package 工具前 | Client/Server 独立程序不依赖源码、编辑器或仓库目录，并通过全新电脑验收 |
 | PicoGraph 类型检查、字节码和执行预算 | MVP 后第 9 月 | AI 生成可执行玩法图前 | 非法连线无法编译；循环和单次执行受预算限制；Runtime 不递归遍历编辑器图 |
 | RenderProxy、RenderScene 和 RHI 边界 | MVP 后复杂渲染阶段 | 延迟渲染、Render Graph、多线程渲染、Vulkan/DX12 或光线追踪前 | Renderer 不再直接遍历并绘制 `PObject`；公共接口不暴露 OpenGL ID，后端可通过 RHI 替换 |
 
@@ -651,8 +651,12 @@ Branching Point 精确任务语义、复杂 Montage 优先级和任意 Montage �
 - 正式场景编辑器尚未提供完整的 SkeletalMeshComponent 创建、资产拖放、Clip/状态映射 Details 和重导入。
 - 最小场景配置可在 Montage Lite 后用 1～2 天补齐，但不作为第 6 月网络准入条件；复杂 Persona、AnimGraph、
   Retargeting、PhysicsAsset 和材质自动导入继续延后。
-- 当前可构建项目专属独立 EXE，并已通过仓库外 Staged 布局探针；这不等于一键 Package 已完成。Cook 依赖图、
-  Stage 文件收集、Shipping Profile 和编辑器 Package 命令仍按第 7 月执行。
+- 当前已完成 Windows Development Package V1：Target Receipt、原生资产/运行时依赖 Contributor、原子 Stage、
+  校验、PackageReport、编辑器 Package 命令和仓库外两帧冒烟测试均已落地。依赖图 Cook、Shipping Profile、
+  Client/Server Target、归档和全新电脑验收仍按第 7 月执行。
+- Package V1 已补齐显式同名覆盖、自定义 Stage 名称、唯一内部工作目录与失败清理；Windows Game Target
+  使用 GUI 子系统。第三人称相机已补齐可配置 Pitch 限制和可关闭的 SpringArm 球形 Sweep，但 Camera Lag
+  仍属于可选手感增强，不是网络准入条件。
 
 ## 第 5.6 阶段（代码完成，等待真实人形资产验收）：AnimationSet 与最小人物配置
 
@@ -770,14 +774,21 @@ Standalone Play 仍保持独立游戏进程，不能与资产编辑器的平台�
 
 PicoSandbox 已增加持久化 `StarterWorld` 与 `/Game/StarterContent` 基础网格/材质。地面、墙、动态箱子、PlayerStart 和灯光属于关卡场景对象，不再由 GameMode 在 BeginPlay 临时生成；这保证编辑器预览、Standalone、网络复制与未来 Cook/Package 使用同一份 World 数据。
 
+Windows Development Package V1 已提前完成。`PicoPackager` 与编辑器 File 菜单读取 Target Receipt，收集全部
+Pico 原生资产和声明式 Runtime Dependency，在临时目录完成校验及仓库外冒烟测试后原子替换成功 Stage；
+`Content/Source`、Saved、Intermediate、FBX/glTF/GLB/OBJ 和 Assimp 不进入包。该基线按
+`Game/Client/Server + Development/Shipping + IPackageContributor` 扩展，网络和后端替换不应重写 StageBuilder。
+同名输出必须显式选择 Replace，自定义 Package Name 只改变 Stage 文件夹名；唯一内部工作目录在成功或失败后
+清理。Game Target 使用 Windows GUI 子系统，后续 Dedicated Server Target 仍可单独保留控制台日志行为。
+
 目标：产出仓库外可运行的公网双人 Demo。
 
 | 周次 | 任务 | 月末验收 |
 | --- | --- | --- |
 | 第 1 周 | 延迟、抖动、丢包、乱序模拟，带宽预算和移动平滑 | 网络模拟环境稳定 |
 | 第 2 周 | Dedicated Server Target、公网连接、超时、基于 StablePlayerId/SessionToken 的短线重连、InactivePlayerRecord、版本校验和限流 | 公网双客户端可连接；断线后在窗口期内恢复 PlayerState 和当前权威状态，无需追赶断线帧 |
-| 第 3 周 | `PicoTask` Worker Pool、任务状态/取消、Game Thread Dispatcher、安全关闭；接入 Cook 依赖图、人物 Source Metadata/Reimport 和 Stage Runtime | 耗时纯数据任务不阻塞编辑器；Reimport 保持资产身份；Stage 只收 Pico 原生依赖并排除 glTF/FBX、Content/Source 与 Assimp |
-| 第 4 周 | Development/Shipping Profile、编辑器 Package 命令、仓库外测试 | 独立 EXE 可运行 |
+| 第 3 周 | `PicoTask` Worker Pool、任务状态/取消、Game Thread Dispatcher、安全关闭；在现有 Package V1 上接入 Cook 依赖图和人物 Source Metadata/Reimport | 耗时纯数据任务不阻塞编辑器；Reimport 保持资产身份；Stage 从“全部原生资产”升级为地图根依赖闭包 |
+| 第 4 周 | Shipping 编译配置、Client/Server Receipt、归档、全新电脑测试 | Client 与 Server 包均可分发运行；Development Package V1 保持兼容 |
 
 `PicoTask` 的第一版线程规则固定为：后台任务不得直接保存或修改裸 `PObject*`；需要关联对象时保存
 `FObjectHandle`，回到 Game Thread 后重新 `ResolveObject`。资产扫描/解码、Cook、外部构建进程和 AI HTTP

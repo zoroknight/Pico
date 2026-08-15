@@ -270,11 +270,13 @@ FPicoEditorApp::~FPicoEditorApp()
 {
     SaveEditorSession(true);
     StopGame(false);
+    PackageProcess.Reset();
 }
 
 void FPicoEditorApp::Draw()
 {
     UpdateGameProcess();
+    UpdatePackageProcess();
     bInteractiveEditVisited = false;
     ImGuizmo::BeginFrame();
     HandleShortcuts();
@@ -321,6 +323,16 @@ void FPicoEditorApp::Draw()
         ImGui::SameLine();
         ImGui::TextDisabled("|");
         ImGui::SameLine();
+        if (bShowFrameRate && EngineLoop != nullptr)
+        {
+            ImGui::TextDisabled(
+                "FPS %.1f  %.2f ms",
+                EngineLoop->GetAverageFPS(),
+                EngineLoop->GetAverageFrameTimeMS());
+            ImGui::SameLine();
+            ImGui::TextDisabled("|");
+            ImGui::SameLine();
+        }
         DrawStatusBar();
         ImGui::EndMenuBar();
     }
@@ -338,6 +350,7 @@ void FPicoEditorApp::Draw()
     DrawRenamePopup();
     DrawActorClassPicker();
     DrawPlayableCharacterCreator();
+    DrawPackageProjectPopup();
     DrawProjectSettings();
     DrawUnsavedChangesPopup();
     DrawPlayValidationPopup();
@@ -1001,6 +1014,37 @@ void FPicoEditorApp::DrawFileMenu()
         SaveWorldAs();
     }
     ImGui::Separator();
+    if (ImGui::BeginMenu("Package Project"))
+    {
+        if (ImGui::MenuItem(
+                "Windows (Development)",
+                nullptr,
+                false,
+                !PackageProcess.IsValid()))
+        {
+            const std::string Output =
+                (FPaths::GetProjectSavedDir() / "StagedBuilds").string();
+            std::snprintf(
+                PackageOutputRootSetting.data(),
+                PackageOutputRootSetting.size(),
+                "%s",
+                Output.c_str());
+            FConfigFile ProjectDescriptor;
+            ProjectDescriptor.Load(FPaths::GetProjectFile());
+            const std::string ProjectName = ProjectDescriptor.GetString(
+                "Project", "Name", FPaths::GetProjectFile().stem().string());
+            const std::string PackageName =
+                ProjectName + "-Windows-Development";
+            std::snprintf(
+                PackageNameSetting.data(),
+                PackageNameSetting.size(),
+                "%s",
+                PackageName.c_str());
+            bOpenPackageProjectPopup = true;
+        }
+        ImGui::EndMenu();
+    }
+    ImGui::Separator();
     if (ImGui::MenuItem("Exit"))
     {
         RequestClose();
@@ -1086,6 +1130,7 @@ void FPicoEditorApp::DrawViewMenu()
         return;
     }
     ImGui::MenuItem("Message Log", nullptr, &bMessageLogOpen);
+    ImGui::MenuItem("Frame Rate", nullptr, &bShowFrameRate);
     ImGui::EndMenu();
 }
 
@@ -1558,19 +1603,6 @@ void FPicoEditorApp::LaunchGame(const std::string& ValidationMessage)
             true);
         return;
     }
-    std::error_code TimeError;
-    const auto GameWriteTime = std::filesystem::last_write_time(GameExecutable, TimeError);
-    const auto EditorWriteTime = std::filesystem::last_write_time(
-        FPaths::GetExecutablePath(), TimeError);
-    if (!TimeError && GameWriteTime < EditorWriteTime)
-    {
-        SetStatus(
-            "Project Runtime is older than PicoEditor. Build target '"
-                + GameExecutable.stem().string() + "' before Play.",
-            true);
-        return;
-    }
-
     std::string Error;
     GameProcessLogFile = FPaths::GetProjectSavedDir() / "Logs" / "StandaloneGame.log";
     GameProcess = FPlatformProcess::CreateProcess(
@@ -1639,6 +1671,236 @@ void FPicoEditorApp::UpdateGameProcess()
         "Standalone game exited with code " + std::to_string(ExitCode)
             + (Detail.empty() ? "" : ": " + Detail),
         ExitCode != 0);
+}
+
+void FPicoEditorApp::StartPackageProject()
+{
+    if (PackageProcess.IsValid())
+    {
+        SetStatus("A package operation is already running", false, true);
+        return;
+    }
+    if (!FPaths::HasProject())
+    {
+        SetStatus("Package requires an active Pico project", true);
+        return;
+    }
+    if (!WorldDocument.HasAssetPath() || WorldDocument.IsDirty())
+    {
+        SetStatus("Save the current World before packaging", false, true);
+        return;
+    }
+    if (GameProcess.IsValid())
+    {
+        SetStatus("Stop Standalone Play before packaging", false, true);
+        return;
+    }
+
+    FConfigFile ProjectConfig;
+    if (!ProjectConfig.Load(FPaths::GetProjectConfigFile("Pico.ini")))
+    {
+        SetStatus("Could not load project Config/Pico.ini", true);
+        return;
+    }
+    std::filesystem::path GameExecutableName =
+        ProjectConfig.GetString("Game", "Executable", "PicoGame");
+    if (GameExecutableName.empty()
+        || GameExecutableName.has_parent_path()
+        || GameExecutableName.filename() != GameExecutableName)
+    {
+        SetStatus("[Game] Executable must be a file name", true);
+        return;
+    }
+#if defined(_WIN32)
+    if (!GameExecutableName.has_extension()) GameExecutableName += ".exe";
+#endif
+    const std::filesystem::path BinDirectory = FPaths::GetExecutableDir();
+    const std::filesystem::path GameExecutable = BinDirectory / GameExecutableName;
+    const std::filesystem::path Receipt =
+        BinDirectory / (GameExecutableName.stem().string() + ".targetreceipt");
+#if defined(_WIN32)
+    const std::filesystem::path Packager = BinDirectory / "PicoPackager.exe";
+#else
+    const std::filesystem::path Packager = BinDirectory / "PicoPackager";
+#endif
+    if (!std::filesystem::is_regular_file(Packager))
+    {
+        SetStatus("PicoPackager was not found next to PicoEditor", true);
+        return;
+    }
+    if (!std::filesystem::is_regular_file(GameExecutable)
+        || !std::filesystem::is_regular_file(Receipt))
+    {
+        SetStatus(
+            "Build target '" + GameExecutableName.stem().string()
+                + "' before packaging",
+            true);
+        return;
+    }
+    PackageProcessLogFile =
+        FPaths::GetProjectSavedDir() / "Logs/PackageProject.log";
+    const std::filesystem::path OutputRoot(PackageOutputRootSetting.data());
+    if (OutputRoot.empty())
+    {
+        SetStatus("Choose a package output directory", true);
+        return;
+    }
+    const std::string PackageName(PackageNameSetting.data());
+    if (PackageName.empty()
+        || PackageName.find_first_not_of(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+            != std::string::npos)
+    {
+        SetStatus("Package Name may contain only letters, digits, '_' or '-'", true);
+        return;
+    }
+    PackageOutputDirectory = OutputRoot / PackageName;
+    std::string Error;
+    std::vector<std::string> Arguments {
+        "-project=" + FPaths::GetProjectFile().string(),
+        "-receipt=" + Receipt.string(),
+        "-output=" + OutputRoot.string(),
+        "-engineroot=" + FPaths::GetEngineRootDir().string(),
+        "-profile=Development",
+        "-stagename=" + PackageName
+    };
+    if (bPackageSmokeTest) Arguments.push_back("-smoke");
+    PackageProcess = FPlatformProcess::CreateProcess(
+        Packager,
+        Arguments,
+        FPaths::GetEngineRootDir(),
+        PackageProcessLogFile,
+        &Error);
+    if (!PackageProcess.IsValid())
+    {
+        SetStatus("Could not start PicoPackager: " + Error, true);
+        return;
+    }
+    SetStatus(
+        "Packaging Windows Development build (process "
+            + std::to_string(PackageProcess.GetProcessId()) + ")");
+}
+
+void FPicoEditorApp::DrawPackageProjectPopup()
+{
+    if (bOpenPackageProjectPopup)
+    {
+        ImGui::OpenPopup("Package Project");
+        bOpenPackageProjectPopup = false;
+    }
+    if (!ImGui::BeginPopupModal(
+            "Package Project", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        return;
+    }
+
+    ImGui::TextUnformatted("Target");
+    ImGui::SameLine(150.0f);
+    ImGui::TextUnformatted("Game");
+    ImGui::TextUnformatted("Platform");
+    ImGui::SameLine(150.0f);
+    ImGui::TextUnformatted("Windows");
+    ImGui::TextUnformatted("Profile");
+    ImGui::SameLine(150.0f);
+    ImGui::TextUnformatted("Development");
+    ImGui::Separator();
+    ImGui::SetNextItemWidth(560.0f);
+    ImGui::InputText(
+        "Output Root",
+        PackageOutputRootSetting.data(),
+        PackageOutputRootSetting.size());
+    ImGui::SameLine();
+    if (ImGui::Button("Browse..."))
+    {
+        const std::optional<std::filesystem::path> Selected =
+            OpenProjectFolderDialog();
+        if (Selected.has_value())
+        {
+            const std::string Path = Selected->string();
+            std::snprintf(
+                PackageOutputRootSetting.data(),
+                PackageOutputRootSetting.size(),
+                "%s",
+                Path.c_str());
+        }
+    }
+    ImGui::Checkbox("Run two-frame smoke test", &bPackageSmokeTest);
+    ImGui::SetNextItemWidth(360.0f);
+    ImGui::InputText(
+        "Package Name",
+        PackageNameSetting.data(),
+        PackageNameSetting.size());
+    const std::filesystem::path OutputRoot(PackageOutputRootSetting.data());
+    const std::filesystem::path FinalOutput =
+        OutputRoot / PackageNameSetting.data();
+    std::error_code OutputError;
+    const bool bReplacingPackage = !OutputRoot.empty()
+        && std::filesystem::exists(FinalOutput, OutputError);
+    ImGui::TextDisabled("Output: %s", FinalOutput.string().c_str());
+    if (bReplacingPackage)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.72f, 0.24f, 1.0f));
+        ImGui::TextWrapped(
+            "A package with this name already exists. The successful build will replace it.");
+        ImGui::PopStyleColor();
+    }
+    ImGui::Separator();
+    if (ImGui::Button(
+            bReplacingPackage ? "Replace Package" : "Package",
+            ImVec2(150.0f, 0.0f)))
+    {
+        StartPackageProject();
+        if (PackageProcess.IsValid()) ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(110.0f, 0.0f)))
+        ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
+void FPicoEditorApp::UpdatePackageProcess()
+{
+    if (!PackageProcess.IsValid()
+        || FPlatformProcess::IsRunning(PackageProcess))
+    {
+        return;
+    }
+    int ExitCode = 0;
+    FPlatformProcess::WaitForExit(PackageProcess, 0, &ExitCode);
+    PackageProcess.Reset();
+    std::string Detail;
+    if (ExitCode != 0 && std::filesystem::is_regular_file(PackageProcessLogFile))
+    {
+        std::ifstream Log(PackageProcessLogFile);
+        std::string FallbackDetail;
+        for (std::string Line; std::getline(Log, Line);)
+        {
+            if (Line.starts_with("Error:") && Detail.empty())
+            {
+                Detail = Line.substr(std::string("Error:").size());
+                while (!Detail.empty() && Detail.front() == ' ')
+                {
+                    Detail.erase(Detail.begin());
+                }
+            }
+            else if (!Line.empty() && FallbackDetail.empty())
+            {
+                FallbackDetail = Line;
+            }
+        }
+        if (Detail.empty()) Detail = std::move(FallbackDetail);
+    }
+    if (ExitCode == 0)
+    {
+        SetStatus("Package succeeded: " + PackageOutputDirectory.string());
+    }
+    else
+    {
+        SetStatus(
+            "Package failed with code " + std::to_string(ExitCode)
+                + (Detail.empty() ? "" : ": " + Detail),
+            true);
+    }
 }
 
 void FPicoEditorApp::SpawnEmptyActor()

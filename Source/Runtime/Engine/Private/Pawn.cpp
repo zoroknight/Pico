@@ -16,7 +16,14 @@ bool PPawn::RegisterProperties(PClass& Class)
     Metadata.Flags = EPropertyFlags::Transient | EPropertyFlags::Replicated;
     std::vector<PProperty> Properties;
     PICO_ADD_PROPERTY_METADATA(Properties, Controller, Metadata);
-    PICO_ADD_PROPERTY(Properties, AutoPossessPlayerIndex);
+    FPropertyMetadata AutoPossessMetadata;
+    AutoPossessMetadata.DisplayName = "Auto Possess Player";
+    AutoPossessMetadata.EnumOptions = {
+        {-1, "Disabled"},
+        {0, "Player 0"}
+    };
+    PICO_ADD_PROPERTY_METADATA(
+        Properties, AutoPossessPlayerIndex, AutoPossessMetadata);
     PICO_ADD_PROPERTY(Properties, bUseControllerRotationYaw);
     return Class.AddProperties(std::move(Properties));
 }
