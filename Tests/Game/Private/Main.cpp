@@ -8,6 +8,7 @@
 #include "Pico/Engine/GameModule.h"
 #include "Pico/Engine/LocalPlayer.h"
 #include "Pico/Engine/MatchState.h"
+#include "Pico/Engine/NetDriver.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerController.h"
 #include "Pico/Engine/PlayerState.h"
@@ -16,20 +17,91 @@
 #include "Pico/Object/GarbageCollection.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectSystem.h"
+#include "Pico/Net/NetPacket.h"
+#include "Pico/Net/LoopbackTransport.h"
 #include "PicoSandbox/SandboxModule.h"
 
 #include <filesystem>
+#include <chrono>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
 {
+class FFrameOrderTransport final : public Pico::INetTransport
+{
+public:
+    explicit FFrameOrderTransport(Pico::PWorld* InWorld)
+        : World(InWorld)
+    {
+        Pico::FNetByteWriter Writer;
+        Writer.WriteUInt8(static_cast<Pico::uint8>(
+            Pico::ENetHandshakeType::ClientHello));
+        Writer.WriteUInt64(99);
+        Pico::FNetPacketHeader Header;
+        Header.Flags = Pico::ENetPacketFlags::Handshake;
+        Header.Sequence = 1;
+        Pico::EncodeNetPacket(Header, Writer.GetBytes(), IncomingPacket);
+    }
+
+    bool Open(const Pico::FNetAddress& InLocalAddress) override
+    {
+        LocalAddress = InLocalAddress;
+        bOpen = true;
+        return true;
+    }
+
+    void Close() override { bOpen = false; }
+    bool IsOpen() const override { return bOpen; }
+
+    bool SendTo(
+        const Pico::FNetAddress&,
+        std::span<const Pico::uint8>) override
+    {
+        FlushWorldTickCount = World != nullptr ? World->GetTickCount() : 0;
+        return true;
+    }
+
+    Pico::ENetReceiveResult ReceiveFrom(
+        Pico::FNetAddress& OutRemoteAddress,
+        std::vector<Pico::uint8>& OutBytes) override
+    {
+        if (bPacketConsumed) return Pico::ENetReceiveResult::None;
+        bPacketConsumed = true;
+        DispatchWorldTickCount = World != nullptr ? World->GetTickCount() : 0;
+        OutRemoteAddress = { "TestClient", 9001 };
+        OutBytes = IncomingPacket;
+        return Pico::ENetReceiveResult::Packet;
+    }
+
+    const Pico::FNetAddress& GetLocalAddress() const override
+    {
+        return LocalAddress;
+    }
+
+    const std::string& GetLastError() const override { return LastError; }
+
+    Pico::uint64 DispatchWorldTickCount = 0;
+    Pico::uint64 FlushWorldTickCount = 0;
+
+private:
+    Pico::PWorld* World = nullptr;
+    Pico::FNetAddress LocalAddress;
+    std::vector<Pico::uint8> IncomingPacket;
+    std::string LastError;
+    bool bOpen = false;
+    bool bPacketConsumed = false;
+};
+
 class PTestGameInstance final : public Pico::PGameInstance
 {
     PICO_DECLARE_CLASS(PTestGameInstance, Pico::PGameInstance)
 
 public:
     inline static std::vector<std::string> Events;
+    inline static Pico::uint64 ObservedWorldTickCount = 0;
 
     bool Init(Pico::FGameEngine& GameEngine) override
     {
@@ -44,6 +116,10 @@ public:
 
     void Tick(float) override
     {
+        if (const Pico::PWorld* World = GetWorld())
+        {
+            ObservedWorldTickCount = World->GetTickCount();
+        }
         Events.emplace_back("Tick");
     }
 
@@ -199,9 +275,112 @@ void TestContentPathResolution(FTestRunner& Runner)
         "default map requires a Game virtual path");
 }
 
+void TestNetDriverMultipleClients(FTestRunner& Runner)
+{
+    auto Network = std::make_shared<Pico::FLoopbackNetwork>();
+    Pico::FNetDriver Server;
+    Pico::FNetDriver ClientA;
+    Pico::FNetDriver ClientB;
+    const Pico::FNetAddress ServerAddress { "0.0.0.0", 7777 };
+    const bool bInitialized = Server.InitializeServer(
+            ServerAddress.Port,
+            std::make_unique<Pico::FLoopbackTransport>(Network))
+        && ClientA.InitializeClient(
+            ServerAddress,
+            std::make_unique<Pico::FLoopbackTransport>(Network))
+        && ClientB.InitializeClient(
+            ServerAddress,
+            std::make_unique<Pico::FLoopbackTransport>(Network));
+    Runner.Expect(
+        bInitialized,
+        "NetDriver creates a loopback server and two ephemeral clients");
+    if (!bInitialized) return;
+
+    for (int Step = 0; Step < 80
+        && (Server.GetOpenConnectionCount() != 2
+            || ClientA.GetOpenConnectionCount() != 1
+            || ClientB.GetOpenConnectionCount() != 1); ++Step)
+    {
+        Network->AdvanceTime(0.05);
+        Server.TickDispatch(0.05f);
+        ClientA.TickDispatch(0.05f);
+        ClientB.TickDispatch(0.05f);
+        Server.TickFlush(0.05f);
+        ClientA.TickFlush(0.05f);
+        ClientB.TickFlush(0.05f);
+    }
+    Runner.Expect(
+        Server.GetOpenConnectionCount() == 2
+            && ClientA.GetOpenConnectionCount() == 1
+            && ClientB.GetOpenConnectionCount() == 1,
+        "One NetDriver server accepts two independent client connections");
+
+    ClientA.Shutdown();
+    for (int Step = 0; Step < 120; ++Step)
+    {
+        Network->AdvanceTime(0.05);
+        Server.TickDispatch(0.05f);
+        ClientB.TickDispatch(0.05f);
+        Server.TickFlush(0.05f);
+        ClientB.TickFlush(0.05f);
+    }
+    Runner.Expect(
+        Server.GetOpenConnectionCount() == 1
+            && ClientB.GetOpenConnectionCount() == 1,
+        "A timed-out client is removed without affecting another connection");
+    ClientB.Shutdown();
+    Server.Shutdown();
+}
+
+void TestNetDriverUdpMultipleClients(FTestRunner& Runner)
+{
+    Pico::FNetDriver Server;
+    Pico::FNetDriver ClientA;
+    Pico::FNetDriver ClientB;
+    const bool bServerInitialized = Server.InitializeServer(0);
+    const Pico::FNetAddress ServerAddress {
+        "127.0.0.1", Server.GetLocalAddress().Port };
+    const bool bInitialized = bServerInitialized
+        && ClientA.InitializeClient(ServerAddress)
+        && ClientB.InitializeClient(ServerAddress);
+    Runner.Expect(
+        bInitialized,
+        "UDP NetDrivers bind one server and two ephemeral localhost clients");
+    if (!bInitialized)
+    {
+        ClientA.Shutdown();
+        ClientB.Shutdown();
+        Server.Shutdown();
+        return;
+    }
+
+    for (int Step = 0; Step < 300
+        && (Server.GetOpenConnectionCount() != 2
+            || ClientA.GetOpenConnectionCount() != 1
+            || ClientB.GetOpenConnectionCount() != 1); ++Step)
+    {
+        Server.TickDispatch(0.01f);
+        ClientA.TickDispatch(0.01f);
+        ClientB.TickDispatch(0.01f);
+        Server.TickFlush(0.01f);
+        ClientA.TickFlush(0.01f);
+        ClientB.TickFlush(0.01f);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Runner.Expect(
+        Server.GetOpenConnectionCount() == 2
+            && ClientA.GetOpenConnectionCount() == 1
+            && ClientB.GetOpenConnectionCount() == 1,
+        "Real UDP NetDrivers complete two independent localhost handshakes");
+    ClientA.Shutdown();
+    ClientB.Shutdown();
+    Server.Shutdown();
+}
+
 void TestGameInstanceLifecycle(FTestRunner& Runner)
 {
     PTestGameInstance::Events.clear();
+    PTestGameInstance::ObservedWorldTickCount = 0;
     FTestGameModule Module;
     Pico::FGameEngine GameEngine(&Module);
     char Program[] = "PicoGameTests";
@@ -280,12 +459,31 @@ void TestGameInstanceLifecycle(FTestRunner& Runner)
             && Pico::ResolveObject(InitialPawnHandle) == InitialPawn,
         "World Gameplay ownership keeps the logged-in player chain reachable during garbage collection");
 
+    const Pico::uint64 WorldTicksBeforeFrame =
+        GameEngine.GetEngineLoop().GetWorld()->GetTickCount();
+    auto FrameOrderTransport = std::make_unique<FFrameOrderTransport>(
+        GameEngine.GetEngineLoop().GetWorld());
+    FFrameOrderTransport* FrameOrderTransportView = FrameOrderTransport.get();
+    Runner.Expect(
+        GameEngine.GetNetDriver().InitializeServer(
+            7777, std::move(FrameOrderTransport)),
+        "GameEngine can install a controlled server transport for frame tests");
     GameEngine.Tick();
     Runner.Expect(
         PTestGameInstance::Events.back() == "Tick"
             && GameEngine.GetEngineLoop().GetWorld()->GetGameState()
                 ->GetElapsedMatchTime() > 0.0f,
         "GameEngine forwards each frame and advances the active match clock");
+    Runner.Expect(
+        PTestGameInstance::ObservedWorldTickCount == WorldTicksBeforeFrame
+            && GameEngine.GetEngineLoop().GetWorld()->GetTickCount()
+                == WorldTicksBeforeFrame + 1,
+        "GameInstance ticks in the pre-World phase before Gameplay and physics");
+    Runner.Expect(
+        FrameOrderTransportView->DispatchWorldTickCount == WorldTicksBeforeFrame
+            && FrameOrderTransportView->FlushWorldTickCount
+                == WorldTicksBeforeFrame + 1,
+        "NetDriver dispatches before the World and flushes after the World");
 
     Runner.Expect(
         GameEngine.LoadMap(GameEngine.GetDefaultMapPath()),
@@ -335,6 +533,8 @@ int main()
     TestMappings(Runner);
     TestDefaultMappings(Runner);
     TestContentPathResolution(Runner);
+    TestNetDriverMultipleClients(Runner);
+    TestNetDriverUdpMultipleClients(Runner);
     TestGameInstanceLifecycle(Runner);
     return Runner.Finish();
 }

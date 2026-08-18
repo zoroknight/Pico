@@ -384,6 +384,10 @@ int main(int Argc, char** Argv)
                 {
                     LayoutIniPath = LayoutPath.string();
                     IO.IniFilename = LayoutIniPath.c_str();
+                    if (std::filesystem::is_regular_file(LayoutPath))
+                    {
+                        ImGui::LoadIniSettingsFromDisk(LayoutIniPath.c_str());
+                    }
                 }
             }
         }

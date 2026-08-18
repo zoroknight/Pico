@@ -140,6 +140,31 @@ else()
     target_compile_options(PicoCore PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_library(PicoNetCore STATIC
+    Source/Runtime/NetCore/Private/LoopbackTransport.cpp
+    Source/Runtime/NetCore/Private/NetConnection.cpp
+    Source/Runtime/NetCore/Private/NetPacket.cpp
+    Source/Runtime/NetCore/Private/NetTypes.cpp
+    Source/Runtime/NetCore/Private/UdpTransport.cpp
+)
+
+target_include_directories(PicoNetCore
+    PUBLIC
+        Source/Runtime/NetCore/Public
+)
+
+target_link_libraries(PicoNetCore PUBLIC PicoCore)
+if(WIN32)
+    target_link_libraries(PicoNetCore PRIVATE ws2_32)
+endif()
+set_target_properties(PicoNetCore PROPERTIES FOLDER "Pico")
+
+if(MSVC)
+    target_compile_options(PicoNetCore PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoNetCore PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_library(PicoAsset STATIC
     Source/Runtime/Asset/Private/CharacterProfile.cpp
     Source/Runtime/Asset/Private/AssetManager.cpp
@@ -412,6 +437,7 @@ add_library(PicoEngine STATIC
     Source/Runtime/Engine/Private/LightComponent.cpp
     Source/Runtime/Engine/Private/LocalPlayer.cpp
     Source/Runtime/Engine/Private/MovementComponent.cpp
+    Source/Runtime/Engine/Private/NetDriver.cpp
     Source/Runtime/Engine/Private/Pawn.cpp
     Source/Runtime/Engine/Private/PawnMovementComponent.cpp
     Source/Runtime/Engine/Private/FloatingPawnMovement.cpp
@@ -440,6 +466,7 @@ target_link_libraries(PicoEngine
     PUBLIC
         PicoAsset
         PicoInput
+        PicoNetCore
         PicoObject
         PicoPhysicsCore
         PicoPhysicsJolt
@@ -634,6 +661,7 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Private/EditorAssetService.cpp
         Source/Editor/PicoEditor/Private/EditorCommandService.cpp
         Source/Editor/PicoEditor/Private/EditorPropertyService.cpp
+        Source/Editor/PicoEditor/Private/PlaySession.cpp
         Source/Editor/PicoEditor/Private/EditorProjectManager.cpp
         Source/Editor/PicoEditor/Private/EditorSceneClipboard.cpp
         Source/Editor/PicoEditor/Private/EditorSelection.cpp
@@ -642,6 +670,7 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Private/EditorWorldDocument.cpp
         Source/Editor/PicoEditor/Public/Pico/Editor/EditorPropertyService.h
         Source/Editor/PicoEditor/Public/Pico/Editor/EditorProjectManager.h
+        Source/Editor/PicoEditor/Public/Pico/Editor/PlaySession.h
         Source/Editor/PicoEditor/Public/Pico/Editor/AssetDependencyService.h
     )
 
@@ -953,6 +982,20 @@ else()
     target_compile_options(PicoEngineTests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_executable(PicoNetCoreTests
+    Tests/NetCore/Private/Main.cpp
+)
+
+target_include_directories(PicoNetCoreTests PRIVATE Tests/Common)
+target_link_libraries(PicoNetCoreTests PRIVATE PicoNetCore)
+set_target_properties(PicoNetCoreTests PROPERTIES FOLDER "Tests/NetCore")
+
+if(MSVC)
+    target_compile_options(PicoNetCoreTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoNetCoreTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(PicoGameTests
     Tests/Game/Private/Main.cpp
 )
@@ -1027,6 +1070,7 @@ if(BUILD_TESTING)
     add_test(NAME PicoGarbageCollectionTests COMMAND PicoGarbageCollectionTests)
     add_test(NAME PicoDynamicDelegateTests COMMAND PicoDynamicDelegateTests)
     add_test(NAME PicoEngineTests COMMAND PicoEngineTests)
+    add_test(NAME PicoNetCoreTests COMMAND PicoNetCoreTests)
     add_test(NAME PicoGameTests COMMAND PicoGameTests)
     add_test(NAME PicoMovementTests COMMAND PicoMovementTests)
     add_test(NAME PicoPhysicsTests COMMAND PicoPhysicsTests)

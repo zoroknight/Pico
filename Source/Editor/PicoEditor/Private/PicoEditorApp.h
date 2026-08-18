@@ -15,6 +15,7 @@
 #include "Pico/Editor/EditorAssetService.h"
 #include "Pico/Editor/EditorCommandQueue.h"
 #include "Pico/Editor/EditorPropertyService.h"
+#include "Pico/Editor/PlaySession.h"
 #include "Pico/Editor/EditorSceneClipboard.h"
 #include "Pico/Editor/EditorSelection.h"
 #include "Pico/Editor/EditorToolState.h"
@@ -93,13 +94,16 @@ private:
     void DrawStatusBar();
     void DrawMessageLog();
     void DrawPlayValidationPopup();
+    void DrawPlaySettingsPopup();
     void DrawUnsavedChangesPopup();
     void DrawRenamePopup();
     void ProcessDeferredActions();
     void StartGame();
     void LaunchGame(const std::string& ValidationMessage);
     void StopGame(bool bUpdateStatus = true);
-    void UpdateGameProcess();
+    void UpdatePlaySession();
+    void LoadPlaySettings();
+    void SavePlaySettings();
     void DrawPackageProjectPopup();
     void StartPackageProject();
     void UpdatePackageProcess();
@@ -196,10 +200,11 @@ private:
     FSkeletalAssetEditor SkeletalAssetEditor;
     FActorBlueprintEditor ActorBlueprintEditor;
     FEditorAssetWorkflowController AssetWorkflow;
-    FProcessHandle GameProcess;
+    FPlaySession PlaySession;
+    FPlaySessionSettings PlaySettings;
     FProcessHandle PackageProcess;
     std::filesystem::path PendingProjectFile;
-    std::filesystem::path GameProcessLogFile;
+    std::filesystem::path PlaySettingsFile;
     std::filesystem::path PackageProcessLogFile;
     std::filesystem::path PackageOutputDirectory;
     FAssetPath PendingWorldAssetPath;
@@ -230,6 +235,7 @@ private:
     bool bShowFrameRate = true;
     bool bFocusMessageLog = false;
     bool bOpenPlayValidationPopup = false;
+    bool bOpenPlaySettingsPopup = false;
     bool bPendingPlayBlocked = false;
     bool bPendingPlayWarning = false;
     bool bPendingPlayNeedsSave = false;

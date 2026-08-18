@@ -1,6 +1,7 @@
 #include "Pico/Launch/GameLaunch.h"
 
 #include "Pico/Core/Platform.h"
+#include "Pico/Core/CommandLine.h"
 #include "Pico/Core/PlatformTextInput.h"
 #include "Pico/Engine/GameEngine.h"
 #include "Pico/Engine/GameInstance.h"
@@ -13,6 +14,7 @@
 #include "Pico/Engine/LocalPlayer.h"
 #include "Pico/Engine/MatchState.h"
 #include "Pico/Engine/MovementComponent.h"
+#include "Pico/Engine/NetDriver.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PawnMovementComponent.h"
 #include "Pico/Engine/PlayerController.h"
@@ -41,6 +43,7 @@
 #include <imgui.h>
 
 #include <cstdio>
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <filesystem>
@@ -192,6 +195,49 @@ struct FGameplayDebugPanel
             ImGui::Text("PlayerStart bindings: %zu   broadcasts observed: %d",
                 PlayerStart->OnPlayerSpawned().Num(),
                 PlayerStart->GetSpawnEventCount());
+        }
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Network");
+        const Pico::FNetDriver& NetDriver = GameEngine.GetNetDriver();
+        const std::string LocalAddress = NetDriver.GetLocalAddress().IsValid()
+            ? NetDriver.GetLocalAddress().ToString() : "none";
+        ImGui::Text("Mode: %s   Local: %s",
+            Pico::ToString(NetDriver.GetNetMode()), LocalAddress.c_str());
+        ImGui::Text("Open connections: %zu   Invalid packets: %llu",
+            NetDriver.GetOpenConnectionCount(),
+            static_cast<unsigned long long>(NetDriver.GetInvalidPacketCount()));
+        const std::vector<Pico::FNetConnectionSnapshot> Connections =
+            NetDriver.GetConnectionSnapshots();
+        if (Connections.empty()) ImGui::TextDisabled("No network connections");
+        for (std::size_t Index = 0; Index < Connections.size(); ++Index)
+        {
+            const Pico::FNetConnectionSnapshot& Connection = Connections[Index];
+            ImGui::PushID(static_cast<int>(Index));
+            ImGui::Text("Connection %u: %s",
+                Connection.ConnectionId.Value, Pico::ToString(Connection.State));
+            ImGui::Text("Remote: %s   RTT: %.1f ms",
+                Connection.RemoteAddress.ToString().c_str(),
+                Connection.Statistics.SmoothedRoundTripSeconds * 1000.0);
+            ImGui::Text("Packets: sent %llu  received %llu  dropped %llu",
+                static_cast<unsigned long long>(Connection.Statistics.PacketsSent),
+                static_cast<unsigned long long>(Connection.Statistics.PacketsReceived),
+                static_cast<unsigned long long>(Connection.Statistics.PacketsDropped));
+            ImGui::Text("Duplicate: %llu  out of order: %llu  reliable queue: %zu",
+                static_cast<unsigned long long>(Connection.Statistics.DuplicatePackets),
+                static_cast<unsigned long long>(Connection.Statistics.OutOfOrderPackets),
+                Connection.PendingReliableMessages);
+            if (!Connection.CloseReason.empty())
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
+                    "Closed: %s", Connection.CloseReason.c_str());
+            }
+            ImGui::PopID();
+        }
+        if (!NetDriver.GetLastError().empty())
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.3f, 1.0f),
+                "Last error: %s", NetDriver.GetLastError().c_str());
         }
 
         ImGui::Separator();
@@ -703,6 +749,15 @@ int RunPicoGame(
     IGameModule* GameModule,
     const std::filesystem::path& DefaultProjectFile)
 {
+    FCommandLine::Init(Argc, Argv);
+    const int WindowWidth = std::clamp(
+        FCommandLine::GetInt("windowwidth").value_or(1280), 320, 3840);
+    const int WindowHeight = std::clamp(
+        FCommandLine::GetInt("windowheight").value_or(720), 240, 2160);
+    const std::string InstanceLabel =
+        FCommandLine::GetValue("instance").value_or("");
+    const std::string WindowTitle = InstanceLabel.empty()
+        ? "Pico Game" : "Pico Game - " + InstanceLabel;
     if (!glfwInit())
     {
         std::fprintf(stderr, "GLFW initialization failed\n");
@@ -712,12 +767,16 @@ int RunPicoGame(
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    GLFWwindow* Window = glfwCreateWindow(1280, 720, "Pico Game", nullptr, nullptr);
+    GLFWwindow* Window = glfwCreateWindow(
+        WindowWidth, WindowHeight, WindowTitle.c_str(), nullptr, nullptr);
     if (Window == nullptr)
     {
         glfwTerminate();
         return 1;
     }
+    const int WindowX = FCommandLine::GetInt("windowx").value_or(-1);
+    const int WindowY = FCommandLine::GetInt("windowy").value_or(-1);
+    if (WindowX >= 0 && WindowY >= 0) glfwSetWindowPos(Window, WindowX, WindowY);
     glfwMakeContextCurrent(Window);
     glfwSwapInterval(1);
 

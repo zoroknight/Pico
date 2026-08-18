@@ -42,6 +42,7 @@
 #include <limits>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -3428,6 +3429,54 @@ void TestTwoFrameLifecycle(FTestRunner& Runner)
     Runner.Expect(!Pico::PObjectSystem::IsInitialized(), "GuardedMain shuts down the object system");
 }
 
+void TestEngineFrameCallbacks(FTestRunner& Runner)
+{
+    char Program[] = "PicoFramePhaseTests";
+    char MaxFPS[] = "-maxfps=0";
+    char* Arguments[] = { Program, MaxFPS };
+
+    Pico::FEngineLoop EngineLoop;
+    const bool bInitialized = EngineLoop.PreInit(2, Arguments) == 0
+        && EngineLoop.Init() == 0;
+    Runner.Expect(bInitialized, "Frame phase test initializes the engine loop");
+    if (!bInitialized)
+    {
+        EngineLoop.Exit();
+        return;
+    }
+
+    Pico::PWorld* World = EngineLoop.GetWorld();
+    const std::uint64_t InitialWorldTickCount = World->GetTickCount();
+    std::vector<std::string> ObservedPhases;
+
+    Pico::FEngineFrameCallbacks Callbacks;
+    Callbacks.BeforeWorldTick =
+        [&](float DeltaSeconds)
+        {
+            ObservedPhases.emplace_back("BeforeWorld");
+            Runner.Expect(
+                DeltaSeconds >= 0.0f
+                    && World->GetTickCount() == InitialWorldTickCount,
+                "BeforeWorldTick runs before the World advances");
+        };
+    Callbacks.AfterWorldTick =
+        [&](float DeltaSeconds)
+        {
+            ObservedPhases.emplace_back("AfterWorld");
+            Runner.Expect(
+                DeltaSeconds >= 0.0f
+                    && World->GetTickCount() == InitialWorldTickCount + 1,
+                "AfterWorldTick runs after the World advances");
+        };
+
+    EngineLoop.Tick(Callbacks);
+    Runner.Expect(
+        ObservedPhases == std::vector<std::string> {
+            "BeforeWorld", "AfterWorld" },
+        "Engine frame callbacks preserve the pre-World and post-World order");
+    EngineLoop.Exit();
+}
+
 void TestZeroFrameLifecycle(FTestRunner& Runner)
 {
     char Program[] = "PicoEngineTests";
@@ -3477,6 +3526,7 @@ int main()
     TestGameplayFrameworkTypes(Runner);
     TestTickSchedulingAndGameThread(Runner);
     TestEngineLoopWorldLifecycle(Runner);
+    TestEngineFrameCallbacks(Runner);
     TestTwoFrameLifecycle(Runner);
     TestZeroFrameLifecycle(Runner);
     TestInvalidFrameLimit(Runner);

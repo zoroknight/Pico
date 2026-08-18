@@ -8,6 +8,7 @@
 #include "Pico/Engine/GameInstance.h"
 #include "Pico/Engine/GameModule.h"
 #include "Pico/Engine/GameModeBase.h"
+#include "Pico/Engine/NetDriver.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/ActorBlueprint.h"
 #include "Pico/Object/Class.h"
@@ -76,6 +77,15 @@ int FGameEngine::Init()
         return Result;
     }
 
+    NetDriver = std::make_unique<FNetDriver>();
+    if (!NetDriver->InitializeFromCommandLine())
+    {
+        PICO_LOG(LogNet, Error, "Game Init failed to initialize NetDriver: {}",
+            NetDriver->GetLastError());
+        NetDriver.reset();
+        return 1;
+    }
+
     if (GameModule != nullptr)
     {
         if (!GameModule->StartupModule())
@@ -132,16 +142,38 @@ int FGameEngine::Init()
 
 void FGameEngine::Tick()
 {
-    EngineLoop.Tick();
-    if (PGameInstance* GameInstance = GetGameInstance())
-    {
-        GameInstance->Tick(EngineLoop.GetDeltaSeconds());
-    }
+    FEngineFrameCallbacks Callbacks;
+    Callbacks.BeforeWorldTick =
+        [this](float DeltaSeconds)
+        {
+            if (NetDriver != nullptr)
+            {
+                NetDriver->TickDispatch(DeltaSeconds);
+            }
+            if (PGameInstance* GameInstance = GetGameInstance())
+            {
+                GameInstance->Tick(DeltaSeconds);
+            }
+        };
+    Callbacks.AfterWorldTick =
+        [this](float DeltaSeconds)
+        {
+            if (NetDriver != nullptr)
+            {
+                NetDriver->TickFlush(DeltaSeconds);
+            }
+        };
+    EngineLoop.Tick(Callbacks);
 }
 
 void FGameEngine::Exit()
 {
     DestroyGameInstance();
+    if (NetDriver != nullptr)
+    {
+        NetDriver->Shutdown();
+        NetDriver.reset();
+    }
     EngineLoop.Exit();
     if (bModuleStarted && GameModule != nullptr)
     {
@@ -222,6 +254,16 @@ FInputSystem& FGameEngine::GetInputSystem()
 const FInputSystem& FGameEngine::GetInputSystem() const
 {
     return InputSystem;
+}
+
+FNetDriver& FGameEngine::GetNetDriver()
+{
+    return *NetDriver;
+}
+
+const FNetDriver& FGameEngine::GetNetDriver() const
+{
+    return *NetDriver;
 }
 
 PGameInstance* FGameEngine::GetGameInstance() const

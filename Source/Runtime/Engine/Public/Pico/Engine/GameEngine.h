@@ -5,11 +5,13 @@
 #include "Pico/Object/ObjectTypes.h"
 
 #include <filesystem>
+#include <memory>
 
 namespace Pico
 {
 class PGameInstance;
 class IGameModule;
+class FNetDriver;
 
 class FGameEngine
 {
@@ -33,6 +35,8 @@ public:
     const FEngineLoop& GetEngineLoop() const;
     FInputSystem& GetInputSystem();
     const FInputSystem& GetInputSystem() const;
+    FNetDriver& GetNetDriver();
+    const FNetDriver& GetNetDriver() const;
     PGameInstance* GetGameInstance() const;
     IGameModule* GetGameModule() const;
     const std::filesystem::path& GetDefaultMapPath() const;
@@ -48,6 +52,7 @@ private:
 
     FEngineLoop EngineLoop;
     FInputSystem InputSystem;
+    std::unique_ptr<FNetDriver> NetDriver;
     IGameModule* GameModule = nullptr;
     FObjectHandle GameInstanceHandle;
     std::filesystem::path DefaultMapPath;

@@ -5,6 +5,7 @@
 #include "Pico/Editor/EditorTransformService.h"
 #include "Pico/Editor/EditorTransactionManager.h"
 #include "Pico/Editor/EditorWorldDocument.h"
+#include "Pico/Editor/PlaySession.h"
 
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorBlueprint.h"
@@ -27,6 +28,7 @@
 #include "PicoSandbox/SandboxModule.h"
 #include "TestRunner.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -35,6 +37,47 @@
 
 namespace
 {
+bool CopyEditorTestProject(
+    const std::filesystem::path& SourceRoot,
+    const std::filesystem::path& DestinationRoot)
+{
+    std::error_code Error;
+    std::filesystem::remove_all(DestinationRoot, Error);
+    Error.clear();
+    std::filesystem::create_directories(DestinationRoot, Error);
+    if (Error)
+    {
+        return false;
+    }
+
+    std::filesystem::copy_file(
+        SourceRoot / "PicoSandbox.pico",
+        DestinationRoot / "PicoSandbox.pico",
+        std::filesystem::copy_options::overwrite_existing,
+        Error);
+    if (Error)
+    {
+        return false;
+    }
+
+    for (const std::filesystem::path& Directory : {
+             std::filesystem::path("Config"),
+             std::filesystem::path("Content") })
+    {
+        std::filesystem::copy(
+            SourceRoot / Directory,
+            DestinationRoot / Directory,
+            std::filesystem::copy_options::recursive
+                | std::filesystem::copy_options::overwrite_existing,
+            Error);
+        if (Error)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 void TestEditorProjectManager(FTestRunner& Runner)
 {
     const std::filesystem::path Root =
@@ -111,6 +154,86 @@ void TestViewportRenderOptionDefaults(FTestRunner& Runner)
             && !Options.bDrawWorldAxes
             && Options.bDrawComponentVisualizations,
         "Viewport render options keep editor-only world axes opt-in");
+}
+
+void TestPlaySessionSettings(FTestRunner& Runner)
+{
+    const std::filesystem::path Root =
+        std::filesystem::temp_directory_path() / "PicoPlaySessionTests";
+    std::error_code Error;
+    std::filesystem::remove_all(Root, Error);
+    std::filesystem::create_directories(Root, Error);
+    const std::filesystem::path Executable = Root / "PicoGame.exe";
+    const std::filesystem::path Project = Root / "LearningProject.pico";
+    {
+        std::ofstream File(Executable);
+        File << "test";
+    }
+    {
+        std::ofstream File(Project);
+        File << "[Project]\nName=LearningProject\n";
+    }
+
+    Pico::FPlaySessionSettings Settings;
+    Settings.NetMode = Pico::EEditorPlayNetMode::SeparateServer;
+    Settings.PlayerCount = 2;
+    Settings.ServerPort = 17777;
+    Settings.ClientWindowWidth = 800;
+    Settings.ClientWindowHeight = 450;
+    const std::filesystem::path SettingsFile = Root / "PlaySettings.ini";
+    Pico::FPlaySessionSettings Loaded;
+    Runner.Expect(
+        Settings.Save(SettingsFile)
+            && Loaded.Load(SettingsFile)
+            && Loaded.NetMode == Pico::EEditorPlayNetMode::SeparateServer
+            && Loaded.PlayerCount == 2
+            && Loaded.ServerPort == 17777
+            && Loaded.ClientWindowWidth == 800
+            && Loaded.ClientWindowHeight == 450,
+        "Play Session settings persist mode, players, port, and window size");
+
+    Pico::FPlaySessionLaunchRequest Request;
+    Request.Settings = Loaded;
+    Request.Executable = Executable;
+    Request.ProjectFile = Project;
+    Request.MapAssetPath = "/Game/Maps/Test.pworld";
+    Request.WorkingDirectory = Root;
+    Request.LogDirectory = Root / "Logs";
+    std::vector<Pico::FPlayProcessSpec> Specs;
+    std::string BuildError;
+    const bool bBuilt = Pico::BuildPlayProcessSpecs(Request, Specs, BuildError);
+    Runner.Expect(
+        bBuilt && Specs.size() == 3
+            && Specs[0].Role == Pico::EPlayProcessRole::Server
+            && Specs[1].Role == Pico::EPlayProcessRole::Client
+            && Specs[2].Role == Pico::EPlayProcessRole::Client,
+        "Separate-server Play builds one server process and one process per player");
+    Runner.Expect(
+        bBuilt
+            && std::find(Specs[0].Arguments.begin(), Specs[0].Arguments.end(),
+                "-server") != Specs[0].Arguments.end()
+            && std::find(Specs[1].Arguments.begin(), Specs[1].Arguments.end(),
+                "-client=127.0.0.1") != Specs[1].Arguments.end()
+            && Specs[0].LogFile.filename() == "Server.log"
+            && Specs[1].LogFile.filename() == "Client_1.log",
+        "Play process specs assign network roles and independent logs");
+
+    Request.Settings.NetMode = Pico::EEditorPlayNetMode::Standalone;
+    Request.Settings.PlayerCount = 1;
+    Specs.clear();
+    Runner.Expect(
+        Pico::BuildPlayProcessSpecs(Request, Specs, BuildError)
+            && Specs.size() == 1
+            && Specs[0].Role == Pico::EPlayProcessRole::Standalone,
+        "Standalone Play builds exactly one offline process");
+
+    Request.Settings.NetMode = Pico::EEditorPlayNetMode::ListenServer;
+    Runner.Expect(
+        !Pico::BuildPlayProcessSpecs(Request, Specs, BuildError)
+            && BuildError.find("replication") != std::string::npos,
+        "Listen Server remains explicitly unavailable before replication support");
+
+    std::filesystem::remove_all(Root, Error);
 }
 
 Pico::PObject* FindWorldObjectByPath(
@@ -1099,8 +1222,23 @@ void TestEditorWorldDocument(FTestRunner& Runner)
     char Program[] = "PicoEditorDocumentTests";
     char MaxFPS[] = "-maxfps=0";
     char* Arguments[] = { Program, MaxFPS };
+    const std::filesystem::path SourceProjectRoot = std::filesystem::absolute(
+        "Projects/PicoSandbox").lexically_normal();
+    const std::filesystem::path TestProjectRoot =
+        std::filesystem::temp_directory_path()
+        / "PicoEditorDocumentTests"
+        / "PicoSandbox";
+    const bool bFixtureReady =
+        CopyEditorTestProject(SourceProjectRoot, TestProjectRoot);
+    Runner.Expect(
+        bFixtureReady,
+        "Editor document test prepares an isolated project fixture");
+    if (!bFixtureReady)
+    {
+        return;
+    }
     const std::filesystem::path ProjectFile =
-        "Projects/PicoSandbox/PicoSandbox.pico";
+        TestProjectRoot / "PicoSandbox.pico";
 
     Pico::FEngineLoop EngineLoop;
     const bool bInitialized = EngineLoop.PreInit(2, Arguments, ProjectFile) == 0
@@ -1160,6 +1298,9 @@ void TestEditorWorldDocument(FTestRunner& Runner)
     Runner.Expect(
         Pico::FObjectRegistry::GetObjectCount() == 0,
         "Editor document tests release the World");
+
+    std::error_code Error;
+    std::filesystem::remove_all(TestProjectRoot.parent_path(), Error);
 }
 }
 
@@ -1168,6 +1309,7 @@ int main()
     FTestRunner Runner;
     TestEditorProjectManager(Runner);
     TestViewportRenderOptionDefaults(Runner);
+    TestPlaySessionSettings(Runner);
     TestEditorCommandService(Runner);
     TestEditorTransactions(Runner);
     TestEditorWorldDocument(Runner);

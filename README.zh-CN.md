@@ -14,6 +14,12 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 当前实现可以：
 
 - 运行类似 UE 的 `PreInit -> Init -> Tick -> Exit` 引擎循环。
+- 通过独立 `PicoNetCore` 使用确定性 Loopback 或非阻塞 Windows UDP 连接一个服务器和多个客户端，提供版本化
+  Packet、握手、Sequence/Ack、有界且有序的可靠交付、心跳、超时，以及 World 前后 NetDriver 阶段。
+- 编辑器 Play 下拉菜单可在 Standalone 与“可视化独立服务器 + 1～4 个客户端”之间切换，持久化端口和窗口
+  尺寸，并以独立标题、日志和进程句柄启动、监控及统一停止整组 Play Session。
+- Windows UDP Transport 针对自身 Socket 关闭 `SIO_UDP_CONNRESET`，并将启动竞态产生的 Winsock `10054`
+  视为可重试的暂时无数据；其他程序和系统网络设置不受影响，连接失败仍由握手超时判定。
 - 启动独立的 `PicoGame` Runtime，提供逐帧输入、可配置的 Action/Axis 映射，并支持项目默认地图或命令行地图覆盖。
 - 构建项目专属的 `PicoSandboxGame` Runtime：静态链接的 Game Module 在地图加载前注册项目原生类型，随后创建项目 GameInstance。
 - 生成可反射的项目 Character，通过正常的 World/Actor Tick 消费 WASD 与 Jump 映射输入。
@@ -135,7 +141,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
-Debug 和 Release 均可完整构建，十七个 CTest 目标全部通过；动画聚焦测试为 13/13 断言通过。
+Debug 和 Release 均可完整构建，十八个 CTest 目标全部通过；动画聚焦测试为 13/13 断言通过。
 
 ## 架构
 
@@ -169,6 +175,7 @@ PicoSandboxGame
 | --- | --- |
 | `PicoCore` | App状态、命令行、配置、日志、FName、路径、时间、数学和项目描述 |
 | `PicoInput` | 逐帧按键与指针状态，以及可配置的 Action/Axis 映射 |
+| `PicoNetCore` | 网络地址与身份、Packet 编解码、确定性 Loopback、非阻塞 UDP、握手、Ack、有界可靠交付、心跳和超时 |
 | `PicoAsset` | 经过校验的虚拟资产发现、确定性项目注册表和文件元数据 |
 | `PicoAssetImport` | 仅供开发阶段使用的 OBJ 到原生 Static Mesh 转换 |
 | `PicoObject` | 对象模型、反射、委托、强弱引用、Root Set、Mark-Sweep GC、注册表、Handle、Outer 和序列化 |
@@ -305,8 +312,10 @@ cmake --build Build --config Release --target PicoEditor PicoSandboxGame --paral
 默认地图，自动冒烟测试可以附加 `-frames=N`；通用 `PicoGame` 仍可用于没有原生项目代码的项目。
 
 编辑器工具栏中的绿色三角形会在需要时保存当前 World，并把当前文档的 `/Game/...` 地图路径传给独立
-Runtime。运行期间控件会变成用于终止游戏进程的红色正方形，两个控件均提供 Tooltip；游戏自行退出后，
-编辑器也会检测到并恢复可运行状态。
+Runtime。三角形右侧的原生下三角按钮可选择 Standalone，或启动一个可视化服务器与 1～4 个客户端；端口、玩家数
+和客户端窗口尺寸保存在 `Saved/Editor/PlaySettings.ini`。各实例使用 `Server`、`Client_1` 等窗口标题，日志写入
+`Saved/Logs/PlaySession/Session_*/`。运行期间控件会变成红色正方形，一次停止整组进程；单个客户端自行退出
+只会结束该实例。Listen Server 与真正无窗口的 Headless Dedicated Server 将在复制层稳定后开放。
 
 ## 编辑器操作
 
@@ -498,6 +507,9 @@ private:
 相关文档：
 
 - [Pico 剩余开发路线](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
+- [第 6 月前网络准入基线](Docs/Month08_14_PreNetworkReadiness.md)
+- [网络开发风险登记](Docs/NetworkRiskRegister.zh-CN.md)
+- [网络传输、连接与帧阶段](Docs/Month09_1_NetTransportAndConnection.md)
 - [反射类编写指南](Docs/ReflectionAuthoringGuide.md)
 - [Native 委托编写指南](Docs/DelegateAuthoringGuide.md)
 - [PicoInspector Developer Sandbox 计划](Docs/PicoInspector_DeveloperSandbox_Plan.zh-CN.md)
@@ -546,6 +558,10 @@ private:
 [角色控制、第三人称模板与摄像机策略](Docs/Month08_8_CharacterControlAndCameraPolicy.md) 和
 [Data-Only Actor Blueprint 与角色装配编辑器](Docs/Month08_9_DataOnlyActorBlueprint.md)。Data-Only Blueprint
 负责可复用的 Actor/组件默认值和生成类；行为节点仍属于后续 PicoGraph，不与当前装配工作流耦合。后续学习路线为：
+
+第 6 月前的运行时基线已经增加明确的 `BeforeWorldTick/AfterWorldTick` 阶段：GameInstance 在 World 模拟前运行，
+GC 与帧率限制位于 World 和帧末回调之后；编辑器文档测试改用临时项目副本，不会再修改真实 PicoSandbox 地图。
+具体边界见 [第 6 月前网络准入基线](Docs/Month08_14_PreNetworkReadiness.md)。
 
 - Replication、RPC、Transform 同步、客户端预测与修正
 - Dedicated Server/广域网验证、依赖裁剪 Cook、Shipping 与全新电脑打包验收

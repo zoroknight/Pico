@@ -16,6 +16,13 @@ enough to study while preserving clear ownership boundaries and an end-to-end ru
 The current implementation can:
 
 - Run a UE-style `PreInit -> Init -> Tick -> Exit` engine loop.
+- Connect one server and multiple clients through `PicoNetCore` using a deterministic loopback lab or
+  non-blocking Windows UDP, with versioned packets, handshake, Sequence/Ack, bounded ordered reliable
+  delivery, heartbeat, timeout, and pre/post-World NetDriver phases.
+- Configure editor Play as Standalone or a visible separate server plus one to four clients; persist
+  port/window settings and launch, monitor, log, and stop the complete multi-process Play Session.
+- Scope Windows `SIO_UDP_CONNRESET` suppression to each Pico UDP socket so startup-race Winsock
+  `10054` reports remain retryable without changing other applications or bypassing handshake timeout.
 - Launch a standalone `PicoGame` runtime with frame-based input, configurable Action/Axis mappings,
   and a project default map or command-line map override.
 - Build a project-specific `PicoSandboxGame` runtime whose statically linked Game Module registers
@@ -170,7 +177,7 @@ The current implementation can:
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-Debug and Release configurations build successfully, all seventeen CTest targets pass, and the focused animation
+Debug and Release configurations build successfully, all eighteen CTest targets pass, and the focused animation
 suite passes 13/13 assertions.
 
 ## Architecture
@@ -205,6 +212,7 @@ PicoSandboxGame
 | --- | --- |
 | `PicoCore` | App state, command line, config, logging, names, paths, time, math, project descriptor |
 | `PicoInput` | Frame-based key and pointer state plus configurable Action/Axis mappings |
+| `PicoNetCore` | Network addresses and IDs, packet codec, deterministic loopback, non-blocking UDP, handshake, Ack, bounded reliable delivery, heartbeat, and timeout |
 | `PicoAsset` | Validated virtual asset discovery, deterministic project registry, and file metadata |
 | `PicoAssetImport` | Developer-only OBJ conversion into validated native static-mesh assets |
 | `PicoObject` | Object model, reflection, delegates, strong/weak references, Root Set, mark-sweep GC, registry, handles, Outer graph, serialization |
@@ -376,11 +384,12 @@ The project runtime reads `[Game] DefaultMap`, Gameplay class/profile defaults, 
 `-map=/Game/Maps/Example.pworld` overrides the default map, and `-frames=N` supports automated
 smoke runs. The generic `PicoGame` target remains available for projects without native code.
 
-The editor toolbar's green triangle launches this standalone runtime with the current document's
-`/Game/...` map path. A dirty or untitled World opens an explicit `Save & Play` confirmation because
-the child process can only load scene data from disk; Play never silently overwrites the document.
-While the game is running, the control becomes a red square that stops the process. Tooltips identify
-both controls; closing either process is detected and the editor returns to its ready state.
+The editor toolbar's green triangle launches the current `/Game/...` map. Its adjacent native down-arrow menu selects
+Standalone or a visible separate server plus one to four clients, and persists player count, port,
+and client window size in `Saved/Editor/PlaySettings.ini`. Instances have `Server`/`Client_1` titles
+and independent logs under `Saved/Logs/PlaySession/Session_*/`; the red square stops the whole group.
+A dirty or untitled World still requires explicit `Save & Play`. Listen Server and a truly headless
+Dedicated Server remain reserved until the replication/runtime split is ready.
 
 ## Editor Controls
 
@@ -598,6 +607,9 @@ the existing `PClass`, `PProperty`, and `PFunction` runtime. Generated files liv
 See:
 
 - [Remaining Development Roadmap (Chinese)](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
+- [Pre-Network Readiness (Chinese)](Docs/Month08_14_PreNetworkReadiness.md)
+- [Network Risk Register (Chinese)](Docs/NetworkRiskRegister.zh-CN.md)
+- [Network Transport, Connection, and Frame Phases (Chinese)](Docs/Month09_1_NetTransportAndConnection.md)
 - [Reflection Authoring Guide](Docs/ReflectionAuthoringGuide.md)
 - [PicoHeaderTool](Docs/Month03_17_PicoHeaderTool.md)
 - [Mark-Sweep Garbage Collection](Docs/Month03_18_GarbageCollection.md)
@@ -661,6 +673,10 @@ over Character Profile and imported mesh defaults; slots without mesh sections a
 The Data-Only Actor Blueprint editor now separates reusable Actor/component defaults from level
 instances and gives PicoSandbox a generated default Pawn class. Event Graph behavior remains the
 later PicoGraph milestone rather than being coupled to this assembly workflow.
+The pre-network runtime baseline now exposes explicit `BeforeWorldTick` and `AfterWorldTick` frame
+slots. `PGameInstance` runs before World simulation, while GC and frame pacing remain after the
+World and post-World callback. Editor document tests use a temporary project copy and cannot modify
+the working PicoSandbox map. See [Pre-Network Readiness](Docs/Month08_14_PreNetworkReadiness.md).
 The remaining learning path is:
 
 - Replication, RPC, transform synchronization, client prediction, and correction

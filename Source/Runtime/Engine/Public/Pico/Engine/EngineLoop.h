@@ -7,10 +7,17 @@
 #include "Pico/Object/ObjectTypes.h"
 
 #include <filesystem>
+#include <functional>
 
 namespace Pico
 {
 class PWorld;
+
+struct FEngineFrameCallbacks
+{
+    std::function<void(float)> BeforeWorldTick;
+    std::function<void(float)> AfterWorldTick;
+};
 
 class FEngineLoop
 {
@@ -21,6 +28,7 @@ public:
         const std::filesystem::path& ProjectFile = {});
     int Init();
     void Tick();
+    void Tick(const FEngineFrameCallbacks& Callbacks);
     void Exit();
     bool LoadWorld(
         const std::filesystem::path& FilePath,

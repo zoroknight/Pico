@@ -380,6 +380,11 @@ int FEngineLoop::Init()
 
 void FEngineLoop::Tick()
 {
+    Tick(FEngineFrameCallbacks {});
+}
+
+void FEngineLoop::Tick(const FEngineFrameCallbacks& Callbacks)
+{
     if (!bInitialized)
     {
         PICO_LOG(LogEngine, Error, "Tick called before Init");
@@ -389,6 +394,12 @@ void FEngineLoop::Tick()
 
     FApp::BeginFrame();
     FrameTimer.Tick();
+
+    const float DeltaSeconds = static_cast<float>(FrameTimer.GetDeltaSeconds());
+    if (Callbacks.BeforeWorldTick)
+    {
+        Callbacks.BeforeWorldTick(DeltaSeconds);
+    }
 
     PWorld* World = GetWorld();
     if (World == nullptr)
@@ -404,9 +415,14 @@ void FEngineLoop::Tick()
         {
             bTickingWorld = false;
         });
-    World->Tick(static_cast<float>(FrameTimer.GetDeltaSeconds()));
+    World->Tick(DeltaSeconds);
     ResetTickingWorld.Release();
     bTickingWorld = false;
+
+    if (Callbacks.AfterWorldTick)
+    {
+        Callbacks.AfterWorldTick(DeltaSeconds);
+    }
 
     GarbageCollectionElapsedSeconds += FrameTimer.GetDeltaSeconds();
     if (GarbageCollectionIntervalSeconds > 0.0

@@ -35,6 +35,8 @@ Pico 是一个以学习 Unreal Engine 5 源码和完整游戏引擎链路为主�
 - 独立 `PicoGame` Runtime、输入 Action/Axis 映射和地图覆盖。
 - 编辑器绿色 Play、红色 Stop 和独立 Game World 进程。
 - Game Module、GameInstance、通用 `PicoGameRuntime` 和项目专属 `PicoSandboxGame` Target。
+- `FEngineFrameCallbacks` 提供 World 外围的 `BeforeWorldTick/AfterWorldTick` 阶段；GameInstance 已移到
+  World 模拟前，GC 与帧率限制保持在 World 及帧回调之后，为网络接收和发送留下稳定插槽。
 - `PCharacter`、Capsule 和 CharacterMovement：Controller -> 输入缓存 -> 确定性移动模拟 -> MoveComponent。
 - 第三人称模板基础链：ControlRotation 驱动 SpringArm，WASD 转换为世界移动意图，角色按移动方向平滑转身。
 - UE 风格 SpringArm TargetRotation：ControlRotation 与组件 RelativeRotation 分离，支持 Pitch/Yaw/Roll
@@ -325,10 +327,14 @@ Tick/Gameplay
 PrePhysics、DuringPhysics、同步 `IPhysicsScene::Step`、物理结果/事件写回、PostPhysics 和
 PostUpdateWork。Jolt 使用固定 60 Hz、每个 World 帧最多 4 个子步；同组 prerequisite 和跨组顺序均有测试。
 
-进入第 6 月后仍需完成的是 World 外围帧编排：当前 `FGameEngine::Tick` 先执行包含 GC 安全点的
-`FEngineLoop::Tick`，然后才调用 `PGameInstance::Tick`。网络接入时必须把 `NetDriver::TickDispatch` 放到
-World 模拟前，把延迟销毁、GameInstance 帧末工作、`TickFlush` 和 GC 放到权威状态稳定后。GameInstance
-只承担进程级、跨地图和明确的 PreWorld/PostWorld 工作，不能成为输入、网络和所有玩法 Tick 的收纳箱。
+第 6 月前已经补齐 World 外围的最小帧编排：`FEngineLoop` 暴露
+`BeforeWorldTick/AfterWorldTick`，`FGameEngine` 在 `BeforeWorldTick` 调用 `PGameInstance::Tick`，World 模拟完成后
+才进入 `AfterWorldTick`、GC 安全点和帧率限制。自动化测试会直接验证两个回调与 World Tick 的相对顺序。
+
+网络接入时应把 `NetDriver::TickDispatch` 接入 `BeforeWorldTick`，把延迟销毁、明确的 GameInstance 帧末工作
+和 `NetDriver::TickFlush` 接入 `AfterWorldTick`。GameInstance 只承担进程级、跨地图和明确的 PreWorld/PostWorld
+工作，不能成为输入、网络和所有玩法 Tick 的收纳箱。输入目前仍由 Game Runtime 在调用 `FGameEngine::Tick`
+前更新，符合模拟前完成输入采样的约束。
 
 推荐的最终帧顺序固定为：
 
@@ -658,7 +664,7 @@ Branching Point 精确任务语义、复杂 Montage 优先级和任意 Montage �
   使用 GUI 子系统。第三人称相机已补齐可配置 Pitch 限制和可关闭的 SpringArm 球形 Sweep，但 Camera Lag
   仍属于可选手感增强，不是网络准入条件。
 
-## 第 5.6 阶段（代码完成，等待真实人形资产验收）：AnimationSet 与最小人物配置
+## 第 5.6 阶段（已完成）：AnimationSet 与最小人物配置
 
 Montage Lite 后安排 1～2 天完成，不延伸为完整 Persona：
 
@@ -667,25 +673,50 @@ Montage Lite 后安排 1～2 天完成，不延伸为完整 Persona：
 | 第 1 天 | 新增版本化 `.panimset`，保存 Skeleton、Idle、Walk、Jump；AssetRegistry/AssetManager 支持；PAnimInstance 改为读取 AnimationSet | 替换 AnimationSet 即可改变移动动画；组件不再硬编码三个项目 Clip 路径；保存加载与非法 Skeleton 引用测试通过 |
 | 第 2 天 | 正式编辑器创建/选择 SkeletalMeshComponent，Details 配置 Mesh、AnimationSet、按 Slot Material Override 与相对 Transform | 导入的简单 CC0 人形可装配到 Character；保存 `.pworld`、关闭重开后全部引用恢复；Play 中完成 Idle/Walk/Jump |
 
-本阶段不实现 VisualProfile、动画重定向、AnimGraph、PhysicsAsset、自动复杂材质、完整骨骼树或动画时间轴。
-如果按 Slot 覆盖需要修改资产版本，旧的单材质场景必须保持向后兼容。完成后使用简单 CC0 GLB 做正式验收，
-再将 Manny/Quinn 作为独立兼容性测试，不让复杂 UE 资产阻塞第 6 月网络。
+本阶段不实现动画重定向、AnimGraph、PhysicsAsset、完整骨骼树或完整动画时间轴。旧的单材质场景保持
+向后兼容；Manny/Quinn 仍只作为未来复杂兼容性测试，不阻塞第 6 月网络。
 
-代码完成记录：`.panimset`、Registry/Manager、组件反射引用、导入时按 Idle/Walk/Jump 名称自动生成、
-四个 Section 材质覆盖、分 Section 渲染以及 AnimationSet/Montage 预览入口已经实现。待办只剩选择许可证
-清晰且包含 Idle/Walk/Jump 的人形 GLB，完成导入、场景保存重开和 Standalone Play 的视觉验收；该外部资产
-不作为进入第 6 月网络底层的阻塞项。
+完成记录：`.panimset`、Registry/Manager、组件反射引用、导入时按 Idle/Walk/Jump 名称自动生成、八个可编辑
+材质覆盖槽、分 Section 渲染以及 AnimationSet/Montage 预览入口均已实现。真实 Knight GLB 已完成 Skeleton、
+SkeletalMesh、17 个动画、材质、CharacterProfile 和 Data-Only Actor Blueprint 的导入与装配；场景保存重开、
+项目设置、地图内 Auto Possess Pawn、Standalone Play 和动画预览均已完成可视化验收。
 
 ## 第 6 月：Replication、RPC 与预测
 
 目标：一个服务器和两个客户端完成 Gameplay 同步。
 
-| 周次 | 任务 | 月末验收 |
+| 周次 | 任务 | 周末验收 |
 | --- | --- | --- |
-| 第 1 周 | `INetTransport/FUdpTransport`、平台 Socket、NetDriver、Connection、握手、Packet Sequence、Ack/AckBits、心跳/超时、可靠队列、NetMode、NetRole、Ownership、`FNetObjectId` 与身份类型隔离 | 本机客户端可通过 UDP 连接服务器；可靠消息可确认/重发；网络身份不复用 ObjectHandle/SceneId |
-| 第 2 周 | ActorChannel、Spawn/Destroy、网络对象引用、Dirty Tracking、Replication Condition、OnRep、每连接属性基线和 Delta | Actor 和属性可复制；未变化字段不重复发送；客户端确认的基线可用于后续增量 |
-| 第 3 周 | Server/Client/Multicast RPC、可靠/不可靠、函数反射调用、方向/Role/Ownership/参数校验 | 合法交互 RPC 可执行，非法调用零副作用 |
-| 第 4 周 | SavedMove、输入序号、服务器重演、Ack/Correction、纠错快照、未确认输入回滚重演、模拟代理快照缓冲与插值 | 高延迟下所属角色可预测和纠正；其他角色可平滑显示；重演和快照缓冲均有上限 |
+| 第 1 周（已完成） | 新增 `PicoNetCore`；实现内存 Loopback 与 Windows UDP `INetTransport`、Packet Header、Connection、握手、Sequence、Ack/AckBits、心跳/超时、有限可靠队列；定义 NetMode、NetRole、`FNetObjectId`；NetDriver 接入帧阶段；编辑器增加多进程 Play Session 配置与编排 | 本机一个服务器与两个客户端完成 UDP 握手；可靠消息在丢包下确认/重发并恰好一次、有序交付；编辑器可启动/监控/统一停止可视化服务器与 1～4 个客户端；网络身份不复用 ObjectHandle/SceneId |
+| 第 2 周 | ActorChannel、Spawn/Destroy、网络对象引用、反射 Replication Schema、Dirty Tracking、Replication Condition、OnRep、每连接已确认属性基线和 Delta | 服务器 Actor 可在客户端生成、更新、引用和销毁；未变化字段不重复发送；断开与 GC 后无悬空 Channel/引用 |
+| 第 3 周 | Server/Client/Multicast RPC、可靠/不可靠、参数网络序列化、`ProcessEvent` 调用、方向/Role/Ownership/参数校验；落实 Gameplay Framework 网络可见性；完成开门或拾取纵向实例 | 合法交互 RPC 可执行并通过属性复制同步结果；非拥有者、错误方向和非法参数调用零副作用；三进程 Gameplay 状态一致 |
+| 第 4 周 | SavedMove、输入序号、服务器重演、Ack/Correction、纠错快照、未确认输入回滚重演、模拟代理快照缓冲与插值；延迟/抖动/丢包模拟；Network Debug 与 Play Session 网络模拟控制 | 100～150 ms 延迟和少量丢包下所属角色可预测和纠正，其他角色平滑显示；一个服务器加两个客户端连续运行，重演、快照和可靠队列均有上限 |
+
+第 1 周完成记录：`PicoNetCore` 与 `FNetDriver` 已落地；Loopback 和真实 Winsock UDP 均通过一个服务器加两个客户端
+测试；三步握手、Sequence 回绕、Ack/AckBits、Heartbeat、超时、可靠消息重发/去重/有序交付和资源上限均有
+自动化覆盖。GameEngine 已固定 `TickDispatch -> GameInstance/World -> TickFlush -> GC` 顺序，运行时 F1 Network
+Debug 可观察连接与包统计。三个独立 PicoSandboxGame 进程的真实 UDP 握手、Open 和退出超时清理已通过。
+编辑器 Play 下拉菜单已提前完成最小网络启动入口：Standalone 与可视化独立服务器模式、1～4 个客户端、端口、
+窗口尺寸、独立标题/日志和整组停止均已落地；Listen Server、Headless Dedicated Server 与单进程多 World PIE
+仍保持后续边界，不在底层连接阶段伪实现。
+实现说明见 [`Month09_1_NetTransportAndConnection.md`](Month09_1_NetTransportAndConnection.md)。
+
+### 第 6 月每周准入门槛
+
+第 6 月按纵向闭环推进，下一周不能建立在尚未验证的上一层之上：
+
+1. 第 1 周结束：Loopback 和真实 UDP 的握手、丢包重发、重复/乱序、超时清理全部通过，才开始 ActorChannel。
+2. 第 2 周结束：Spawn、Destroy、属性 Delta、对象引用延迟修复和 GC/断开清理全部通过，才开始 Gameplay RPC。
+3. 第 3 周结束：非法 RPC 全部被拒绝，三进程开门或拾取闭环通过，才开始 CharacterMovement 预测。
+4. 第 4 周结束：在 100～150 ms 延迟、约 5% 丢包下连续运行至少 10 分钟，无崩溃、悬空对象或无界队列。
+
+本月交付优先级固定为：连接与身份、Actor/属性复制、Server RPC 与 Ownership、Transform 同步与模拟代理插值、
+自主代理预测与重演。若第 4 周时间不足，可以降低视觉平滑和完整重演精度，但不能留下只有底层协议、没有可运行
+Gameplay Demo 的半套系统。Root Motion 预测、动态刚体预测、复杂复制条件、Dormancy、分片、Iris 和
+Replication Graph 均不得侵占本月主线。
+
+网络风险、触发信号、降级方案与关闭条件统一记录在
+[`NetworkRiskRegister.zh-CN.md`](NetworkRiskRegister.zh-CN.md)，每周开始和结束时各复查一次。
 
 网络职责固定为：GameMode 仅服务器；GameState/PlayerState 对所有客户端；PlayerController 仅服务器和所属客户端；Pawn 对相关连接复制。
 

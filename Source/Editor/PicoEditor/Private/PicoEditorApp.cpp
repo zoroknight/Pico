@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <optional>
@@ -202,6 +203,12 @@ FPicoEditorApp::FPicoEditorApp(
             ViewportPanel.InvalidateStaticMesh(AssetPath);
         })
 {
+    FPaths::TryGetProjectWritePath(
+        EProjectWriteRoot::Saved,
+        "Editor/PlaySettings.ini",
+        PlaySettingsFile);
+    LoadPlaySettings();
+
     FConfigFile Config;
     const std::filesystem::path ConfigPath = FPaths::GetProjectConfigFile("Pico.ini");
     const bool bHasConfig = Config.Load(ConfigPath);
@@ -275,7 +282,7 @@ FPicoEditorApp::~FPicoEditorApp()
 
 void FPicoEditorApp::Draw()
 {
-    UpdateGameProcess();
+    UpdatePlaySession();
     UpdatePackageProcess();
     bInteractiveEditVisited = false;
     ImGuizmo::BeginFrame();
@@ -633,7 +640,7 @@ void FPicoEditorApp::DrawToolbar()
         }
     };
 
-    const bool bGameRunning = GameProcess.IsValid();
+    const bool bGameRunning = PlaySession.IsActive();
     if (DrawPlayStopButton(bGameRunning))
     {
         if (bGameRunning)
@@ -649,9 +656,19 @@ void FPicoEditorApp::DrawToolbar()
     {
         ImGui::SetTooltip(
             bGameRunning
-                ? "Stop the standalone game"
-                : "Save the World and play in a standalone game window");
+                ? "Stop every process in the Play Session"
+                : "Save the World and start the configured Play Session");
     }
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##PlaySettings", ImGuiDir_Down))
+    {
+        bOpenPlaySettingsPopup = true;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Play Session settings");
+    }
+    DrawPlaySettingsPopup();
     ImGui::SameLine();
     ImGui::TextDisabled("|");
     ImGui::SameLine();
@@ -1365,6 +1382,72 @@ void FPicoEditorApp::DrawMessageLog()
     ImGui::End();
 }
 
+void FPicoEditorApp::DrawPlaySettingsPopup()
+{
+    if (bOpenPlaySettingsPopup)
+    {
+        ImGui::OpenPopup("Play Session Settings");
+        bOpenPlaySettingsPopup = false;
+    }
+    if (!ImGui::BeginPopup("Play Session Settings")) return;
+
+    bool bChanged = false;
+    const char* ModeLabel = PlaySettings.NetMode == EEditorPlayNetMode::Standalone
+        ? "Standalone" : "Separate Server + Clients (Visible)";
+    ImGui::SetNextItemWidth(250.0f);
+    if (ImGui::BeginCombo("Play Mode", ModeLabel))
+    {
+        if (ImGui::Selectable(
+                "Standalone",
+                PlaySettings.NetMode == EEditorPlayNetMode::Standalone))
+        {
+            PlaySettings.NetMode = EEditorPlayNetMode::Standalone;
+            PlaySettings.PlayerCount = 1;
+            bChanged = true;
+        }
+        if (ImGui::Selectable(
+                "Separate Server + Clients (Visible)",
+                PlaySettings.NetMode == EEditorPlayNetMode::SeparateServer))
+        {
+            PlaySettings.NetMode = EEditorPlayNetMode::SeparateServer;
+            bChanged = true;
+        }
+        ImGui::BeginDisabled();
+        ImGui::Selectable("Listen Server (Replication milestone)", false);
+        ImGui::Selectable("Headless Dedicated Server (Runtime milestone)", false);
+        ImGui::EndDisabled();
+        ImGui::EndCombo();
+    }
+
+    ImGui::BeginDisabled(PlaySettings.NetMode == EEditorPlayNetMode::Standalone);
+    bChanged |= ImGui::InputInt("Players", &PlaySettings.PlayerCount);
+    bChanged |= ImGui::InputInt("Server Port", &PlaySettings.ServerPort);
+    ImGui::EndDisabled();
+    bChanged |= ImGui::InputInt("Window Width", &PlaySettings.ClientWindowWidth);
+    bChanged |= ImGui::InputInt("Window Height", &PlaySettings.ClientWindowHeight);
+    if (bChanged)
+    {
+        PlaySettings.Clamp();
+        SavePlaySettings();
+    }
+
+    ImGui::Separator();
+    if (PlaySettings.NetMode == EEditorPlayNetMode::Standalone)
+    {
+        ImGui::TextDisabled("Starts one offline game process.");
+    }
+    else
+    {
+        ImGui::TextDisabled(
+            "Starts one visible server and %d client process(es).",
+            PlaySettings.PlayerCount);
+        ImGui::TextDisabled("The server is not included in Players.");
+        ImGui::TextDisabled(
+            "The server keeps a window until headless runtime is introduced.");
+    }
+    ImGui::EndPopup();
+}
+
 void FPicoEditorApp::DrawPlayValidationPopup()
 {
     if (bOpenPlayValidationPopup)
@@ -1391,7 +1474,7 @@ void FPicoEditorApp::DrawPlayValidationPopup()
     {
         ImGui::Spacing();
         ImGui::TextWrapped(
-            "Standalone Play runs in another process. Save the current World "
+            "Play runs in separate processes. Save the current World "
             "explicitly so that process can load the same scene.");
     }
     ImGui::Separator();
@@ -1532,7 +1615,7 @@ void FPicoEditorApp::ProcessDeferredActions()
 
 void FPicoEditorApp::StartGame()
 {
-    if (GameProcess.IsValid())
+    if (PlaySession.IsActive())
     {
         return;
     }
@@ -1575,7 +1658,6 @@ void FPicoEditorApp::StartGame()
 
 void FPicoEditorApp::LaunchGame(const std::string& ValidationMessage)
 {
-
     FConfigFile ProjectConfig;
     ProjectConfig.Load(FPaths::GetProjectConfigFile("Pico.ini"));
     std::filesystem::path GameExecutableName =
@@ -1603,74 +1685,79 @@ void FPicoEditorApp::LaunchGame(const std::string& ValidationMessage)
             true);
         return;
     }
+    const auto SessionId = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    FPlaySessionLaunchRequest Request;
+    Request.Settings = PlaySettings;
+    Request.Executable = GameExecutable;
+    Request.ProjectFile = FPaths::GetProjectFile();
+    Request.MapAssetPath = std::string(WorldDocument.GetAssetPath().ToString());
+    Request.WorkingDirectory = FPaths::GetEngineRootDir();
+    Request.LogDirectory = FPaths::GetProjectSavedDir()
+        / "Logs" / "PlaySession" / ("Session_" + std::to_string(SessionId));
+
     std::string Error;
-    GameProcessLogFile = FPaths::GetProjectSavedDir() / "Logs" / "StandaloneGame.log";
-    GameProcess = FPlatformProcess::CreateProcess(
-        GameExecutable,
-        {
-            FPaths::GetProjectFile().string(),
-            "-map=" + std::string(WorldDocument.GetAssetPath().ToString())
-        },
-        FPaths::GetEngineRootDir(),
-        GameProcessLogFile,
-        &Error);
-    if (!GameProcess.IsValid())
+    if (!PlaySession.Start(Request, Error))
     {
-        SetStatus("Could not start project game: " + Error, true);
+        SetStatus("Could not start Play Session: " + Error, true);
         return;
     }
     SetStatus(
-        "Playing standalone game (process "
-            + std::to_string(GameProcess.GetProcessId()) + "); "
+        "Started " + std::string(ToString(PlaySettings.NetMode))
+            + " Play Session with "
+            + std::to_string(PlaySession.GetProcessCount()) + " process(es); "
             + ValidationMessage);
 }
 
 void FPicoEditorApp::StopGame(bool bUpdateStatus)
 {
-    if (!GameProcess.IsValid())
+    if (!PlaySession.IsActive())
     {
         return;
     }
 
-    bool bStopped = true;
-    if (FPlatformProcess::IsRunning(GameProcess))
-    {
-        bStopped = FPlatformProcess::Terminate(GameProcess);
-        if (bStopped)
-        {
-            FPlatformProcess::WaitForExit(GameProcess, 2000);
-        }
-    }
-    GameProcess.Reset();
+    const bool bStopped = PlaySession.Stop();
     if (bUpdateStatus)
     {
         SetStatus(
-            bStopped ? "Standalone game stopped" : "Could not stop PicoGame",
+            bStopped ? "Play Session stopped"
+                     : "One or more Play processes could not be stopped",
             !bStopped);
     }
 }
 
-void FPicoEditorApp::UpdateGameProcess()
+void FPicoEditorApp::UpdatePlaySession()
 {
-    if (!GameProcess.IsValid() || FPlatformProcess::IsRunning(GameProcess))
+    const std::vector<FPlayProcessExit> Exits = PlaySession.Poll();
+    for (const FPlayProcessExit& Exit : Exits)
     {
-        return;
+        std::string Detail;
+        if (Exit.ExitCode != 0 && std::filesystem::is_regular_file(Exit.LogFile))
+        {
+            std::ifstream Log(Exit.LogFile);
+            std::string Line;
+            while (std::getline(Log, Line)) if (!Line.empty()) Detail = Line;
+        }
+        SetStatus(
+            Exit.Label + " exited with code " + std::to_string(Exit.ExitCode)
+                + (Detail.empty() ? "" : ": " + Detail),
+            Exit.ExitCode != 0,
+            Exit.ExitCode == 0 && PlaySession.IsActive());
     }
+}
 
-    int ExitCode = 0;
-    FPlatformProcess::WaitForExit(GameProcess, 0, &ExitCode);
-    GameProcess.Reset();
-    std::string Detail;
-    if (ExitCode != 0 && std::filesystem::is_regular_file(GameProcessLogFile))
+void FPicoEditorApp::LoadPlaySettings()
+{
+    if (!PlaySettingsFile.empty()) PlaySettings.Load(PlaySettingsFile);
+    PlaySettings.Clamp();
+}
+
+void FPicoEditorApp::SavePlaySettings()
+{
+    if (!PlaySettingsFile.empty() && !PlaySettings.Save(PlaySettingsFile))
     {
-        std::ifstream Log(GameProcessLogFile);
-        std::string Line;
-        while (std::getline(Log, Line)) if (!Line.empty()) Detail = Line;
+        SetStatus("Could not save Play Session settings", true);
     }
-    SetStatus(
-        "Standalone game exited with code " + std::to_string(ExitCode)
-            + (Detail.empty() ? "" : ": " + Detail),
-        ExitCode != 0);
 }
 
 void FPicoEditorApp::StartPackageProject()
@@ -1690,9 +1777,9 @@ void FPicoEditorApp::StartPackageProject()
         SetStatus("Save the current World before packaging", false, true);
         return;
     }
-    if (GameProcess.IsValid())
+    if (PlaySession.IsActive())
     {
-        SetStatus("Stop Standalone Play before packaging", false, true);
+        SetStatus("Stop the Play Session before packaging", false, true);
         return;
     }
 
