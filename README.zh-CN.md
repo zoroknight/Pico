@@ -18,6 +18,8 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   Packet、握手、Sequence/Ack、有界且有序的可靠交付、心跳、超时，以及 World 前后 NetDriver 阶段。
 - 通过每连接 ActorChannel、服务器分配的 NetObjectId、稳定反射 Schema 和确认属性基线复制显式启用的 Actor，
   支持 Spawn/Delta/Destroy、Transform、InitialOnly、零参数 OnRep 和带类型检查的延迟 Actor 引用修复。
+- PicoSandbox Replication Lab 可用一个可视化服务器和两个客户端验证完整路径：三个 F1 面板显示一致的 NetId 与
+  InitialOnly 状态，服务器按键可触发 Transform Delta、OnRep、Destroy 和重新 Spawn。
 - 编辑器 Play 下拉菜单可在 Standalone 与“可视化独立服务器 + 1～4 个客户端”之间切换，持久化端口和窗口
   尺寸，并以独立标题、日志和进程句柄启动、监控及统一停止整组 Play Session。
 - Windows UDP Transport 针对自身 Socket 关闭 `SIO_UDP_CONNRESET`，并将启动竞态产生的 Winsock `10054`
@@ -324,6 +326,10 @@ Runtime。三角形右侧的原生下三角按钮可选择 Standalone，或启�
 `Saved/Logs/PlaySession/Session_*/`。运行期间控件会变成红色正方形，一次停止整组进程；单个客户端自行退出
 只会结束该实例。Listen Server 与真正无窗口的 Headless Dedicated Server 将在复制层稳定后开放。
 
+PicoSandbox 的第 2 周 Replication Lab 会在 Standalone 或 Server 模式自动生成。使用“可视化服务器 + 两个客户端”
+运行时，在服务器窗口按 `Y` 移动权威 Actor，按 `U` 修改复制 revision 并变色，按 `I` 销毁，按 `T` 重新生成。
+F1 Project Debug 会显示三端 NetId、位置、InitialOnly marker、revision 和当前端的 OnRep 次数。
+
 ## 编辑器操作
 
 编辑器启动后只有空场景：
@@ -517,6 +523,7 @@ private:
 - [第 6 月前网络准入基线](Docs/Month08_14_PreNetworkReadiness.md)
 - [网络开发风险登记](Docs/NetworkRiskRegister.zh-CN.md)
 - [网络传输、连接与帧阶段](Docs/Month09_1_NetTransportAndConnection.md)
+- [Actor、属性复制与可视化验收场](Docs/Month09_2_ActorReplication.md)
 - [反射类编写指南](Docs/ReflectionAuthoringGuide.md)
 - [Native 委托编写指南](Docs/DelegateAuthoringGuide.md)
 - [PicoInspector Developer Sandbox 计划](Docs/PicoInspector_DeveloperSandbox_Plan.zh-CN.md)
@@ -570,7 +577,7 @@ private:
 GC 与帧率限制位于 World 和帧末回调之后；编辑器文档测试改用临时项目副本，不会再修改真实 PicoSandbox 地图。
 具体边界见 [第 6 月前网络准入基线](Docs/Month08_14_PreNetworkReadiness.md)。
 
-- Replication、RPC、Transform 同步、客户端预测与修正
+- Gameplay RPC、Ownership、角色网络移动、客户端预测与修正
 - Dedicated Server/广域网验证、依赖裁剪 Cook、Shipping 与全新电脑打包验收
 - 精简的 `PicoTask` Worker Pool 与 Game Thread Dispatcher，用于异步 Cook、构建和 AI 请求；运行时对象仍由 Game Thread 修改
 - 精简版 Gameplay Ability System 与 AbilityTask，随后接入 AI 工具和 Agent 工作流

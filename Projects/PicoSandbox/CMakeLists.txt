@@ -8,6 +8,14 @@ pico_generate_reflection(
     "PicoSandbox_SandboxPawn_h"
 )
 
+pico_generate_reflection(
+    PICO_SANDBOX_REPLICATION_LAB_GENERATED
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source/Public/PicoSandbox/SandboxReplicationLabActor.h"
+    "PicoSandbox/SandboxReplicationLabActor.h"
+    "PicoSandbox/SandboxReplicationLabActor.generated.h"
+    "PicoSandbox_SandboxReplicationLabActor_h"
+)
+
 add_library(PicoSandboxModule STATIC
     Source/Private/SandboxCharacter.cpp
     Source/Private/SandboxEntity.cpp
@@ -16,8 +24,10 @@ add_library(PicoSandboxModule STATIC
     Source/Private/SandboxModule.cpp
     Source/Private/SandboxPawn.cpp
     Source/Private/SandboxPlayerController.cpp
+    Source/Private/SandboxReplicationLabActor.cpp
     Source/Private/SandboxSession.cpp
     ${PICO_SANDBOX_PAWN_GENERATED}
+    ${PICO_SANDBOX_REPLICATION_LAB_GENERATED}
 )
 
 target_include_directories(PicoSandboxModule

@@ -22,6 +22,9 @@ The current implementation can:
 - Replicate explicitly enabled Actors through per-connection ActorChannels, server-assigned NetObjectIds,
   stable reflection schemas, acknowledged property baselines, Spawn/Delta/Destroy, Transform state,
   InitialOnly conditions, zero-argument OnRep calls, and deferred type-checked Actor references.
+- Validate that path in the PicoSandbox Replication Lab: an authority-spawned cube exposes matching
+  NetId/InitialOnly state in three F1 panels, while server keys exercise Transform Delta, OnRep,
+  Destroy, and fresh Spawn across two clients.
 - Configure editor Play as Standalone or a visible separate server plus one to four clients; persist
   port/window settings and launch, monitor, log, and stop the complete multi-process Play Session.
 - Scope Windows `SIO_UDP_CONNRESET` suppression to each Pico UDP socket so startup-race Winsock
@@ -399,6 +402,11 @@ and independent logs under `Saved/Logs/PlaySession/Session_*/`; the red square s
 A dirty or untitled World still requires explicit `Save & Play`. Listen Server and a truly headless
 Dedicated Server remain reserved until the replication/runtime split is ready.
 
+PicoSandbox's Week 2 Replication Lab starts automatically in Standalone or Server mode. In a visible
+server plus two clients, use `Y` to move the authority Actor, `U` to change its replicated revision and
+color, `I` to destroy it, and `T` to spawn it again. F1 Project Debug shows the shared NetId, location,
+InitialOnly marker, revision, and endpoint-local OnRep count.
+
 ## Editor Controls
 
 The editor starts with an empty scene:
@@ -618,6 +626,7 @@ See:
 - [Pre-Network Readiness (Chinese)](Docs/Month08_14_PreNetworkReadiness.md)
 - [Network Risk Register (Chinese)](Docs/NetworkRiskRegister.zh-CN.md)
 - [Network Transport, Connection, and Frame Phases (Chinese)](Docs/Month09_1_NetTransportAndConnection.md)
+- [Actor and Property Replication with Visual Lab (Chinese)](Docs/Month09_2_ActorReplication.md)
 - [Reflection Authoring Guide](Docs/ReflectionAuthoringGuide.md)
 - [PicoHeaderTool](Docs/Month03_17_PicoHeaderTool.md)
 - [Mark-Sweep Garbage Collection](Docs/Month03_18_GarbageCollection.md)
@@ -687,7 +696,7 @@ World and post-World callback. Editor document tests use a temporary project cop
 the working PicoSandbox map. See [Pre-Network Readiness](Docs/Month08_14_PreNetworkReadiness.md).
 The remaining learning path is:
 
-- Replication, RPC, transform synchronization, client prediction, and correction
+- Gameplay RPC, ownership, character network movement, client prediction, and correction
 - Dedicated-server/WAN validation, dependency-pruned Cook, Shipping, and clean-machine packaging
 - A compact `PicoTask` worker pool and game-thread dispatcher for asynchronous Cook, build, and AI
   work while runtime objects remain game-thread-owned

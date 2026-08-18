@@ -88,6 +88,33 @@ TickFlush
 运行时按 `F1` 可查看 NetObject、ActorChannel、未解析引用、Spawn/Delta/Destroy、接收/拒绝和 OnRep 计数，并列出
 每个 Channel 的 ConnectionId、NetId、状态、基线字段数和 Pending ReliableId。
 
+## 可视化验收场
+
+`PicoSandbox` 会在 Standalone 或 Server World 中自动创建一个绿色的
+`PSandboxReplicationLabActor`。Client 不会自行创建它，只能通过服务器的 Spawn 消息取得对象。该 Actor 使用
+PHT 生成的反射代码，包含 `InitialOnly` 标记和带 `OnRep_LabRevision` 的普通复制属性；它的 Transform 走 Actor
+内建复制路径。
+
+运行编辑器并在 Play Settings 中选择一个服务器和两个客户端后，分别在三个窗口按 `F1` 打开 Gameplay Debug。
+操作键只在服务器窗口生效：
+
+| 操作 | 预期现象 | 验证内容 |
+|---|---|---|
+| 启动并连接 | 三个窗口出现同一方块，Project Debug 的 NetId、位置、marker `6202` 一致 | Spawn、网络身份和 `InitialOnly` |
+| `Y` | 三个窗口中的方块移到相同位置 | Actor Transform Delta |
+| `U` | 方块在三个窗口同步变色且 revision 同步增加；客户端 local OnRep calls 增加 | 反射属性 Delta 和 RepNotify |
+| `I` | 两个客户端中的方块随服务器对象一起消失 | 可靠 Destroy 和 Channel 清理 |
+| `T` | 三个窗口重新出现新方块，并取得新的 NetId | 重新 Spawn 和网络身份不复用 |
+
+服务器窗口的 `local OnRep calls` 保持为 `0` 是正确行为：权威端直接修改本地值，不需要用 OnRep 通知自己；客户端
+通过网络应用值时才调用 OnRep。若方块现象与数字不一致，以 F1 的 Project Debug 和 Network 计数作为定位依据。
+
+### 人工验收记录
+
+2026-08-18 已使用编辑器 Play 的一个可视化服务器和两个客户端完成上述全流程验收。三个窗口的初始 Spawn、NetId、
+位置与 marker `6202` 一致；`Y` 后 Transform 同步，`U` 后 revision 与颜色同步且客户端 OnRep 计数增加，`I` 后
+三端对象消失，`T` 后使用新 NetId 重新生成。该结果与自动化测试共同满足第 2 周进入 RPC 阶段的准入条件。
+
 ## 自动化验收
 
 `PicoReplicationTests` 创建两个独立 World，模拟可靠消息交付与确认，覆盖 Spawn、Transform、RepNotify、乱序 Spawn

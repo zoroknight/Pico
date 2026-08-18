@@ -706,7 +706,11 @@ Debug 可观察连接与包统计。三个独立 PicoSandboxGame 进程的真实
 引用类型校验与延迟修复均已接入 NetDriver。PHT 支持 `RepNotify=Function` 与复制条件生成；F1 面板显示 NetObject、
 Channel、未解析引用和消息计数。`PicoReplicationTests` 使用两个独立 World 覆盖乱序 Spawn 引用修复、无变化零
 Delta、双连接独立基线、截断消息零创建副作用、Destroy 与断线清理。Character Ownership、RPC、模拟代理插值和
-本地预测仍严格留在第 3～4 周。
+本地预测仍严格留在第 3～4 周。项目层新增 `PSandboxReplicationLabActor` 可视化验收场：服务器自动生成，客户端
+通过真实 ActorChannel 获得；服务器可用 `Y/U/I/T` 依次验证 Transform、RepNotify 属性、Destroy 和重新 Spawn，
+F1 Project Debug 同时显示 NetId、`InitialOnly` marker、revision 与客户端本地 OnRep 次数。
+2026-08-18 已在编辑器启动一个可视化服务器和两个客户端完成 Spawn、`Y` Transform、`U` RepNotify、`I` Destroy、
+`T` 重新 Spawn 的全流程人工验收；三端状态与调试计数一致，第 2 周可视化准入门槛通过。
 实现说明见 [`Month09_2_ActorReplication.md`](Month09_2_ActorReplication.md)。
 
 ### 第 6 月每周准入门槛

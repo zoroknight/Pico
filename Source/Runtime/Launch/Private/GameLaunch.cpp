@@ -265,6 +265,21 @@ struct FGameplayDebugPanel
                 "Last error: %s", NetDriver.GetLastError().c_str());
         }
 
+        std::vector<std::string> ProjectDebugLines;
+        if (GameInstance != nullptr)
+        {
+            GameInstance->AppendGameplayDebugLines(ProjectDebugLines);
+        }
+        if (!ProjectDebugLines.empty())
+        {
+            ImGui::Separator();
+            ImGui::TextUnformatted("Project Debug");
+            for (const std::string& Line : ProjectDebugLines)
+            {
+                ImGui::TextWrapped("%s", Line.c_str());
+            }
+        }
+
         ImGui::Separator();
         ImGui::TextUnformatted("Movement");
         Pico::PPawnMovementComponent* Movement =

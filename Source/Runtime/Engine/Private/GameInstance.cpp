@@ -39,6 +39,10 @@ void PGameInstance::Shutdown()
 {
 }
 
+void PGameInstance::AppendGameplayDebugLines(std::vector<std::string>&) const
+{
+}
+
 FGameEngine* PGameInstance::GetGameEngine() const
 {
     return OwningGameEngine;

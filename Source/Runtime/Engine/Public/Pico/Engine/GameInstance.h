@@ -3,6 +3,7 @@
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ReflectionMacros.h"
 
+#include <string>
 #include <vector>
 
 namespace Pico
@@ -22,6 +23,7 @@ public:
     virtual void Tick(float DeltaSeconds);
     virtual void OnWorldCleanup(PWorld* World);
     virtual void Shutdown();
+    virtual void AppendGameplayDebugLines(std::vector<std::string>& OutLines) const;
 
     FGameEngine* GetGameEngine() const;
     PWorld* GetWorld() const;

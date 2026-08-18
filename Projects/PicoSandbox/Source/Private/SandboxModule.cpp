@@ -12,6 +12,7 @@
 #include "PicoSandbox/SandboxEntity.h"
 #include "PicoSandbox/SandboxPawn.h"
 #include "PicoSandbox/SandboxPlayerController.h"
+#include "PicoSandbox/SandboxReplicationLabActor.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ClassRegistry.h"
@@ -80,6 +81,7 @@ bool RegisterSandboxGameplayClasses()
 {
     return RegisterSandboxClasses()
         && PSandboxPawn::RegisterClass()
+        && PSandboxReplicationLabActor::RegisterClass()
         && PSandboxPlayerController::RegisterClass()
         && PSandboxGameMode::RegisterClass()
         && PSandboxGameInstance::RegisterClass();
