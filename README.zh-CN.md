@@ -16,6 +16,8 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 运行类似 UE 的 `PreInit -> Init -> Tick -> Exit` 引擎循环。
 - 通过独立 `PicoNetCore` 使用确定性 Loopback 或非阻塞 Windows UDP 连接一个服务器和多个客户端，提供版本化
   Packet、握手、Sequence/Ack、有界且有序的可靠交付、心跳、超时，以及 World 前后 NetDriver 阶段。
+- 通过每连接 ActorChannel、服务器分配的 NetObjectId、稳定反射 Schema 和确认属性基线复制显式启用的 Actor，
+  支持 Spawn/Delta/Destroy、Transform、InitialOnly、零参数 OnRep 和带类型检查的延迟 Actor 引用修复。
 - 编辑器 Play 下拉菜单可在 Standalone 与“可视化独立服务器 + 1～4 个客户端”之间切换，持久化端口和窗口
   尺寸，并以独立标题、日志和进程句柄启动、监控及统一停止整组 Play Session。
 - Windows UDP Transport 针对自身 Socket 关闭 `SIO_UDP_CONNRESET`，并将启动竞态产生的 Winsock `10054`
@@ -52,8 +54,9 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   ControlRotation 写入相对 Transform；固定鼠标按 S 时角色转身而镜头 Yaw 保持不变。
 - Controller 提供可反射的俯仰角上下限，Sandbox 默认限制为 `-75` 到 `+55` 度；SpringArm 参考 UE 的
   球形 Sweep 在墙壁、地板或天花板前回缩，并可通过 `Do Collision Test` 和 `Probe Size` 独立配置。
-- 编辑器顶部可显示平滑后的 FPS 与帧耗时，通过 `View -> Frame Rate` 开关；Game 与打包 EXE 使用 Windows
-  GUI 子系统，正常启动不再伴随独立控制台窗口。
+- 编辑器顶部可显示平滑后的 FPS 与帧耗时，通过 `View -> Frame Rate` 开关；Editor、Game 与打包 EXE 使用
+  Windows GUI 子系统，默认不显示控制台。编辑器日志保存到 `Saved/Logs`，需要调试时可用 `-console` 或
+  `-log` 临时打开控制台。
 - 每次骨骼导入自动生成 `.pcharprofile`，集中引用 Mesh、AnimationSet、Montage 与材质槽；项目可切换
   Profile 而无需修改 Pawn CDO。覆盖重导入会先备份旧资产，失败时整批恢复。
 - 编辑器可从项目 Pawn 类和 Character Profile 创建持久化可玩角色；运行时优先 Possess 地图中标记为
@@ -141,7 +144,7 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 自由停靠编辑器面板，并将每个项目的布局保存到 `Saved/Editor`。
 - 通过 `PicoRender` 私有的 GLAD 目标加载现代 OpenGL 函数。
 
-Debug 和 Release 均可完整构建，十八个 CTest 目标全部通过；动画聚焦测试为 13/13 断言通过。
+Debug 和 Release 均可完整构建，十九个 CTest 目标全部通过；动画聚焦测试为 13/13 断言通过。
 
 ## 架构
 
@@ -286,6 +289,10 @@ powershell -ExecutionPolicy Bypass -File .\Scripts\SetupWindows.ps1
 
 直接启动不带参数的 `PicoEditor.exe` 会进入 Project Browser。它接受 `.pico` 文件或只包含一个描述符的
 项目文件夹，并恢复该项目上次的编辑器会话。
+
+编辑器默认不打开控制台；完整启动和运行日志写入
+`Projects/<ProjectName>/Saved/Logs/PicoEditor.log`，Warning 和 Error 还会同步进入编辑器 Message Log。
+需要交互式诊断时，可在启动参数中加入 `-console` 或 `-log`。
 
 编辑器默认最大化，默认 UI 缩放为 `1.4`。需要更大的界面时可以指定：
 

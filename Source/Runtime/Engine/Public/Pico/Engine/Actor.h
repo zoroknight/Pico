@@ -3,6 +3,7 @@
 #include "Pico/Core/Math/Transform.h"
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/TickFunction.h"
+#include "Pico/Net/NetTypes.h"
 #include "Pico/Object/ObjectDelegate.h"
 #include "Pico/Object/ReflectionMacros.h"
 
@@ -31,6 +32,9 @@ public:
     PWorld* GetWorld() const;
     PLevel* GetLevel() const;
     PActor* GetOwner() const;
+    bool GetIsReplicated() const;
+    void SetReplicates(bool bInReplicates);
+    FNetObjectId GetNetObjectId() const;
     bool HasBegunPlay() const;
     bool IsPendingDestroy() const;
     bool Destroy();
@@ -90,6 +94,7 @@ private:
     void DispatchDestroyed();
     void MarkPendingDestroy();
     void SetOwner(PActor* InOwner);
+    void SetNetObjectId(FNetObjectId InNetObjectId);
     PActorComponent* ResolveComponent(FObjectHandle Handle) const;
     bool OwnsComponent(const PActorComponent* Component) const;
     void RegisterAllComponents();
@@ -98,14 +103,18 @@ private:
     friend class PWorld;
     friend class FWorldAssetLoader;
     friend class FActorTickFunction;
+    friend class FReplicationSystem;
+    friend class FNetObjectRegistry;
 
     std::vector<FObjectHandle> ComponentHandles;
     FObjectHandle RootComponentHandle;
     FObjectHandle OwnerHandle;
+    FNetObjectId NetObjectId;
     FOnActorDestroyed ActorDestroyedEvent;
     bool bHasBegunPlay = false;
     bool bHasEndedPlay = false;
     bool bPendingDestroy = false;
+    bool bReplicates = false;
     bool bDestroyedEventBroadcast = false;
 };
 }

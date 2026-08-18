@@ -1,9 +1,13 @@
 #pragma once
 
+#include <cstdint>
+#include <filesystem>
 #include <format>
 #include <iostream>
+#include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace Pico
 {
@@ -15,6 +19,15 @@ enum class ELogLevel
     Error
 };
 
+struct FLogRecord
+{
+    std::uint64_t Sequence = 0;
+    ELogLevel Level = ELogLevel::Info;
+    std::string Category;
+    std::string Message;
+    std::string FormattedLine;
+};
+
 class FLog
 {
 public:
@@ -22,6 +35,14 @@ public:
 
     static void Write(ELogLevel Level, std::string_view Message);
     static void Write(std::string_view Category, ELogLevel Level, std::string_view Message);
+    static void SetConsoleOutputEnabled(bool bEnabled);
+    static bool IsConsoleOutputEnabled();
+    static bool SetOutputFile(
+        const std::filesystem::path& FilePath,
+        bool bAppend = false);
+    static void CloseOutputFile();
+    static std::uint64_t GetLatestSequence();
+    static std::vector<FLogRecord> GetRecordsSince(std::uint64_t Sequence);
 
     template <typename... TArgs>
     static void Trace(std::string_view Category, std::format_string<TArgs...> Format, TArgs&&... Args)

@@ -5,6 +5,7 @@
 #include "Pico/Core/CommandLine.h"
 #include "Pico/Core/Config.h"
 #include "Pico/Core/Delegate.h"
+#include "Pico/Core/Log.h"
 #include "Pico/Core/Math/Math.h"
 #include "Pico/Core/Name.h"
 #include "Pico/Core/Paths.h"
@@ -17,6 +18,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <stdexcept>
 #include <unordered_map>
@@ -649,6 +651,44 @@ void TestTransformMath(FTestRunner& Runner)
             .Equals(Pico::FVector3(0.0f, 1.0f, 1.0f)),
         "Inverse transform protects zero scale components");
 }
+
+void TestLogOutputs(FTestRunner& Runner)
+{
+    const std::filesystem::path LogFile =
+        std::filesystem::temp_directory_path() / "PicoCoreLogTest.log";
+    std::error_code Error;
+    std::filesystem::remove(LogFile, Error);
+
+    const std::uint64_t PreviousSequence = Pico::FLog::GetLatestSequence();
+    Pico::FLog::SetConsoleOutputEnabled(false);
+    Runner.Expect(
+        !Pico::FLog::IsConsoleOutputEnabled(),
+        "Log console output can be disabled independently");
+    const bool bOpened = Pico::FLog::SetOutputFile(LogFile);
+    Pico::FLog::Write(
+        "LogTest", Pico::ELogLevel::Warning, "persistent warning marker");
+    Pico::FLog::CloseOutputFile();
+
+    std::ifstream Input(LogFile);
+    const std::string Contents {
+        std::istreambuf_iterator<char>(Input),
+        std::istreambuf_iterator<char>()};
+    Runner.Expect(
+        bOpened && Contents.find("[LogTest][Warning] persistent warning marker")
+            != std::string::npos,
+        "Log records persist to a file while console output is disabled");
+
+    const std::vector<Pico::FLogRecord> Records =
+        Pico::FLog::GetRecordsSince(PreviousSequence);
+    Runner.Expect(
+        !Records.empty()
+            && Records.back().Category == "LogTest"
+            && Records.back().Level == Pico::ELogLevel::Warning,
+        "Recent log history exposes structured records to editor tools");
+
+    Pico::FLog::SetConsoleOutputEnabled(true);
+    std::filesystem::remove(LogFile, Error);
+}
 }
 
 int main(int Argc, char** Argv)
@@ -677,5 +717,6 @@ int main(int Argc, char** Argv)
     TestVectorMath(Runner);
     TestRotationMath(Runner);
     TestTransformMath(Runner);
+    TestLogOutputs(Runner);
     return Runner.Finish();
 }

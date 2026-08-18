@@ -53,6 +53,21 @@ PActor* PActor::GetOwner() const
         : nullptr;
 }
 
+bool PActor::GetIsReplicated() const
+{
+    return bReplicates;
+}
+
+void PActor::SetReplicates(bool bInReplicates)
+{
+    bReplicates = bInReplicates;
+}
+
+FNetObjectId PActor::GetNetObjectId() const
+{
+    return NetObjectId;
+}
+
 bool PActor::HasBegunPlay() const
 {
     return bHasBegunPlay;
@@ -390,6 +405,11 @@ void PActor::MarkPendingDestroy()
 void PActor::SetOwner(PActor* InOwner)
 {
     OwnerHandle = InOwner != nullptr ? InOwner->GetHandle() : FObjectHandle {};
+}
+
+void PActor::SetNetObjectId(FNetObjectId InNetObjectId)
+{
+    NetObjectId = InNetObjectId;
 }
 
 PActorComponent* PActor::ResolveComponent(FObjectHandle Handle) const

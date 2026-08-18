@@ -46,8 +46,11 @@ public:
     bool HandlePacket(const FDecodedNetPacket& Packet, double NowSeconds);
     void Tick(double NowSeconds);
     std::vector<FNetOutboundPacket> BuildOutgoingPackets(double NowSeconds);
-    bool QueueReliable(std::span<const uint8> Payload);
+    bool QueueReliable(
+        std::span<const uint8> Payload,
+        uint32* OutReliableId = nullptr);
     std::vector<std::vector<uint8>> ConsumeDeliveredReliableMessages();
+    std::vector<uint32> ConsumeAcknowledgedReliableIds();
 
     ENetConnectionState GetState() const { return State; }
     FNetConnectionId GetConnectionId() const { return ConnectionId; }
@@ -118,5 +121,6 @@ private:
     std::deque<FSentPacket> SentPackets;
     std::unordered_map<uint32, std::vector<uint8>> BufferedReliableMessages;
     std::vector<std::vector<uint8>> DeliveredReliableMessages;
+    std::vector<uint32> AcknowledgedReliableIds;
 };
 }

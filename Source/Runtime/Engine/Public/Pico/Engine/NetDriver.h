@@ -2,12 +2,14 @@
 
 #include "Pico/Net/NetConnection.h"
 #include "Pico/Net/NetTransport.h"
+#include "Pico/Engine/Replication.h"
 
 #include <memory>
 #include <vector>
 
 namespace Pico
 {
+class PWorld;
 enum class ENetMode : uint8
 {
     Standalone,
@@ -51,6 +53,7 @@ public:
     void TickDispatch(float DeltaSeconds);
     void TickFlush(float DeltaSeconds);
     bool QueueReliableToAll(std::span<const uint8> Payload);
+    void SetWorld(PWorld* World);
 
     ENetMode GetNetMode() const { return NetMode; }
     bool IsInitialized() const { return bInitialized; }
@@ -59,6 +62,8 @@ public:
     std::size_t GetOpenConnectionCount() const;
     uint64 GetInvalidPacketCount() const { return InvalidPacketCount; }
     const std::string& GetLastError() const { return LastError; }
+    std::vector<FActorChannelSnapshot> GetActorChannelSnapshots() const;
+    FReplicationStatistics GetReplicationStatistics() const;
 
 private:
     FNetConnection* FindConnection(
@@ -78,6 +83,7 @@ private:
     double ElapsedSeconds = 0.0;
     uint64 InvalidPacketCount = 0;
     std::string LastError;
+    FReplicationSystem ReplicationSystem;
     bool bInitialized = false;
 };
 }

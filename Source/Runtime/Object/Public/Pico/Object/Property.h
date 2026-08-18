@@ -84,6 +84,14 @@ enum class EPropertyFlags : uint32
     ReadOnly = 1 << 4
 };
 
+enum class EReplicationCondition : uint8
+{
+    Always,
+    InitialOnly,
+    OwnerOnly,
+    SkipOwner
+};
+
 constexpr EPropertyFlags operator|(EPropertyFlags Left, EPropertyFlags Right)
 {
     return static_cast<EPropertyFlags>(
@@ -108,6 +116,9 @@ struct FPropertyMetadata
     EPropertyFlags Flags =
         EPropertyFlags::Editable | EPropertyFlags::Serializable;
     EAssetReferenceType AssetReferenceType = EAssetReferenceType::None;
+    EReplicationCondition ReplicationCondition =
+        EReplicationCondition::Always;
+    FName RepNotifyFunction;
     std::string DisplayName;
 
     struct FEnumOption
@@ -271,6 +282,36 @@ public:
                     return {};
                 }
             },
+            [](PObject* Object, PObject* ReferencedObject) -> bool
+            {
+                if constexpr (TObjectPointerTraits<TValue>::IsObjectPointer)
+                {
+                    using FReferencedObject =
+                        typename TObjectPointerTraits<TValue>::ObjectType;
+                    static_cast<TObject*>(Object)->*Member =
+                        static_cast<FReferencedObject*>(ReferencedObject);
+                    return true;
+                }
+                else
+                {
+                    (void)Object;
+                    (void)ReferencedObject;
+                    return false;
+                }
+            },
+            []() -> const PClass*
+            {
+                if constexpr (TObjectPointerTraits<TValue>::IsObjectPointer)
+                {
+                    using FReferencedObject =
+                        typename TObjectPointerTraits<TValue>::ObjectType;
+                    return FReferencedObject::StaticClass();
+                }
+                else
+                {
+                    return nullptr;
+                }
+            },
             [](PObject* Object) -> FDynamicMulticastDelegate*
             {
                 if constexpr (TIsDynamicMulticastDelegateValue<TValue>)
@@ -321,6 +362,12 @@ public:
     EAssetReferenceType GetAssetReferenceType() const;
     EObjectReferenceKind GetObjectReferenceKind() const;
     PObject* GetReferencedObject(const PObject* Object) const;
+    FObjectHandle GetReferencedObjectHandle(const PObject* Object) const;
+    const PClass* GetReferencedObjectClass() const;
+    bool HasReferencedObjectClassResolver() const;
+    bool SetReferencedObjectSilently(
+        PObject* Object,
+        PObject* ReferencedObject) const;
     FDynamicMulticastDelegate* GetDynamicMulticastDelegate(PObject* Object) const;
     const FDynamicMulticastDelegate* GetDynamicMulticastDelegate(const PObject* Object) const;
     bool NotifyPreChange(
@@ -414,6 +461,8 @@ private:
     using FMutableAccessor = void* (*)(PObject*);
     using FConstAccessor = const void* (*)(const PObject*);
     using FReferenceAccessor = FObjectHandle (*)(const PObject*);
+    using FReferenceSetter = bool (*)(PObject*, PObject*);
+    using FObjectClassResolver = const PClass* (*)();
     using FDynamicMutableAccessor = FDynamicMulticastDelegate* (*)(PObject*);
     using FDynamicConstAccessor = const FDynamicMulticastDelegate* (*)(const PObject*);
     using FValueCopier = void (*)(void*, const void*);
@@ -428,6 +477,8 @@ private:
         FPropertyMetadata InMetadata,
         EObjectReferenceKind InObjectReferenceKind,
         FReferenceAccessor InReferenceAccessor,
+        FReferenceSetter InReferenceSetter,
+        FObjectClassResolver InObjectClassResolver,
         FDynamicMutableAccessor InDynamicMutableAccessor,
         FDynamicConstAccessor InDynamicConstAccessor);
 
@@ -458,6 +509,8 @@ private:
     FConstAccessor ConstAccessor = nullptr;
     EObjectReferenceKind ObjectReferenceKind = EObjectReferenceKind::None;
     FReferenceAccessor ReferenceAccessor = nullptr;
+    FReferenceSetter ReferenceSetter = nullptr;
+    FObjectClassResolver ObjectClassResolver = nullptr;
     FDynamicMutableAccessor DynamicMutableAccessor = nullptr;
     FDynamicConstAccessor DynamicConstAccessor = nullptr;
     const PClass* OwnerClass = nullptr;

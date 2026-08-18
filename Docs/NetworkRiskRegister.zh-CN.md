@@ -23,6 +23,20 @@
 - NET-R10：已部分缓解。F1 Network Debug 显示模式、连接、RTT、Packet 与可靠队列；属性和预测指标后续增加。
 - NET-R12：Winsock 静态系统依赖位于 `PicoNetCore`，Standalone 不打开 Socket；Client/Server Receipt 留到第 7 月。
 
+## 第 2 周复查结果
+
+- NET-R01：已关闭本月基础范围。服务器分配 `FNetObjectId`，双端注册表只通过本地 Handle 解析；引用 Wire Format
+  仅携带 NetId，并验证目标反射类。
+- NET-R03：已关闭本月基础范围。每个 ActorChannel 保存独立 Pending/ACKed 基线；两个连接独立初始同步，未变化
+  字段零 Delta，可靠 ACK 后才提交基线。
+- NET-R04：部分缓解。普通 Actor Transform 在 World Tick 后捕获；Character 模拟代理插值和自主代理写入所有权
+  仍由第 4 周关闭，当前可靠 Transform 只用于基础权威同步。
+- NET-R05：已关闭基础 Actor 范围。Channel 保存 Handle，Destroy 可靠有序，断线按 Connection 清理，延迟引用不
+  保存裸指针；Component/Subobject 生命周期不在本月范围。
+- NET-R08：已关闭复制范围。Dispatch 应用远端状态，World Tick 后捕获服务器最终状态，Flush 早于 GC。
+- NET-R10：继续缓解。F1 已显示 NetObject、Channel、未解析引用、复制消息、拒绝和 OnRep 计数；网络模拟与预测
+  指标留到第 4 周。
+
 ## 风险总表
 
 | 编号 | 风险 | 等级 | 主要触发信号 | 负责周次 |

@@ -14,8 +14,11 @@ public:
     PFUNCTION(Pure)
     int32 GetScore() const;
 
+    PFUNCTION()
+    void OnRep_Score();
+
 private:
-    PPROPERTY(Replicated, ReadOnly)
+    PPROPERTY(Replicated, ReadOnly, InitialOnly, RepNotify=OnRep_Score)
     int32 Score = 42;
 };
 }

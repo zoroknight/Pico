@@ -445,6 +445,7 @@ add_library(PicoEngine STATIC
         Source/Runtime/Engine/Private/PointLightComponent.cpp
         Source/Runtime/Engine/Private/SpringArmComponent.cpp
     Source/Runtime/Engine/Private/PrimitiveComponent.cpp
+    Source/Runtime/Engine/Private/Replication.cpp
     Source/Runtime/Engine/Private/PlayerController.cpp
     Source/Runtime/Engine/Private/PlayerStart.cpp
     Source/Runtime/Engine/Private/PlayerState.cpp
@@ -762,6 +763,7 @@ if(PICO_BUILD_INSPECTOR)
 
     if(WIN32)
         target_link_libraries(PicoEditor PRIVATE comdlg32 ole32 shell32)
+        set_property(TARGET PicoEditor PROPERTY WIN32_EXECUTABLE TRUE)
     endif()
 
     set_target_properties(PicoEditor PROPERTIES
@@ -771,6 +773,7 @@ if(PICO_BUILD_INSPECTOR)
 
     if(MSVC)
         target_compile_options(PicoEditor PRIVATE /W4 /permissive- /FS)
+        target_link_options(PicoEditor PRIVATE "/ENTRY:mainCRTStartup")
     else()
         target_compile_options(PicoEditor PRIVATE -Wall -Wextra -Wpedantic)
     endif()
@@ -986,6 +989,20 @@ add_executable(PicoNetCoreTests
     Tests/NetCore/Private/Main.cpp
 )
 
+add_executable(PicoReplicationTests
+    Tests/Replication/Private/Main.cpp
+)
+
+target_include_directories(PicoReplicationTests PRIVATE Tests/Common)
+target_link_libraries(PicoReplicationTests PRIVATE PicoEngine)
+set_target_properties(PicoReplicationTests PROPERTIES FOLDER "Tests/Net")
+
+if(MSVC)
+    target_compile_options(PicoReplicationTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoReplicationTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 target_include_directories(PicoNetCoreTests PRIVATE Tests/Common)
 target_link_libraries(PicoNetCoreTests PRIVATE PicoNetCore)
 set_target_properties(PicoNetCoreTests PROPERTIES FOLDER "Tests/NetCore")
@@ -1071,6 +1088,7 @@ if(BUILD_TESTING)
     add_test(NAME PicoDynamicDelegateTests COMMAND PicoDynamicDelegateTests)
     add_test(NAME PicoEngineTests COMMAND PicoEngineTests)
     add_test(NAME PicoNetCoreTests COMMAND PicoNetCoreTests)
+    add_test(NAME PicoReplicationTests COMMAND PicoReplicationTests)
     add_test(NAME PicoGameTests COMMAND PicoGameTests)
     add_test(NAME PicoMovementTests COMMAND PicoMovementTests)
     add_test(NAME PicoPhysicsTests COMMAND PicoPhysicsTests)
@@ -1087,6 +1105,9 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoAssetTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoReplicationTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoAssetImportTests PROPERTIES

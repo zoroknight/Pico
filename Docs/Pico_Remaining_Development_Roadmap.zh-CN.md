@@ -688,7 +688,7 @@ SkeletalMesh、17 个动画、材质、CharacterProfile 和 Data-Only Actor Blue
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |
 | 第 1 周（已完成） | 新增 `PicoNetCore`；实现内存 Loopback 与 Windows UDP `INetTransport`、Packet Header、Connection、握手、Sequence、Ack/AckBits、心跳/超时、有限可靠队列；定义 NetMode、NetRole、`FNetObjectId`；NetDriver 接入帧阶段；编辑器增加多进程 Play Session 配置与编排 | 本机一个服务器与两个客户端完成 UDP 握手；可靠消息在丢包下确认/重发并恰好一次、有序交付；编辑器可启动/监控/统一停止可视化服务器与 1～4 个客户端；网络身份不复用 ObjectHandle/SceneId |
-| 第 2 周 | ActorChannel、Spawn/Destroy、网络对象引用、反射 Replication Schema、Dirty Tracking、Replication Condition、OnRep、每连接已确认属性基线和 Delta | 服务器 Actor 可在客户端生成、更新、引用和销毁；未变化字段不重复发送；断开与 GC 后无悬空 Channel/引用 |
+| 第 2 周（已完成） | ActorChannel、Spawn/Destroy、网络对象引用、反射 Replication Schema、Dirty Tracking、Replication Condition、OnRep、每连接已确认属性基线和 Delta | 服务器 Actor 可在客户端生成、更新、引用和销毁；未变化字段不重复发送；断开与 GC 后无悬空 Channel/引用 |
 | 第 3 周 | Server/Client/Multicast RPC、可靠/不可靠、参数网络序列化、`ProcessEvent` 调用、方向/Role/Ownership/参数校验；落实 Gameplay Framework 网络可见性；完成开门或拾取纵向实例 | 合法交互 RPC 可执行并通过属性复制同步结果；非拥有者、错误方向和非法参数调用零副作用；三进程 Gameplay 状态一致 |
 | 第 4 周 | SavedMove、输入序号、服务器重演、Ack/Correction、纠错快照、未确认输入回滚重演、模拟代理快照缓冲与插值；延迟/抖动/丢包模拟；Network Debug 与 Play Session 网络模拟控制 | 100～150 ms 延迟和少量丢包下所属角色可预测和纠正，其他角色平滑显示；一个服务器加两个客户端连续运行，重演、快照和可靠队列均有上限 |
 
@@ -700,6 +700,14 @@ Debug 可观察连接与包统计。三个独立 PicoSandboxGame 进程的真实
 窗口尺寸、独立标题/日志和整组停止均已落地；Listen Server、Headless Dedicated Server 与单进程多 World PIE
 仍保持后续边界，不在底层连接阶段伪实现。
 实现说明见 [`Month09_1_NetTransportAndConnection.md`](Month09_1_NetTransportAndConnection.md)。
+
+第 2 周完成记录：`FNetObjectRegistry`、稳定 `FReplicationSchema`、每 Connection/Actor 的 Channel 状态机和 ACK 后
+提交的属性基线已落地；可靠 Spawn/Delta/Destroy、内建 Actor Transform、`InitialOnly`、零参数 RepNotify、对象
+引用类型校验与延迟修复均已接入 NetDriver。PHT 支持 `RepNotify=Function` 与复制条件生成；F1 面板显示 NetObject、
+Channel、未解析引用和消息计数。`PicoReplicationTests` 使用两个独立 World 覆盖乱序 Spawn 引用修复、无变化零
+Delta、双连接独立基线、截断消息零创建副作用、Destroy 与断线清理。Character Ownership、RPC、模拟代理插值和
+本地预测仍严格留在第 3～4 周。
+实现说明见 [`Month09_2_ActorReplication.md`](Month09_2_ActorReplication.md)。
 
 ### 第 6 月每周准入门槛
 

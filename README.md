@@ -19,6 +19,9 @@ The current implementation can:
 - Connect one server and multiple clients through `PicoNetCore` using a deterministic loopback lab or
   non-blocking Windows UDP, with versioned packets, handshake, Sequence/Ack, bounded ordered reliable
   delivery, heartbeat, timeout, and pre/post-World NetDriver phases.
+- Replicate explicitly enabled Actors through per-connection ActorChannels, server-assigned NetObjectIds,
+  stable reflection schemas, acknowledged property baselines, Spawn/Delta/Destroy, Transform state,
+  InitialOnly conditions, zero-argument OnRep calls, and deferred type-checked Actor references.
 - Configure editor Play as Standalone or a visible separate server plus one to four clients; persist
   port/window settings and launch, monitor, log, and stop the complete multi-process Play Session.
 - Scope Windows `SIO_UDP_CONNRESET` suppression to each Pico UDP socket so startup-race Winsock
@@ -79,8 +82,9 @@ The current implementation can:
   evaluates an independent camera target rotation instead of writing ControlRotation into its relative transform.
 - Clamp reflected Controller view pitch to configurable limits (`-75` to `+55` degrees in Sandbox),
   and retract SpringArm through an optional UE-style sphere sweep with a configurable probe size.
-- Show smoothed FPS/frame time in the editor through `View -> Frame Rate`, while Game and packaged
-  executables use the Windows GUI subsystem and do not open a separate console window.
+- Show smoothed FPS/frame time in the editor through `View -> Frame Rate`; Editor, Game, and packaged
+  executables use the Windows GUI subsystem and do not open a console by default. Editor startup logs
+  persist under `Saved/Logs`, and `-console` or `-log` restores a diagnostic console on demand.
 - Inspect the live Gameplay object chain, restart/destroy/repossess its Pawn, and reload the map from
   the standalone runtime's `Gameplay Debug` panel; inspect PlayerStart shape and validation in editor.
 - Create PlayerStart from the editor toolbar, review persistent green/yellow/red diagnostics in
@@ -177,7 +181,7 @@ The current implementation can:
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-Debug and Release configurations build successfully, all eighteen CTest targets pass, and the focused animation
+Debug and Release configurations build successfully, all nineteen CTest targets pass, and the focused animation
 suite passes 13/13 assertions.
 
 ## Architecture
@@ -358,6 +362,10 @@ Start the editor:
 
 Starting `PicoEditor.exe` without arguments opens the Project Browser. It accepts a `.pico` file or a
 folder containing exactly one descriptor, and restores the project's previous editor session.
+
+The editor does not open a console by default. Its complete startup and runtime log is written to
+`Projects/<ProjectName>/Saved/Logs/PicoEditor.log`; Warning and Error records are also forwarded to
+the editor Message Log. Add `-console` or `-log` when an interactive diagnostic console is useful.
 
 The editor starts maximized. Its default UI scale is `1.4`; override it when needed:
 

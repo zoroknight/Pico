@@ -46,6 +46,7 @@ void FNetConnection::Close(std::string Reason)
     SentPackets.clear();
     BufferedReliableMessages.clear();
     DeliveredReliableMessages.clear();
+    AcknowledgedReliableIds.clear();
 }
 
 bool FNetConnection::HandlePacket(
@@ -180,7 +181,9 @@ std::vector<FNetOutboundPacket> FNetConnection::BuildOutgoingPackets(
     return Result;
 }
 
-bool FNetConnection::QueueReliable(std::span<const uint8> Payload)
+bool FNetConnection::QueueReliable(
+    std::span<const uint8> Payload,
+    uint32* OutReliableId)
 {
     constexpr std::size_t ReliableHeaderBytes = 4;
     constexpr std::size_t PacketHeaderBytes = 26;
@@ -195,6 +198,7 @@ bool FNetConnection::QueueReliable(std::span<const uint8> Payload)
     Reliable.ReliableId = NextReliableId++;
     if (Reliable.ReliableId == 0) Reliable.ReliableId = NextReliableId++;
     Reliable.Payload.assign(Payload.begin(), Payload.end());
+    if (OutReliableId != nullptr) *OutReliableId = Reliable.ReliableId;
     PendingReliable.push_back(std::move(Reliable));
     return true;
 }
@@ -205,6 +209,13 @@ FNetConnection::ConsumeDeliveredReliableMessages()
     std::vector<std::vector<uint8>> Result =
         std::move(DeliveredReliableMessages);
     DeliveredReliableMessages.clear();
+    return Result;
+}
+
+std::vector<uint32> FNetConnection::ConsumeAcknowledgedReliableIds()
+{
+    std::vector<uint32> Result = std::move(AcknowledgedReliableIds);
+    AcknowledgedReliableIds.clear();
     return Result;
 }
 
@@ -291,6 +302,7 @@ void FNetConnection::ProcessAcks(
             : Statistics.SmoothedRoundTripSeconds * 0.875 + Sample * 0.125;
         if (It->ReliableId != 0)
         {
+            AcknowledgedReliableIds.push_back(It->ReliableId);
             std::erase_if(
                 PendingReliable,
                 [&](const FPendingReliable& Reliable)

@@ -127,6 +127,7 @@ void FNetDriver::Shutdown()
         if (Connection != nullptr) Connection->Close("NetDriver shutdown");
     }
     Connections.clear();
+    ReplicationSystem.Reset();
     if (Transport != nullptr) Transport->Close();
     Transport.reset();
     NetMode = ENetMode::Standalone;
@@ -170,10 +171,24 @@ void FNetDriver::TickDispatch(float DeltaSeconds)
         if (PreviousState != ENetConnectionState::Closed
             && Connection->GetState() == ENetConnectionState::Closed)
         {
+            ReplicationSystem.HandleConnectionClosed(
+                Connection->GetConnectionId());
             PICO_LOG(LogNet, Info, "Connection {} to {} closed: {}",
                 Connection->GetConnectionId().Value,
                 Connection->GetRemoteAddress().ToString(),
                 Connection->GetCloseReason());
+        }
+        for (const std::vector<uint8>& Message :
+            Connection->ConsumeDeliveredReliableMessages())
+        {
+            ReplicationSystem.HandleReliableMessage(
+                Connection->GetConnectionId(), Message);
+        }
+        for (const uint32 ReliableId :
+            Connection->ConsumeAcknowledgedReliableIds())
+        {
+            ReplicationSystem.HandleReliableAcknowledged(
+                Connection->GetConnectionId(), ReliableId);
         }
     }
     if (NetMode == ENetMode::Server)
@@ -191,6 +206,18 @@ void FNetDriver::TickFlush(float)
     if (!bInitialized || Transport == nullptr) return;
     for (const std::unique_ptr<FNetConnection>& Connection : Connections)
     {
+        if (NetMode == ENetMode::Server
+            && Connection->GetState() == ENetConnectionState::Open)
+        {
+            ReplicationSystem.ReplicateServerConnection(
+                Connection->GetConnectionId(),
+                [&Connection](std::span<const uint8> Payload,
+                    uint32* OutReliableId)
+                {
+                    return Connection->QueueReliable(
+                        Payload, OutReliableId);
+                });
+        }
         for (const FNetOutboundPacket& Packet :
             Connection->BuildOutgoingPackets(ElapsedSeconds))
         {
@@ -201,6 +228,22 @@ void FNetDriver::TickFlush(float)
             }
         }
     }
+}
+
+void FNetDriver::SetWorld(PWorld* World)
+{
+    ReplicationSystem.SetWorld(World);
+}
+
+std::vector<FActorChannelSnapshot>
+FNetDriver::GetActorChannelSnapshots() const
+{
+    return ReplicationSystem.GetChannelSnapshots();
+}
+
+FReplicationStatistics FNetDriver::GetReplicationStatistics() const
+{
+    return ReplicationSystem.GetStatistics();
 }
 
 bool FNetDriver::QueueReliableToAll(std::span<const uint8> Payload)

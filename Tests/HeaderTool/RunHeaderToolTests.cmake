@@ -29,6 +29,14 @@ foreach(EXPECTED
         message(FATAL_ERROR "generated output is missing: ${EXPECTED}")
     endif()
 endforeach()
+foreach(EXPECTED
+    "EReplicationCondition::InitialOnly"
+    "Metadata.RepNotifyFunction = ::Pico::FName(\"OnRep_Score\")")
+    string(FIND "${GENERATED_SOURCE}" "${EXPECTED}" FOUND_AT)
+    if(FOUND_AT EQUAL -1)
+        message(FATAL_ERROR "generated replication metadata is missing: ${EXPECTED}")
+    endif()
+endforeach()
 
 execute_process(
     COMMAND "${PHT}"

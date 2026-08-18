@@ -25,6 +25,7 @@
 #include "Pico/Object/ObjectTypes.h"
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -93,6 +94,7 @@ private:
     void DrawViewport(float Width, float Height);
     void DrawStatusBar();
     void DrawMessageLog();
+    void PumpCoreLogMessages();
     void DrawPlayValidationPopup();
     void DrawPlaySettingsPopup();
     void DrawUnsavedChangesPopup();
@@ -225,6 +227,7 @@ private:
     std::string Status;
     std::string PendingPlayValidation;
     std::vector<FEditorMessage> Messages;
+    std::uint64_t LastObservedLogSequence = 0;
     bool bInteractiveEditChanged = false;
     bool bInteractiveEditVisited = false;
     bool bFinishInteractiveEditRequested = false;

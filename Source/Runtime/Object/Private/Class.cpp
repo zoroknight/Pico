@@ -207,6 +207,7 @@ bool PClass::ValidateProperty(
     const bool bIsObjectReference = Property.GetType() == EPropertyType::Object;
     const bool bValidObjectReference = bIsObjectReference
         ? Property.GetObjectReferenceKind() != EObjectReferenceKind::None
+            && Property.HasReferencedObjectClassResolver()
             && bTransient
             && !bSerializable
         : Property.GetObjectReferenceKind() == EObjectReferenceKind::None;

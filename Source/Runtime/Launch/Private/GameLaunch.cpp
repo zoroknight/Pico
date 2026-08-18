@@ -207,6 +207,20 @@ struct FGameplayDebugPanel
         ImGui::Text("Open connections: %zu   Invalid packets: %llu",
             NetDriver.GetOpenConnectionCount(),
             static_cast<unsigned long long>(NetDriver.GetInvalidPacketCount()));
+        const Pico::FReplicationStatistics Replication =
+            NetDriver.GetReplicationStatistics();
+        ImGui::Text("Net objects: %zu   Actor channels: %zu   Unresolved refs: %zu",
+            Replication.NetObjectCount,
+            Replication.ChannelCount,
+            Replication.UnresolvedReferenceCount);
+        ImGui::Text("Replication: spawn %llu  delta %llu  destroy %llu  OnRep %llu",
+            static_cast<unsigned long long>(Replication.SpawnMessagesSent),
+            static_cast<unsigned long long>(Replication.DeltaMessagesSent),
+            static_cast<unsigned long long>(Replication.DestroyMessagesSent),
+            static_cast<unsigned long long>(Replication.OnRepCalls));
+        ImGui::Text("Received: %llu   rejected: %llu",
+            static_cast<unsigned long long>(Replication.MessagesReceived),
+            static_cast<unsigned long long>(Replication.RejectedMessages));
         const std::vector<Pico::FNetConnectionSnapshot> Connections =
             NetDriver.GetConnectionSnapshots();
         if (Connections.empty()) ImGui::TextDisabled("No network connections");
@@ -233,6 +247,17 @@ struct FGameplayDebugPanel
                     "Closed: %s", Connection.CloseReason.c_str());
             }
             ImGui::PopID();
+        }
+        const std::vector<Pico::FActorChannelSnapshot> Channels =
+            NetDriver.GetActorChannelSnapshots();
+        for (const Pico::FActorChannelSnapshot& Channel : Channels)
+        {
+            ImGui::Text("Channel C%u / N%u: state %u  fields %zu  pending %u",
+                Channel.ConnectionId.Value,
+                Channel.NetObjectId.Value,
+                static_cast<unsigned int>(Channel.State),
+                Channel.BaselineFieldCount,
+                Channel.PendingReliableId);
         }
         if (!NetDriver.GetLastError().empty())
         {

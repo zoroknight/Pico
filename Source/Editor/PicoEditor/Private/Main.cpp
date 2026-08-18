@@ -2,6 +2,7 @@
 #include "NativeFileDialog.h"
 
 #include "Pico/Editor/EditorProjectManager.h"
+#include "Pico/Core/Log.h"
 #include "Pico/Core/Paths.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/ActorBlueprint.h"
@@ -9,6 +10,12 @@
 
 #if defined(PICO_EDITOR_WITH_SANDBOX)
 #include "PicoSandbox/SandboxModule.h"
+#endif
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
 #endif
 
 #include <GLFW/glfw3.h>
@@ -28,6 +35,47 @@
 
 namespace
 {
+bool HasArgument(int Argc, char** Argv, std::string_view Expected)
+{
+    for (int Index = 1; Index < Argc; ++Index)
+    {
+        if (std::string_view(Argv[Index]) == Expected)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void ConfigureEditorConsole(int Argc, char** Argv)
+{
+#if defined(_WIN32)
+    const bool bShowConsole = HasArgument(Argc, Argv, "-console")
+        || HasArgument(Argc, Argv, "-log");
+    Pico::FLog::SetConsoleOutputEnabled(bShowConsole);
+    if (!bShowConsole || !AllocConsole())
+    {
+        return;
+    }
+    SetConsoleOutputCP(CP_UTF8);
+    FILE* ConsoleStream = nullptr;
+    freopen_s(&ConsoleStream, "CONOUT$", "w", stdout);
+    freopen_s(&ConsoleStream, "CONOUT$", "w", stderr);
+#else
+    (void)Argc;
+    (void)Argv;
+#endif
+}
+
+void ReportFatalError(std::string_view Message)
+{
+    Pico::FLog::Write("LogEditor", Pico::ELogLevel::Error, Message);
+#if defined(_WIN32)
+    const std::string Text(Message);
+    MessageBoxA(nullptr, Text.c_str(), "Pico Editor", MB_OK | MB_ICONERROR);
+#endif
+}
+
 std::filesystem::path FindProjectSelection(int Argc, char** Argv)
 {
     constexpr std::string_view ProjectPrefix = "-project=";
@@ -258,9 +306,10 @@ std::optional<std::filesystem::path> RunProjectBrowser(
 
 int main(int Argc, char** Argv)
 {
+    ConfigureEditorConsole(Argc, Argv);
     if (!glfwInit())
     {
-        std::fprintf(stderr, "GLFW initialization failed\n");
+        ReportFatalError("GLFW initialization failed");
         return 1;
     }
 
@@ -274,6 +323,7 @@ int main(int Argc, char** Argv)
     GLFWwindow* Window = glfwCreateWindow(WindowWidth, WindowHeight, "Pico Editor", nullptr, nullptr);
     if (Window == nullptr)
     {
+        ReportFatalError("Pico Editor window creation failed");
         glfwTerminate();
         return 1;
     }
@@ -369,6 +419,21 @@ int main(int Argc, char** Argv)
                 throw std::runtime_error("Scene viewport renderer initialization failed");
             }
             ExitCode = EngineLoop.PreInit(Argc, Argv, ProjectFile);
+            if (ExitCode == 0)
+            {
+                std::filesystem::path LogFile;
+                if (!Pico::FPaths::TryGetProjectWritePath(
+                        Pico::EProjectWriteRoot::Saved,
+                        "Logs/PicoEditor.log",
+                        LogFile)
+                    || !Pico::FLog::SetOutputFile(LogFile))
+                {
+                    Pico::FLog::Write(
+                        "LogEditor",
+                        Pico::ELogLevel::Warning,
+                        "Could not open the project editor log file");
+                }
+            }
         }
         if (bProjectChosen && ExitCode == 0)
         {
@@ -439,12 +504,12 @@ int main(int Argc, char** Argv)
     }
     catch (const std::exception& Exception)
     {
-        std::fprintf(stderr, "Pico Editor fatal error: %s\n", Exception.what());
+        ReportFatalError(std::string("Pico Editor fatal error: ") + Exception.what());
         ExitCode = 1;
     }
     catch (...)
     {
-        std::fprintf(stderr, "Pico Editor fatal error: unknown exception\n");
+        ReportFatalError("Pico Editor fatal error: unknown exception");
         ExitCode = 1;
     }
 
@@ -471,5 +536,6 @@ int main(int Argc, char** Argv)
     }
     glfwDestroyWindow(Window);
     glfwTerminate();
+    Pico::FLog::CloseOutputFile();
     return ExitCode;
 }

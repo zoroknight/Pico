@@ -432,16 +432,6 @@ void FEngineLoop::Tick(const FEngineFrameCallbacks& Callbacks)
     }
     RunGarbageCollectionSafePoint();
 
-    PICO_LOG(
-        LogEngine,
-        Trace,
-        "Tick: frame={} delta={:.6f}s total={:.6f}s avg={:.3f}ms fps={:.1f}",
-        FApp::GetFrameCounter(),
-        FrameTimer.GetDeltaSeconds(),
-        FrameTimer.GetTotalSeconds(),
-        FrameTimer.GetAverageFrameTimeMS(),
-        FrameTimer.GetAverageFPS());
-
     if (MaxFrameCount >= 0 && FApp::GetFrameCounter() >= static_cast<uint64>(MaxFrameCount))
     {
         FApp::RequestExit();

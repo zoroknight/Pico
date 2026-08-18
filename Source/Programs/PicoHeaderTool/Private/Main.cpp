@@ -23,6 +23,8 @@ struct FProperty
 {
     std::string Name;
     std::vector<std::string> Specifiers;
+    std::string RepNotify;
+    std::string ReplicationCondition;
 };
 
 struct FFunction
@@ -203,6 +205,73 @@ std::vector<std::string> ParseSpecifiers(
     return Result;
 }
 
+FProperty ParsePropertySpecifiers(
+    const std::vector<FToken>& Tokens,
+    std::size_t Macro,
+    std::size_t& OutAfter,
+    FDiagnostics& Diagnostics)
+{
+    FProperty Result;
+    if (Macro + 1 >= Tokens.size() || Tokens[Macro + 1].Text != "(")
+    {
+        Diagnostics.Error(Tokens[Macro], "PHT1001",
+            "expected '(' after reflection annotation");
+        OutAfter = Macro + 1;
+        return Result;
+    }
+    const std::size_t Close = FindMatching(Tokens, Macro + 1, "(", ")");
+    if (Close == Tokens.size())
+    {
+        Diagnostics.Error(Tokens[Macro], "PHT1002",
+            "unterminated reflection annotation");
+        OutAfter = Tokens.size();
+        return Result;
+    }
+    const std::set<std::string> Flags = {
+        "Transient", "ReadOnly", "Replicated", "NotEditable",
+        "NotSerializable"};
+    for (std::size_t Index = Macro + 2; Index < Close; ++Index)
+    {
+        const std::string& Specifier = Tokens[Index].Text;
+        if (Specifier == ",") continue;
+        if (Flags.contains(Specifier))
+        {
+            Result.Specifiers.push_back(Specifier);
+            continue;
+        }
+        if (Specifier == "InitialOnly" || Specifier == "OwnerOnly"
+            || Specifier == "SkipOwner")
+        {
+            if (!Result.ReplicationCondition.empty())
+            {
+                Diagnostics.Error(Tokens[Index], "PHT3003",
+                    "a property can have only one replication condition");
+            }
+            Result.ReplicationCondition = Specifier;
+            continue;
+        }
+        if (Specifier == "RepNotify" && Index + 2 < Close
+            && Tokens[Index + 1].Text == "=")
+        {
+            Result.RepNotify = Tokens[Index + 2].Text;
+            Index += 2;
+            continue;
+        }
+        Diagnostics.Error(Tokens[Index], "PHT1003",
+            "unknown specifier '" + Specifier + "'");
+    }
+    if ((!Result.RepNotify.empty()
+            || !Result.ReplicationCondition.empty())
+        && std::find(Result.Specifiers.begin(), Result.Specifiers.end(),
+            "Replicated") == Result.Specifiers.end())
+    {
+        Diagnostics.Error(Tokens[Macro], "PHT3004",
+            "RepNotify and replication conditions require Replicated");
+    }
+    OutAfter = Close + 1;
+    return Result;
+}
+
 std::string QualifiedName(const std::vector<FToken>& Tokens, std::size_t Begin, std::size_t End)
 {
     std::string Result;
@@ -318,10 +387,8 @@ std::vector<FClass> Parse(const std::vector<FToken>& Tokens, FDiagnostics& Diagn
             if (Tokens[Member].Text == "PPROPERTY")
             {
                 std::size_t After = 0;
-                FProperty Property;
-                Property.Specifiers = ParseSpecifiers(
-                    Tokens, Member, After, Diagnostics,
-                    {"Transient", "ReadOnly", "Replicated", "NotEditable", "NotSerializable"});
+                FProperty Property = ParsePropertySpecifiers(
+                    Tokens, Member, After, Diagnostics);
                 std::size_t End = After;
                 while (End < BodyClose && Tokens[End].Text != ";") ++End;
                 std::size_t NameEnd = After;
@@ -388,6 +455,25 @@ std::string PropertyFlags(const FProperty& Property)
     return Result;
 }
 
+std::string PropertyMetadata(const FProperty& Property)
+{
+    std::string Result = "([]() { ::Pico::FPropertyMetadata Metadata; ";
+    Result += "Metadata.Flags = " + PropertyFlags(Property) + "; ";
+    if (!Property.ReplicationCondition.empty())
+    {
+        Result += "Metadata.ReplicationCondition = "
+            "::Pico::EReplicationCondition::"
+            + Property.ReplicationCondition + "; ";
+    }
+    if (!Property.RepNotify.empty())
+    {
+        Result += "Metadata.RepNotifyFunction = ::Pico::FName(\""
+            + Property.RepNotify + "\"); ";
+    }
+    Result += "return Metadata; }())";
+    return Result;
+}
+
 std::string FunctionFlags(const FFunction& Function)
 {
     std::vector<std::string> Flags = Function.Specifiers;
@@ -439,8 +525,7 @@ std::string GenerateSource(const FOptions& Options, const std::vector<FClass>& C
                     Out << "    PICO_ADD_PROPERTY(Properties, " << Property.Name << ");\n";
                 else
                     Out << "    PICO_ADD_PROPERTY_METADATA(Properties, " << Property.Name
-                        << ", (::Pico::FPropertyMetadata { " << PropertyFlags(Property)
-                        << ", ::Pico::EAssetReferenceType::None }));\n";
+                        << ", " << PropertyMetadata(Property) << ");\n";
             }
             Out << "    if (!Class.AddProperties(std::move(Properties))) return false;\n";
         }

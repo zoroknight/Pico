@@ -39,6 +39,7 @@ bool PGameStateBase::RegisterProperties(PClass& Class)
 PGameStateBase::PGameStateBase(const FObjectConstructionParams& Params)
     : PActor(Params)
 {
+    SetReplicates(true);
     PrimaryActorTick.SetCanEverTick(true);
     PrimaryActorTick.SetTickGroup(ETickGroup::PostUpdateWork);
 }

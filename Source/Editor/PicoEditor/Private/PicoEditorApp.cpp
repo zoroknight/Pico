@@ -4,6 +4,7 @@
 #include "Pico/Developer/ReflectionDebug.h"
 #include "Pico/Core/Paths.h"
 #include "Pico/Core/Config.h"
+#include "Pico/Core/Log.h"
 #include "Pico/Core/PlatformProcess.h"
 #include "Pico/Core/Math/MathUtility.h"
 #include "Pico/Editor/EditorProjectManager.h"
@@ -282,6 +283,7 @@ FPicoEditorApp::~FPicoEditorApp()
 
 void FPicoEditorApp::Draw()
 {
+    PumpCoreLogMessages();
     UpdatePlaySession();
     UpdatePackageProcess();
     bInteractiveEditVisited = false;
@@ -543,6 +545,38 @@ void FPicoEditorApp::Draw()
     ProcessDeferredActions();
     SaveEditorSession();
     UpdateWindowTitle();
+}
+
+void FPicoEditorApp::PumpCoreLogMessages()
+{
+    const std::vector<FLogRecord> Records =
+        FLog::GetRecordsSince(LastObservedLogSequence);
+    bool bReceivedIssue = false;
+    for (const FLogRecord& Record : Records)
+    {
+        LastObservedLogSequence = std::max(
+            LastObservedLogSequence, Record.Sequence);
+        if (Record.Level != ELogLevel::Warning
+            && Record.Level != ELogLevel::Error)
+        {
+            continue;
+        }
+        Messages.push_back({
+            Record.Level == ELogLevel::Error
+                ? EMessageSeverity::Error : EMessageSeverity::Warning,
+            "[" + Record.Category + "] " + Record.Message
+        });
+        bReceivedIssue = true;
+    }
+    if (Messages.size() > 200)
+    {
+        Messages.erase(Messages.begin(), Messages.begin() + (Messages.size() - 200));
+    }
+    if (bReceivedIssue)
+    {
+        bMessageLogOpen = true;
+        bFocusMessageLog = true;
+    }
 }
 
 void FPicoEditorApp::RequestClose()

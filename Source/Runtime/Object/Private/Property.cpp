@@ -17,6 +17,8 @@ PProperty::PProperty(
     FPropertyMetadata InMetadata,
     EObjectReferenceKind InObjectReferenceKind,
     FReferenceAccessor InReferenceAccessor,
+    FReferenceSetter InReferenceSetter,
+    FObjectClassResolver InObjectClassResolver,
     FDynamicMutableAccessor InDynamicMutableAccessor,
     FDynamicConstAccessor InDynamicConstAccessor)
     : Name(InName)
@@ -28,6 +30,8 @@ PProperty::PProperty(
     , ConstAccessor(InConstAccessor)
     , ObjectReferenceKind(InObjectReferenceKind)
     , ReferenceAccessor(InReferenceAccessor)
+    , ReferenceSetter(InReferenceSetter)
+    , ObjectClassResolver(InObjectClassResolver)
     , DynamicMutableAccessor(InDynamicMutableAccessor)
     , DynamicConstAccessor(InDynamicConstAccessor)
 {
@@ -75,6 +79,45 @@ PObject* PProperty::GetReferencedObject(const PObject* Object) const
         && ReferenceAccessor != nullptr
         ? ResolveObject(ReferenceAccessor(Object))
         : nullptr;
+}
+
+FObjectHandle PProperty::GetReferencedObjectHandle(
+    const PObject* Object) const
+{
+    return Object != nullptr
+        && OwnerClass != nullptr
+        && Object->IsA(OwnerClass)
+        && Type == EPropertyType::Object
+        && ReferenceAccessor != nullptr
+        ? ReferenceAccessor(Object)
+        : FObjectHandle {};
+}
+
+const PClass* PProperty::GetReferencedObjectClass() const
+{
+    return Type == EPropertyType::Object && ObjectClassResolver != nullptr
+        ? ObjectClassResolver() : nullptr;
+}
+
+bool PProperty::HasReferencedObjectClassResolver() const
+{
+    return Type == EPropertyType::Object && ObjectClassResolver != nullptr;
+}
+
+bool PProperty::SetReferencedObjectSilently(
+    PObject* Object,
+    PObject* ReferencedObject) const
+{
+    return CheckGameThread("PProperty::SetReferencedObjectSilently")
+        && Object != nullptr
+        && OwnerClass != nullptr
+        && Object->IsA(OwnerClass)
+        && Type == EPropertyType::Object
+        && ReferenceSetter != nullptr
+        && (ReferencedObject == nullptr
+            || (GetReferencedObjectClass() != nullptr
+                && ReferencedObject->IsA(GetReferencedObjectClass())))
+        && ReferenceSetter(Object, ReferencedObject);
 }
 
 FDynamicMulticastDelegate* PProperty::GetDynamicMulticastDelegate(PObject* Object) const

@@ -228,6 +228,10 @@ bool FGameEngine::LoadMap(
         }
         GameInstance->DispatchWorldInitialized(EngineLoop.GetWorld());
     }
+    if (NetDriver != nullptr)
+    {
+        NetDriver->SetWorld(EngineLoop.GetWorld());
+    }
     return true;
 }
 
