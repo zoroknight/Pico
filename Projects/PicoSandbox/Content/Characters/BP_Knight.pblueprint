@@ -1,6 +1,5 @@
 [ActorDefaults]
 AutoPossessPlayerIndex=0
-ThirdPersonControlProfileAsset=/Game/Controls/ThirdPersonDefault.pcontrolprofile
 
 [Blueprint]
 Components=CollisionCapsule;CharacterMovement;SandboxPlayerMesh;SandboxAnimatedMesh;CameraBoom;FollowCamera
@@ -12,7 +11,7 @@ Version=1
 RelativeTransform=0,0,0,0,0,0,1,1,1
 
 [Component.CollisionCapsule]
-RelativeTransform=0,0,-2.93999983e-05,0,0,0,1,1,1
+RelativeTransform=0,0,-7.83999931e-05,0,0,0,1,1,1
 
 [Component.SandboxAnimatedMesh]
 AnimationSetAsset=/Game/Characters/Knight_Male/Knight_Male.panimset

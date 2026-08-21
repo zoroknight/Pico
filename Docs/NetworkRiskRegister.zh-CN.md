@@ -21,6 +21,10 @@
 - NET-R08：第一周范围已关闭。GameEngine 测试证明 Dispatch 在 World 前、Flush 在 World 后且早于 GC。
 - NET-R09：可靠发送队列、接收缓冲、重发次数、单帧发送和历史 Packet 均有硬上限；后续 Channel/快照另行复查。
 - NET-R10：已部分缓解。F1 Network Debug 显示模式、连接、RTT、Packet 与可靠队列；属性和预测指标后续增加。
+- NET-R11：远端角色的固定平滑窗口可能在网络 RTT 之外继续增加视觉拖尾。先增加 Move/Server/Snapshot/Render
+  阶段计时，再用服务器时间同步和快照间隔驱动动态平滑；不得以无条件缩短 Smooth Time 代替抖动测试。
+- NET-R12：简化 SimulatedProxy 仅携带 Transform、Velocity 和 MovementMode，急转、移动基座与复杂状态可能
+  外推错误。外推保持 0.2 秒硬上限；后续逐项加入 Acceleration、Rotation 和 Movement Base，不复制第二套玩法逻辑。
 - NET-R12：Winsock 静态系统依赖位于 `PicoNetCore`，Standalone 不打开 Socket；Client/Server Receipt 留到第 7 月。
 
 ## 第 2 周复查结果
@@ -53,6 +57,20 @@
 | NET-R10 | 缺少网络模拟和可视化诊断 | 中 | 只能看到不同步，无法定位 Connection、Role 或属性 | 全月 |
 | NET-R11 | 过度复制 UE5/Iris 复杂度导致范围失控 | 中高 | 长时间停留在抽象层，没有三进程 Gameplay 闭环 | 全月 |
 | NET-R12 | Socket、配置和 Target Receipt 破坏后续打包扩展 | 中 | 开发目录可运行，Stage 中缺依赖或端口配置 | 第 1、4 周 |
+
+## 第 4 周代码复查结果
+
+- NET-R04：代码层已关闭 Character Transform 双写。初始 Spawn 可应用通用 Transform；后续自主代理和模拟代理
+  忽略通用 Transform 写入，分别由 Correction/Replay 和快照插值更新。Root Motion 与动态刚体预测仍明确排除。
+- NET-R07：代码与自动化范围已缓解。输入序号、DeltaTime、ControlYaw、策略 Hash、Ack 对应状态比较和未确认
+  输入重演已落地；首次三进程验收发现复制 Pawn 指针未触发客户端 Possess，导致策略 Hash 为 0、移动被拒绝且
+  动画停在 Falling。现已增加 `OnRep_Pawn` 双向关系修复、晚到 Actor 的客户端绑定补偿和自动化回归；仍需
+  100～150 ms、约 5% 丢包的 10 分钟人工证据后关闭。
+- NET-R09：Pending Move 32、服务器移动 32、每帧服务器重演 8、快照 32、每包移动 3、延迟包 4096；F1
+  可观察当前数量，未发现无界新增路径。
+- NET-R10：Play Session 与命令行均可配置延迟、抖动、丢包；F1 已显示移动消息、Correction、Snapshot、
+  Sent/Ack、Pending、重演、最大误差和模拟队列。本风险的代码范围关闭。
+- NET-R12：网络模拟和移动协议仍位于 Runtime 模块，不依赖编辑器；Client/Server Receipt 继续留在第 7 月。
 
 ## NET-R01：网络身份混用
 

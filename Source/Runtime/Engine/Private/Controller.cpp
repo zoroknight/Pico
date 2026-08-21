@@ -13,13 +13,19 @@ bool PController::RegisterProperties(PClass& Class)
 {
     FPropertyMetadata Metadata;
     Metadata.Flags = EPropertyFlags::Transient | EPropertyFlags::Replicated;
+    Metadata.RepNotifyFunction = FName("OnRep_Pawn");
     std::vector<PProperty> Properties;
     PICO_ADD_PROPERTY_METADATA(Properties, Pawn, Metadata);
+    Metadata.RepNotifyFunction = {};
     PICO_ADD_PROPERTY_METADATA(Properties, ControlRotation, Metadata);
     Metadata.Flags = EPropertyFlags::None;
     PICO_ADD_PROPERTY_METADATA(Properties, ViewPitchMin, Metadata);
     PICO_ADD_PROPERTY_METADATA(Properties, ViewPitchMax, Metadata);
-    return Class.AddProperties(std::move(Properties));
+    if (!Class.AddProperties(std::move(Properties))) return false;
+    std::vector<PFunction> Functions;
+    PICO_ADD_FUNCTION(
+        Functions, OnRep_Pawn, EFunctionFlags::Callable);
+    return Class.AddFunctions(std::move(Functions));
 }
 
 const FRotator& PController::GetControlRotation() const { return ControlRotation; }
@@ -66,6 +72,19 @@ PPawn* PController::GetPawn() const
     return Pawn.Get();
 }
 
+void PController::OnRep_Pawn()
+{
+    PPawn* ReplicatedPawn = Pawn.Get();
+    if (ReplicatedPawn != nullptr)
+    {
+        Possess(ReplicatedPawn);
+    }
+    else
+    {
+        UnPossess();
+    }
+}
+
 bool PController::Possess(PPawn* InPawn)
 {
     if (InPawn == nullptr
@@ -79,6 +98,13 @@ bool PController::Possess(PPawn* InPawn)
     }
     if (Pawn.Get() == InPawn && InPawn->GetController() == this)
     {
+        if (LifecyclePawn.Get() != InPawn)
+        {
+            LifecyclePawn = InPawn;
+            InPawn->PossessedBy(this);
+            OnPossess(InPawn);
+            PossessedPawnChangedEvent.Broadcast(nullptr, InPawn);
+        }
         return true;
     }
     if (PController* OldController = InPawn->GetController())
@@ -91,6 +117,7 @@ bool PController::Possess(PPawn* InPawn)
         return false;
     }
     InPawn->PossessedBy(this);
+    LifecyclePawn = InPawn;
     OnPossess(InPawn);
     PossessedPawnChangedEvent.Broadcast(nullptr, InPawn);
     return true;
@@ -101,13 +128,31 @@ void PController::UnPossess()
     PPawn* OldPawn = Pawn.Get();
     if (OldPawn == nullptr)
     {
+        OldPawn = LifecyclePawn.Get();
+    }
+    if (OldPawn == nullptr)
+    {
         Pawn.Reset();
+        LifecyclePawn.Reset();
         return;
     }
-    SetPawn(nullptr);
-    OldPawn->UnPossessed();
-    OnUnPossess(OldPawn);
-    PossessedPawnChangedEvent.Broadcast(OldPawn, nullptr);
+    const bool bLifecycleWasActive = LifecyclePawn.Get() == OldPawn;
+    if (Pawn.Get() != nullptr)
+    {
+        SetPawn(nullptr);
+    }
+    else if (OldPawn->GetController() == this)
+    {
+        OldPawn->SetController(nullptr);
+        OldPawn->RefreshMovementTickPrerequisites();
+    }
+    LifecyclePawn.Reset();
+    if (bLifecycleWasActive)
+    {
+        OldPawn->UnPossessed();
+        OnUnPossess(OldPawn);
+        PossessedPawnChangedEvent.Broadcast(OldPawn, nullptr);
+    }
 }
 
 FOnPossessedPawnChanged& PController::OnPossessedPawnChanged()

@@ -159,6 +159,10 @@ void FGameEngine::Tick()
                     const std::vector<FNetConnectionId> Closed =
                         NetDriver->ConsumeClosedConnections();
                     GameInstance->DispatchNetworkEvents(Opened, Closed);
+                    if (NetDriver->GetNetMode() == ENetMode::Client)
+                    {
+                        GameInstance->RefreshClientControllerBinding();
+                    }
                 }
                 GameInstance->Tick(DeltaSeconds);
             }
@@ -211,9 +215,17 @@ bool FGameEngine::LoadMap(
     {
         GameInstance->DispatchWorldCleanup(OldWorld);
     }
+    if (NetDriver != nullptr)
+    {
+        NetDriver->SetWorld(nullptr);
+    }
 
     if (!EngineLoop.ReplaceWorld(Data, OutError))
     {
+        if (NetDriver != nullptr)
+        {
+            NetDriver->SetWorld(OldWorld);
+        }
         if (bWasBoundToOldWorld)
         {
             GameInstance->DispatchWorldInitialized(OldWorld);

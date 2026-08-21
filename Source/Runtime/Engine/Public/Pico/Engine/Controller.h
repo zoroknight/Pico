@@ -38,8 +38,10 @@ protected:
 
 private:
     void SanitizeViewPitchLimits();
+    void OnRep_Pawn();
 
     TWeakObjectPtr<PPawn> Pawn;
+    TWeakObjectPtr<PPawn> LifecyclePawn;
     FRotator ControlRotation;
     float ViewPitchMin = -85.0f;
     float ViewPitchMax = 85.0f;

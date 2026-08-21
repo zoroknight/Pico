@@ -3,6 +3,7 @@
 #include "Pico/Developer/ReflectionDebug.h"
 #include "Pico/Editor/EditorSelection.h"
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/SkeletalMeshComponent.h"
@@ -314,6 +315,10 @@ void FDetailsPanel::Draw(
     {
         DrawSceneComponentDetails(static_cast<PSceneComponent*>(Object));
     }
+    else if (Object->IsA(PActorComponent::StaticClass()))
+    {
+        DrawActorComponentDetails(static_cast<PActorComponent*>(Object));
+    }
     else if (Object->IsA(PLevel::StaticClass()))
     {
         PLevel* Level = static_cast<PLevel*>(Object);
@@ -390,6 +395,18 @@ void FDetailsPanel::DrawActorDetails(PActor* Actor)
     ImGui::Text("Components: %zu", Actor->GetComponents().size());
     ImGui::Text("Begun Play: %s", Actor->HasBegunPlay() ? "true" : "false");
     DrawReflectedProperties(Actor);
+}
+
+
+void FDetailsPanel::DrawActorComponentDetails(PActorComponent* Component)
+{
+    PActor* Owner = Component->GetOwner();
+    ImGui::Separator();
+    ImGui::Text(
+        "Owner: %s",
+        Owner != nullptr ? Owner->GetPathName().c_str() : "None");
+    ImGui::Text("Registered: %s", Component->IsRegistered() ? "true" : "false");
+    DrawReflectedProperties(Component);
 }
 
 

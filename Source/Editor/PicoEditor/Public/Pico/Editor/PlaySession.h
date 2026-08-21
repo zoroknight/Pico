@@ -29,6 +29,9 @@ struct FPlaySessionSettings
     int ServerPort = 17777;
     int ClientWindowWidth = 960;
     int ClientWindowHeight = 540;
+    int NetworkLatencyMs = 0;
+    int NetworkJitterMs = 0;
+    int PacketLossPercent = 0;
 
     void Clamp();
     bool Validate(std::string& OutError) const;

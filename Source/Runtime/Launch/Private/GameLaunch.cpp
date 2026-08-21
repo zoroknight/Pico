@@ -225,6 +225,98 @@ struct FGameplayDebugPanel
             static_cast<unsigned long long>(Replication.RpcMessagesSent),
             static_cast<unsigned long long>(Replication.RpcMessagesReceived),
             static_cast<unsigned long long>(Replication.RpcMessagesRejected));
+        ImGui::Text(
+            "Character moves: sent %llu  received %llu  rejected %llu",
+            static_cast<unsigned long long>(
+                Replication.CharacterMoveMessagesSent),
+            static_cast<unsigned long long>(
+                Replication.CharacterMoveMessagesReceived),
+            static_cast<unsigned long long>(
+                Replication.CharacterMoveMessagesRejected));
+        ImGui::Text("Movement state: corrections %llu/%llu  snapshots %llu/%llu",
+            static_cast<unsigned long long>(
+                Replication.CharacterCorrectionsSent),
+            static_cast<unsigned long long>(
+                Replication.CharacterCorrectionsReceived),
+            static_cast<unsigned long long>(
+                Replication.CharacterSnapshotsSent),
+            static_cast<unsigned long long>(
+                Replication.CharacterSnapshotsReceived));
+        const Pico::FNetworkSimulationSnapshot Simulation =
+            NetDriver.GetNetworkSimulationSnapshot();
+        ImGui::Text("Net simulation: outgoing %d ms  +/- %d ms  loss %d%%  queued %zu  dropped %llu",
+            Simulation.Settings.LatencyMs,
+            Simulation.Settings.JitterMs,
+            Simulation.Settings.PacketLossPercent,
+            Simulation.DelayedPacketCount,
+            static_cast<unsigned long long>(Simulation.DroppedPacketCount));
+        if (Pawn != nullptr && Pawn->IsA(Pico::PCharacter::StaticClass()))
+        {
+            const Pico::PCharacterMovementComponent* Movement =
+                static_cast<Pico::PCharacter*>(Pawn)->GetCharacterMovement();
+            if (Movement != nullptr)
+            {
+                const Pico::FCharacterPredictionStatistics Prediction =
+                    Movement->GetPredictionStatistics();
+                ImGui::Text(
+                    "Prediction: %s  policy %s  sent %u  ack %u  pending %zu",
+                    Prediction.bPredictionEnabled ? "on" : "off",
+                    Prediction.bPolicyHashMatches ? "match" : "mismatch",
+                    Prediction.LastSentMove,
+                    Prediction.LastAcknowledgedMove,
+                    Prediction.PendingMoveCount);
+                ImGui::Text(
+                    "Corrections: %llu  replays %llu  max error %.2f  snapshots %zu",
+                    static_cast<unsigned long long>(Prediction.CorrectionCount),
+                    static_cast<unsigned long long>(Prediction.ReplayCount),
+                    Prediction.MaxPositionError,
+                    Prediction.SnapshotCount);
+            }
+        }
+        const Pico::PCharacterMovementComponent* SimulatedMovement = nullptr;
+        if (World != nullptr)
+        {
+            for (Pico::PLevel* Level : World->GetLevels())
+            {
+                if (Level == nullptr) continue;
+                for (Pico::PActor* Actor : Level->GetActors())
+                {
+                    if (Actor != nullptr
+                        && Actor->IsA(Pico::PCharacter::StaticClass())
+                        && Actor->GetLocalRole()
+                            == Pico::ENetRole::SimulatedProxy)
+                    {
+                        SimulatedMovement = static_cast<Pico::PCharacter*>(Actor)
+                            ->GetCharacterMovement();
+                        break;
+                    }
+                }
+                if (SimulatedMovement != nullptr) break;
+            }
+        }
+        if (SimulatedMovement != nullptr)
+        {
+            const Pico::FCharacterPredictionStatistics SimulatedStats =
+                SimulatedMovement->GetPredictionStatistics();
+            ImGui::Text(
+                "Remote smoothing: %s  time %.0f ms  offset %.2f  buffer %zu  delay %.1f ticks",
+                Pico::ToString(SimulatedMovement->GetNetworkSmoothingMode()),
+                SimulatedMovement->GetNetworkSimulatedSmoothLocationTime()
+                    * 1000.0f,
+                SimulatedMovement->GetNetworkSmoothingVisualOffsetDistance(),
+                SimulatedStats.SnapshotCount,
+                SimulatedMovement->GetSnapshotInterpolationDelayTicks());
+            ImGui::Text(
+                "Remote simulation: extrapolation %s  %.0f / %.0f ms  snapshot age %.0f ms  clamps %llu",
+                SimulatedMovement->IsSimulatedProxyExtrapolationEnabled()
+                    ? "on" : "off",
+                SimulatedStats.SimulatedProxyExtrapolationSeconds * 1000.0f,
+                SimulatedMovement->GetNetworkMaxSimulatedProxyExtrapolationTime()
+                    * 1000.0f,
+                SimulatedStats.SimulatedProxySnapshotAgeSeconds * 1000.0f,
+                static_cast<unsigned long long>(
+                    SimulatedStats.SimulatedProxyExtrapolationClampCount));
+        }
         const std::vector<Pico::FNetConnectionSnapshot> Connections =
             NetDriver.GetConnectionSnapshots();
         if (Connections.empty()) ImGui::TextDisabled("No network connections");

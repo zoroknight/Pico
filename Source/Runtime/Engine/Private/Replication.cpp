@@ -4,6 +4,7 @@
 #include "Pico/Core/Log.h"
 #include "Pico/Core/Math/Transform.h"
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/Character.h"
 #include "Pico/Engine/GameStateBase.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/World.h"
@@ -16,6 +17,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <limits>
 #include <utility>
 
@@ -36,7 +38,10 @@ enum class EReplicationMessageType : uint8
     Spawn = 1,
     Delta = 2,
     Destroy = 3,
-    Rpc = 4
+    Rpc = 4,
+    CharacterMove = 5,
+    CharacterCorrection = 6,
+    CharacterSnapshot = 7
 };
 
 struct FFieldValue
@@ -596,6 +601,58 @@ bool WriteMessageHeader(FNetByteWriter& Writer, EReplicationMessageType Type)
         && Writer.WriteUInt8(static_cast<uint8>(Type));
 }
 
+bool WriteCharacterState(
+    FNetByteWriter& Writer,
+    const FCharacterNetworkState& State)
+{
+    const std::vector<uint8> Transform = EncodeTransform(State.State.Transform);
+    return !Transform.empty()
+        && Transform.size() <= std::numeric_limits<uint16>::max()
+        && Writer.WriteUInt32(State.ServerTick)
+        && Writer.WriteUInt32(State.LastProcessedMove)
+        && Writer.WriteUInt64(State.PolicyHash)
+        && Writer.WriteUInt16(static_cast<uint16>(Transform.size()))
+        && Writer.WriteBytes(Transform)
+        && WriteVector(Writer, State.State.Velocity)
+        && Writer.WriteUInt8(static_cast<uint8>(State.State.MovementMode));
+}
+
+bool ReadCharacterState(
+    FNetByteReader& Reader,
+    FCharacterNetworkState& OutState)
+{
+    uint16 TransformSize = 0;
+    std::vector<uint8> Transform;
+    uint8 RawMode = 0;
+    if (!Reader.ReadUInt32(OutState.ServerTick)
+        || !Reader.ReadUInt32(OutState.LastProcessedMove)
+        || !Reader.ReadUInt64(OutState.PolicyHash)
+        || !Reader.ReadUInt16(TransformSize)
+        || !Reader.ReadBytes(TransformSize, Transform)
+        || !DecodeTransform(Transform, OutState.State.Transform)
+        || !ReadVector(Reader, OutState.State.Velocity)
+        || !Reader.ReadUInt8(RawMode)
+        || RawMode > static_cast<uint8>(EMovementMode::Falling))
+        return false;
+    OutState.State.MovementMode = static_cast<EMovementMode>(RawMode);
+    return true;
+}
+
+bool BuildCharacterStateMessage(
+    EReplicationMessageType Type,
+    FNetObjectId NetId,
+    const FCharacterNetworkState& State,
+    std::vector<uint8>& OutMessage)
+{
+    FNetByteWriter Writer;
+    if (!WriteMessageHeader(Writer, Type)
+        || !Writer.WriteUInt32(NetId.Value)
+        || !WriteCharacterState(Writer, State))
+        return false;
+    OutMessage = Writer.GetBytes();
+    return true;
+}
+
 PActor* FindUnboundStartupActor(
     PWorld* World,
     const PClass* Class,
@@ -985,7 +1042,8 @@ void FReplicationSystem::Reset()
 
 void FReplicationSystem::ReplicateServerConnection(
     FNetConnectionId ConnectionId,
-    const FQueueReliable& QueueReliable)
+    const FQueueReliable& QueueReliable,
+    const FQueueUnreliable& QueueUnreliable)
 {
     if (World == nullptr || !ConnectionId.IsValid() || !QueueReliable) return;
     if (Impl == nullptr) Impl = std::make_shared<FImpl>();
@@ -1039,6 +1097,34 @@ void FReplicationSystem::ReplicateServerConnection(
                 QueueReliable, bIsOwner))
         {
             ++Statistics.DeltaMessagesSent;
+        }
+
+        if (Channel->State == EActorChannelState::Open
+            && QueueUnreliable && Actor->IsA(PCharacter::StaticClass()))
+        {
+            PCharacter* Character = static_cast<PCharacter*>(Actor);
+            PCharacterMovementComponent* Movement =
+                Character->GetCharacterMovement();
+            if (Movement != nullptr)
+            {
+                FCharacterNetworkState State;
+                State.ServerTick = static_cast<uint32>(World->GetTickCount());
+                if (State.ServerTick == 0) State.ServerTick = 1;
+                State.LastProcessedMove =
+                    Movement->GetLastProcessedNetworkMove();
+                State.State = Movement->CaptureMoveState();
+                State.PolicyHash = Movement->GetNetworkPolicyHash();
+                std::vector<uint8> Message;
+                const EReplicationMessageType Type = bIsOwner
+                    ? EReplicationMessageType::CharacterCorrection
+                    : EReplicationMessageType::CharacterSnapshot;
+                if (BuildCharacterStateMessage(Type, NetId, State, Message)
+                    && QueueUnreliable(Message))
+                {
+                    if (bIsOwner) ++Statistics.CharacterCorrectionsSent;
+                    else ++Statistics.CharacterSnapshotsSent;
+                }
+            }
         }
     }
 
@@ -1100,6 +1186,86 @@ bool FReplicationSystem::HandleMessage(
     uint32 RawNetId = 0;
     if (!Reader.ReadUInt32(RawNetId) || RawNetId == 0) return Reject();
     const FNetObjectId NetId {RawNetId};
+
+    if (Type == EReplicationMessageType::CharacterMove)
+    {
+        const auto RejectMove = [this, &Reject]()
+        {
+            ++Statistics.CharacterMoveMessagesRejected;
+            return Reject();
+        };
+        if (bReliable) return RejectMove();
+        PActor* Target = ObjectRegistry.ResolveActor(NetId);
+        if (Target == nullptr || !Target->IsA(PCharacter::StaticClass())
+            || Target->GetLocalRole() != ENetRole::Authority
+            || GetActorOwningConnection(Target) != ConnectionId)
+            return RejectMove();
+        uint8 Count = 0;
+        uint64 PolicyHash = 0;
+        if (!Reader.ReadUInt8(Count) || Count == 0 || Count > 3
+            || !Reader.ReadUInt64(PolicyHash))
+            return RejectMove();
+        std::vector<FCharacterNetworkMove> Moves;
+        Moves.reserve(Count);
+        for (uint8 Index = 0; Index < Count; ++Index)
+        {
+            FCharacterNetworkMove Move;
+            uint8 Jump = 0;
+            Move.PolicyHash = PolicyHash;
+            if (!Reader.ReadUInt32(Move.Sequence)
+                || !ReadFloat(Reader, Move.DeltaSeconds)
+                || !ReadVector(Reader, Move.Input.WorldInput)
+                || !Reader.ReadUInt8(Jump) || Jump > 1
+                || !ReadFloat(Reader, Move.ControlYaw))
+                return RejectMove();
+            Move.Input.bJumpPressed = Jump != 0;
+            Move.Input.RootMotionDelta = FTransform::Identity;
+            Moves.push_back(Move);
+        }
+        if (Reader.GetRemainingBytes() != 0) return RejectMove();
+        PCharacterMovementComponent* Movement =
+            static_cast<PCharacter*>(Target)->GetCharacterMovement();
+        if (Movement == nullptr) return RejectMove();
+        for (const FCharacterNetworkMove& Move : Moves)
+        {
+            if (!Movement->EnqueueServerMove(Move)) return RejectMove();
+        }
+        ++Statistics.CharacterMoveMessagesReceived;
+        ++Statistics.MessagesReceived;
+        return true;
+    }
+
+    if (Type == EReplicationMessageType::CharacterCorrection
+        || Type == EReplicationMessageType::CharacterSnapshot)
+    {
+        if (bReliable) return Reject();
+        PActor* Target = ObjectRegistry.ResolveActor(NetId);
+        if (Target == nullptr || !Target->IsA(PCharacter::StaticClass()))
+            return Reject();
+        FCharacterNetworkState State;
+        if (!ReadCharacterState(Reader, State)
+            || Reader.GetRemainingBytes() != 0)
+            return Reject();
+        PCharacterMovementComponent* Movement =
+            static_cast<PCharacter*>(Target)->GetCharacterMovement();
+        if (Movement == nullptr) return Reject();
+        if (Type == EReplicationMessageType::CharacterCorrection)
+        {
+            if (Target->GetLocalRole() != ENetRole::AutonomousProxy)
+                return Reject();
+            Movement->ReceiveNetworkCorrection(State);
+            ++Statistics.CharacterCorrectionsReceived;
+        }
+        else
+        {
+            if (Target->GetLocalRole() != ENetRole::SimulatedProxy)
+                return Reject();
+            Movement->ReceiveSimulatedSnapshot(State);
+            ++Statistics.CharacterSnapshotsReceived;
+        }
+        ++Statistics.MessagesReceived;
+        return true;
+    }
 
     if (Type == EReplicationMessageType::Rpc)
     {
@@ -1319,7 +1485,10 @@ bool FReplicationSystem::HandleMessage(
         return Reject();
     }
 
-    if (!TransformData.empty())
+    if (!TransformData.empty()
+        && !(Actor->IsA(PCharacter::StaticClass())
+            && (Actor->GetLocalRole() == ENetRole::AutonomousProxy
+                || Actor->GetLocalRole() == ENetRole::SimulatedProxy)))
     {
         FTransform Transform;
         if (!DecodeTransform(TransformData, Transform)
@@ -1409,6 +1578,50 @@ bool FReplicationSystem::HandleMessage(
     }
     ++Statistics.MessagesReceived;
     return true;
+}
+
+bool FReplicationSystem::BuildCharacterMoveMessage(
+    PActor* Target,
+    std::span<const FCharacterNetworkMove> Moves,
+    std::vector<uint8>& OutMessage)
+{
+    OutMessage.clear();
+    if (Target == nullptr || !Target->IsA(PCharacter::StaticClass())
+        || Moves.empty() || Moves.size() > 3)
+        return false;
+    const FNetObjectId NetId = ObjectRegistry.FindNetId(Target->GetHandle());
+    if (!NetId.IsValid()) return false;
+    const uint64 PolicyHash = Moves.front().PolicyHash;
+    FNetByteWriter Writer;
+    if (!WriteMessageHeader(Writer, EReplicationMessageType::CharacterMove)
+        || !Writer.WriteUInt32(NetId.Value)
+        || !Writer.WriteUInt8(static_cast<uint8>(Moves.size()))
+        || !Writer.WriteUInt64(PolicyHash))
+        return false;
+    for (const FCharacterNetworkMove& Move : Moves)
+    {
+        if (Move.Sequence == 0 || Move.PolicyHash != PolicyHash
+            || !std::isfinite(Move.DeltaSeconds)
+            || Move.DeltaSeconds <= 0.0f || Move.DeltaSeconds > 0.125f
+            || !std::isfinite(Move.Input.WorldInput.X)
+            || !std::isfinite(Move.Input.WorldInput.Y)
+            || !std::isfinite(Move.Input.WorldInput.Z)
+            || Move.Input.WorldInput.SizeSquared() > 1.21f
+            || !std::isfinite(Move.ControlYaw)
+            || !Writer.WriteUInt32(Move.Sequence)
+            || !WriteFloat(Writer, Move.DeltaSeconds)
+            || !WriteVector(Writer, Move.Input.WorldInput)
+            || !Writer.WriteUInt8(Move.Input.bJumpPressed ? 1 : 0)
+            || !WriteFloat(Writer, Move.ControlYaw))
+            return false;
+    }
+    OutMessage = Writer.GetBytes();
+    return true;
+}
+
+void FReplicationSystem::RecordCharacterMovesSent(std::size_t)
+{
+    ++Statistics.CharacterMoveMessagesSent;
 }
 
 bool FReplicationSystem::BuildRpcMessage(

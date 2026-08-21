@@ -62,7 +62,24 @@ void PSkeletalMeshComponent::SetUseCharacterProfileVisualTransform(bool bValue)
 const FTransform& PSkeletalMeshComponent::GetCharacterProfileVisualTransform() const
 { return CharacterProfileVisualTransform; }
 FTransform PSkeletalMeshComponent::GetVisualWorldTransform() const
-{ return CharacterProfileVisualTransform * GetWorldTransform(); }
+{
+    return bHasNetworkSmoothingVisualTransform
+        ? NetworkSmoothingVisualTransform
+        : CharacterProfileVisualTransform * GetWorldTransform();
+}
+void PSkeletalMeshComponent::SetNetworkSmoothingVisualTransform(
+    const FTransform& Transform)
+{
+    NetworkSmoothingVisualTransform = Transform;
+    bHasNetworkSmoothingVisualTransform = true;
+}
+void PSkeletalMeshComponent::ClearNetworkSmoothingVisualTransform()
+{
+    NetworkSmoothingVisualTransform = FTransform::Identity;
+    bHasNetworkSmoothingVisualTransform = false;
+}
+bool PSkeletalMeshComponent::HasNetworkSmoothingVisualTransform() const
+{ return bHasNetworkSmoothingVisualTransform; }
 void PSkeletalMeshComponent::SetSkeletalMeshAsset(const FAssetPath& AssetPath)
 { SkeletalMeshAsset = AssetPath; InvalidateConfiguredAssets(); }
 const FAssetPath& PSkeletalMeshComponent::GetMaterialAsset() const { return MaterialAsset; }
@@ -138,6 +155,7 @@ void PSkeletalMeshComponent::InvalidateConfiguredAssets()
     RuntimeJump.reset();
     RuntimeProfileMaterials = {};
     CharacterProfileVisualTransform = FTransform::Identity;
+    ClearNetworkSmoothingVisualTransform();
     RenderData = {};
 }
 

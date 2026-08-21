@@ -14,6 +14,7 @@ namespace Pico
 {
 class FEditorSelection;
 class PActor;
+class PActorComponent;
 class PObject;
 class PProperty;
 class PSceneComponent;
@@ -53,6 +54,7 @@ public:
 private:
     void DrawObjectIdentity(PObject* Object);
     void DrawActorDetails(PActor* Actor);
+    void DrawActorComponentDetails(PActorComponent* Component);
     void DrawSceneComponentDetails(PSceneComponent* Component);
     void DrawReflectedProperties(PObject* Object);
     void DrawEventBindings(

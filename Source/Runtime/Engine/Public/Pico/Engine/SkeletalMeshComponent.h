@@ -26,6 +26,9 @@ public:
     void SetUseCharacterProfileVisualTransform(bool bValue);
     const FTransform& GetCharacterProfileVisualTransform() const;
     FTransform GetVisualWorldTransform() const;
+    void SetNetworkSmoothingVisualTransform(const FTransform& Transform);
+    void ClearNetworkSmoothingVisualTransform();
+    bool HasNetworkSmoothingVisualTransform() const;
     void SetSkeletalMeshAsset(const FAssetPath& AssetPath);
     const FAssetPath& GetMaterialAsset() const;
     void SetMaterialAsset(const FAssetPath& AssetPath);
@@ -98,6 +101,8 @@ private:
     std::shared_ptr<const FAnimationSetData> RuntimeAnimationSet;
     std::array<FAssetPath, 8> RuntimeProfileMaterials;
     FTransform CharacterProfileVisualTransform;
+    FTransform NetworkSmoothingVisualTransform;
+    bool bHasNetworkSmoothingVisualTransform = false;
     FSkinnedMeshRenderData RenderData;
     FObjectHandle AnimInstanceHandle;
     bool bEnableRootMotion = false;

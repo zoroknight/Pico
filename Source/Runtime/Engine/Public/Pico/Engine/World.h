@@ -25,6 +25,7 @@ class PLevel;
 class IWorldCollisionQuery;
 class IPhysicsScene;
 class FReplicationSystem;
+class FNetDriver;
 
 using FOnActorSpawned = TObjectMulticastDelegate<void(PActor*)>;
 
@@ -105,6 +106,8 @@ public:
     void SetAssetServices(FAssetRegistry* InRegistry, FAssetManager* InManager);
     FAssetRegistry* GetAssetRegistry() const;
     FAssetManager* GetAssetManager() const;
+    void SetNetDriver(FNetDriver* InNetDriver);
+    FNetDriver* GetNetDriver() const;
 
 protected:
     explicit PWorld(const FObjectConstructionParams& Params);
@@ -144,6 +147,7 @@ private:
     IWorldCollisionQuery* CollisionQuery = nullptr;
     FAssetRegistry* AssetRegistry = nullptr;
     FAssetManager* AssetManager = nullptr;
+    FNetDriver* NetDriver = nullptr;
     std::vector<FPhysicsContactEvent> LastPhysicsEvents;
     std::vector<FActiveOverlapPair> ActiveOverlapPairs;
     EWorldState State = EWorldState::Uninitialized;

@@ -18,6 +18,9 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   Packet、握手、Sequence/Ack、有界且有序的可靠交付、心跳、超时，以及 World 前后 NetDriver 阶段。
 - 通过每连接 ActorChannel、服务器分配的 NetObjectId、稳定反射 Schema 和确认属性基线复制显式启用的 Actor，
   支持 Spawn/Delta/Destroy、Transform、InitialOnly、零参数 OnRep 和带类型检查的延迟 Actor 引用修复。
+- 通过有界 SavedMove 冗余、Ownership 与控制策略校验实现服务器权威角色移动，自主代理可预测、纠错并重演；
+  模拟代理支持 Disabled、Linear、Exponential 与 Snapshot Interpolation 四种网络平滑模式，并按 UE5 思路在快照间
+  进行有上限的碰撞感知外推、只对 Mesh 消除视觉跳变；Play 网络模拟以目标 RTT 表示延迟。
 - PicoSandbox Replication Lab 可用一个可视化服务器和两个客户端验证完整路径：三个 F1 面板显示一致的 NetId 与
   InitialOnly 状态，服务器按键可触发 Transform Delta、OnRep、Destroy 和重新 Spawn。
 - 编辑器 Play 下拉菜单可在 Standalone 与“可视化独立服务器 + 1～4 个客户端”之间切换，持久化端口和窗口
@@ -528,6 +531,7 @@ private:
 - [Actor、属性复制与可视化验收场](Docs/Month09_2_ActorReplication.md)
 - [Gameplay RPC、所有权与开门验收场](Docs/Month09_3_GameplayRpcAndOwnership.md)
 - [第三人称控制基线与跨项目复用](Docs/Month09_3_5_ThirdPersonControlBaseline.md)
+- [角色网络移动、预测与插值](Docs/Month09_4_CharacterNetworkMovement.md)
 - [反射类编写指南](Docs/ReflectionAuthoringGuide.md)
 - [Native 委托编写指南](Docs/DelegateAuthoringGuide.md)
 - [PicoInspector Developer Sandbox 计划](Docs/PicoInspector_DeveloperSandbox_Plan.zh-CN.md)

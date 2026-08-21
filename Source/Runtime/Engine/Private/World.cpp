@@ -31,6 +31,16 @@ PWorld::PWorld(const FObjectConstructionParams& Params)
 
 PWorld::~PWorld() = default;
 
+void PWorld::SetNetDriver(FNetDriver* InNetDriver)
+{
+    NetDriver = InNetDriver;
+}
+
+FNetDriver* PWorld::GetNetDriver() const
+{
+    return NetDriver;
+}
+
 void PWorld::AddReferencedObjects(FReferenceCollector& Collector) const
 {
     PObject::AddReferencedObjects(Collector);

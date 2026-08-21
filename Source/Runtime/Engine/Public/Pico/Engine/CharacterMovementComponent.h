@@ -2,10 +2,14 @@
 
 #include "Pico/Engine/PawnMovementComponent.h"
 
+#include <deque>
+#include <vector>
+
 namespace Pico
 {
 class PCharacter;
 class PPrimitiveComponent;
+class PSkeletalMeshComponent;
 
 enum class EMovementMode : uint8
 {
@@ -15,6 +19,16 @@ enum class EMovementMode : uint8
 };
 
 const char* ToString(EMovementMode Mode);
+
+enum class ENetworkSmoothingMode : uint8
+{
+    Disabled,
+    Linear,
+    Exponential,
+    SnapshotInterpolation
+};
+
+const char* ToString(ENetworkSmoothingMode Mode);
 
 struct FCharacterMoveInput
 {
@@ -28,6 +42,43 @@ struct FCharacterMoveState
     FTransform Transform;
     FVector3 Velocity = FVector3::ZeroVector;
     EMovementMode MovementMode = EMovementMode::Falling;
+};
+
+struct FCharacterNetworkMove
+{
+    uint32 Sequence = 0;
+    float DeltaSeconds = 0.0f;
+    FCharacterMoveInput Input;
+    float ControlYaw = 0.0f;
+    FCharacterMoveState StartState;
+    FCharacterMoveState PredictedState;
+    uint64 PolicyHash = 0;
+};
+
+struct FCharacterNetworkState
+{
+    uint32 ServerTick = 0;
+    uint32 LastProcessedMove = 0;
+    FCharacterMoveState State;
+    uint64 PolicyHash = 0;
+};
+
+struct FCharacterPredictionStatistics
+{
+    uint32 LastSentMove = 0;
+    uint32 LastAcknowledgedMove = 0;
+    uint64 CorrectionCount = 0;
+    uint64 ReplayCount = 0;
+    uint64 DroppedMoveCount = 0;
+    float MaxPositionError = 0.0f;
+    std::size_t PendingMoveCount = 0;
+    std::size_t SnapshotCount = 0;
+    std::size_t ServerMoveQueueCount = 0;
+    float SimulatedProxySnapshotAgeSeconds = 0.0f;
+    float SimulatedProxyExtrapolationSeconds = 0.0f;
+    uint64 SimulatedProxyExtrapolationClampCount = 0;
+    bool bPredictionEnabled = true;
+    bool bPolicyHashMatches = true;
 };
 
 struct FFindFloorResult
@@ -77,6 +128,21 @@ public:
     void SetUseControllerDesiredRotation(bool bValue);
     float GetRotationRate() const;
     void SetRotationRate(float Value);
+    ENetworkSmoothingMode GetNetworkSmoothingMode() const;
+    void SetNetworkSmoothingMode(ENetworkSmoothingMode Mode);
+    float GetNetworkSimulatedSmoothLocationTime() const;
+    void SetNetworkSimulatedSmoothLocationTime(float Value);
+    float GetNetworkMaxSmoothUpdateDistance() const;
+    void SetNetworkMaxSmoothUpdateDistance(float Value);
+    float GetNetworkNoSmoothUpdateDistance() const;
+    void SetNetworkNoSmoothUpdateDistance(float Value);
+    float GetSnapshotInterpolationDelayTicks() const;
+    void SetSnapshotInterpolationDelayTicks(float Value);
+    bool IsSimulatedProxyExtrapolationEnabled() const;
+    void SetSimulatedProxyExtrapolationEnabled(bool bValue);
+    float GetNetworkMaxSimulatedProxyExtrapolationTime() const;
+    void SetNetworkMaxSimulatedProxyExtrapolationTime(float Value);
+    float GetNetworkSmoothingVisualOffsetDistance() const;
 
     FCharacterMoveState CaptureMoveState() const;
     bool ApplyMoveState(const FCharacterMoveState& State);
@@ -84,6 +150,14 @@ public:
     bool IsWalkable(const FHitResult& Hit) const;
     void SimulateMovement(const FCharacterMoveInput& Input, float DeltaSeconds);
     void QueueRootMotion(const FTransform& Delta);
+    void SetNetworkPolicyHash(uint64 Value);
+    uint64 GetNetworkPolicyHash() const;
+    bool EnqueueServerMove(const FCharacterNetworkMove& Move);
+    void ReceiveNetworkCorrection(const FCharacterNetworkState& State);
+    void ReceiveSimulatedSnapshot(const FCharacterNetworkState& State);
+    void SimulateProxyMovement(float DeltaSeconds);
+    uint32 GetLastProcessedNetworkMove() const;
+    FCharacterPredictionStatistics GetPredictionStatistics() const;
     void TickComponent(float DeltaSeconds) override;
 
 protected:
@@ -94,6 +168,24 @@ private:
     void SimulateWalking(const FCharacterMoveInput& Input, float DeltaSeconds);
     void SimulateFalling(const FCharacterMoveInput& Input, float DeltaSeconds);
     void HandleImpact(const FHitResult& Hit, const FVector3& MoveDelta);
+    void TickAuthorityNetworkMovement(float DeltaSeconds);
+    void TickAutonomousNetworkMovement(
+        const FCharacterMoveInput& Input, float DeltaSeconds);
+    void TickSimulatedNetworkMovement(float DeltaSeconds);
+    void TickNetworkMeshSmoothing(float DeltaSeconds);
+    void TranslateNetworkSmoothingTargets(const FVector3& TranslationDelta);
+    void ApplyNetworkSnapshotWithMeshSmoothing(
+        const FCharacterNetworkState& State);
+    void ClearNetworkMeshSmoothing();
+    void RefreshNetworkSmoothingMeshes();
+    void ApplyPendingCorrection();
+
+    struct FNetworkSmoothingMeshState
+    {
+        FObjectHandle ComponentHandle;
+        FTransform StartVisualTransform;
+        FTransform TargetVisualTransform;
+    };
 
     float MaxWalkSpeed = 250.0f;
     float GroundAcceleration = 1200.0f;
@@ -109,10 +201,44 @@ private:
     bool bOrientRotationToMovement = true;
     bool bUseControllerDesiredRotation = false;
     float RotationRate = 540.0f;
+    float NetworkSimulatedSmoothLocationTime = 0.1f;
+    float NetworkMaxSmoothUpdateDistance = 256.0f;
+    float NetworkNoSmoothUpdateDistance = 384.0f;
+    float SnapshotInterpolationDelayTicks = 2.0f;
+    bool bEnableSimulatedProxyExtrapolation = true;
+    float NetworkMaxSimulatedProxyExtrapolationTime = 0.2f;
     int32 MovementModeValue = static_cast<int32>(EMovementMode::Falling);
+    int32 NetworkSmoothingModeValue =
+        static_cast<int32>(ENetworkSmoothingMode::Exponential);
     int32 LastSimulationIterations = 0;
     FFindFloorResult CurrentFloor;
     FCharacterMoveInput LastSimulationInput;
     FTransform PendingRootMotion;
+    std::deque<FCharacterNetworkMove> ServerMoves;
+    std::deque<FCharacterNetworkMove> PendingMoves;
+    std::deque<FCharacterNetworkState> SimulatedSnapshots;
+    FCharacterNetworkState PendingCorrection;
+    uint64 NetworkPolicyHash = 0;
+    uint32 NextMoveSequence = 1;
+    uint32 LastProcessedNetworkMove = 0;
+    uint32 LastReceivedServerTick = 0;
+    float SimulatedPlaybackTick = 0.0f;
+    float SimulatedProxySnapshotAgeSeconds = 0.0f;
+    float SimulatedProxyExtrapolationSeconds = 0.0f;
+    float NetworkSmoothingElapsedSeconds = 0.0f;
+    float NetworkSmoothingVisualOffsetDistance = 0.0f;
+    ENetworkSmoothingMode ActiveNetworkSmoothingMode =
+        ENetworkSmoothingMode::Exponential;
+    std::vector<FNetworkSmoothingMeshState> NetworkSmoothingMeshes;
+    bool bHasPendingCorrection = false;
+    bool bSimulatedProxyExtrapolationClamped = false;
+    bool bPredictionEnabled = true;
+    bool bPolicyHashMatches = true;
+    bool bLoggedAutonomousStart = false;
+    bool bLoggedAuthorityStart = false;
+    bool bLoggedAcceptedServerMove = false;
+    bool bLoggedRejectedServerMove = false;
+    bool bLoggedMoveSendFailure = false;
+    FCharacterPredictionStatistics PredictionStatistics;
 };
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Pico/Net/NetTypes.h"
+#include "Pico/Engine/CharacterMovementComponent.h"
 #include "Pico/Object/ObjectTypes.h"
 #include "Pico/Object/Property.h"
 #include "Pico/Object/Function.h"
@@ -96,6 +97,13 @@ struct FReplicationStatistics
     uint64 RpcMessagesSent = 0;
     uint64 RpcMessagesReceived = 0;
     uint64 RpcMessagesRejected = 0;
+    uint64 CharacterMoveMessagesSent = 0;
+    uint64 CharacterMoveMessagesReceived = 0;
+    uint64 CharacterMoveMessagesRejected = 0;
+    uint64 CharacterCorrectionsSent = 0;
+    uint64 CharacterCorrectionsReceived = 0;
+    uint64 CharacterSnapshotsSent = 0;
+    uint64 CharacterSnapshotsReceived = 0;
     std::size_t ChannelCount = 0;
     std::size_t NetObjectCount = 0;
     std::size_t UnresolvedReferenceCount = 0;
@@ -112,13 +120,15 @@ public:
     FReplicationSystem& operator=(FReplicationSystem&&) noexcept = default;
     using FQueueReliable =
         std::function<bool(std::span<const uint8>, uint32*)>;
+    using FQueueUnreliable = std::function<bool(std::span<const uint8>)>;
 
     void SetWorld(PWorld* InWorld);
     void BeginNetworkFrame();
     void Reset();
     void ReplicateServerConnection(
         FNetConnectionId ConnectionId,
-        const FQueueReliable& QueueReliable);
+        const FQueueReliable& QueueReliable,
+        const FQueueUnreliable& QueueUnreliable = {});
     bool HandleReliableMessage(
         FNetConnectionId ConnectionId,
         std::span<const uint8> Payload);
@@ -141,6 +151,11 @@ public:
         std::span<const FFunctionValue> Arguments,
         std::vector<uint8>& OutMessage);
     void RecordRpcSent();
+    bool BuildCharacterMoveMessage(
+        PActor* Target,
+        std::span<const FCharacterNetworkMove> Moves,
+        std::vector<uint8>& OutMessage);
+    void RecordCharacterMovesSent(std::size_t MoveCount);
 
 private:
     std::shared_ptr<FImpl> Impl;

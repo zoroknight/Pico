@@ -3,6 +3,8 @@
 #include "Pico/Core/CommandLine.h"
 #include "Pico/Core/Log.h"
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/Character.h"
+#include "Pico/Engine/World.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/Function.h"
 #include "Pico/Net/NetPacket.h"
@@ -17,6 +19,7 @@ namespace
 {
 const FNetAddress EmptyNetAddress;
 constexpr std::size_t MaxPacketsPerDispatch = 256;
+constexpr std::size_t MaxDelayedPackets = 4096;
 }
 
 const char* ToString(ENetMode Mode)
@@ -58,17 +61,30 @@ bool FNetDriver::InitializeFromCommandLine()
         LastError = "network port must be between 1 and 65535";
         return false;
     }
-    if (bServer) return InitializeServer(static_cast<uint16>(Port));
+    FNetworkSimulationSettings Simulation;
+    Simulation.LatencyMs = FCommandLine::GetInt("netlatency").value_or(0);
+    Simulation.JitterMs = FCommandLine::GetInt("netjitter").value_or(0);
+    Simulation.PacketLossPercent =
+        FCommandLine::GetInt("netloss").value_or(0);
+    if (bServer)
+    {
+        const bool bResult = InitializeServer(static_cast<uint16>(Port));
+        if (bResult) SetNetworkSimulationSettings(Simulation);
+        return bResult;
+    }
     if (Client.has_value())
     {
-        return InitializeClient(
+        const bool bResult = InitializeClient(
             FNetAddress { *Client, static_cast<uint16>(Port) });
+        if (bResult) SetNetworkSimulationSettings(Simulation);
+        return bResult;
     }
 
     Shutdown();
     NetMode = ENetMode::Standalone;
     LastError.clear();
     bInitialized = true;
+    SetNetworkSimulationSettings(Simulation);
     LastError.clear();
     return true;
 }
@@ -125,6 +141,9 @@ bool FNetDriver::InitializeClient(
 
 void FNetDriver::Shutdown()
 {
+    if (World != nullptr && World->GetNetDriver() == this)
+        World->SetNetDriver(nullptr);
+    World = nullptr;
     for (const std::unique_ptr<FNetConnection>& Connection : Connections)
     {
         if (Connection != nullptr) Connection->Close("NetDriver shutdown");
@@ -139,6 +158,10 @@ void FNetDriver::Shutdown()
     InvalidPacketCount = 0;
     OpenedConnections.clear();
     ClosedConnections.clear();
+    DelayedPackets.clear();
+    NetworkSimulation = {};
+    SimulatedDroppedPacketCount = 0;
+    SimulationRandomState = 0x5049434fu;
     bInitialized = false;
 }
 
@@ -217,6 +240,7 @@ void FNetDriver::TickDispatch(float DeltaSeconds)
 void FNetDriver::TickFlush(float)
 {
     if (!bInitialized || Transport == nullptr) return;
+    FlushDelayedPackets();
     for (const std::unique_ptr<FNetConnection>& Connection : Connections)
     {
         if (NetMode == ENetMode::Server
@@ -229,23 +253,29 @@ void FNetDriver::TickFlush(float)
                 {
                     return Connection->QueueReliable(
                         Payload, OutReliableId);
+                },
+                [&Connection](std::span<const uint8> Payload)
+                {
+                    return Connection->QueueUnreliable(Payload);
                 });
         }
         for (const FNetOutboundPacket& Packet :
             Connection->BuildOutgoingPackets(ElapsedSeconds))
         {
-            if (!Packet.Bytes.empty()
-                && !Transport->SendTo(Packet.RemoteAddress, Packet.Bytes))
-            {
-                LastError = Transport->GetLastError();
-            }
+            if (!Packet.Bytes.empty())
+                SendOrDelayPacket(Packet.RemoteAddress, Packet.Bytes);
         }
     }
+    FlushDelayedPackets();
 }
 
-void FNetDriver::SetWorld(PWorld* World)
+void FNetDriver::SetWorld(PWorld* InWorld)
 {
-    ReplicationSystem.SetWorld(World);
+    if (this->World != nullptr && this->World->GetNetDriver() == this)
+        this->World->SetNetDriver(nullptr);
+    this->World = InWorld;
+    if (this->World != nullptr) this->World->SetNetDriver(this);
+    ReplicationSystem.SetWorld(this->World);
 }
 
 std::vector<FActorChannelSnapshot>
@@ -488,6 +518,103 @@ bool FNetDriver::CallRemoteFunction(
     }
     if (bQueued) ReplicationSystem.RecordRpcSent();
     return bQueued;
+}
+
+bool FNetDriver::QueueCharacterMoves(
+    PCharacter* Character,
+    std::span<const FCharacterNetworkMove> Moves)
+{
+    if (NetMode != ENetMode::Client || Character == nullptr
+        || Character->GetLocalRole() != ENetRole::AutonomousProxy
+        || Moves.empty() || Connections.empty())
+        return false;
+    FNetConnection* Connection = Connections.front().get();
+    if (Connection == nullptr
+        || Connection->GetState() != ENetConnectionState::Open)
+        return false;
+    std::vector<uint8> Message;
+    if (!ReplicationSystem.BuildCharacterMoveMessage(
+            Character, Moves, Message))
+        return false;
+    if (!Connection->QueueUnreliable(Message)) return false;
+    ReplicationSystem.RecordCharacterMovesSent(Moves.size());
+    return true;
+}
+
+void FNetDriver::SetNetworkSimulationSettings(
+    const FNetworkSimulationSettings& Settings)
+{
+    NetworkSimulation.LatencyMs = std::clamp(Settings.LatencyMs, 0, 2000);
+    NetworkSimulation.JitterMs = std::clamp(Settings.JitterMs, 0, 1000);
+    NetworkSimulation.PacketLossPercent = std::clamp(
+        Settings.PacketLossPercent, 0, 100);
+}
+
+FNetworkSimulationSnapshot FNetDriver::GetNetworkSimulationSnapshot() const
+{
+    return {NetworkSimulation, DelayedPackets.size(),
+        SimulatedDroppedPacketCount};
+}
+
+uint32 FNetDriver::NextSimulationRandom()
+{
+    SimulationRandomState = SimulationRandomState * 1664525u + 1013904223u;
+    return SimulationRandomState;
+}
+
+void FNetDriver::SendOrDelayPacket(
+    const FNetAddress& RemoteAddress,
+    std::span<const uint8> Bytes)
+{
+    if (Transport == nullptr || Bytes.empty()) return;
+    if (NetworkSimulation.PacketLossPercent > 0
+        && static_cast<int>(NextSimulationRandom() % 100u)
+            < NetworkSimulation.PacketLossPercent)
+    {
+        ++SimulatedDroppedPacketCount;
+        return;
+    }
+    int DelayMs = NetworkSimulation.LatencyMs;
+    if (NetworkSimulation.JitterMs > 0)
+    {
+        const int Range = NetworkSimulation.JitterMs * 2 + 1;
+        DelayMs += static_cast<int>(NextSimulationRandom()
+            % static_cast<uint32>(Range)) - NetworkSimulation.JitterMs;
+    }
+    DelayMs = std::max(DelayMs, 0);
+    if (DelayMs == 0)
+    {
+        if (!Transport->SendTo(RemoteAddress, Bytes))
+            LastError = Transport->GetLastError();
+        return;
+    }
+    if (DelayedPackets.size() >= MaxDelayedPackets)
+    {
+        ++SimulatedDroppedPacketCount;
+        return;
+    }
+    FDelayedPacket Packet;
+    Packet.RemoteAddress = RemoteAddress;
+    Packet.Bytes.assign(Bytes.begin(), Bytes.end());
+    Packet.DeliveryTime = ElapsedSeconds
+        + static_cast<double>(DelayMs) / 1000.0;
+    DelayedPackets.push_back(std::move(Packet));
+}
+
+void FNetDriver::FlushDelayedPackets()
+{
+    if (Transport == nullptr) return;
+    for (auto It = DelayedPackets.begin(); It != DelayedPackets.end();)
+    {
+        if (It->DeliveryTime > ElapsedSeconds)
+        {
+            ++It;
+            continue;
+        }
+        if (!Transport->SendTo(It->RemoteAddress, It->Bytes))
+            LastError = Transport->GetLastError();
+        It = DelayedPackets.erase(It);
+    }
 }
 
 uint64 FNetDriver::MakeClientNonce() const

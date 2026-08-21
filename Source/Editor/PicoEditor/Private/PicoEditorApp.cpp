@@ -1459,6 +1459,16 @@ void FPicoEditorApp::DrawPlaySettingsPopup()
     ImGui::EndDisabled();
     bChanged |= ImGui::InputInt("Window Width", &PlaySettings.ClientWindowWidth);
     bChanged |= ImGui::InputInt("Window Height", &PlaySettings.ClientWindowHeight);
+    ImGui::Separator();
+    ImGui::TextUnformatted("Network Simulation");
+    ImGui::BeginDisabled(PlaySettings.NetMode == EEditorPlayNetMode::Standalone);
+    bChanged |= ImGui::InputInt(
+        "Target RTT (ms)", &PlaySettings.NetworkLatencyMs);
+    bChanged |= ImGui::InputInt(
+        "Jitter (+/- ms)", &PlaySettings.NetworkJitterMs);
+    bChanged |= ImGui::InputInt(
+        "Packet Loss (%)", &PlaySettings.PacketLossPercent);
+    ImGui::EndDisabled();
     if (bChanged)
     {
         PlaySettings.Clamp();

@@ -22,6 +22,9 @@ The current implementation can:
 - Replicate explicitly enabled Actors through per-connection ActorChannels, server-assigned NetObjectIds,
   stable reflection schemas, acknowledged property baselines, Spawn/Delta/Destroy, Transform state,
   InitialOnly conditions, zero-argument OnRep calls, and deferred type-checked Actor references.
+- Run server-authoritative Character movement with bounded SavedMove redundancy, ownership and control-policy
+  validation, autonomous-proxy prediction/correction/replay, plus Disabled, Linear, Exponential, and
+  Snapshot Interpolation modes that smooth the visual Mesh without delaying the authoritative capsule.
 - Validate that path in the PicoSandbox Replication Lab: an authority-spawned cube exposes matching
   NetId/InitialOnly state in three F1 panels, while server keys exercise Transform Delta, OnRep,
   Destroy, and fresh Spawn across two clients.
@@ -400,7 +403,8 @@ smoke runs. The generic `PicoGame` target remains available for projects without
 
 The editor toolbar's green triangle launches the current `/Game/...` map. Its adjacent native down-arrow menu selects
 Standalone or a visible separate server plus one to four clients, and persists player count, port,
-and client window size in `Saved/Editor/PlaySettings.ini`. Instances have `Server`/`Client_1` titles
+client window size, target RTT, jitter, and packet loss in `Saved/Editor/PlaySettings.ini`. The editor applies half of the target RTT
+as each process's outgoing latency. Instances have `Server`/`Client_1` titles
 and independent logs under `Saved/Logs/PlaySession/Session_*/`; the red square stops the whole group.
 A dirty or untitled World still requires explicit `Save & Play`. Listen Server and a truly headless
 Dedicated Server remain reserved until the replication/runtime split is ready.
@@ -631,6 +635,7 @@ See:
 - [Network Transport, Connection, and Frame Phases (Chinese)](Docs/Month09_1_NetTransportAndConnection.md)
 - [Actor and Property Replication with Visual Lab (Chinese)](Docs/Month09_2_ActorReplication.md)
 - [Reusable Third-Person Control Baseline (Chinese)](Docs/Month09_3_5_ThirdPersonControlBaseline.md)
+- [Character Network Movement, Prediction, and Interpolation (Chinese)](Docs/Month09_4_CharacterNetworkMovement.md)
 - [Reflection Authoring Guide](Docs/ReflectionAuthoringGuide.md)
 - [PicoHeaderTool](Docs/Month03_17_PicoHeaderTool.md)
 - [Mark-Sweep Garbage Collection](Docs/Month03_18_GarbageCollection.md)
@@ -673,6 +678,7 @@ See:
 - [Actor and Property Replication](Docs/Month09_2_ActorReplication.md)
 - [Gameplay RPC and Ownership](Docs/Month09_3_GameplayRpcAndOwnership.md)
 - [Reusable Third-Person Control Baseline](Docs/Month09_3_5_ThirdPersonControlBaseline.md)
+- [Character Network Movement and Prediction](Docs/Month09_4_CharacterNetworkMovement.md)
 
 ## Roadmap
 

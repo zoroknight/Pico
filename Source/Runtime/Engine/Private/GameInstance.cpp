@@ -1,5 +1,6 @@
 #include "Pico/Engine/GameInstance.h"
 
+#include "Pico/Core/Log.h"
 #include "Pico/Engine/GameEngine.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/LocalPlayer.h"
@@ -233,6 +234,18 @@ void PGameInstance::RefreshClientControllerBinding()
     PWorld* World = GetWorld();
     PLocalPlayer* LocalPlayer = GetPrimaryLocalPlayer();
     if (World == nullptr || LocalPlayer == nullptr) return;
+    PPlayerController* ExistingController =
+        LocalPlayer->GetPlayerController();
+    if (ExistingController != nullptr
+        && ExistingController->GetLocalRole() == ENetRole::AutonomousProxy)
+    {
+        PPawn* ExistingPawn = ExistingController->GetPawn();
+        if (ExistingPawn != nullptr)
+        {
+            ExistingController->Possess(ExistingPawn);
+        }
+        return;
+    }
     PPlayerController* AutonomousController = nullptr;
     for (PLevel* Level : World->GetLevels())
     {
@@ -249,15 +262,28 @@ void PGameInstance::RefreshClientControllerBinding()
         }
         if (AutonomousController != nullptr) break;
     }
-    if (AutonomousController == nullptr
-        || LocalPlayer->GetPlayerController() == AutonomousController) return;
-    PPlayerController* Previous = LocalPlayer->GetPlayerController();
-    if (Previous != nullptr && World->GetGameMode() != nullptr
-        && Previous->GetLocalRole() == ENetRole::Authority)
+    if (AutonomousController == nullptr) return;
+    if (LocalPlayer->GetPlayerController() != AutonomousController)
     {
-        World->GetGameMode()->Logout(Previous);
+        PPlayerController* Previous = LocalPlayer->GetPlayerController();
+        if (Previous != nullptr && World->GetGameMode() != nullptr
+            && Previous->GetLocalRole() == ENetRole::Authority)
+        {
+            World->GetGameMode()->Logout(Previous);
+        }
+        LocalPlayer->SetPlayerController(AutonomousController);
+        PICO_LOG(LogNet, Info,
+            "Local player bound to autonomous controller '{}'",
+            AutonomousController->GetPathName());
     }
-    LocalPlayer->SetPlayerController(AutonomousController);
+    PPawn* Pawn = AutonomousController->GetPawn();
+    if (Pawn != nullptr)
+    {
+        const bool bPossessed = AutonomousController->Possess(Pawn);
+        PICO_LOG(LogNet, Info,
+            "Client possess reconciliation: controller='{}' pawn='{}' result={}",
+            AutonomousController->GetPathName(), Pawn->GetPathName(), bPossessed);
+    }
 }
 
 void PGameInstance::AddReferencedObjects(FReferenceCollector& Collector) const

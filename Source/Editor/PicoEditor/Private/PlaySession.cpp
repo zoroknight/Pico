@@ -28,6 +28,13 @@ void AddCommonArguments(
         "windowheight", Request.Settings.ClientWindowHeight));
     Spec.Arguments.push_back(MakeArgument("windowx", 40 + WindowIndex * 36));
     Spec.Arguments.push_back(MakeArgument("windowy", 40 + WindowIndex * 36));
+    // Each packet crosses two simulated one-way legs in a client/server RTT.
+    Spec.Arguments.push_back(MakeArgument(
+        "netlatency", (Request.Settings.NetworkLatencyMs + 1) / 2));
+    Spec.Arguments.push_back(MakeArgument(
+        "netjitter", Request.Settings.NetworkJitterMs));
+    Spec.Arguments.push_back(MakeArgument(
+        "netloss", Request.Settings.PacketLossPercent));
 }
 }
 
@@ -48,6 +55,9 @@ void FPlaySessionSettings::Clamp()
     ServerPort = std::clamp(ServerPort, 1, 65535);
     ClientWindowWidth = std::clamp(ClientWindowWidth, 320, 3840);
     ClientWindowHeight = std::clamp(ClientWindowHeight, 240, 2160);
+    NetworkLatencyMs = std::clamp(NetworkLatencyMs, 0, 2000);
+    NetworkJitterMs = std::clamp(NetworkJitterMs, 0, 1000);
+    PacketLossPercent = std::clamp(PacketLossPercent, 0, 100);
     if (NetMode == EEditorPlayNetMode::Standalone) PlayerCount = 1;
 }
 
@@ -80,6 +90,13 @@ bool FPlaySessionSettings::Validate(std::string& OutError) const
         OutError = "client window size is outside the supported range";
         return false;
     }
+    if (NetworkLatencyMs < 0 || NetworkLatencyMs > 2000
+        || NetworkJitterMs < 0 || NetworkJitterMs > 1000
+        || PacketLossPercent < 0 || PacketLossPercent > 100)
+    {
+        OutError = "network simulation settings are outside the supported range";
+        return false;
+    }
     return true;
 }
 
@@ -96,6 +113,9 @@ bool FPlaySessionSettings::Load(const std::filesystem::path& FilePath)
     ServerPort = Config.GetInt("Play", "ServerPort", 17777);
     ClientWindowWidth = Config.GetInt("Play", "ClientWindowWidth", 960);
     ClientWindowHeight = Config.GetInt("Play", "ClientWindowHeight", 540);
+    NetworkLatencyMs = Config.GetInt("Play", "NetworkLatencyMs", 0);
+    NetworkJitterMs = Config.GetInt("Play", "NetworkJitterMs", 0);
+    PacketLossPercent = Config.GetInt("Play", "PacketLossPercent", 0);
     Clamp();
     return true;
 }
@@ -110,6 +130,12 @@ bool FPlaySessionSettings::Save(const std::filesystem::path& FilePath) const
         "Play", "ClientWindowWidth", std::to_string(ClientWindowWidth));
     Config.SetString(
         "Play", "ClientWindowHeight", std::to_string(ClientWindowHeight));
+    Config.SetString(
+        "Play", "NetworkLatencyMs", std::to_string(NetworkLatencyMs));
+    Config.SetString(
+        "Play", "NetworkJitterMs", std::to_string(NetworkJitterMs));
+    Config.SetString(
+        "Play", "PacketLossPercent", std::to_string(PacketLossPercent));
     return Config.Save(FilePath);
 }
 

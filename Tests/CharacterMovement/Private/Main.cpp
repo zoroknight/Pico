@@ -7,6 +7,7 @@
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/PrimitiveComponent.h"
+#include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/PhysicsCore/PhysicsScene.h"
 
@@ -265,6 +266,137 @@ int main()
         Character->GetActorLocation().X > 390.0f
             && !Movement->GetCurrentFloor().bBlockingHit,
         "NoCollision disables Character movement sweeps and floor queries");
+
+    Movement->SetNetworkPolicyHash(0xCAFEu);
+    Pico::FCharacterNetworkMove NetworkMove;
+    NetworkMove.Sequence = 1;
+    NetworkMove.DeltaSeconds = 1.0f / 60.0f;
+    NetworkMove.Input.WorldInput = {1.0f, 0.0f, 0.0f};
+    NetworkMove.PolicyHash = 0xCAFEu;
+    Runner.Expect(
+        Movement->EnqueueServerMove(NetworkMove)
+            && Movement->EnqueueServerMove(NetworkMove)
+            && Movement->GetPredictionStatistics().ServerMoveQueueCount == 1,
+        "Server SavedMove queue accepts one move and deduplicates retransmission");
+    NetworkMove.Sequence = 2;
+    NetworkMove.PolicyHash = 0xBADu;
+    Runner.Expect(
+        !Movement->EnqueueServerMove(NetworkMove)
+            && Movement->GetPredictionStatistics().ServerMoveQueueCount == 1,
+        "Server rejects movement produced by a different control policy hash");
+
+    auto* NetworkVisual =
+        Character->CreateComponent<Pico::PSkeletalMeshComponent>(
+            "NetworkSmoothingVisual");
+    if (NetworkVisual != nullptr)
+    {
+        NetworkVisual->AttachToComponent(
+            Character->GetRootComponent(),
+            Pico::EAttachmentTransformRule::KeepRelative);
+    }
+    Pico::FCharacterMoveState SmoothStart = Movement->CaptureMoveState();
+    SmoothStart.Transform.Translation = {-300.0f, -350.0f, 96.0f};
+    SmoothStart.Velocity = Pico::FVector3::ZeroVector;
+    SmoothStart.MovementMode = Pico::EMovementMode::None;
+    Movement->ApplyMoveState(SmoothStart);
+    Pico::FCharacterNetworkState SmoothSnapshot;
+    SmoothSnapshot.ServerTick = 1;
+    SmoothSnapshot.State = SmoothStart;
+    SmoothSnapshot.State.Transform.Translation.X += 100.0f;
+
+    Movement->SetNetworkSmoothingMode(
+        Pico::ENetworkSmoothingMode::Disabled);
+    Movement->ReceiveSimulatedSnapshot(SmoothSnapshot);
+    Runner.Expect(
+        NetworkVisual != nullptr
+            && Character->GetActorLocation().X
+                == SmoothSnapshot.State.Transform.Translation.X
+            && !NetworkVisual->HasNetworkSmoothingVisualTransform(),
+        "Disabled network smoothing applies the authoritative snapshot immediately");
+
+    Movement->ApplyMoveState(SmoothStart);
+    Movement->SetNetworkSmoothingMode(Pico::ENetworkSmoothingMode::Linear);
+    Movement->SetNetworkSimulatedSmoothLocationTime(0.1f);
+    SmoothSnapshot.ServerTick = 2;
+    const float LinearOldVisualX = NetworkVisual != nullptr
+        ? NetworkVisual->GetVisualWorldTransform().Translation.X : 0.0f;
+    Movement->ReceiveSimulatedSnapshot(SmoothSnapshot);
+    Runner.Expect(
+        NetworkVisual != nullptr
+            && Character->GetActorLocation().X
+                == SmoothSnapshot.State.Transform.Translation.X
+            && NetworkVisual->HasNetworkSmoothingVisualTransform()
+            && std::abs(
+                NetworkVisual->GetVisualWorldTransform().Translation.X
+                    - LinearOldVisualX) < 0.01f,
+        "Linear smoothing updates the authoritative capsule while preserving the old Mesh visual");
+    Movement->TickComponent(0.1f);
+    Runner.Expect(
+        NetworkVisual != nullptr
+            && !NetworkVisual->HasNetworkSmoothingVisualTransform()
+            && std::abs(
+                NetworkVisual->GetVisualWorldTransform().Translation.X
+                    - SmoothSnapshot.State.Transform.Translation.X) < 0.01f,
+        "Linear smoothing reaches the authoritative Mesh transform in its configured time");
+
+    Movement->ApplyMoveState(SmoothStart);
+    Movement->SetNetworkSmoothingMode(
+        Pico::ENetworkSmoothingMode::Exponential);
+    SmoothSnapshot.ServerTick = 3;
+    const float ExponentialOldVisualX = NetworkVisual != nullptr
+        ? NetworkVisual->GetVisualWorldTransform().Translation.X : 0.0f;
+    Movement->ReceiveSimulatedSnapshot(SmoothSnapshot);
+    Movement->TickComponent(0.05f);
+    const float ExponentialVisualX = NetworkVisual != nullptr
+        ? NetworkVisual->GetVisualWorldTransform().Translation.X : 0.0f;
+    Runner.Expect(
+        NetworkVisual != nullptr
+            && NetworkVisual->HasNetworkSmoothingVisualTransform()
+            && ExponentialVisualX > ExponentialOldVisualX
+            && ExponentialVisualX
+                < SmoothSnapshot.State.Transform.Translation.X,
+        "Exponential smoothing immediately begins decaying the Mesh offset without delaying the capsule");
+
+    Pico::FCharacterNetworkState MovingSnapshot;
+    MovingSnapshot.ServerTick = 4;
+    MovingSnapshot.State = Movement->CaptureMoveState();
+    MovingSnapshot.State.Transform.Translation = {-300.0f, -350.0f, 96.0f};
+    MovingSnapshot.State.Velocity = {100.0f, 0.0f, 0.0f};
+    MovingSnapshot.State.MovementMode = Pico::EMovementMode::Walking;
+    Movement->SetSimulatedProxyExtrapolationEnabled(true);
+    Movement->SetNetworkMaxSimulatedProxyExtrapolationTime(0.2f);
+    Movement->ReceiveSimulatedSnapshot(MovingSnapshot);
+    Movement->SimulateProxyMovement(0.05f);
+    Runner.Expect(
+        std::abs(Character->GetActorLocation().X
+            - (MovingSnapshot.State.Transform.Translation.X + 5.0f)) < 0.1f,
+        "Simulated proxy advances between authoritative snapshots using replicated velocity");
+    Movement->SimulateProxyMovement(0.5f);
+    const Pico::FCharacterPredictionStatistics ExtrapolationStats =
+        Movement->GetPredictionStatistics();
+    Runner.Expect(
+        std::abs(Character->GetActorLocation().X
+            - (MovingSnapshot.State.Transform.Translation.X + 20.0f)) < 0.1f
+            && std::abs(
+                ExtrapolationStats.SimulatedProxyExtrapolationSeconds - 0.2f)
+                < 0.001f
+            && ExtrapolationStats.SimulatedProxyExtrapolationClampCount == 1,
+        "Simulated proxy extrapolation stops at the configured safety horizon");
+
+    Movement->SetNetworkSmoothingMode(
+        Pico::ENetworkSmoothingMode::SnapshotInterpolation);
+
+    for (Pico::uint32 Tick = 5; Tick <= 44; ++Tick)
+    {
+        Pico::FCharacterNetworkState Snapshot;
+        Snapshot.ServerTick = Tick;
+        Snapshot.State = Movement->CaptureMoveState();
+        Snapshot.State.Transform.Translation.X += static_cast<float>(Tick);
+        Movement->ReceiveSimulatedSnapshot(Snapshot);
+    }
+    Runner.Expect(
+        Movement->GetPredictionStatistics().SnapshotCount == 32,
+        "Simulated proxy interpolation history remains bounded under sustained snapshots");
 
     EngineLoop.Exit();
     return Runner.Finish();

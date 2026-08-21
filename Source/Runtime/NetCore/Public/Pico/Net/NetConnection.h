@@ -15,7 +15,7 @@ struct FNetConnectionConfig
     double ReliableRetrySeconds = 0.15;
     double HeartbeatSeconds = 0.5;
     double HandshakeTimeoutSeconds = 5.0;
-    double ConnectionTimeoutSeconds = 5.0;
+    double ConnectionTimeoutSeconds = 15.0;
     std::size_t MaxReliableQueue = 128;
     uint32 MaxReliableAttempts = 16;
     std::size_t MaxPacketsPerFlush = 32;

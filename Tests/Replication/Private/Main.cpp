@@ -1,6 +1,8 @@
 #include "TestRunner.h"
 
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/Character.h"
+#include "Pico/Engine/Controller.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Replication.h"
 #include "Pico/Engine/SceneComponent.h"
@@ -115,6 +117,28 @@ bool PReplicationTestActor::RegisterProperties(Pico::PClass& Class)
     return Class.AddFunctions(std::move(Functions));
 }
 
+class PReplicationTestController : public Pico::PController
+{
+    PICO_DECLARE_CLASS(PReplicationTestController, Pico::PController)
+
+public:
+    int GetPossessCount() const { return PossessCount; }
+
+protected:
+    explicit PReplicationTestController(
+        const Pico::FObjectConstructionParams& Params)
+        : PController(Params)
+    {
+    }
+
+    void OnPossess(Pico::PPawn*) override { ++PossessCount; }
+
+private:
+    int PossessCount = 0;
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PReplicationTestController)
+
 class PRootlessReplicationActor : public Pico::PActor
 {
     PICO_DECLARE_CLASS(PRootlessReplicationActor, Pico::PActor)
@@ -145,6 +169,7 @@ void TestReplicationLifecycle(FTestRunner& Runner)
     const bool bInitialized = EngineLoop.PreInit(2, Arguments) == 0
         && EngineLoop.Init() == 0
         && PReplicationTestActor::RegisterClass()
+        && PReplicationTestController::RegisterClass()
         && PRootlessReplicationActor::RegisterClass();
     Runner.Expect(bInitialized, "Replication test initializes engine classes");
     if (!bInitialized)
@@ -364,6 +389,109 @@ void TestReplicationLifecycle(FTestRunner& Runner)
         && ClientReplication.GetObjectRegistry().ResolveActor(RootlessId)
             != nullptr,
         "A replicated Gameplay Actor without a RootComponent skips Transform safely");
+
+    Messages.clear();
+    PReplicationTestController* ServerController =
+        ServerWorld->SpawnActor<PReplicationTestController>("NetworkController");
+    Pico::PCharacter* ServerCharacter =
+        ServerWorld->SpawnActor<Pico::PCharacter>("NetworkCharacter");
+    if (ServerController != nullptr && ServerCharacter != nullptr)
+    {
+        ServerController->SetReplicates(true);
+        ServerController->SetOnlyRelevantToOwner(true);
+        ServerCharacter->SetReplicates(true);
+        ServerController->Possess(ServerCharacter);
+        ServerReplication.SetActorOwningConnection(ServerController, Connection);
+        ServerReplication.SetActorOwningConnection(ServerCharacter, Connection);
+        ServerCharacter->GetCharacterMovement()->SetNetworkPolicyHash(0x1234u);
+    }
+    ServerReplication.ReplicateServerConnection(Connection, Queue);
+    const Pico::FNetObjectId CharacterId = ServerCharacter != nullptr
+        ? ServerCharacter->GetNetObjectId() : Pico::FNetObjectId {};
+    const Pico::FNetObjectId ControllerId = ServerController != nullptr
+        ? ServerController->GetNetObjectId() : Pico::FNetObjectId {};
+    bool bAppliedCharacterSpawn = false;
+    for (const FQueuedMessage& Message : Messages)
+    {
+        bAppliedCharacterSpawn = ClientReplication.HandleReliableMessage(
+            Connection, Message.Payload) || bAppliedCharacterSpawn;
+        ServerReplication.HandleReliableAcknowledged(
+            Connection, Message.ReliableId);
+    }
+    auto* ClientCharacter = static_cast<Pico::PCharacter*>(
+        ClientReplication.GetObjectRegistry().ResolveActor(CharacterId));
+    auto* ClientController = static_cast<PReplicationTestController*>(
+        ClientReplication.GetObjectRegistry().ResolveActor(ControllerId));
+    if (ClientCharacter != nullptr)
+    {
+        ClientCharacter->GetCharacterMovement()->SetNetworkPolicyHash(0x1234u);
+        ClientCharacter->GetCharacterMovement()->SetNetworkSmoothingMode(
+            Pico::ENetworkSmoothingMode::Disabled);
+    }
+    if (ServerCharacter != nullptr)
+    {
+        ServerCharacter->GetCharacterMovement()->SetNetworkSmoothingMode(
+            Pico::ENetworkSmoothingMode::Disabled);
+    }
+    Pico::FCharacterNetworkMove CharacterMove;
+    CharacterMove.Sequence = 1;
+    CharacterMove.DeltaSeconds = 1.0f / 60.0f;
+    CharacterMove.Input.WorldInput = {1.0f, 0.0f, 0.0f};
+    CharacterMove.ControlYaw = 20.0f;
+    CharacterMove.PolicyHash = 0x1234u;
+    std::vector<Pico::uint8> CharacterMoveMessage;
+    Runner.Expect(
+        bAppliedCharacterSpawn && ClientCharacter != nullptr
+            && ClientController != nullptr
+            && ClientController->GetPawn() == ClientCharacter
+            && ClientCharacter->GetController() == ClientController
+            && ClientController->GetPossessCount() == 1
+            && ClientCharacter->GetLocalRole()
+                == Pico::ENetRole::AutonomousProxy
+            && ClientReplication.BuildCharacterMoveMessage(
+                ClientCharacter,
+                std::span<const Pico::FCharacterNetworkMove>(
+                    &CharacterMove, 1),
+                CharacterMoveMessage)
+            && ServerReplication.HandleUnreliableMessage(
+                Connection, CharacterMoveMessage)
+            && ServerCharacter->GetCharacterMovement()
+                ->GetPredictionStatistics().ServerMoveQueueCount == 1,
+        "Disabled visual smoothing does not block Possess or owning SavedMove delivery");
+    CharacterMove.Sequence = 2;
+    CharacterMove.PolicyHash = 0x9999u;
+    Runner.Expect(
+        ClientReplication.BuildCharacterMoveMessage(
+            ClientCharacter,
+            std::span<const Pico::FCharacterNetworkMove>(&CharacterMove, 1),
+            CharacterMoveMessage)
+            && !ServerReplication.HandleUnreliableMessage(
+                Connection, CharacterMoveMessage)
+            && ServerReplication.GetStatistics()
+                .CharacterMoveMessagesRejected == 1,
+        "Authority rejects SavedMove data with a mismatched movement policy");
+
+    std::vector<std::vector<Pico::uint8>> UnreliableMessages;
+    ServerReplication.ReplicateServerConnection(
+        Connection,
+        Queue,
+        [&UnreliableMessages](std::span<const Pico::uint8> Payload)
+        {
+            UnreliableMessages.emplace_back(Payload.begin(), Payload.end());
+            return true;
+        });
+    bool bAppliedCorrection = false;
+    for (const std::vector<Pico::uint8>& Message : UnreliableMessages)
+    {
+        bAppliedCorrection = ClientReplication.HandleUnreliableMessage(
+            Connection, Message) || bAppliedCorrection;
+    }
+    Runner.Expect(
+        bAppliedCorrection
+            && ServerReplication.GetStatistics().CharacterCorrectionsSent >= 1
+            && ClientReplication.GetStatistics()
+                .CharacterCorrectionsReceived >= 1,
+        "Authority emits an unreliable acknowledged state for its owning proxy");
 
     ServerReplication.Reset();
     ClientReplication.Reset();

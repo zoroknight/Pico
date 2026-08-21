@@ -691,7 +691,7 @@ SkeletalMesh、17 个动画、材质、CharacterProfile 和 Data-Only Actor Blue
 | 第 2 周（已完成） | ActorChannel、Spawn/Destroy、网络对象引用、反射 Replication Schema、Dirty Tracking、Replication Condition、OnRep、每连接已确认属性基线和 Delta | 服务器 Actor 可在客户端生成、更新、引用和销毁；未变化字段不重复发送；断开与 GC 后无悬空 Channel/引用 |
 | 第 3 周（已完成） | Server/Client/Multicast RPC、可靠/不可靠、参数网络序列化、`ProcessEvent` 调用、方向/Role/Ownership/参数校验；落实 Gameplay Framework 网络可见性；完成开门纵向实例 | 合法交互 RPC 可执行并通过属性复制同步结果；非拥有者、错误方向和非法参数调用零副作用；三进程 Gameplay 状态一致 |
 | 第 3.5 阶段（已完成） | 将调优后的第三人称移动/摄像机参数提取为 `.pcontrolprofile`；统一移动方向纯函数；增加策略 Hash、F1 诊断和 0/90 度黄金行为测试 | 控制策略可由 Actor Blueprint 引用并跨项目复用；所有网络玩家使用相同 Pawn Class 与策略；第 4 周预测和服务器重演不得复制另一套移动方向算法 |
-| 第 4 周 | SavedMove、输入序号、服务器重演、Ack/Correction、纠错快照、未确认输入回滚重演、模拟代理快照缓冲与插值；延迟/抖动/丢包模拟；Network Debug 与 Play Session 网络模拟控制 | 100～150 ms 延迟和少量丢包下所属角色可预测和纠正，其他角色平滑显示；一个服务器加两个客户端连续运行，重演、快照和可靠队列均有上限 |
+| 第 4 周（代码与自动化已完成，待 10 分钟人工长稳验收） | SavedMove、输入序号、服务器重演、Ack/Correction、纠错快照、未确认输入回滚重演、模拟代理快照缓冲与插值；延迟/抖动/丢包模拟；Network Debug 与 Play Session 网络模拟控制 | 100～150 ms 延迟和少量丢包下所属角色可预测和纠正，其他角色平滑显示；一个服务器加两个客户端连续运行，重演、快照和可靠队列均有上限 |
 
 第 1 周完成记录：`PicoNetCore` 与 `FNetDriver` 已落地；Loopback 和真实 Winsock UDP 均通过一个服务器加两个客户端
 测试；三步握手、Sequence 回绕、Ack/AckBits、Heartbeat、超时、可靠消息重发/去重/有序交付和资源上限均有
@@ -722,6 +722,21 @@ SimulatedProxy。Server/Client/NetMulticast RPC 已通过 PFunction 元数据、
 Sandbox 新增客户端 `F` 开门闭环及 F1 Role/RPC/门状态统计。完整 Debug 自动化测试 19/19 通过；三进程人工验收
 完成后即可进入第 4 周预测阶段。
 实现说明见 [`Month09_3_GameplayRpcAndOwnership.md`](Month09_3_GameplayRpcAndOwnership.md)。
+
+第 4 周实现记录：`PCharacterMovementComponent` 已按 Authority、AutonomousProxy、SimulatedProxy 分流；自主代理
+生成有序 SavedMove 并本地预测，服务器校验 Ownership、Role、输入范围和 `.pcontrolprofile` Hash 后调用同一
+`SimulateMovement` 重演，Correction 按 Ack 对应的历史预测状态比较误差并重演未确认输入。模拟代理使用两个
+服务器 Tick 延迟的有界快照插值，或采用 UE5 思路在快照间做最多 0.2 秒的碰撞感知限时外推，再单独平滑 Mesh。
+Pending Move、服务器输入、快照和延迟包均有硬上限。Play Session 可配置目标 RTT、单包抖动和丢包，并自动将
+目标 RTT 的一半传给每个进程作为出站延迟；F1 显示移动消息、Correction/Snapshot、Sent/Ack、Pending、重演、
+最大误差、快照年龄、外推时间和触顶次数。
+Debug 定向自动化已通过；完成 100～150 ms、约 5% 丢包下三进程 10 分钟人工验收后关闭本月最终门槛。
+实现说明见 [`Month09_4_CharacterNetworkMovement.md`](Month09_4_CharacterNetworkMovement.md)。
+
+第 4 周后低延迟加固顺序固定为：先增加端到端阶段计时，再建立服务器时间同步与 UE5 风格动态平滑，然后补
+AutonomousProxy 校正视觉平滑和更完整的 SimulatedProxy 状态。Pico 不为动作/FPS Demo 改成全局帧同步；目标模型
+继续保持“服务器权威状态同步 + 本地预测/重演 + 远端插值或限时外推 + 后续命中回滚”。当前实现可证明完整链路，
+但在时间戳自适应、移动基座、加速度/旋转状态和带宽调度完成前，不标记为达到 UE5 生产级网络移动水准。
 
 ### 第 6 月每周准入门槛
 

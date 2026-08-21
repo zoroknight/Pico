@@ -135,7 +135,7 @@ void PSandboxGameInstance::AppendGameplayDebugLines(
     OutLines.emplace_back(
         "Authority: T Spawn | Y Move | U Change State | I Destroy | Client: F Use Door");
     OutLines.emplace_back(
-        "Movement networking: client-local only until Week 4 SavedMove/server replay; the separate server has no local input.");
+        "Movement networking: SavedMove prediction + authority replay + simulated proxy interpolation; the separate server has no local input.");
 
     const Pico::PLocalPlayer* LocalPlayer = GetPrimaryLocalPlayer();
     const auto* Controller = LocalPlayer != nullptr

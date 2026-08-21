@@ -180,6 +180,9 @@ void TestPlaySessionSettings(FTestRunner& Runner)
     Settings.ServerPort = 17777;
     Settings.ClientWindowWidth = 800;
     Settings.ClientWindowHeight = 450;
+    Settings.NetworkLatencyMs = 120;
+    Settings.NetworkJitterMs = 15;
+    Settings.PacketLossPercent = 5;
     const std::filesystem::path SettingsFile = Root / "PlaySettings.ini";
     Pico::FPlaySessionSettings Loaded;
     Runner.Expect(
@@ -189,8 +192,11 @@ void TestPlaySessionSettings(FTestRunner& Runner)
             && Loaded.PlayerCount == 2
             && Loaded.ServerPort == 17777
             && Loaded.ClientWindowWidth == 800
-            && Loaded.ClientWindowHeight == 450,
-        "Play Session settings persist mode, players, port, and window size");
+            && Loaded.ClientWindowHeight == 450
+            && Loaded.NetworkLatencyMs == 120
+            && Loaded.NetworkJitterMs == 15
+            && Loaded.PacketLossPercent == 5,
+        "Play Session settings persist process and network simulation options");
 
     Pico::FPlaySessionLaunchRequest Request;
     Request.Settings = Loaded;
@@ -214,9 +220,13 @@ void TestPlaySessionSettings(FTestRunner& Runner)
                 "-server") != Specs[0].Arguments.end()
             && std::find(Specs[1].Arguments.begin(), Specs[1].Arguments.end(),
                 "-client=127.0.0.1") != Specs[1].Arguments.end()
+            && std::find(Specs[1].Arguments.begin(), Specs[1].Arguments.end(),
+                "-netlatency=60") != Specs[1].Arguments.end()
+            && std::find(Specs[1].Arguments.begin(), Specs[1].Arguments.end(),
+                "-netloss=5") != Specs[1].Arguments.end()
             && Specs[0].LogFile.filename() == "Server.log"
             && Specs[1].LogFile.filename() == "Client_1.log",
-        "Play process specs assign network roles and independent logs");
+        "Play process specs assign roles, half the target RTT per hop, and independent logs");
 
     Request.Settings.NetMode = Pico::EEditorPlayNetMode::Standalone;
     Request.Settings.PlayerCount = 1;

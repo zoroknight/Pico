@@ -297,6 +297,15 @@ void TestNetDriverMultipleClients(FTestRunner& Runner)
         "NetDriver creates a loopback server and two ephemeral clients");
     if (!bInitialized) return;
 
+    ClientA.SetNetworkSimulationSettings({120, 15, 5});
+    const Pico::FNetworkSimulationSnapshot Simulation =
+        ClientA.GetNetworkSimulationSnapshot();
+    Runner.Expect(
+        Simulation.Settings.LatencyMs == 120
+            && Simulation.Settings.JitterMs == 15
+            && Simulation.Settings.PacketLossPercent == 5,
+        "NetDriver owns per-process latency, jitter, and packet-loss simulation settings");
+
     for (int Step = 0; Step < 80
         && (Server.GetOpenConnectionCount() != 2
             || ClientA.GetOpenConnectionCount() != 1

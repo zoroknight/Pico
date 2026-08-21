@@ -12,6 +12,7 @@ namespace Pico
 {
 class PWorld;
 class PActor;
+class PCharacter;
 
 struct FNetConnectionSnapshot
 {
@@ -21,6 +22,20 @@ struct FNetConnectionSnapshot
     FNetStatistics Statistics;
     std::size_t PendingReliableMessages = 0;
     std::string CloseReason;
+};
+
+struct FNetworkSimulationSettings
+{
+    int LatencyMs = 0;
+    int JitterMs = 0;
+    int PacketLossPercent = 0;
+};
+
+struct FNetworkSimulationSnapshot
+{
+    FNetworkSimulationSettings Settings;
+    std::size_t DelayedPacketCount = 0;
+    uint64 DroppedPacketCount = 0;
 };
 
 class FNetDriver
@@ -57,6 +72,12 @@ public:
         PActor* Target,
         FName FunctionName,
         std::span<const FFunctionValue> Arguments = {});
+    bool QueueCharacterMoves(
+        PCharacter* Character,
+        std::span<const FCharacterNetworkMove> Moves);
+    void SetNetworkSimulationSettings(
+        const FNetworkSimulationSettings& Settings);
+    FNetworkSimulationSnapshot GetNetworkSimulationSnapshot() const;
 
 private:
     FNetConnection* FindConnection(
@@ -68,6 +89,18 @@ private:
         const FNetAddress& RemoteAddress,
         const FDecodedNetPacket& Packet);
     uint64 MakeClientNonce() const;
+    void SendOrDelayPacket(
+        const FNetAddress& RemoteAddress,
+        std::span<const uint8> Bytes);
+    void FlushDelayedPackets();
+    uint32 NextSimulationRandom();
+
+    struct FDelayedPacket
+    {
+        FNetAddress RemoteAddress;
+        std::vector<uint8> Bytes;
+        double DeliveryTime = 0.0;
+    };
 
     std::unique_ptr<INetTransport> Transport;
     std::vector<std::unique_ptr<FNetConnection>> Connections;
@@ -79,6 +112,11 @@ private:
     FReplicationSystem ReplicationSystem;
     std::vector<FNetConnectionId> OpenedConnections;
     std::vector<FNetConnectionId> ClosedConnections;
+    PWorld* World = nullptr;
+    FNetworkSimulationSettings NetworkSimulation;
+    std::vector<FDelayedPacket> DelayedPackets;
+    uint64 SimulatedDroppedPacketCount = 0;
+    uint32 SimulationRandomState = 0x5049434fu;
     bool bInitialized = false;
 };
 }

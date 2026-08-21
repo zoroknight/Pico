@@ -1,14 +1,19 @@
 #include "Pico/Engine/CharacterMovementComponent.h"
 
+#include "Pico/Core/Log.h"
 #include "Pico/Engine/Character.h"
 #include "Pico/Engine/Controller.h"
+#include "Pico/Engine/NetDriver.h"
+#include "Pico/Net/NetPacket.h"
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ObjectGlobals.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -47,6 +52,23 @@ bool PCharacterMovementComponent::RegisterProperties(PClass& Class)
     PICO_ADD_PROPERTY(Properties, bOrientRotationToMovement);
     PICO_ADD_PROPERTY(Properties, bUseControllerDesiredRotation);
     PICO_ADD_PROPERTY(Properties, RotationRate);
+    PICO_ADD_PROPERTY(Properties, NetworkSimulatedSmoothLocationTime);
+    PICO_ADD_PROPERTY(Properties, NetworkMaxSmoothUpdateDistance);
+    PICO_ADD_PROPERTY(Properties, NetworkNoSmoothUpdateDistance);
+    PICO_ADD_PROPERTY(Properties, SnapshotInterpolationDelayTicks);
+    PICO_ADD_PROPERTY(Properties, bEnableSimulatedProxyExtrapolation);
+    PICO_ADD_PROPERTY(Properties, NetworkMaxSimulatedProxyExtrapolationTime);
+    FPropertyMetadata SmoothingMetadata;
+    SmoothingMetadata.DisplayName = "Network Smoothing Mode";
+    SmoothingMetadata.EnumOptions = {
+        {static_cast<int32>(ENetworkSmoothingMode::Disabled), "Disabled"},
+        {static_cast<int32>(ENetworkSmoothingMode::Linear), "Linear"},
+        {static_cast<int32>(ENetworkSmoothingMode::Exponential), "Exponential"},
+        {static_cast<int32>(ENetworkSmoothingMode::SnapshotInterpolation),
+            "Snapshot Interpolation"}
+    };
+    PICO_ADD_PROPERTY_METADATA(
+        Properties, NetworkSmoothingModeValue, SmoothingMetadata);
     FPropertyMetadata RuntimeMetadata;
     RuntimeMetadata.Flags = EPropertyFlags::Transient | EPropertyFlags::ReadOnly;
     RuntimeMetadata.DisplayName = "Movement Mode";
@@ -66,6 +88,19 @@ const char* ToString(EMovementMode Mode)
     case EMovementMode::None: return "None";
     case EMovementMode::Walking: return "Walking";
     case EMovementMode::Falling: return "Falling";
+    }
+    return "Unknown";
+}
+
+const char* ToString(ENetworkSmoothingMode Mode)
+{
+    switch (Mode)
+    {
+    case ENetworkSmoothingMode::Disabled: return "Disabled";
+    case ENetworkSmoothingMode::Linear: return "Linear";
+    case ENetworkSmoothingMode::Exponential: return "Exponential";
+    case ENetworkSmoothingMode::SnapshotInterpolation:
+        return "Snapshot Interpolation";
     }
     return "Unknown";
 }
@@ -177,6 +212,70 @@ void PCharacterMovementComponent::SetUseControllerDesiredRotation(bool bValue)
 float PCharacterMovementComponent::GetRotationRate() const { return RotationRate; }
 void PCharacterMovementComponent::SetRotationRate(float Value)
 { if (std::isfinite(Value) && Value >= 0.0f) RotationRate = Value; }
+ENetworkSmoothingMode PCharacterMovementComponent::GetNetworkSmoothingMode() const
+{
+    const int32 Minimum = static_cast<int32>(ENetworkSmoothingMode::Disabled);
+    const int32 Maximum = static_cast<int32>(
+        ENetworkSmoothingMode::SnapshotInterpolation);
+    return static_cast<ENetworkSmoothingMode>(
+        std::clamp(NetworkSmoothingModeValue, Minimum, Maximum));
+}
+void PCharacterMovementComponent::SetNetworkSmoothingMode(
+    ENetworkSmoothingMode Mode)
+{
+    ClearNetworkMeshSmoothing();
+    SimulatedSnapshots.clear();
+    SimulatedPlaybackTick = 0.0f;
+    NetworkSmoothingModeValue = static_cast<int32>(Mode);
+    ActiveNetworkSmoothingMode = Mode;
+}
+float PCharacterMovementComponent::GetNetworkSimulatedSmoothLocationTime() const
+{ return NetworkSimulatedSmoothLocationTime; }
+void PCharacterMovementComponent::SetNetworkSimulatedSmoothLocationTime(float Value)
+{
+    if (std::isfinite(Value))
+        NetworkSimulatedSmoothLocationTime = std::clamp(Value, 0.001f, 1.0f);
+}
+float PCharacterMovementComponent::GetNetworkMaxSmoothUpdateDistance() const
+{ return NetworkMaxSmoothUpdateDistance; }
+void PCharacterMovementComponent::SetNetworkMaxSmoothUpdateDistance(float Value)
+{
+    if (std::isfinite(Value) && Value >= 0.0f)
+    {
+        NetworkMaxSmoothUpdateDistance = Value;
+        NetworkNoSmoothUpdateDistance = std::max(
+            NetworkNoSmoothUpdateDistance, NetworkMaxSmoothUpdateDistance);
+    }
+}
+float PCharacterMovementComponent::GetNetworkNoSmoothUpdateDistance() const
+{ return NetworkNoSmoothUpdateDistance; }
+void PCharacterMovementComponent::SetNetworkNoSmoothUpdateDistance(float Value)
+{
+    if (std::isfinite(Value) && Value >= 0.0f)
+        NetworkNoSmoothUpdateDistance = std::max(
+            Value, NetworkMaxSmoothUpdateDistance);
+}
+float PCharacterMovementComponent::GetSnapshotInterpolationDelayTicks() const
+{ return SnapshotInterpolationDelayTicks; }
+void PCharacterMovementComponent::SetSnapshotInterpolationDelayTicks(float Value)
+{
+    if (std::isfinite(Value))
+        SnapshotInterpolationDelayTicks = std::clamp(Value, 0.0f, 8.0f);
+}
+bool PCharacterMovementComponent::IsSimulatedProxyExtrapolationEnabled() const
+{ return bEnableSimulatedProxyExtrapolation; }
+void PCharacterMovementComponent::SetSimulatedProxyExtrapolationEnabled(bool bValue)
+{ bEnableSimulatedProxyExtrapolation = bValue; }
+float PCharacterMovementComponent::GetNetworkMaxSimulatedProxyExtrapolationTime() const
+{ return NetworkMaxSimulatedProxyExtrapolationTime; }
+void PCharacterMovementComponent::SetNetworkMaxSimulatedProxyExtrapolationTime(
+    float Value)
+{
+    if (std::isfinite(Value))
+        NetworkMaxSimulatedProxyExtrapolationTime = std::clamp(Value, 0.0f, 1.0f);
+}
+float PCharacterMovementComponent::GetNetworkSmoothingVisualOffsetDistance() const
+{ return NetworkSmoothingVisualOffsetDistance; }
 
 FCharacterMoveState PCharacterMovementComponent::CaptureMoveState() const
 {
@@ -498,6 +597,646 @@ void PCharacterMovementComponent::QueueRootMotion(const FTransform& Delta)
     PendingRootMotion = PendingRootMotion * Delta;
 }
 
+namespace
+{
+constexpr std::size_t MaxPendingNetworkMoves = 32;
+constexpr std::size_t MaxServerNetworkMoves = 32;
+constexpr std::size_t MaxSimulatedSnapshots = 32;
+constexpr std::size_t MaxMovesPerServerTick = 8;
+constexpr std::size_t MovesPerPacket = 3;
+constexpr float NetworkCorrectionDistance = 2.0f;
+constexpr float NetworkCorrectionVelocity = 5.0f;
+constexpr float NetworkSimulationRate = 60.0f;
+
+bool IsAcknowledged(uint32 Sequence, uint32 Acknowledged)
+{
+    return Sequence == Acknowledged
+        || !IsNetSequenceNewer(Sequence, Acknowledged);
+}
+
+FVector3 LerpVector(const FVector3& A, const FVector3& B, float Alpha)
+{
+    return A + (B - A) * Alpha;
+}
+
+FRotator LerpRotation(const FRotator& A, const FRotator& B, float Alpha)
+{
+    return FRotator(
+        A.Pitch + FRotator::NormalizeAxis(B.Pitch - A.Pitch) * Alpha,
+        A.Yaw + FRotator::NormalizeAxis(B.Yaw - A.Yaw) * Alpha,
+        A.Roll + FRotator::NormalizeAxis(B.Roll - A.Roll) * Alpha);
+}
+
+FCharacterMoveState InterpolateState(
+    const FCharacterMoveState& A,
+    const FCharacterMoveState& B,
+    float Alpha)
+{
+    FCharacterMoveState Result;
+    Result.Transform.Translation = LerpVector(
+        A.Transform.Translation, B.Transform.Translation, Alpha);
+    Result.Transform.Scale = LerpVector(
+        A.Transform.Scale, B.Transform.Scale, Alpha);
+    Result.Transform.Rotation = LerpRotation(
+        A.Transform.Rotation.Rotator(),
+        B.Transform.Rotation.Rotator(), Alpha).Quaternion();
+    Result.Velocity = LerpVector(A.Velocity, B.Velocity, Alpha);
+    Result.MovementMode = Alpha < 0.5f ? A.MovementMode : B.MovementMode;
+    return Result;
+}
+
+FTransform InterpolateTransform(
+    const FTransform& A,
+    const FTransform& B,
+    float Alpha)
+{
+    FTransform Result;
+    Result.Translation = LerpVector(A.Translation, B.Translation, Alpha);
+    Result.Scale = LerpVector(A.Scale, B.Scale, Alpha);
+    Result.Rotation = LerpRotation(
+        A.Rotation.Rotator(), B.Rotation.Rotator(), Alpha).Quaternion();
+    return Result;
+}
+}
+
+void PCharacterMovementComponent::SetNetworkPolicyHash(uint64 Value)
+{
+    NetworkPolicyHash = Value;
+}
+
+uint64 PCharacterMovementComponent::GetNetworkPolicyHash() const
+{
+    return NetworkPolicyHash;
+}
+
+bool PCharacterMovementComponent::EnqueueServerMove(
+    const FCharacterNetworkMove& Move)
+{
+    const bool bInvalidPayload = Move.Sequence == 0 || !std::isfinite(Move.DeltaSeconds)
+        || Move.DeltaSeconds <= 0.0f || Move.DeltaSeconds > 0.125f
+        || !std::isfinite(Move.Input.WorldInput.X)
+        || !std::isfinite(Move.Input.WorldInput.Y)
+        || !std::isfinite(Move.Input.WorldInput.Z)
+        || Move.Input.WorldInput.SizeSquared() > 1.21f
+        || !std::isfinite(Move.ControlYaw);
+    if (bInvalidPayload || Move.PolicyHash != NetworkPolicyHash)
+    {
+        if (!bLoggedRejectedServerMove)
+        {
+            bLoggedRejectedServerMove = true;
+            PICO_LOG(LogNet, Warning,
+                "CharacterMove rejected for '{}': sequence={} invalidPayload={} clientPolicy={} serverPolicy={}",
+                GetOwner() != nullptr ? GetOwner()->GetPathName() : std::string("<null>"),
+                Move.Sequence, bInvalidPayload, Move.PolicyHash, NetworkPolicyHash);
+        }
+        return false;
+    }
+    if (Move.Sequence == LastProcessedNetworkMove
+        || !IsNetSequenceNewer(Move.Sequence, LastProcessedNetworkMove))
+        return true;
+    if (std::any_of(ServerMoves.begin(), ServerMoves.end(),
+            [&Move](const FCharacterNetworkMove& Existing)
+            {
+                return Existing.Sequence == Move.Sequence;
+            }))
+        return true;
+    if (ServerMoves.size() >= MaxServerNetworkMoves)
+    {
+        if (!bLoggedRejectedServerMove)
+        {
+            bLoggedRejectedServerMove = true;
+            PICO_LOG(LogNet, Warning,
+                "CharacterMove rejected for '{}': server move queue is full",
+                GetOwner() != nullptr ? GetOwner()->GetPathName() : std::string("<null>"));
+        }
+        return false;
+    }
+    const auto InsertAt = std::find_if(
+        ServerMoves.begin(), ServerMoves.end(),
+        [&Move](const FCharacterNetworkMove& Existing)
+        {
+            return IsNetSequenceNewer(Existing.Sequence, Move.Sequence);
+        });
+    ServerMoves.insert(InsertAt, Move);
+    if (!bLoggedAcceptedServerMove)
+    {
+        bLoggedAcceptedServerMove = true;
+        PICO_LOG(LogNet, Info,
+            "CharacterMove accepted for '{}': first sequence={} policy={}",
+            GetOwner() != nullptr ? GetOwner()->GetPathName() : std::string("<null>"),
+            Move.Sequence, Move.PolicyHash);
+    }
+    return true;
+}
+
+void PCharacterMovementComponent::ReceiveNetworkCorrection(
+    const FCharacterNetworkState& State)
+{
+    if (bHasPendingCorrection
+        && !IsNetSequenceNewer(
+            State.LastProcessedMove, PendingCorrection.LastProcessedMove))
+        return;
+    PendingCorrection = State;
+    bHasPendingCorrection = true;
+}
+
+void PCharacterMovementComponent::ReceiveSimulatedSnapshot(
+    const FCharacterNetworkState& State)
+{
+    if (State.ServerTick == 0
+        || (LastReceivedServerTick != 0
+            && !IsNetSequenceNewer(State.ServerTick, LastReceivedServerTick)))
+        return;
+    LastReceivedServerTick = State.ServerTick;
+    SimulatedProxySnapshotAgeSeconds = 0.0f;
+    SimulatedProxyExtrapolationSeconds = 0.0f;
+    bSimulatedProxyExtrapolationClamped = false;
+    const ENetworkSmoothingMode Mode = GetNetworkSmoothingMode();
+    if (ActiveNetworkSmoothingMode != Mode)
+    {
+        ClearNetworkMeshSmoothing();
+        SimulatedSnapshots.clear();
+        SimulatedPlaybackTick = 0.0f;
+        ActiveNetworkSmoothingMode = Mode;
+    }
+    if (Mode == ENetworkSmoothingMode::Disabled)
+    {
+        ClearNetworkMeshSmoothing();
+        SimulatedSnapshots.clear();
+        ApplyMoveState(State.State);
+        return;
+    }
+    if (Mode == ENetworkSmoothingMode::Linear
+        || Mode == ENetworkSmoothingMode::Exponential)
+    {
+        SimulatedSnapshots.clear();
+        ApplyNetworkSnapshotWithMeshSmoothing(State);
+        return;
+    }
+    if (SimulatedSnapshots.size() >= MaxSimulatedSnapshots)
+        SimulatedSnapshots.pop_front();
+    SimulatedSnapshots.push_back(State);
+    if (SimulatedSnapshots.size() == 1)
+    {
+        SimulatedPlaybackTick = static_cast<float>(State.ServerTick);
+        ApplyMoveState(State.State);
+    }
+}
+
+void PCharacterMovementComponent::RefreshNetworkSmoothingMeshes()
+{
+    NetworkSmoothingMeshes.clear();
+    PCharacter* Character = GetCharacterOwner();
+    if (Character == nullptr) return;
+    for (PActorComponent* Component : Character->GetComponents())
+    {
+        if (Component == nullptr
+            || !Component->IsA(PSkeletalMeshComponent::StaticClass()))
+            continue;
+        auto* Mesh = static_cast<PSkeletalMeshComponent*>(Component);
+        FNetworkSmoothingMeshState MeshState;
+        MeshState.ComponentHandle = Mesh->GetHandle();
+        MeshState.StartVisualTransform = Mesh->GetVisualWorldTransform();
+        MeshState.TargetVisualTransform = MeshState.StartVisualTransform;
+        NetworkSmoothingMeshes.push_back(MeshState);
+    }
+}
+
+void PCharacterMovementComponent::ClearNetworkMeshSmoothing()
+{
+    PCharacter* Character = GetCharacterOwner();
+    if (Character != nullptr)
+    {
+        for (PActorComponent* Component : Character->GetComponents())
+        {
+            if (Component != nullptr
+                && Component->IsA(PSkeletalMeshComponent::StaticClass()))
+            {
+                static_cast<PSkeletalMeshComponent*>(Component)
+                    ->ClearNetworkSmoothingVisualTransform();
+            }
+        }
+    }
+    NetworkSmoothingMeshes.clear();
+    NetworkSmoothingElapsedSeconds = 0.0f;
+    NetworkSmoothingVisualOffsetDistance = 0.0f;
+}
+
+void PCharacterMovementComponent::ApplyNetworkSnapshotWithMeshSmoothing(
+    const FCharacterNetworkState& State)
+{
+    const FCharacterMoveState PreviousState = CaptureMoveState();
+    RefreshNetworkSmoothingMeshes();
+    for (FNetworkSmoothingMeshState& MeshState : NetworkSmoothingMeshes)
+    {
+        PObject* Object = ResolveObject(MeshState.ComponentHandle);
+        if (Object != nullptr
+            && Object->IsA(PSkeletalMeshComponent::StaticClass()))
+        {
+            static_cast<PSkeletalMeshComponent*>(Object)
+                ->ClearNetworkSmoothingVisualTransform();
+        }
+    }
+    ApplyMoveState(State.State);
+
+    const float CorrectionDistance = (
+        State.State.Transform.Translation
+        - PreviousState.Transform.Translation).Size();
+    if (CorrectionDistance > NetworkNoSmoothUpdateDistance)
+    {
+        NetworkSmoothingMeshes.clear();
+        NetworkSmoothingVisualOffsetDistance = 0.0f;
+        return;
+    }
+
+    NetworkSmoothingElapsedSeconds = 0.0f;
+    NetworkSmoothingVisualOffsetDistance = 0.0f;
+    for (FNetworkSmoothingMeshState& MeshState : NetworkSmoothingMeshes)
+    {
+        PObject* Object = ResolveObject(MeshState.ComponentHandle);
+        auto* Mesh = Object != nullptr
+                && Object->IsA(PSkeletalMeshComponent::StaticClass())
+            ? static_cast<PSkeletalMeshComponent*>(Object) : nullptr;
+        if (Mesh == nullptr) continue;
+        MeshState.TargetVisualTransform = Mesh->GetVisualWorldTransform();
+        FVector3 Offset = MeshState.StartVisualTransform.Translation
+            - MeshState.TargetVisualTransform.Translation;
+        const float OffsetDistance = Offset.Size();
+        if (OffsetDistance > NetworkMaxSmoothUpdateDistance
+            && OffsetDistance > SmallNumber)
+        {
+            MeshState.StartVisualTransform.Translation =
+                MeshState.TargetVisualTransform.Translation
+                + Offset * (NetworkMaxSmoothUpdateDistance / OffsetDistance);
+        }
+        NetworkSmoothingVisualOffsetDistance = std::max(
+            NetworkSmoothingVisualOffsetDistance,
+            (MeshState.StartVisualTransform.Translation
+                - MeshState.TargetVisualTransform.Translation).Size());
+        Mesh->SetNetworkSmoothingVisualTransform(
+            MeshState.StartVisualTransform);
+    }
+}
+
+void PCharacterMovementComponent::TickNetworkMeshSmoothing(float DeltaSeconds)
+{
+    const ENetworkSmoothingMode Mode = GetNetworkSmoothingMode();
+    if ((Mode != ENetworkSmoothingMode::Linear
+            && Mode != ENetworkSmoothingMode::Exponential)
+        || NetworkSmoothingMeshes.empty())
+        return;
+    const float SmoothTime = std::max(
+        NetworkSimulatedSmoothLocationTime, 0.001f);
+    const float Step = std::max(DeltaSeconds, 0.0f);
+    NetworkSmoothingElapsedSeconds += Step;
+    const float LinearAlpha = std::clamp(
+        NetworkSmoothingElapsedSeconds / SmoothTime, 0.0f, 1.0f);
+    const float ExponentialAlpha = std::clamp(Step / SmoothTime, 0.0f, 1.0f);
+    bool bAllComplete = true;
+    NetworkSmoothingVisualOffsetDistance = 0.0f;
+    for (FNetworkSmoothingMeshState& MeshState : NetworkSmoothingMeshes)
+    {
+        PObject* Object = ResolveObject(MeshState.ComponentHandle);
+        auto* Mesh = Object != nullptr
+                && Object->IsA(PSkeletalMeshComponent::StaticClass())
+            ? static_cast<PSkeletalMeshComponent*>(Object) : nullptr;
+        if (Mesh == nullptr) continue;
+        const FTransform Current = Mesh->GetVisualWorldTransform();
+        const FTransform Smoothed = InterpolateTransform(
+            Mode == ENetworkSmoothingMode::Linear
+                ? MeshState.StartVisualTransform : Current,
+            MeshState.TargetVisualTransform,
+            Mode == ENetworkSmoothingMode::Linear
+                ? LinearAlpha : ExponentialAlpha);
+        Mesh->SetNetworkSmoothingVisualTransform(Smoothed);
+        const float Remaining = (
+            Smoothed.Translation
+            - MeshState.TargetVisualTransform.Translation).Size();
+        NetworkSmoothingVisualOffsetDistance = std::max(
+            NetworkSmoothingVisualOffsetDistance, Remaining);
+        bAllComplete = bAllComplete
+            && Remaining <= 0.01f
+            && Smoothed.Rotation.Rotator().Equals(
+                MeshState.TargetVisualTransform.Rotation.Rotator(), 0.01f)
+            && Smoothed.Scale.Equals(
+                MeshState.TargetVisualTransform.Scale, 0.001f);
+    }
+    if (Mode == ENetworkSmoothingMode::Linear && LinearAlpha >= 1.0f)
+        bAllComplete = true;
+    if (Mode == ENetworkSmoothingMode::Exponential
+        && NetworkSmoothingElapsedSeconds >= SmoothTime * 6.0f)
+        bAllComplete = true;
+    if (bAllComplete) ClearNetworkMeshSmoothing();
+}
+
+void PCharacterMovementComponent::TranslateNetworkSmoothingTargets(
+    const FVector3& TranslationDelta)
+{
+    if (TranslationDelta.IsNearlyZero()) return;
+    for (FNetworkSmoothingMeshState& MeshState : NetworkSmoothingMeshes)
+    {
+        PObject* Object = ResolveObject(MeshState.ComponentHandle);
+        auto* Mesh = Object != nullptr
+                && Object->IsA(PSkeletalMeshComponent::StaticClass())
+            ? static_cast<PSkeletalMeshComponent*>(Object) : nullptr;
+        if (Mesh != nullptr && Mesh->HasNetworkSmoothingVisualTransform())
+        {
+            FTransform VisualTransform = Mesh->GetVisualWorldTransform();
+            VisualTransform.Translation += TranslationDelta;
+            Mesh->SetNetworkSmoothingVisualTransform(VisualTransform);
+        }
+        MeshState.StartVisualTransform.Translation += TranslationDelta;
+        MeshState.TargetVisualTransform.Translation += TranslationDelta;
+    }
+}
+
+uint32 PCharacterMovementComponent::GetLastProcessedNetworkMove() const
+{
+    return LastProcessedNetworkMove;
+}
+
+FCharacterPredictionStatistics
+PCharacterMovementComponent::GetPredictionStatistics() const
+{
+    FCharacterPredictionStatistics Result = PredictionStatistics;
+    Result.PendingMoveCount = PendingMoves.size();
+    Result.SnapshotCount = SimulatedSnapshots.size();
+    Result.ServerMoveQueueCount = ServerMoves.size();
+    Result.SimulatedProxySnapshotAgeSeconds =
+        SimulatedProxySnapshotAgeSeconds;
+    Result.SimulatedProxyExtrapolationSeconds =
+        SimulatedProxyExtrapolationSeconds;
+    Result.bPredictionEnabled = bPredictionEnabled;
+    Result.bPolicyHashMatches = bPolicyHashMatches;
+    return Result;
+}
+
+void PCharacterMovementComponent::SimulateProxyMovement(float DeltaSeconds)
+{
+    PSceneComponent* Updated = GetUpdatedComponent();
+    if (!bEnableSimulatedProxyExtrapolation
+        || Updated == nullptr
+        || LastReceivedServerTick == 0
+        || !std::isfinite(DeltaSeconds)
+        || DeltaSeconds <= 0.0f
+        || GetMovementMode() == EMovementMode::None)
+        return;
+
+    const float Remaining = NetworkMaxSimulatedProxyExtrapolationTime
+        - SimulatedProxyExtrapolationSeconds;
+    if (Remaining <= SmallNumber)
+    {
+        if (!bSimulatedProxyExtrapolationClamped)
+        {
+            bSimulatedProxyExtrapolationClamped = true;
+            ++PredictionStatistics.SimulatedProxyExtrapolationClampCount;
+        }
+        return;
+    }
+
+    const float Step = std::min(DeltaSeconds, Remaining);
+    const FVector3 PreviousLocation = Updated->GetWorldTransform().Translation;
+    FVector3 NewVelocity = GetVelocity();
+    if (GetMovementMode() == EMovementMode::Walking)
+        NewVelocity.Z = 0.0f;
+    else if (GetMovementMode() == EMovementMode::Falling)
+        NewVelocity.Z += GravityZ * GravityScale * Step;
+
+    const FVector3 Delta = NewVelocity * Step;
+    FHitResult Hit;
+    SafeMoveUpdatedComponent(
+        Delta, Updated->GetWorldTransform().Rotation, true, &Hit);
+    if (Hit.bBlockingHit)
+    {
+        if (NewVelocity.Z <= 0.0f && IsWalkable(Hit))
+        {
+            NewVelocity.Z = 0.0f;
+            SetMovementMode(EMovementMode::Walking);
+            FindFloor(CurrentFloor);
+        }
+        else
+        {
+            const FVector3 Normal = Hit.Normal.GetSafeNormal();
+            SlideAlongSurface(Delta, 1.0f - Hit.Time, Hit.Normal, Hit, true);
+            NewVelocity -= Normal * FVector3::Dot(NewVelocity, Normal);
+        }
+    }
+    SetVelocity(NewVelocity);
+    SimulatedProxyExtrapolationSeconds += Step;
+    if (SimulatedProxyExtrapolationSeconds
+            >= NetworkMaxSimulatedProxyExtrapolationTime - SmallNumber
+        && !bSimulatedProxyExtrapolationClamped)
+    {
+        bSimulatedProxyExtrapolationClamped = true;
+        ++PredictionStatistics.SimulatedProxyExtrapolationClampCount;
+    }
+    TranslateNetworkSmoothingTargets(
+        Updated->GetWorldTransform().Translation - PreviousLocation);
+}
+
+void PCharacterMovementComponent::TickAuthorityNetworkMovement(float)
+{
+    PCharacter* Character = GetCharacterOwner();
+    if (!bLoggedAuthorityStart)
+    {
+        bLoggedAuthorityStart = true;
+        PICO_LOG(LogNet, Info,
+            "CharacterMovement authority tick started for '{}' policy={} ownerConnectionValid={}",
+            Character != nullptr ? Character->GetPathName() : std::string("<null>"),
+            NetworkPolicyHash,
+            Character != nullptr && Character->GetWorld() != nullptr
+                && Character->GetWorld()->GetNetDriver() != nullptr
+                && Character->GetWorld()->GetNetDriver()
+                    ->GetActorOwningConnection(Character).IsValid());
+    }
+    std::size_t Processed = 0;
+    while (!ServerMoves.empty() && Processed < MaxMovesPerServerTick)
+    {
+        FCharacterNetworkMove Move = ServerMoves.front();
+        ServerMoves.pop_front();
+        if (PController* Controller = Character->GetController())
+        {
+            FRotator Rotation = Controller->GetControlRotation();
+            Rotation.Yaw = FRotator::NormalizeAxis(Move.ControlYaw);
+            Controller->SetControlRotation(Rotation);
+        }
+        SimulateMovement(Move.Input, Move.DeltaSeconds);
+        LastProcessedNetworkMove = Move.Sequence;
+        ++Processed;
+    }
+}
+
+void PCharacterMovementComponent::ApplyPendingCorrection()
+{
+    if (!bHasPendingCorrection) return;
+    bHasPendingCorrection = false;
+    bPolicyHashMatches = PendingCorrection.PolicyHash == NetworkPolicyHash;
+    PredictionStatistics.LastAcknowledgedMove =
+        PendingCorrection.LastProcessedMove;
+    FCharacterMoveState ComparedState = CaptureMoveState();
+    if (PendingCorrection.LastProcessedMove == 0 && !PendingMoves.empty())
+    {
+        ComparedState = PendingMoves.front().StartState;
+    }
+    else
+    {
+        const auto Acknowledged = std::find_if(
+            PendingMoves.begin(), PendingMoves.end(),
+            [this](const FCharacterNetworkMove& Move)
+            {
+                return Move.Sequence == PendingCorrection.LastProcessedMove;
+            });
+        if (Acknowledged != PendingMoves.end())
+            ComparedState = Acknowledged->PredictedState;
+    }
+    while (!PendingMoves.empty()
+        && IsAcknowledged(
+            PendingMoves.front().Sequence,
+            PendingCorrection.LastProcessedMove))
+    {
+        PendingMoves.pop_front();
+    }
+
+    const float PositionError = (
+        ComparedState.Transform.Translation
+        - PendingCorrection.State.Transform.Translation).Size();
+    const float VelocityError = (
+        ComparedState.Velocity - PendingCorrection.State.Velocity).Size();
+    const bool bNeedsCorrection = !bPolicyHashMatches
+        || PositionError > NetworkCorrectionDistance
+        || VelocityError > NetworkCorrectionVelocity
+        || ComparedState.MovementMode != PendingCorrection.State.MovementMode;
+    bPredictionEnabled = bPolicyHashMatches;
+    if (!bNeedsCorrection) return;
+
+    ApplyMoveState(PendingCorrection.State);
+    ++PredictionStatistics.CorrectionCount;
+    PredictionStatistics.MaxPositionError = std::max(
+        PredictionStatistics.MaxPositionError, PositionError);
+    if (!bPredictionEnabled)
+    {
+        PendingMoves.clear();
+        return;
+    }
+    PCharacter* Character = GetCharacterOwner();
+    for (FCharacterNetworkMove& Move : PendingMoves)
+    {
+        if (PController* Controller = Character->GetController())
+        {
+            FRotator Rotation = Controller->GetControlRotation();
+            Rotation.Yaw = FRotator::NormalizeAxis(Move.ControlYaw);
+            Controller->SetControlRotation(Rotation);
+        }
+        Move.StartState = CaptureMoveState();
+        SimulateMovement(Move.Input, Move.DeltaSeconds);
+        Move.PredictedState = CaptureMoveState();
+        ++PredictionStatistics.ReplayCount;
+    }
+}
+
+void PCharacterMovementComponent::TickAutonomousNetworkMovement(
+    const FCharacterMoveInput& Input, float DeltaSeconds)
+{
+    ApplyPendingCorrection();
+    PCharacter* Character = GetCharacterOwner();
+    if (!bLoggedAutonomousStart)
+    {
+        bLoggedAutonomousStart = true;
+        PICO_LOG(LogNet, Info,
+            "CharacterMovement autonomous tick started for '{}' policy={} controller={}",
+            Character != nullptr ? Character->GetPathName() : std::string("<null>"),
+            NetworkPolicyHash,
+            Character != nullptr && Character->GetController() != nullptr
+                ? Character->GetController()->GetPathName() : std::string("<null>"));
+    }
+    FCharacterNetworkMove Move;
+    Move.Sequence = NextMoveSequence++;
+    if (NextMoveSequence == 0) NextMoveSequence = 1;
+    Move.DeltaSeconds = std::clamp(DeltaSeconds, 0.001f, 0.125f);
+    Move.Input = Input;
+    Move.Input.RootMotionDelta = FTransform::Identity;
+    Move.ControlYaw = Character->GetController() != nullptr
+        ? Character->GetController()->GetControlRotation().Yaw : 0.0f;
+    Move.PolicyHash = NetworkPolicyHash;
+    if (bPredictionEnabled)
+    {
+        Move.StartState = CaptureMoveState();
+        SimulateMovement(Move.Input, Move.DeltaSeconds);
+        Move.PredictedState = CaptureMoveState();
+        if (PendingMoves.size() >= MaxPendingNetworkMoves)
+        {
+            PendingMoves.pop_front();
+            ++PredictionStatistics.DroppedMoveCount;
+        }
+        PendingMoves.push_back(Move);
+    }
+
+    FNetDriver* Driver = Character->GetWorld() != nullptr
+        ? Character->GetWorld()->GetNetDriver() : nullptr;
+    if (Driver == nullptr) return;
+    std::array<FCharacterNetworkMove, MovesPerPacket> PacketMoves;
+    const std::size_t Count = std::min(PendingMoves.size(), MovesPerPacket);
+    for (std::size_t Index = 0; Index < Count; ++Index)
+        PacketMoves[Index] = PendingMoves[PendingMoves.size() - Count + Index];
+    if (Count == 0)
+    {
+        PacketMoves[0] = Move;
+    }
+    const std::size_t SendCount = Count == 0 ? 1 : Count;
+    if (Driver->QueueCharacterMoves(
+            Character,
+            std::span<const FCharacterNetworkMove>(
+                PacketMoves.data(), SendCount)))
+        PredictionStatistics.LastSentMove = Move.Sequence;
+    else if (!bLoggedMoveSendFailure)
+    {
+        bLoggedMoveSendFailure = true;
+        PICO_LOG(LogNet, Warning,
+            "CharacterMove could not be queued for '{}' sequence={} role={} policy={}",
+            Character->GetPathName(), Move.Sequence,
+            static_cast<int>(Character->GetLocalRole()), NetworkPolicyHash);
+    }
+}
+
+void PCharacterMovementComponent::TickSimulatedNetworkMovement(
+    float DeltaSeconds)
+{
+    SimulatedProxySnapshotAgeSeconds += std::max(DeltaSeconds, 0.0f);
+    if (GetNetworkSmoothingMode()
+        != ENetworkSmoothingMode::SnapshotInterpolation)
+    {
+        SimulateProxyMovement(DeltaSeconds);
+        return;
+    }
+    if (SimulatedSnapshots.empty()) return;
+    const float LatestTick = static_cast<float>(
+        SimulatedSnapshots.back().ServerTick);
+    const float TargetTick = std::max(
+        static_cast<float>(SimulatedSnapshots.front().ServerTick),
+        LatestTick - SnapshotInterpolationDelayTicks);
+    SimulatedPlaybackTick = std::min(
+        TargetTick,
+        SimulatedPlaybackTick + std::max(DeltaSeconds, 0.0f)
+            * NetworkSimulationRate);
+    while (SimulatedSnapshots.size() > 2
+        && static_cast<float>(SimulatedSnapshots[1].ServerTick)
+            <= SimulatedPlaybackTick)
+        SimulatedSnapshots.pop_front();
+    if (SimulatedSnapshots.size() == 1)
+    {
+        ApplyMoveState(SimulatedSnapshots.front().State);
+        return;
+    }
+    const FCharacterNetworkState& A = SimulatedSnapshots[0];
+    const FCharacterNetworkState& B = SimulatedSnapshots[1];
+    const float Span = std::max(
+        1.0f, static_cast<float>(B.ServerTick - A.ServerTick));
+    const float Alpha = std::clamp(
+        (SimulatedPlaybackTick - static_cast<float>(A.ServerTick)) / Span,
+        0.0f, 1.0f);
+    ApplyMoveState(InterpolateState(A.State, B.State, Alpha));
+}
+
 void PCharacterMovementComponent::TickComponent(float DeltaSeconds)
 {
     PPawnMovementComponent::TickComponent(DeltaSeconds);
@@ -508,6 +1247,32 @@ void PCharacterMovementComponent::TickComponent(float DeltaSeconds)
     Input.bJumpPressed = Character->ConsumeJumpInput();
     Input.RootMotionDelta = PendingRootMotion;
     PendingRootMotion = FTransform::Identity;
+    PWorld* World = Character->GetWorld();
+    FNetDriver* Driver = World != nullptr ? World->GetNetDriver() : nullptr;
+    if (Driver == nullptr || Driver->GetNetMode() == ENetMode::Standalone)
+    {
+        TickNetworkMeshSmoothing(DeltaSeconds);
+        SimulateMovement(Input, DeltaSeconds);
+        return;
+    }
+    if (Character->GetLocalRole() == ENetRole::SimulatedProxy)
+    {
+        TickSimulatedNetworkMovement(DeltaSeconds);
+        TickNetworkMeshSmoothing(DeltaSeconds);
+        return;
+    }
+    TickNetworkMeshSmoothing(DeltaSeconds);
+    if (Character->GetLocalRole() == ENetRole::AutonomousProxy)
+    {
+        TickAutonomousNetworkMovement(Input, DeltaSeconds);
+        return;
+    }
+    if (Character->GetLocalRole() == ENetRole::Authority
+        && Driver->GetActorOwningConnection(Character).IsValid())
+    {
+        TickAuthorityNetworkMovement(DeltaSeconds);
+        return;
+    }
     SimulateMovement(Input, DeltaSeconds);
 }
 }

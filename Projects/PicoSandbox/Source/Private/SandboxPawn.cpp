@@ -1,6 +1,7 @@
 #include "PicoSandbox/SandboxPawn.h"
 
 #include "Pico/Core/AssetPath.h"
+#include "Pico/Core/Log.h"
 #include "Pico/Asset/AssetManager.h"
 #include "Pico/Asset/AssetRegistry.h"
 #include "Pico/Engine/CapsuleComponent.h"
@@ -64,6 +65,10 @@ bool PSandboxPawn::LoadAndApplyThirdPersonControlProfile()
         || Registry == nullptr || Manager == nullptr)
     {
         bLoadedControlProfile = false;
+        PICO_LOG(LogNet, Warning,
+            "Control profile unavailable for '{}': asset='{}' registry={} manager={}",
+            GetPathName(), ThirdPersonControlProfileAsset.ToString(),
+            Registry != nullptr, Manager != nullptr);
         return false;
     }
     const auto Profile = Manager->LoadThirdPersonControlProfile(
@@ -71,6 +76,9 @@ bool PSandboxPawn::LoadAndApplyThirdPersonControlProfile()
     if (Profile == nullptr)
     {
         bLoadedControlProfile = false;
+        PICO_LOG(LogNet, Warning,
+            "Control profile load failed for '{}': asset='{}'",
+            GetPathName(), ThirdPersonControlProfileAsset.ToString());
         return false;
     }
     ActiveControlProfile = *Profile;
@@ -80,10 +88,15 @@ bool PSandboxPawn::LoadAndApplyThirdPersonControlProfile()
     SetUseControllerRotationYaw(Profile->bUseControllerRotationYaw);
     if (Pico::PCharacterMovementComponent* Movement = GetCharacterMovement())
     {
+        Movement->SetNetworkPolicyHash(ActiveControlProfileHash);
         Movement->SetMaxWalkSpeed(Profile->MaxWalkSpeed);
         Movement->SetRotationRate(Profile->RotationRate);
         Movement->SetOrientRotationToMovement(Profile->bOrientRotationToMovement);
     }
+    PICO_LOG(LogNet, Info,
+        "Control profile applied to '{}': asset='{}' policy={}",
+        GetPathName(), ThirdPersonControlProfileAsset.ToString(),
+        ActiveControlProfileHash);
     Pico::PObject* BoomObject = Pico::FindObject(this, Pico::FName("CameraBoom"));
     auto* Boom = BoomObject != nullptr
             && BoomObject->IsA(Pico::PSpringArmComponent::StaticClass())
