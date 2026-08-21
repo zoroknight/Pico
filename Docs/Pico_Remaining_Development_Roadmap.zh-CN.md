@@ -681,7 +681,7 @@ Montage Lite 后安排 1～2 天完成，不延伸为完整 Persona：
 SkeletalMesh、17 个动画、材质、CharacterProfile 和 Data-Only Actor Blueprint 的导入与装配；场景保存重开、
 项目设置、地图内 Auto Possess Pawn、Standalone Play 和动画预览均已完成可视化验收。
 
-## 第 6 月：Replication、RPC 与预测
+## 第 6 月（已完成）：Replication、RPC 与预测
 
 目标：一个服务器和两个客户端完成 Gameplay 同步。
 
@@ -691,7 +691,7 @@ SkeletalMesh、17 个动画、材质、CharacterProfile 和 Data-Only Actor Blue
 | 第 2 周（已完成） | ActorChannel、Spawn/Destroy、网络对象引用、反射 Replication Schema、Dirty Tracking、Replication Condition、OnRep、每连接已确认属性基线和 Delta | 服务器 Actor 可在客户端生成、更新、引用和销毁；未变化字段不重复发送；断开与 GC 后无悬空 Channel/引用 |
 | 第 3 周（已完成） | Server/Client/Multicast RPC、可靠/不可靠、参数网络序列化、`ProcessEvent` 调用、方向/Role/Ownership/参数校验；落实 Gameplay Framework 网络可见性；完成开门纵向实例 | 合法交互 RPC 可执行并通过属性复制同步结果；非拥有者、错误方向和非法参数调用零副作用；三进程 Gameplay 状态一致 |
 | 第 3.5 阶段（已完成） | 将调优后的第三人称移动/摄像机参数提取为 `.pcontrolprofile`；统一移动方向纯函数；增加策略 Hash、F1 诊断和 0/90 度黄金行为测试 | 控制策略可由 Actor Blueprint 引用并跨项目复用；所有网络玩家使用相同 Pawn Class 与策略；第 4 周预测和服务器重演不得复制另一套移动方向算法 |
-| 第 4 周（代码与自动化已完成，待 10 分钟人工长稳验收） | SavedMove、输入序号、服务器重演、Ack/Correction、纠错快照、未确认输入回滚重演、模拟代理快照缓冲与插值；延迟/抖动/丢包模拟；Network Debug 与 Play Session 网络模拟控制 | 100～150 ms 延迟和少量丢包下所属角色可预测和纠正，其他角色平滑显示；一个服务器加两个客户端连续运行，重演、快照和可靠队列均有上限 |
+| 第 4 周（已完成） | SavedMove、输入序号、服务器重演、Ack/Correction、纠错快照、未确认输入回滚重演、模拟代理快照缓冲与插值；延迟/抖动/丢包模拟；Network Debug 与 Play Session 网络模拟控制 | 100～150 ms 延迟和少量丢包下所属角色可预测和纠正，其他角色平滑显示；重演、快照、延迟包和可靠队列均有上限 |
 
 第 1 周完成记录：`PicoNetCore` 与 `FNetDriver` 已落地；Loopback 和真实 Winsock UDP 均通过一个服务器加两个客户端
 测试；三步握手、Sequence 回绕、Ack/AckBits、Heartbeat、超时、可靠消息重发/去重/有序交付和资源上限均有
@@ -730,7 +730,10 @@ Sandbox 新增客户端 `F` 开门闭环及 F1 Role/RPC/门状态统计。完整
 Pending Move、服务器输入、快照和延迟包均有硬上限。Play Session 可配置目标 RTT、单包抖动和丢包，并自动将
 目标 RTT 的一半传给每个进程作为出站延迟；F1 显示移动消息、Correction/Snapshot、Sent/Ack、Pending、重演、
 最大误差、快照年龄、外推时间和触顶次数。
-Debug 定向自动化已通过；完成 100～150 ms、约 5% 丢包下三进程 10 分钟人工验收后关闭本月最终门槛。
+Debug 全量自动化 19/19 通过；`PicoCharacterMovementTests` 增加固定种子的 36,000 帧快速压力回归，以 75 ms
+单程快照延迟对应 150 ms RTT，并丢弃约 5% 快照，验证延迟队列、Mesh 平滑偏移和快照历史有界，停止输入后
+模拟代理与权威位置完全收敛。三进程 40 ms RTT 已完成人工操作检查。项目按学习型 MVP 标准关闭本月；真实等待
+10 分钟的 100～150 ms/5% 长稳测试保留为发布或公网验证前的可选加固，不再阻塞后续月份。
 实现说明见 [`Month09_4_CharacterNetworkMovement.md`](Month09_4_CharacterNetworkMovement.md)。
 
 第 4 周后低延迟加固顺序固定为：先增加端到端阶段计时，再建立服务器时间同步与 UE5 风格动态平滑，然后补
@@ -750,7 +753,8 @@ Transit 与 Clock Offset；SimulatedProxy 默认使用 25～100 ms 有界动态�
 1. 第 1 周结束：Loopback 和真实 UDP 的握手、丢包重发、重复/乱序、超时清理全部通过，才开始 ActorChannel。
 2. 第 2 周结束：Spawn、Destroy、属性 Delta、对象引用延迟修复和 GC/断开清理全部通过，才开始 Gameplay RPC。
 3. 第 3 周结束：非法 RPC 全部被拒绝，三进程开门或拾取闭环通过，才开始 CharacterMovement 预测。
-4. 第 4 周结束：在 100～150 ms 延迟、约 5% 丢包下连续运行至少 10 分钟，无崩溃、悬空对象或无界队列。
+4. 第 4 周结束：自动化覆盖 150 ms RTT、约 5% 快照丢失的 36,000 帧等价运行并最终收敛；三进程完成基础
+   人工操作检查。真实 10 分钟长稳运行作为发布前可选验收。
 
 本月交付优先级固定为：连接与身份、Actor/属性复制、Server RPC 与 Ownership、Transform 同步与模拟代理插值、
 自主代理预测与重演。若第 4 周时间不足，可以降低视觉平滑和完整重演精度，但不能留下只有底层协议、没有可运行

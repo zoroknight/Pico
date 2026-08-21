@@ -274,6 +274,7 @@ struct FGameplayDebugPanel
                     Prediction.SnapshotCount);
             }
         }
+        const Pico::PCharacter* SimulatedCharacter = nullptr;
         const Pico::PCharacterMovementComponent* SimulatedMovement = nullptr;
         if (World != nullptr)
         {
@@ -287,8 +288,9 @@ struct FGameplayDebugPanel
                         && Actor->GetLocalRole()
                             == Pico::ENetRole::SimulatedProxy)
                     {
-                        SimulatedMovement = static_cast<Pico::PCharacter*>(Actor)
-                            ->GetCharacterMovement();
+                        SimulatedCharacter = static_cast<Pico::PCharacter*>(Actor);
+                        SimulatedMovement =
+                            SimulatedCharacter->GetCharacterMovement();
                         break;
                     }
                 }
@@ -326,6 +328,42 @@ struct FGameplayDebugPanel
                 SimulatedStats.SimulatedProxySnapshotAgeSeconds * 1000.0f,
                 static_cast<unsigned long long>(
                     SimulatedStats.SimulatedProxyExtrapolationClampCount));
+
+            const Pico::PSkeletalMeshComponent* SimulatedMesh = nullptr;
+            if (SimulatedCharacter != nullptr)
+            {
+                for (Pico::PActorComponent* Component
+                    : SimulatedCharacter->GetComponents())
+                {
+                    if (Component != nullptr
+                        && Component->IsA(
+                            Pico::PSkeletalMeshComponent::StaticClass()))
+                    {
+                        SimulatedMesh = static_cast<
+                            Pico::PSkeletalMeshComponent*>(Component);
+                        break;
+                    }
+                }
+            }
+            if (SimulatedCharacter != nullptr && SimulatedMesh != nullptr)
+            {
+                const float RootZ =
+                    SimulatedCharacter->GetActorLocation().Z;
+                const float VisualZ =
+                    SimulatedMesh->GetVisualWorldTransform().Translation.Z;
+                const Pico::PAnimInstance* AnimInstance =
+                    SimulatedMesh->GetAnimInstance();
+                ImGui::Text(
+                    "Remote visual: root Z %.2f  Mesh Z %.2f  delta %+0.2f  anim %s %.3f s",
+                    RootZ,
+                    VisualZ,
+                    VisualZ - RootZ,
+                    AnimInstance != nullptr
+                        ? Pico::ToString(AnimInstance->GetAnimationState())
+                        : "None",
+                    AnimInstance != nullptr
+                        ? AnimInstance->GetPlaybackTime() : 0.0f);
+            }
         }
         const std::vector<Pico::FNetConnectionSnapshot> Connections =
             NetDriver.GetConnectionSnapshots();

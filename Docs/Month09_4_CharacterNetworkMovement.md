@@ -85,8 +85,10 @@ SimulatedProxy 的模式、平滑时间、当前 Mesh Offset、快照缓冲数�
 - `PicoGameTests`：每进程网络模拟配置及原有双客户端连接。
 - `PicoEditorTests`：网络模拟设置持久化和多进程命令行参数。
 
-Debug 全量 19 项测试必须保持通过。人工最终门槛仍是一个服务器加两个客户端，在目标 RTT 100～150 ms、约 5%
-丢包下连续运行至少 10 分钟；三个窗口应保持角色状态收敛，Pending Move、快照、延迟包和可靠队列不能持续增长。
+Debug 全量 19 项测试保持通过。`PicoCharacterMovementTests` 还包含固定种子的 36,000 帧快速压力回归：使用
+75 ms 单程快照延迟对应 150 ms RTT，丢弃约 5% 快照，并验证延迟队列、Mesh 平滑偏移和快照历史有界，停止输入后
+模拟代理与权威位置收敛。真实三进程连续 10 分钟运行不再作为学习型 MVP 的阻塞门槛，留作发布或公网验证前的
+可选长稳检查。
 
 ## 当前边界
 
@@ -124,11 +126,13 @@ Pico 当前采用与 UE5 常规 Gameplay 相同方向的服务器权威状态同
   25 ms；抖动或漏包时窗口自动扩大。关闭后仍使用原 `NetworkSimulatedSmoothLocationTime` 固定窗口。
 - AutonomousProxy Correction 继续立即恢复胶囊并重演 SavedMove，但 Linear/Exponential 模式会保留校正前 Mesh
   画面，再向重演后的最终 Transform 平滑，避免逻辑正确但本地画面瞬移。
-- F1 新增 Move RTT、有效/固定平滑时间、Snapshot 收发间隔、Jitter、Transit 和 Clock Offset。调优时必须先看
-  这些指标，再判断问题属于真实链路延迟、服务器帧等待、快照抖动还是视觉平滑。
+- F1 新增 Move RTT、有效/固定平滑时间、Snapshot 收发间隔、Jitter、Transit、Clock Offset，以及远端 Actor Root Z、
+  最终 Mesh Z、垂直差值和动画状态/播放时间。调优时必须先看这些指标，再判断问题属于真实链路延迟、服务器帧
+  等待、快照抖动、动画状态还是视觉平滑。
 
-自动化新增稳定快照驱动动态窗口的上下限验收，并修正连接超时测试对旧 5 秒默认值的隐式依赖。当前定向结果为
-`PicoCharacterMovementTests 26/26`、`PicoReplicationTests 28/28`、`PicoGameTests 53/53`。
+自动化新增稳定快照驱动动态窗口、延迟跳跃不重复进入 Falling，以及 36,000 帧延迟/丢包压力回归，并修正连接
+超时测试对旧 5 秒默认值的隐式依赖。当前结果为 `PicoCharacterMovementTests 32/32`，Debug 全量 19/19；已有
+`PicoReplicationTests 28/28` 与 `PicoGameTests 53/53` 定向覆盖继续保持。
 
 人工操作与指标解释见
 [`Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md`](Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md)。

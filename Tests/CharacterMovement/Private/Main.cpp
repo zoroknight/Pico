@@ -12,6 +12,7 @@
 #include "Pico/PhysicsCore/PhysicsScene.h"
 
 #include <cmath>
+#include <deque>
 
 namespace
 {
@@ -423,6 +424,238 @@ int main()
     Runner.Expect(
         Movement->GetPredictionStatistics().SnapshotCount == 32,
         "Simulated proxy interpolation history remains bounded under sustained snapshots");
+
+    Pico::PCharacter* JumpAuthority =
+        World->SpawnActor<Pico::PCharacter>("JumpAuthority");
+    Pico::PCharacter* JumpProxy =
+        World->SpawnActor<Pico::PCharacter>("JumpProxy");
+    auto* JumpVisual = JumpProxy != nullptr
+        ? JumpProxy->CreateComponent<Pico::PSkeletalMeshComponent>("JumpVisual")
+        : nullptr;
+    if (JumpVisual != nullptr)
+    {
+        JumpVisual->AttachToComponent(
+            JumpProxy->GetRootComponent(),
+            Pico::EAttachmentTransformRule::KeepRelative);
+    }
+    auto* AuthorityMovement = JumpAuthority != nullptr
+        ? JumpAuthority->GetCharacterMovement() : nullptr;
+    auto* ProxyMovement = JumpProxy != nullptr
+        ? JumpProxy->GetCharacterMovement() : nullptr;
+    Pico::FCharacterMoveState AuthorityStart;
+    AuthorityStart.Transform.Translation = {150.0f, -300.0f, 96.0f};
+    AuthorityStart.MovementMode = Pico::EMovementMode::Walking;
+    Pico::FCharacterMoveState ProxyStart = AuthorityStart;
+    ProxyStart.Transform.Translation.X = -150.0f;
+    if (AuthorityMovement != nullptr) AuthorityMovement->ApplyMoveState(AuthorityStart);
+    if (ProxyMovement != nullptr)
+    {
+        ProxyMovement->ApplyMoveState(ProxyStart);
+        ProxyMovement->SetNetworkSmoothingMode(
+            Pico::ENetworkSmoothingMode::Exponential);
+        ProxyMovement->SetUseAdaptiveNetworkSmoothing(true);
+    }
+
+    constexpr float JumpStep = 1.0f / 60.0f;
+    std::deque<Pico::FCharacterNetworkState> DelayedJumpSnapshots;
+    float AuthorityPeakZ = AuthorityStart.Transform.Translation.Z;
+    float ProxyRootPeakZ = ProxyStart.Transform.Translation.Z;
+    float ProxyVisualPeakZ = ProxyStart.Transform.Translation.Z;
+    Pico::EMovementMode PreviousProxyMode = Pico::EMovementMode::Walking;
+    int ProxyFallingEntryCount = 0;
+    for (Pico::uint32 Frame = 0; Frame < 120
+        && AuthorityMovement != nullptr && ProxyMovement != nullptr; ++Frame)
+    {
+        Pico::FCharacterMoveInput DelayedJumpInput;
+        DelayedJumpInput.bJumpPressed = Frame == 0;
+        AuthorityMovement->SimulateMovement(DelayedJumpInput, JumpStep);
+        Pico::FCharacterNetworkState Snapshot;
+        Snapshot.ServerTick = 100 + Frame;
+        Snapshot.ServerTimeSeconds = static_cast<double>(Frame) * JumpStep;
+        Snapshot.State = AuthorityMovement->CaptureMoveState();
+        AuthorityPeakZ = std::max(
+            AuthorityPeakZ, Snapshot.State.Transform.Translation.Z);
+        DelayedJumpSnapshots.push_back(Snapshot);
+        if (DelayedJumpSnapshots.size() > 2)
+        {
+            Pico::FCharacterNetworkState Delivered =
+                DelayedJumpSnapshots.front();
+            DelayedJumpSnapshots.pop_front();
+            Delivered.State.Transform.Translation.X = -150.0f;
+            ProxyMovement->ReceiveSimulatedSnapshot(Delivered);
+            ProxyMovement->SimulateProxyMovement(JumpStep);
+            ProxyMovement->SmoothClientPosition(JumpStep);
+        }
+        const Pico::EMovementMode CurrentProxyMode =
+            ProxyMovement->GetMovementMode();
+        if (PreviousProxyMode != Pico::EMovementMode::Falling
+            && CurrentProxyMode == Pico::EMovementMode::Falling)
+        {
+            ++ProxyFallingEntryCount;
+        }
+        PreviousProxyMode = CurrentProxyMode;
+        ProxyRootPeakZ = std::max(
+            ProxyRootPeakZ, JumpProxy->GetActorLocation().Z);
+        if (JumpVisual != nullptr)
+        {
+            ProxyVisualPeakZ = std::max(
+                ProxyVisualPeakZ,
+                JumpVisual->GetVisualWorldTransform().Translation.Z);
+        }
+    }
+    Runner.Expect(
+        JumpVisual != nullptr
+            && ProxyRootPeakZ <= AuthorityPeakZ + 10.0f
+            && ProxyVisualPeakZ <= AuthorityPeakZ + 10.0f,
+        "Delayed jump snapshots do not create a higher proxy or Mesh double-jump peak");
+    Runner.Expect(
+        ProxyFallingEntryCount == 1,
+        "One authoritative jump enters Falling only once on a delayed simulated proxy");
+
+    Pico::PCharacter* SoakAuthority =
+        World->SpawnActor<Pico::PCharacter>("SoakAuthority");
+    Pico::PCharacter* SoakProxy =
+        World->SpawnActor<Pico::PCharacter>("SoakProxy");
+    auto* SoakVisual = SoakProxy != nullptr
+        ? SoakProxy->CreateComponent<Pico::PSkeletalMeshComponent>("SoakVisual")
+        : nullptr;
+    if (SoakVisual != nullptr)
+    {
+        SoakVisual->AttachToComponent(
+            SoakProxy->GetRootComponent(),
+            Pico::EAttachmentTransformRule::KeepRelative);
+    }
+    auto* SoakAuthorityMovement = SoakAuthority != nullptr
+        ? SoakAuthority->GetCharacterMovement() : nullptr;
+    auto* SoakProxyMovement = SoakProxy != nullptr
+        ? SoakProxy->GetCharacterMovement() : nullptr;
+    Pico::FCharacterMoveState SoakAuthorityStart;
+    SoakAuthorityStart.Transform.Translation = {0.0f, -300.0f, 96.0f};
+    SoakAuthorityStart.MovementMode = Pico::EMovementMode::Walking;
+    Pico::FCharacterMoveState SoakProxyStart = SoakAuthorityStart;
+    SoakProxyStart.Transform.Translation.Y = 300.0f;
+    if (SoakAuthorityMovement != nullptr)
+    {
+        SoakAuthorityMovement->ApplyMoveState(SoakAuthorityStart);
+        SoakAuthorityMovement->SetMaxWalkSpeed(60.0f);
+    }
+    if (SoakProxyMovement != nullptr)
+    {
+        SoakProxyMovement->ApplyMoveState(SoakProxyStart);
+        SoakProxyMovement->SetMaxWalkSpeed(60.0f);
+        SoakProxyMovement->SetNetworkSmoothingMode(
+            Pico::ENetworkSmoothingMode::Exponential);
+        SoakProxyMovement->SetUseAdaptiveNetworkSmoothing(true);
+    }
+
+    struct FDelayedSoakSnapshot
+    {
+        Pico::uint32 DeliveryFrame = 0;
+        Pico::FCharacterNetworkState State;
+    };
+    constexpr Pico::uint32 SoakFrames = 10 * 60 * 60;
+    constexpr Pico::uint32 OneWayDelayFrames = 5;
+    constexpr float SoakStep = 1.0f / 60.0f;
+    std::deque<FDelayedSoakSnapshot> SoakSnapshots;
+    Pico::uint32 RandomState = 0x5EED1234u;
+    std::size_t MaxDelayedSnapshotCount = 0;
+    float MaxSoakVisualOffset = 0.0f;
+    float SoakMoveDirection = 1.0f;
+    for (Pico::uint32 Frame = 0; Frame < SoakFrames
+        && SoakAuthorityMovement != nullptr && SoakProxyMovement != nullptr;
+        ++Frame)
+    {
+        const float AuthorityX = SoakAuthority->GetActorLocation().X;
+        if (AuthorityX >= 100.0f) SoakMoveDirection = -1.0f;
+        else if (AuthorityX <= -100.0f) SoakMoveDirection = 1.0f;
+        Pico::FCharacterMoveInput Input;
+        Input.WorldInput.X = SoakMoveDirection * 0.5f;
+        Input.bJumpPressed = Frame % 600u == 0u;
+        SoakAuthorityMovement->SimulateMovement(Input, SoakStep);
+
+        RandomState = RandomState * 1664525u + 1013904223u;
+        const bool bDropSnapshot = RandomState % 100u < 5u;
+        if (!bDropSnapshot)
+        {
+            FDelayedSoakSnapshot Delayed;
+            Delayed.DeliveryFrame = Frame + OneWayDelayFrames;
+            Delayed.State.ServerTick = 1000u + Frame;
+            Delayed.State.ServerTimeSeconds =
+                static_cast<double>(Frame) * SoakStep;
+            Delayed.State.State = SoakAuthorityMovement->CaptureMoveState();
+            Delayed.State.State.Transform.Translation.Y += 600.0f;
+            SoakSnapshots.push_back(Delayed);
+        }
+        while (!SoakSnapshots.empty()
+            && SoakSnapshots.front().DeliveryFrame <= Frame)
+        {
+            SoakProxyMovement->ReceiveSimulatedSnapshot(
+                SoakSnapshots.front().State);
+            SoakSnapshots.pop_front();
+        }
+        SoakProxyMovement->SimulateProxyMovement(SoakStep);
+        SoakProxyMovement->SmoothClientPosition(SoakStep);
+        MaxDelayedSnapshotCount = std::max(
+            MaxDelayedSnapshotCount, SoakSnapshots.size());
+        MaxSoakVisualOffset = std::max(
+            MaxSoakVisualOffset,
+            SoakProxyMovement->GetNetworkSmoothingVisualOffsetDistance());
+    }
+
+    for (Pico::uint32 Frame = 0; Frame < 240u
+        && SoakAuthorityMovement != nullptr && SoakProxyMovement != nullptr;
+        ++Frame)
+    {
+        SoakAuthorityMovement->SimulateMovement({}, SoakStep);
+        Pico::FCharacterNetworkState FinalState;
+        FinalState.ServerTick = 1000u + SoakFrames + Frame;
+        FinalState.ServerTimeSeconds =
+            static_cast<double>(SoakFrames + Frame) * SoakStep;
+        FinalState.State = SoakAuthorityMovement->CaptureMoveState();
+        FinalState.State.Transform.Translation.Y += 600.0f;
+        SoakProxyMovement->ReceiveSimulatedSnapshot(FinalState);
+        SoakProxyMovement->SimulateProxyMovement(SoakStep);
+        SoakProxyMovement->SmoothClientPosition(SoakStep);
+    }
+    Pico::FCharacterMoveState ExpectedSoakState =
+        SoakAuthorityMovement != nullptr
+        ? SoakAuthorityMovement->CaptureMoveState() : Pico::FCharacterMoveState{};
+    ExpectedSoakState.Transform.Translation.Y += 600.0f;
+    const Pico::FCharacterMoveState ActualSoakState =
+        SoakProxyMovement != nullptr
+        ? SoakProxyMovement->CaptureMoveState() : Pico::FCharacterMoveState{};
+    Runner.Expect(
+        MaxDelayedSnapshotCount <= OneWayDelayFrames,
+        "Ten-minute network soak keeps the delayed snapshot queue bounded");
+    Runner.Expect(
+        SoakVisual != nullptr
+            && MaxSoakVisualOffset
+                <= SoakProxyMovement->GetNetworkMaxSmoothUpdateDistance()
+                    + 0.01f,
+        "Ten-minute network soak keeps Mesh smoothing within its configured bound");
+    const Pico::FVector3 SoakPositionError =
+        ActualSoakState.Transform.Translation
+        - ExpectedSoakState.Transform.Translation;
+    const std::string SoakConvergenceDescription =
+        "Ten-minute network soak converges to the final authoritative position"
+        " error=(" + std::to_string(SoakPositionError.X)
+        + "," + std::to_string(SoakPositionError.Y)
+        + "," + std::to_string(SoakPositionError.Z) + ")"
+        + " authority=(" + std::to_string(
+            ExpectedSoakState.Transform.Translation.X)
+        + "," + std::to_string(ExpectedSoakState.Transform.Translation.Z)
+        + ") proxy=(" + std::to_string(
+            ActualSoakState.Transform.Translation.X)
+        + "," + std::to_string(ActualSoakState.Transform.Translation.Z)
+        + ")";
+    Runner.Expect(
+        ActualSoakState.Transform.Translation.Equals(
+            ExpectedSoakState.Transform.Translation, 5.0f),
+        SoakConvergenceDescription);
+    Runner.Expect(
+        SoakProxyMovement != nullptr
+            && SoakProxyMovement->GetPredictionStatistics().SnapshotCount <= 32,
+        "Ten-minute network soak keeps proxy snapshot history bounded");
 
     EngineLoop.Exit();
     return Runner.Finish();

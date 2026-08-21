@@ -1041,6 +1041,11 @@ void PCharacterMovementComponent::TickNetworkMeshSmoothing(float DeltaSeconds)
     if (bAllComplete) ClearNetworkMeshSmoothing();
 }
 
+void PCharacterMovementComponent::SmoothClientPosition(float DeltaSeconds)
+{
+    TickNetworkMeshSmoothing(DeltaSeconds);
+}
+
 void PCharacterMovementComponent::TranslateNetworkSmoothingTargets(
     const FVector3& TranslationDelta)
 {

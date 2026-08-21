@@ -408,7 +408,8 @@ as each process's outgoing latency. Instances have `Server`/`Client_1` titles
 and independent logs under `Saved/Logs/PlaySession/Session_*/`; the red square stops the whole group.
 Character protocol v2 carries client/server movement timestamps. Simulated proxies use a bounded
 25-100 ms adaptive smoothing window derived from snapshot cadence and jitter, while F1 reports move RTT,
-snapshot transit, and clock offset. The three-process acceptance matrix is documented in
+snapshot transit, clock offset, remote Actor/Mesh vertical separation, and animation playback state. The
+three-process acceptance matrix is documented in
 [`Docs/Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md`](Docs/Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md).
 A dirty or untitled World still requires explicit `Save & Play`. Listen Server and a truly headless
 Dedicated Server remain reserved until the replication/runtime split is ready.
@@ -718,9 +719,14 @@ contains a client-to-server door interaction whose durable state is replicated w
 provide directed and transient feedback. Runtime F1 diagnostics expose roles, NetIds, channels, RPC rejection,
 and reliable/unreliable message counters.
 
+Project month 6 is complete for the learning MVP. Character movement now adds ordered SavedMoves,
+autonomous-proxy prediction, server replay and validation, Ack/Correction with unacknowledged-move replay,
+simulated-proxy interpolation or bounded extrapolation, and independent Mesh smoothing. A deterministic
+36,000-frame regression covers the equivalent of 150 ms RTT with about 5% snapshot loss and verifies bounded
+buffers plus final convergence; the complete Debug suite passes 19/19 tests.
+
 The remaining learning path is:
 
-- Character network movement, client prediction, correction, and simulated-proxy interpolation
 - Dedicated-server/WAN validation, dependency-pruned Cook, Shipping, and clean-machine packaging
 - A compact `PicoTask` worker pool and game-thread dispatcher for asynchronous Cook, build, and AI
   work while runtime objects remain game-thread-owned

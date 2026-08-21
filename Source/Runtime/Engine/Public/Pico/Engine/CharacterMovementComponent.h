@@ -173,6 +173,7 @@ public:
     void ReceiveNetworkCorrection(const FCharacterNetworkState& State);
     void ReceiveSimulatedSnapshot(const FCharacterNetworkState& State);
     void SimulateProxyMovement(float DeltaSeconds);
+    void SmoothClientPosition(float DeltaSeconds);
     uint32 GetLastProcessedNetworkMove() const;
     double GetLastProcessedMoveClientTimeSeconds() const;
     FCharacterPredictionStatistics GetPredictionStatistics() const;
