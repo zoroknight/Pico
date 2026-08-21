@@ -408,7 +408,8 @@ as each process's outgoing latency. Instances have `Server`/`Client_1` titles
 and independent logs under `Saved/Logs/PlaySession/Session_*/`; the red square stops the whole group.
 Character protocol v2 carries client/server movement timestamps. Simulated proxies use a bounded
 25-100 ms adaptive smoothing window derived from snapshot cadence and jitter, while F1 reports move RTT,
-snapshot transit, and clock offset.
+snapshot transit, and clock offset. The three-process acceptance matrix is documented in
+[`Docs/Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md`](Docs/Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md).
 A dirty or untitled World still requires explicit `Save & Play`. Listen Server and a truly headless
 Dedicated Server remain reserved until the replication/runtime split is ready.
 

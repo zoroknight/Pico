@@ -73,7 +73,8 @@ Pending Move、重演次数、最大误差和快照数量。
 SimulatedProxy 的模式、平滑时间、当前 Mesh Offset、快照缓冲数量和 Snapshot 延迟 Tick；下一行显示快照年龄、
 本轮外推时间、最大外推时间和触顶次数。UE5 的 `UCharacterMovementComponent::SimulatedTick/SimulateMovement`
 同样会让 SimulatedProxy 在更新间隔内继续模拟，然后由 `SmoothClientPosition` 处理 Mesh 视觉偏移。Pico 保留了
-这条核心分层，但暂未实现 UE5 的服务器时间戳同步、网络时间差修正和完整代理移动状态机。
+这条核心分层，并已加入轻量服务器时间映射和动态平滑；仍未实现 UE5 完整的网络时间差修正、移动基座与完整代理
+移动状态机。
 
 ## 自动化验收
 
@@ -92,13 +93,14 @@ Debug 全量 19 项测试必须保持通过。人工最终门槛仍是一个服�
 本阶段不预测 Root Motion、动态刚体、Montage 位移或跨平台确定性物理。它们仍由服务器权威；后续扩展应继续
 通过 `CaptureMoveState/ApplyMoveState/SimulateMovement` 边界接入，不能从网络层直接新增第二个物理写入口。
 
-## 下一轮低延迟优化
+## 低延迟优化路线
 
 Pico 当前采用与 UE5 常规 Gameplay 相同方向的服务器权威状态同步，而不是全局锁步帧同步。现有实现已经解决
-“能同步”和“本地角色可预测”，但尚不能宣称达到 UE5 `CharacterMovementComponent` 的成熟度。固定 0.1 秒
-Mesh 平滑、缺少服务器/客户端统一时间轴，以及不完整的 SimulatedProxy 状态会在起步、急停和转向时产生可见拖尾。
+“能同步”和“本地角色可预测”，但尚不能宣称达到 UE5 `CharacterMovementComponent` 的成熟度。第一轮已用
+服务器时间样本和动态窗口替换默认固定 0.1 秒拖尾；不完整的 SimulatedProxy 状态仍可能在急停、急转与移动基座上
+产生可见误差。
 
-下一轮必须按可测量顺序推进：
+低延迟工作按以下可测量顺序推进；前四项已经完成第一版：
 
 1. 为 Move、服务器处理、Snapshot 发送/接收和最终显示增加时间与序号诊断，拆分 Client-to-Server、Server Queue、
    Server-to-Client、Snapshot Age 和 Render Offset，禁止继续只凭画面猜测瓶颈。
@@ -127,3 +129,6 @@ Mesh 平滑、缺少服务器/客户端统一时间轴，以及不完整的 Simu
 
 自动化新增稳定快照驱动动态窗口的上下限验收，并修正连接超时测试对旧 5 秒默认值的隐式依赖。当前定向结果为
 `PicoCharacterMovementTests 26/26`、`PicoReplicationTests 28/28`、`PicoGameTests 53/53`。
+
+人工操作与指标解释见
+[`Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md`](Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md)。
