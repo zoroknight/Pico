@@ -27,7 +27,7 @@ namespace
 {
 constexpr uint32 MaxRpcCallsPerConnectionPerFrame = 32;
 constexpr uint16 ReplicationMagic = 0x5052;
-constexpr uint8 ReplicationVersion = 1;
+constexpr uint8 ReplicationVersion = 2;
 constexpr std::size_t MaxReplicatedFields = 64;
 constexpr std::size_t MaxReplicationStringBytes = 255;
 constexpr std::size_t MaxPendingObjectReferences = 256;
@@ -89,6 +89,19 @@ bool ReadFloat(FNetByteReader& Reader, float& OutValue)
     uint32 Bits = 0;
     if (!Reader.ReadUInt32(Bits)) return false;
     OutValue = std::bit_cast<float>(Bits);
+    return true;
+}
+
+bool WriteDouble(FNetByteWriter& Writer, double Value)
+{
+    return Writer.WriteUInt64(std::bit_cast<uint64>(Value));
+}
+
+bool ReadDouble(FNetByteReader& Reader, double& OutValue)
+{
+    uint64 Bits = 0;
+    if (!Reader.ReadUInt64(Bits)) return false;
+    OutValue = std::bit_cast<double>(Bits);
     return true;
 }
 
@@ -609,7 +622,9 @@ bool WriteCharacterState(
     return !Transform.empty()
         && Transform.size() <= std::numeric_limits<uint16>::max()
         && Writer.WriteUInt32(State.ServerTick)
+        && WriteDouble(Writer, State.ServerTimeSeconds)
         && Writer.WriteUInt32(State.LastProcessedMove)
+        && WriteDouble(Writer, State.LastProcessedMoveClientTimeSeconds)
         && Writer.WriteUInt64(State.PolicyHash)
         && Writer.WriteUInt16(static_cast<uint16>(Transform.size()))
         && Writer.WriteBytes(Transform)
@@ -625,7 +640,10 @@ bool ReadCharacterState(
     std::vector<uint8> Transform;
     uint8 RawMode = 0;
     if (!Reader.ReadUInt32(OutState.ServerTick)
+        || !ReadDouble(Reader, OutState.ServerTimeSeconds)
         || !Reader.ReadUInt32(OutState.LastProcessedMove)
+        || !ReadDouble(
+            Reader, OutState.LastProcessedMoveClientTimeSeconds)
         || !Reader.ReadUInt64(OutState.PolicyHash)
         || !Reader.ReadUInt16(TransformSize)
         || !Reader.ReadBytes(TransformSize, Transform)
@@ -635,7 +653,10 @@ bool ReadCharacterState(
         || RawMode > static_cast<uint8>(EMovementMode::Falling))
         return false;
     OutState.State.MovementMode = static_cast<EMovementMode>(RawMode);
-    return true;
+    return std::isfinite(OutState.ServerTimeSeconds)
+        && OutState.ServerTimeSeconds >= 0.0
+        && std::isfinite(OutState.LastProcessedMoveClientTimeSeconds)
+        && OutState.LastProcessedMoveClientTimeSeconds >= 0.0;
 }
 
 bool BuildCharacterStateMessage(
@@ -1110,8 +1131,11 @@ void FReplicationSystem::ReplicateServerConnection(
                 FCharacterNetworkState State;
                 State.ServerTick = static_cast<uint32>(World->GetTickCount());
                 if (State.ServerTick == 0) State.ServerTick = 1;
+                State.ServerTimeSeconds = World->GetTimeSeconds();
                 State.LastProcessedMove =
                     Movement->GetLastProcessedNetworkMove();
+                State.LastProcessedMoveClientTimeSeconds =
+                    Movement->GetLastProcessedMoveClientTimeSeconds();
                 State.State = Movement->CaptureMoveState();
                 State.PolicyHash = Movement->GetNetworkPolicyHash();
                 std::vector<uint8> Message;
@@ -1213,6 +1237,7 @@ bool FReplicationSystem::HandleMessage(
             uint8 Jump = 0;
             Move.PolicyHash = PolicyHash;
             if (!Reader.ReadUInt32(Move.Sequence)
+                || !ReadDouble(Reader, Move.ClientTimeSeconds)
                 || !ReadFloat(Reader, Move.DeltaSeconds)
                 || !ReadVector(Reader, Move.Input.WorldInput)
                 || !Reader.ReadUInt8(Jump) || Jump > 1
@@ -1601,6 +1626,8 @@ bool FReplicationSystem::BuildCharacterMoveMessage(
     for (const FCharacterNetworkMove& Move : Moves)
     {
         if (Move.Sequence == 0 || Move.PolicyHash != PolicyHash
+            || !std::isfinite(Move.ClientTimeSeconds)
+            || Move.ClientTimeSeconds < 0.0
             || !std::isfinite(Move.DeltaSeconds)
             || Move.DeltaSeconds <= 0.0f || Move.DeltaSeconds > 0.125f
             || !std::isfinite(Move.Input.WorldInput.X)
@@ -1609,6 +1636,7 @@ bool FReplicationSystem::BuildCharacterMoveMessage(
             || Move.Input.WorldInput.SizeSquared() > 1.21f
             || !std::isfinite(Move.ControlYaw)
             || !Writer.WriteUInt32(Move.Sequence)
+            || !WriteDouble(Writer, Move.ClientTimeSeconds)
             || !WriteFloat(Writer, Move.DeltaSeconds)
             || !WriteVector(Writer, Move.Input.WorldInput)
             || !Writer.WriteUInt8(Move.Input.bJumpPressed ? 1 : 0)

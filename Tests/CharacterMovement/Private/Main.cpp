@@ -383,10 +383,36 @@ int main()
             && ExtrapolationStats.SimulatedProxyExtrapolationClampCount == 1,
         "Simulated proxy extrapolation stops at the configured safety horizon");
 
+    Movement->SetNetworkSmoothingMode(Pico::ENetworkSmoothingMode::Exponential);
+    Movement->SetUseAdaptiveNetworkSmoothing(true);
+    Movement->SetNetworkMinAdaptiveSmoothTime(0.025f);
+    Movement->SetNetworkMaxAdaptiveSmoothTime(0.1f);
+    Pico::FCharacterNetworkState TimedSnapshot = MovingSnapshot;
+    TimedSnapshot.ServerTick = 5;
+    TimedSnapshot.ServerTimeSeconds = 1.0;
+    TimedSnapshot.State.Velocity = Pico::FVector3::ZeroVector;
+    TimedSnapshot.State.MovementMode = Pico::EMovementMode::None;
+    Character->GetWorld()->Tick(1.0f / 60.0f);
+    Movement->ReceiveSimulatedSnapshot(TimedSnapshot);
+    TimedSnapshot.ServerTick = 6;
+    TimedSnapshot.ServerTimeSeconds += 1.0 / 60.0;
+    Character->GetWorld()->Tick(1.0f / 60.0f);
+    Movement->ReceiveSimulatedSnapshot(TimedSnapshot);
+    const Pico::FCharacterPredictionStatistics TimingStats =
+        Movement->GetPredictionStatistics();
+    Runner.Expect(
+        TimingStats.SnapshotReceiveIntervalSeconds > 0.015f
+            && TimingStats.SnapshotReceiveIntervalSeconds < 0.018f
+            && TimingStats.SnapshotServerIntervalSeconds > 0.015f
+            && TimingStats.SnapshotServerIntervalSeconds < 0.018f
+            && TimingStats.EffectiveNetworkSmoothingTimeSeconds >= 0.025f
+            && TimingStats.EffectiveNetworkSmoothingTimeSeconds < 0.05f,
+        "Adaptive smoothing derives a bounded low-latency window from stable snapshot timing");
+
     Movement->SetNetworkSmoothingMode(
         Pico::ENetworkSmoothingMode::SnapshotInterpolation);
 
-    for (Pico::uint32 Tick = 5; Tick <= 44; ++Tick)
+    for (Pico::uint32 Tick = 7; Tick <= 46; ++Tick)
     {
         Pico::FCharacterNetworkState Snapshot;
         Snapshot.ServerTick = Tick;

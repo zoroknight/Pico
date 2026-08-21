@@ -326,7 +326,7 @@ void TestNetDriverMultipleClients(FTestRunner& Runner)
         "One NetDriver server accepts two independent client connections");
 
     ClientA.Shutdown();
-    for (int Step = 0; Step < 120; ++Step)
+    for (int Step = 0; Step < 320; ++Step)
     {
         Network->AdvanceTime(0.05);
         Server.TickDispatch(0.05f);

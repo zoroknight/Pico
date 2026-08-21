@@ -266,10 +266,11 @@ struct FGameplayDebugPanel
                     Prediction.LastAcknowledgedMove,
                     Prediction.PendingMoveCount);
                 ImGui::Text(
-                    "Corrections: %llu  replays %llu  max error %.2f  snapshots %zu",
+                    "Corrections: %llu  replays %llu  max error %.2f  move RTT %.1f ms  snapshots %zu",
                     static_cast<unsigned long long>(Prediction.CorrectionCount),
                     static_cast<unsigned long long>(Prediction.ReplayCount),
                     Prediction.MaxPositionError,
+                    Prediction.SmoothedMoveRoundTripSeconds * 1000.0f,
                     Prediction.SnapshotCount);
             }
         }
@@ -299,13 +300,22 @@ struct FGameplayDebugPanel
             const Pico::FCharacterPredictionStatistics SimulatedStats =
                 SimulatedMovement->GetPredictionStatistics();
             ImGui::Text(
-                "Remote smoothing: %s  time %.0f ms  offset %.2f  buffer %zu  delay %.1f ticks",
+                "Remote smoothing: %s  %s %.0f ms  fixed %.0f ms  offset %.2f  buffer %zu",
                 Pico::ToString(SimulatedMovement->GetNetworkSmoothingMode()),
+                SimulatedMovement->UsesAdaptiveNetworkSmoothing()
+                    ? "adaptive" : "fixed",
+                SimulatedStats.EffectiveNetworkSmoothingTimeSeconds * 1000.0f,
                 SimulatedMovement->GetNetworkSimulatedSmoothLocationTime()
                     * 1000.0f,
                 SimulatedMovement->GetNetworkSmoothingVisualOffsetDistance(),
-                SimulatedStats.SnapshotCount,
-                SimulatedMovement->GetSnapshotInterpolationDelayTicks());
+                SimulatedStats.SnapshotCount);
+            ImGui::Text(
+                "Remote timing: recv %.1f ms  server %.1f ms  jitter %.1f ms  transit %.1f ms  clock %+0.1f ms",
+                SimulatedStats.SnapshotReceiveIntervalSeconds * 1000.0f,
+                SimulatedStats.SnapshotServerIntervalSeconds * 1000.0f,
+                SimulatedStats.SmoothedSnapshotJitterSeconds * 1000.0f,
+                SimulatedStats.EstimatedSnapshotTransitSeconds * 1000.0f,
+                SimulatedStats.SmoothedServerClockOffsetSeconds * 1000.0f);
             ImGui::Text(
                 "Remote simulation: extrapolation %s  %.0f / %.0f ms  snapshot age %.0f ms  clamps %llu",
                 SimulatedMovement->IsSimulatedProxyExtrapolationEnabled()

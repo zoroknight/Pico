@@ -53,6 +53,9 @@ bool PCharacterMovementComponent::RegisterProperties(PClass& Class)
     PICO_ADD_PROPERTY(Properties, bUseControllerDesiredRotation);
     PICO_ADD_PROPERTY(Properties, RotationRate);
     PICO_ADD_PROPERTY(Properties, NetworkSimulatedSmoothLocationTime);
+    PICO_ADD_PROPERTY(Properties, bUseAdaptiveNetworkSmoothing);
+    PICO_ADD_PROPERTY(Properties, NetworkMinAdaptiveSmoothTime);
+    PICO_ADD_PROPERTY(Properties, NetworkMaxAdaptiveSmoothTime);
     PICO_ADD_PROPERTY(Properties, NetworkMaxSmoothUpdateDistance);
     PICO_ADD_PROPERTY(Properties, NetworkNoSmoothUpdateDistance);
     PICO_ADD_PROPERTY(Properties, SnapshotInterpolationDelayTicks);
@@ -234,7 +237,44 @@ float PCharacterMovementComponent::GetNetworkSimulatedSmoothLocationTime() const
 void PCharacterMovementComponent::SetNetworkSimulatedSmoothLocationTime(float Value)
 {
     if (std::isfinite(Value))
+    {
         NetworkSimulatedSmoothLocationTime = std::clamp(Value, 0.001f, 1.0f);
+        if (!bUseAdaptiveNetworkSmoothing)
+            EffectiveNetworkSmoothingTimeSeconds =
+                NetworkSimulatedSmoothLocationTime;
+    }
+}
+bool PCharacterMovementComponent::UsesAdaptiveNetworkSmoothing() const
+{ return bUseAdaptiveNetworkSmoothing; }
+void PCharacterMovementComponent::SetUseAdaptiveNetworkSmoothing(bool bValue)
+{
+    bUseAdaptiveNetworkSmoothing = bValue;
+    if (!bValue)
+        EffectiveNetworkSmoothingTimeSeconds =
+            NetworkSimulatedSmoothLocationTime;
+}
+float PCharacterMovementComponent::GetNetworkMinAdaptiveSmoothTime() const
+{ return NetworkMinAdaptiveSmoothTime; }
+void PCharacterMovementComponent::SetNetworkMinAdaptiveSmoothTime(float Value)
+{
+    if (!std::isfinite(Value)) return;
+    NetworkMinAdaptiveSmoothTime = std::clamp(Value, 0.001f, 1.0f);
+    NetworkMaxAdaptiveSmoothTime = std::max(
+        NetworkMaxAdaptiveSmoothTime, NetworkMinAdaptiveSmoothTime);
+}
+float PCharacterMovementComponent::GetNetworkMaxAdaptiveSmoothTime() const
+{ return NetworkMaxAdaptiveSmoothTime; }
+void PCharacterMovementComponent::SetNetworkMaxAdaptiveSmoothTime(float Value)
+{
+    if (!std::isfinite(Value)) return;
+    NetworkMaxAdaptiveSmoothTime = std::clamp(
+        Value, NetworkMinAdaptiveSmoothTime, 1.0f);
+}
+float PCharacterMovementComponent::GetEffectiveNetworkSmoothingTime() const
+{
+    return bUseAdaptiveNetworkSmoothing
+        ? EffectiveNetworkSmoothingTimeSeconds
+        : NetworkSimulatedSmoothLocationTime;
 }
 float PCharacterMovementComponent::GetNetworkMaxSmoothUpdateDistance() const
 { return NetworkMaxSmoothUpdateDistance; }
@@ -738,6 +778,17 @@ void PCharacterMovementComponent::ReceiveNetworkCorrection(
         return;
     PendingCorrection = State;
     bHasPendingCorrection = true;
+    PWorld* World = GetWorld();
+    if (World != nullptr && State.LastProcessedMoveClientTimeSeconds > 0.0)
+    {
+        const float Sample = static_cast<float>(std::max(
+            0.0,
+            World->GetTimeSeconds()
+                - State.LastProcessedMoveClientTimeSeconds));
+        SmoothedMoveRoundTripSeconds = SmoothedMoveRoundTripSeconds <= 0.0f
+            ? Sample
+            : SmoothedMoveRoundTripSeconds * 0.9f + Sample * 0.1f;
+    }
 }
 
 void PCharacterMovementComponent::ReceiveSimulatedSnapshot(
@@ -747,6 +798,61 @@ void PCharacterMovementComponent::ReceiveSimulatedSnapshot(
         || (LastReceivedServerTick != 0
             && !IsNetSequenceNewer(State.ServerTick, LastReceivedServerTick)))
         return;
+    PWorld* World = GetWorld();
+    const double LocalNow = World != nullptr ? World->GetTimeSeconds() : 0.0;
+    if (LastSnapshotReceiveLocalTimeSeconds > 0.0 && LocalNow > 0.0)
+        SnapshotReceiveIntervalSeconds = static_cast<float>(
+            LocalNow - LastSnapshotReceiveLocalTimeSeconds);
+    if (LastReceivedServerTimeSeconds > 0.0
+        && State.ServerTimeSeconds > LastReceivedServerTimeSeconds)
+    {
+        SnapshotServerIntervalSeconds = static_cast<float>(
+            State.ServerTimeSeconds - LastReceivedServerTimeSeconds);
+        if (SnapshotReceiveIntervalSeconds > 0.0f)
+        {
+            const float JitterSample = std::abs(
+                SnapshotReceiveIntervalSeconds - SnapshotServerIntervalSeconds);
+            SmoothedSnapshotJitterSeconds = bHasAdaptiveSmoothingSample
+                ? SmoothedSnapshotJitterSeconds * 0.9f + JitterSample * 0.1f
+                : JitterSample;
+            const float TargetSmoothTime = std::clamp(
+                SnapshotServerIntervalSeconds * 1.25f
+                    + SmoothedSnapshotJitterSeconds * 2.0f,
+                NetworkMinAdaptiveSmoothTime,
+                NetworkMaxAdaptiveSmoothTime);
+            EffectiveNetworkSmoothingTimeSeconds = bHasAdaptiveSmoothingSample
+                ? EffectiveNetworkSmoothingTimeSeconds * 0.75f
+                    + TargetSmoothTime * 0.25f
+                : TargetSmoothTime;
+            bHasAdaptiveSmoothingSample = true;
+        }
+    }
+
+    if (LocalNow > 0.0 && State.ServerTimeSeconds > 0.0)
+    {
+        double RoundTripSeconds = 0.0;
+        if (World != nullptr && World->GetNetDriver() != nullptr)
+        {
+            const std::vector<FNetConnectionSnapshot> Connections =
+                World->GetNetDriver()->GetConnectionSnapshots();
+            if (!Connections.empty())
+                RoundTripSeconds =
+                    Connections.front().Statistics.SmoothedRoundTripSeconds;
+        }
+        const double OffsetSample = LocalNow - State.ServerTimeSeconds
+            - std::max(0.0, RoundTripSeconds * 0.5);
+        SmoothedServerClockOffsetSeconds = bHasServerClockOffsetSample
+            ? SmoothedServerClockOffsetSeconds * 0.9 + OffsetSample * 0.1
+            : OffsetSample;
+        bHasServerClockOffsetSample = true;
+        EstimatedSnapshotTransitSeconds = static_cast<float>(std::max(
+            0.0,
+            LocalNow - (State.ServerTimeSeconds
+                + SmoothedServerClockOffsetSeconds)));
+    }
+
+    LastSnapshotReceiveLocalTimeSeconds = LocalNow;
+    LastReceivedServerTimeSeconds = State.ServerTimeSeconds;
     LastReceivedServerTick = State.ServerTick;
     SimulatedProxySnapshotAgeSeconds = 0.0f;
     SimulatedProxyExtrapolationSeconds = 0.0f;
@@ -842,6 +948,12 @@ void PCharacterMovementComponent::ApplyNetworkSnapshotWithMeshSmoothing(
     const float CorrectionDistance = (
         State.State.Transform.Translation
         - PreviousState.Transform.Translation).Size();
+    FinalizeNetworkMeshSmoothing(CorrectionDistance);
+}
+
+void PCharacterMovementComponent::FinalizeNetworkMeshSmoothing(
+    float CorrectionDistance)
+{
     if (CorrectionDistance > NetworkNoSmoothUpdateDistance)
     {
         NetworkSmoothingMeshes.clear();
@@ -886,7 +998,7 @@ void PCharacterMovementComponent::TickNetworkMeshSmoothing(float DeltaSeconds)
         || NetworkSmoothingMeshes.empty())
         return;
     const float SmoothTime = std::max(
-        NetworkSimulatedSmoothLocationTime, 0.001f);
+        GetEffectiveNetworkSmoothingTime(), 0.001f);
     const float Step = std::max(DeltaSeconds, 0.0f);
     NetworkSmoothingElapsedSeconds += Step;
     const float LinearAlpha = std::clamp(
@@ -954,6 +1066,10 @@ uint32 PCharacterMovementComponent::GetLastProcessedNetworkMove() const
 {
     return LastProcessedNetworkMove;
 }
+double PCharacterMovementComponent::GetLastProcessedMoveClientTimeSeconds() const
+{
+    return LastProcessedMoveClientTimeSeconds;
+}
 
 FCharacterPredictionStatistics
 PCharacterMovementComponent::GetPredictionStatistics() const
@@ -966,6 +1082,15 @@ PCharacterMovementComponent::GetPredictionStatistics() const
         SimulatedProxySnapshotAgeSeconds;
     Result.SimulatedProxyExtrapolationSeconds =
         SimulatedProxyExtrapolationSeconds;
+    Result.SnapshotReceiveIntervalSeconds = SnapshotReceiveIntervalSeconds;
+    Result.SnapshotServerIntervalSeconds = SnapshotServerIntervalSeconds;
+    Result.SmoothedSnapshotJitterSeconds = SmoothedSnapshotJitterSeconds;
+    Result.EstimatedSnapshotTransitSeconds = EstimatedSnapshotTransitSeconds;
+    Result.SmoothedServerClockOffsetSeconds = static_cast<float>(
+        SmoothedServerClockOffsetSeconds);
+    Result.EffectiveNetworkSmoothingTimeSeconds =
+        GetEffectiveNetworkSmoothingTime();
+    Result.SmoothedMoveRoundTripSeconds = SmoothedMoveRoundTripSeconds;
     Result.bPredictionEnabled = bPredictionEnabled;
     Result.bPolicyHashMatches = bPolicyHashMatches;
     return Result;
@@ -1062,6 +1187,7 @@ void PCharacterMovementComponent::TickAuthorityNetworkMovement(float)
         }
         SimulateMovement(Move.Input, Move.DeltaSeconds);
         LastProcessedNetworkMove = Move.Sequence;
+        LastProcessedMoveClientTimeSeconds = Move.ClientTimeSeconds;
         ++Processed;
     }
 }
@@ -1109,6 +1235,25 @@ void PCharacterMovementComponent::ApplyPendingCorrection()
     bPredictionEnabled = bPolicyHashMatches;
     if (!bNeedsCorrection) return;
 
+    const FVector3 PreviousLocation = CaptureMoveState().Transform.Translation;
+    const ENetworkSmoothingMode SmoothingMode = GetNetworkSmoothingMode();
+    const bool bSmoothVisualCorrection =
+        SmoothingMode == ENetworkSmoothingMode::Linear
+        || SmoothingMode == ENetworkSmoothingMode::Exponential;
+    if (bSmoothVisualCorrection)
+    {
+        RefreshNetworkSmoothingMeshes();
+        for (FNetworkSmoothingMeshState& MeshState : NetworkSmoothingMeshes)
+        {
+            PObject* Object = ResolveObject(MeshState.ComponentHandle);
+            if (Object != nullptr
+                && Object->IsA(PSkeletalMeshComponent::StaticClass()))
+            {
+                static_cast<PSkeletalMeshComponent*>(Object)
+                    ->ClearNetworkSmoothingVisualTransform();
+            }
+        }
+    }
     ApplyMoveState(PendingCorrection.State);
     ++PredictionStatistics.CorrectionCount;
     PredictionStatistics.MaxPositionError = std::max(
@@ -1116,6 +1261,12 @@ void PCharacterMovementComponent::ApplyPendingCorrection()
     if (!bPredictionEnabled)
     {
         PendingMoves.clear();
+        if (bSmoothVisualCorrection)
+        {
+            FinalizeNetworkMeshSmoothing((
+                CaptureMoveState().Transform.Translation
+                - PreviousLocation).Size());
+        }
         return;
     }
     PCharacter* Character = GetCharacterOwner();
@@ -1131,6 +1282,12 @@ void PCharacterMovementComponent::ApplyPendingCorrection()
         SimulateMovement(Move.Input, Move.DeltaSeconds);
         Move.PredictedState = CaptureMoveState();
         ++PredictionStatistics.ReplayCount;
+    }
+    if (bSmoothVisualCorrection)
+    {
+        FinalizeNetworkMeshSmoothing((
+            CaptureMoveState().Transform.Translation
+            - PreviousLocation).Size());
     }
 }
 
@@ -1153,6 +1310,8 @@ void PCharacterMovementComponent::TickAutonomousNetworkMovement(
     Move.Sequence = NextMoveSequence++;
     if (NextMoveSequence == 0) NextMoveSequence = 1;
     Move.DeltaSeconds = std::clamp(DeltaSeconds, 0.001f, 0.125f);
+    Move.ClientTimeSeconds = Character->GetWorld() != nullptr
+        ? Character->GetWorld()->GetTimeSeconds() : 0.0;
     Move.Input = Input;
     Move.Input.RootMotionDelta = FTransform::Identity;
     Move.ControlYaw = Character->GetController() != nullptr

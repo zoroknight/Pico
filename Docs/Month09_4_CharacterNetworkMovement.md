@@ -110,3 +110,20 @@ Mesh 平滑、缺少服务器/客户端统一时间轴，以及不完整的 Simu
 
 人工验收至少覆盖目标 RTT 0/40/80/150 ms、抖动 0/10 ms 和丢包 0/1/5%。本地所属角色应立即响应；远端角色
 在稳定移动时保持连续；方向突变的延迟不得被误认为可由平滑完全消除，因为客户端在快照到达前不可能知道新的输入。
+
+### 第一轮低延迟加固实现记录
+
+- Character 网络协议升级到版本 2。`FCharacterNetworkMove` 携带客户端生成时间；服务器权威状态携带服务器 World
+  时间和最后处理 Move 的客户端时间。混用旧/新运行时会在消息头版本检查处被拒绝，不会错位解析。
+- 客户端结合服务器时间、自己的接收时间和 Connection 平滑 RTT，估算服务器时钟偏移与 Snapshot 单程传输时间；
+  同时记录服务器发送间隔、客户端接收间隔和两者差值形成的平滑抖动。
+- `bUseAdaptiveNetworkSmoothing` 默认开启。有效窗口按 `ServerInterval * 1.25 + Jitter * 2` 计算，并限制在
+  `NetworkMinAdaptiveSmoothTime=0.025s` 与 `NetworkMaxAdaptiveSmoothTime=0.1s` 之间。稳定 60 Hz 更新可降至约
+  25 ms；抖动或漏包时窗口自动扩大。关闭后仍使用原 `NetworkSimulatedSmoothLocationTime` 固定窗口。
+- AutonomousProxy Correction 继续立即恢复胶囊并重演 SavedMove，但 Linear/Exponential 模式会保留校正前 Mesh
+  画面，再向重演后的最终 Transform 平滑，避免逻辑正确但本地画面瞬移。
+- F1 新增 Move RTT、有效/固定平滑时间、Snapshot 收发间隔、Jitter、Transit 和 Clock Offset。调优时必须先看
+  这些指标，再判断问题属于真实链路延迟、服务器帧等待、快照抖动还是视觉平滑。
+
+自动化新增稳定快照驱动动态窗口的上下限验收，并修正连接超时测试对旧 5 秒默认值的隐式依赖。当前定向结果为
+`PicoCharacterMovementTests 26/26`、`PicoReplicationTests 28/28`、`PicoGameTests 53/53`。

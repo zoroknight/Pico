@@ -47,6 +47,7 @@ struct FCharacterMoveState
 struct FCharacterNetworkMove
 {
     uint32 Sequence = 0;
+    double ClientTimeSeconds = 0.0;
     float DeltaSeconds = 0.0f;
     FCharacterMoveInput Input;
     float ControlYaw = 0.0f;
@@ -58,7 +59,9 @@ struct FCharacterNetworkMove
 struct FCharacterNetworkState
 {
     uint32 ServerTick = 0;
+    double ServerTimeSeconds = 0.0;
     uint32 LastProcessedMove = 0;
+    double LastProcessedMoveClientTimeSeconds = 0.0;
     FCharacterMoveState State;
     uint64 PolicyHash = 0;
 };
@@ -77,6 +80,13 @@ struct FCharacterPredictionStatistics
     float SimulatedProxySnapshotAgeSeconds = 0.0f;
     float SimulatedProxyExtrapolationSeconds = 0.0f;
     uint64 SimulatedProxyExtrapolationClampCount = 0;
+    float SnapshotReceiveIntervalSeconds = 0.0f;
+    float SnapshotServerIntervalSeconds = 0.0f;
+    float SmoothedSnapshotJitterSeconds = 0.0f;
+    float EstimatedSnapshotTransitSeconds = 0.0f;
+    float SmoothedServerClockOffsetSeconds = 0.0f;
+    float EffectiveNetworkSmoothingTimeSeconds = 0.1f;
+    float SmoothedMoveRoundTripSeconds = 0.0f;
     bool bPredictionEnabled = true;
     bool bPolicyHashMatches = true;
 };
@@ -132,6 +142,13 @@ public:
     void SetNetworkSmoothingMode(ENetworkSmoothingMode Mode);
     float GetNetworkSimulatedSmoothLocationTime() const;
     void SetNetworkSimulatedSmoothLocationTime(float Value);
+    bool UsesAdaptiveNetworkSmoothing() const;
+    void SetUseAdaptiveNetworkSmoothing(bool bValue);
+    float GetNetworkMinAdaptiveSmoothTime() const;
+    void SetNetworkMinAdaptiveSmoothTime(float Value);
+    float GetNetworkMaxAdaptiveSmoothTime() const;
+    void SetNetworkMaxAdaptiveSmoothTime(float Value);
+    float GetEffectiveNetworkSmoothingTime() const;
     float GetNetworkMaxSmoothUpdateDistance() const;
     void SetNetworkMaxSmoothUpdateDistance(float Value);
     float GetNetworkNoSmoothUpdateDistance() const;
@@ -157,6 +174,7 @@ public:
     void ReceiveSimulatedSnapshot(const FCharacterNetworkState& State);
     void SimulateProxyMovement(float DeltaSeconds);
     uint32 GetLastProcessedNetworkMove() const;
+    double GetLastProcessedMoveClientTimeSeconds() const;
     FCharacterPredictionStatistics GetPredictionStatistics() const;
     void TickComponent(float DeltaSeconds) override;
 
@@ -176,6 +194,7 @@ private:
     void TranslateNetworkSmoothingTargets(const FVector3& TranslationDelta);
     void ApplyNetworkSnapshotWithMeshSmoothing(
         const FCharacterNetworkState& State);
+    void FinalizeNetworkMeshSmoothing(float CorrectionDistance);
     void ClearNetworkMeshSmoothing();
     void RefreshNetworkSmoothingMeshes();
     void ApplyPendingCorrection();
@@ -202,6 +221,9 @@ private:
     bool bUseControllerDesiredRotation = false;
     float RotationRate = 540.0f;
     float NetworkSimulatedSmoothLocationTime = 0.1f;
+    bool bUseAdaptiveNetworkSmoothing = true;
+    float NetworkMinAdaptiveSmoothTime = 0.025f;
+    float NetworkMaxAdaptiveSmoothTime = 0.1f;
     float NetworkMaxSmoothUpdateDistance = 256.0f;
     float NetworkNoSmoothUpdateDistance = 384.0f;
     float SnapshotInterpolationDelayTicks = 2.0f;
@@ -221,7 +243,17 @@ private:
     uint64 NetworkPolicyHash = 0;
     uint32 NextMoveSequence = 1;
     uint32 LastProcessedNetworkMove = 0;
+    double LastProcessedMoveClientTimeSeconds = 0.0;
     uint32 LastReceivedServerTick = 0;
+    double LastReceivedServerTimeSeconds = 0.0;
+    double LastSnapshotReceiveLocalTimeSeconds = 0.0;
+    double SmoothedServerClockOffsetSeconds = 0.0;
+    float SnapshotReceiveIntervalSeconds = 0.0f;
+    float SnapshotServerIntervalSeconds = 0.0f;
+    float SmoothedSnapshotJitterSeconds = 0.0f;
+    float EstimatedSnapshotTransitSeconds = 0.0f;
+    float EffectiveNetworkSmoothingTimeSeconds = 0.1f;
+    float SmoothedMoveRoundTripSeconds = 0.0f;
     float SimulatedPlaybackTick = 0.0f;
     float SimulatedProxySnapshotAgeSeconds = 0.0f;
     float SimulatedProxyExtrapolationSeconds = 0.0f;
@@ -231,6 +263,8 @@ private:
         ENetworkSmoothingMode::Exponential;
     std::vector<FNetworkSmoothingMeshState> NetworkSmoothingMeshes;
     bool bHasPendingCorrection = false;
+    bool bHasServerClockOffsetSample = false;
+    bool bHasAdaptiveSmoothingSample = false;
     bool bSimulatedProxyExtrapolationClamped = false;
     bool bPredictionEnabled = true;
     bool bPolicyHashMatches = true;

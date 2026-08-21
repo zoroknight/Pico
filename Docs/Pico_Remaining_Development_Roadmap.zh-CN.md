@@ -738,6 +738,11 @@ AutonomousProxy 校正视觉平滑和更完整的 SimulatedProxy 状态。Pico �
 继续保持“服务器权威状态同步 + 本地预测/重演 + 远端插值或限时外推 + 后续命中回滚”。当前实现可证明完整链路，
 但在时间戳自适应、移动基座、加速度/旋转状态和带宽调度完成前，不标记为达到 UE5 生产级网络移动水准。
 
+低延迟加固第一轮已完成：协议 v2 携带 Move/Server 时间，客户端统计 Move RTT、Snapshot 收发间隔、Jitter、
+Transit 与 Clock Offset；SimulatedProxy 默认使用 25～100 ms 有界动态平滑，AutonomousProxy 校正采用逻辑立即
+纠错、Mesh 独立平滑。下一轮集中扩充远端加速度、旋转与 Movement Base，并以 0/40/80/150 ms 目标 RTT 进行
+三进程对比，不再继续增加未经指标证明有效的平滑算法。
+
 ### 第 6 月每周准入门槛
 
 第 6 月按纵向闭环推进，下一周不能建立在尚未验证的上一层之上：

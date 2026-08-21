@@ -406,6 +406,9 @@ Standalone or a visible separate server plus one to four clients, and persists p
 client window size, target RTT, jitter, and packet loss in `Saved/Editor/PlaySettings.ini`. The editor applies half of the target RTT
 as each process's outgoing latency. Instances have `Server`/`Client_1` titles
 and independent logs under `Saved/Logs/PlaySession/Session_*/`; the red square stops the whole group.
+Character protocol v2 carries client/server movement timestamps. Simulated proxies use a bounded
+25-100 ms adaptive smoothing window derived from snapshot cadence and jitter, while F1 reports move RTT,
+snapshot transit, and clock offset.
 A dirty or untitled World still requires explicit `Save & Play`. Listen Server and a truly headless
 Dedicated Server remain reserved until the replication/runtime split is ready.
 

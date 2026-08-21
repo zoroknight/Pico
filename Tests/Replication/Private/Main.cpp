@@ -435,6 +435,7 @@ void TestReplicationLifecycle(FTestRunner& Runner)
     }
     Pico::FCharacterNetworkMove CharacterMove;
     CharacterMove.Sequence = 1;
+    CharacterMove.ClientTimeSeconds = 12.5;
     CharacterMove.DeltaSeconds = 1.0f / 60.0f;
     CharacterMove.Input.WorldInput = {1.0f, 0.0f, 0.0f};
     CharacterMove.ControlYaw = 20.0f;
