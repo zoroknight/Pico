@@ -12,7 +12,8 @@ enum class ENetPacketFlags : uint16
     None = 0,
     Handshake = 1 << 0,
     Reliable = 1 << 1,
-    Heartbeat = 1 << 2
+    Heartbeat = 1 << 2,
+    Unreliable = 1 << 3
 };
 
 constexpr ENetPacketFlags operator|(ENetPacketFlags Left, ENetPacketFlags Right)

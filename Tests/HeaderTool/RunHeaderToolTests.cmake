@@ -22,13 +22,21 @@ foreach(EXPECTED
     "PICO_DECLARE_CLASS(PValidReflectedType, Pico::PObject)"
     "PICO_ADD_PROPERTY_METADATA(Properties, Score"
     "PICO_ADD_FUNCTION(Functions, GetScore"
+    "PICO_ADD_FUNCTION(Functions, ServerSetScore"
     "EFunctionFlags::Pure"
+    "EFunctionFlags::Server"
+    "EFunctionFlags::Reliable"
     "EPropertyFlags::Replicated")
     string(FIND "${GENERATED_HEADER}${GENERATED_SOURCE}" "${EXPECTED}" FOUND_AT)
     if(FOUND_AT EQUAL -1)
         message(FATAL_ERROR "generated output is missing: ${EXPECTED}")
     endif()
 endforeach()
+string(FIND "${GENERATED_SOURCE}"
+    "EAssetReferenceType::ThirdPersonControlProfile" ASSET_METADATA_AT)
+if(ASSET_METADATA_AT EQUAL -1)
+    message(FATAL_ERROR "generated output is missing asset reference metadata")
+endif()
 foreach(EXPECTED
     "EReplicationCondition::InitialOnly"
     "Metadata.RepNotifyFunction = ::Pico::FName(\"OnRep_Score\")")
@@ -88,4 +96,23 @@ if(INVALID_RESULT EQUAL 0)
 endif()
 if(NOT INVALID_ERROR MATCHES "InvalidReflectedType.h\\([0-9]+,[0-9]+\\): error PHT1003")
     message(FATAL_ERROR "invalid fixture did not produce a file/line diagnostic:\n${INVALID_ERROR}")
+endif()
+
+execute_process(
+    COMMAND "${PHT}"
+        --input "${FIXTURE_DIR}/InvalidRpcReflectedType.h"
+        --header-output "${OUTPUT_DIR}/InvalidRpc.generated.h"
+        --source-output "${OUTPUT_DIR}/InvalidRpc.gen.cpp"
+        --include "InvalidRpcReflectedType.h"
+        --file-id "InvalidRpcReflectedType_h"
+    RESULT_VARIABLE INVALID_RPC_RESULT
+    ERROR_VARIABLE INVALID_RPC_ERROR
+)
+if(INVALID_RPC_RESULT EQUAL 0)
+    message(FATAL_ERROR "invalid RPC fixture unexpectedly succeeded")
+endif()
+if(NOT INVALID_RPC_ERROR MATCHES
+    "InvalidRpcReflectedType.h\\([0-9]+,[0-9]+\\): error PHT4003")
+    message(FATAL_ERROR
+        "invalid RPC fixture did not reject conflicting directions:\n${INVALID_RPC_ERROR}")
 endif()

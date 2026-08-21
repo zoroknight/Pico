@@ -2,6 +2,9 @@
 
 #include "Pico/Core/CommandLine.h"
 #include "Pico/Core/Log.h"
+#include "Pico/Engine/Actor.h"
+#include "Pico/Object/Class.h"
+#include "Pico/Object/Function.h"
 #include "Pico/Net/NetPacket.h"
 #include "Pico/Net/UdpTransport.h"
 
@@ -134,12 +137,15 @@ void FNetDriver::Shutdown()
     NextConnectionId.Value = 1;
     ElapsedSeconds = 0.0;
     InvalidPacketCount = 0;
+    OpenedConnections.clear();
+    ClosedConnections.clear();
     bInitialized = false;
 }
 
 void FNetDriver::TickDispatch(float DeltaSeconds)
 {
     if (!bInitialized) return;
+    ReplicationSystem.BeginNetworkFrame();
     ElapsedSeconds += std::max(0.0f, DeltaSeconds);
     if (Transport == nullptr) return;
 
@@ -173,6 +179,7 @@ void FNetDriver::TickDispatch(float DeltaSeconds)
         {
             ReplicationSystem.HandleConnectionClosed(
                 Connection->GetConnectionId());
+            ClosedConnections.push_back(Connection->GetConnectionId());
             PICO_LOG(LogNet, Info, "Connection {} to {} closed: {}",
                 Connection->GetConnectionId().Value,
                 Connection->GetRemoteAddress().ToString(),
@@ -182,6 +189,12 @@ void FNetDriver::TickDispatch(float DeltaSeconds)
             Connection->ConsumeDeliveredReliableMessages())
         {
             ReplicationSystem.HandleReliableMessage(
+                Connection->GetConnectionId(), Message);
+        }
+        for (const std::vector<uint8>& Message :
+            Connection->ConsumeDeliveredUnreliableMessages())
+        {
+            ReplicationSystem.HandleUnreliableMessage(
                 Connection->GetConnectionId(), Message);
         }
         for (const uint32 ReliableId :
@@ -379,10 +392,102 @@ void FNetDriver::DispatchPacket(
     if (PreviousState != ENetConnectionState::Open
         && Connection->GetState() == ENetConnectionState::Open)
     {
+        OpenedConnections.push_back(Connection->GetConnectionId());
         PICO_LOG(LogNet, Info, "Connection {} to {} is open",
             Connection->GetConnectionId().Value,
             Connection->GetRemoteAddress().ToString());
     }
+}
+
+std::vector<FNetConnectionId> FNetDriver::ConsumeOpenedConnections()
+{
+    std::vector<FNetConnectionId> Result = std::move(OpenedConnections);
+    OpenedConnections.clear();
+    return Result;
+}
+
+std::vector<FNetConnectionId> FNetDriver::ConsumeClosedConnections()
+{
+    std::vector<FNetConnectionId> Result = std::move(ClosedConnections);
+    ClosedConnections.clear();
+    return Result;
+}
+
+void FNetDriver::SetActorOwningConnection(
+    PActor* Actor, FNetConnectionId ConnectionId)
+{
+    ReplicationSystem.SetActorOwningConnection(Actor, ConnectionId);
+}
+
+FNetConnectionId FNetDriver::GetActorOwningConnection(
+    const PActor* Actor) const
+{
+    return ReplicationSystem.GetActorOwningConnection(Actor);
+}
+
+bool FNetDriver::CallRemoteFunction(
+    PActor* Target,
+    FName FunctionName,
+    std::span<const FFunctionValue> Arguments)
+{
+    if (Target == nullptr || FunctionName.IsNone()) return false;
+    const PFunction* Function = Target->GetClass()->FindFunction(FunctionName);
+    if (Function == nullptr) return false;
+    const EFunctionFlags Flags = Function->GetFlags();
+    const bool bServer = HasAnyFlags(Flags, EFunctionFlags::Server);
+    const bool bClient = HasAnyFlags(Flags, EFunctionFlags::Client);
+    const bool bMulticast = HasAnyFlags(Flags, EFunctionFlags::NetMulticast);
+    if (static_cast<int>(bServer) + static_cast<int>(bClient)
+            + static_cast<int>(bMulticast) != 1)
+        return false;
+    if (NetMode == ENetMode::Standalone)
+        return Target->ProcessEvent(Function, Arguments)
+            == EFunctionInvokeResult::Success;
+
+    std::vector<uint8> Message;
+    if (!ReplicationSystem.BuildRpcMessage(
+            Target, FunctionName, Arguments, Message)) return false;
+    const bool bReliable = HasAnyFlags(Flags, EFunctionFlags::Reliable);
+    const auto Queue = [&](FNetConnection& Connection)
+    {
+        return bReliable
+            ? Connection.QueueReliable(Message)
+            : Connection.QueueUnreliable(Message);
+    };
+
+    bool bQueued = false;
+    if (NetMode == ENetMode::Client)
+    {
+        if (!bServer || Target->GetLocalRole() != ENetRole::AutonomousProxy
+            || Connections.empty()) return false;
+        bQueued = Queue(*Connections.front());
+    }
+    else if (NetMode == ENetMode::Server && bClient)
+    {
+        const FNetConnectionId Owner = GetActorOwningConnection(Target);
+        for (const std::unique_ptr<FNetConnection>& Connection : Connections)
+        {
+            if (Connection->GetConnectionId() == Owner
+                && Connection->GetState() == ENetConnectionState::Open)
+            {
+                bQueued = Queue(*Connection);
+                break;
+            }
+        }
+    }
+    else if (NetMode == ENetMode::Server && bMulticast)
+    {
+        const bool bLocalExecuted = Target->ProcessEvent(Function, Arguments)
+            == EFunctionInvokeResult::Success;
+        for (const std::unique_ptr<FNetConnection>& Connection : Connections)
+        {
+            if (Connection->GetState() == ENetConnectionState::Open)
+                bQueued = Queue(*Connection) || bQueued;
+        }
+        bQueued = bQueued || bLocalExecuted;
+    }
+    if (bQueued) ReplicationSystem.RecordRpcSent();
+    return bQueued;
 }
 
 uint64 FNetDriver::MakeClientNonce() const

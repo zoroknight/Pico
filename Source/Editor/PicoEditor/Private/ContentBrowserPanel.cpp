@@ -158,7 +158,7 @@ void FContentBrowserPanel::Draw(
     constexpr const char* Types[] = {
         "All Types", "World", "Static Mesh", "Texture", "Material",
         "Skeleton", "Skeletal Mesh", "Animation", "Character Profile",
-        "Actor Blueprint"};
+        "Control Profile", "Actor Blueprint"};
     ImGui::Combo("##AssetType", &TypeFilter, Types, static_cast<int>(std::size(Types)));
 
     if (ImGui::BeginTable("ContentBrowserLayout", 2, ImGuiTableFlags_Resizable))
@@ -239,7 +239,8 @@ bool FContentBrowserPanel::PassesFilter(const FAssetRecord& Record) const
             || Record.Type == EAssetType::AnimationMontage;
         break;
     case 8: bMatchesType = Record.Type == EAssetType::CharacterProfile; break;
-    case 9: bMatchesType = Record.Type == EAssetType::ActorBlueprint; break;
+    case 9: bMatchesType = Record.Type == EAssetType::ThirdPersonControlProfile; break;
+    case 10: bMatchesType = Record.Type == EAssetType::ActorBlueprint; break;
     default: break;
     }
     if (!bMatchesType) return false;

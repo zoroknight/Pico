@@ -68,6 +68,11 @@ FNetObjectId PActor::GetNetObjectId() const
     return NetObjectId;
 }
 
+ENetRole PActor::GetLocalRole() const { return LocalRole; }
+ENetRole PActor::GetRemoteRole() const { return RemoteRole; }
+bool PActor::IsOnlyRelevantToOwner() const { return bOnlyRelevantToOwner; }
+void PActor::SetOnlyRelevantToOwner(bool bValue) { bOnlyRelevantToOwner = bValue; }
+
 bool PActor::HasBegunPlay() const
 {
     return bHasBegunPlay;
@@ -410,6 +415,12 @@ void PActor::SetOwner(PActor* InOwner)
 void PActor::SetNetObjectId(FNetObjectId InNetObjectId)
 {
     NetObjectId = InNetObjectId;
+}
+
+void PActor::SetNetRoles(ENetRole InLocalRole, ENetRole InRemoteRole)
+{
+    LocalRole = InLocalRole;
+    RemoteRole = InRemoteRole;
 }
 
 PActorComponent* PActor::ResolveComponent(FObjectHandle Handle) const

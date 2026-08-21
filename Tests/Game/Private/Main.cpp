@@ -9,6 +9,7 @@
 #include "Pico/Engine/LocalPlayer.h"
 #include "Pico/Engine/MatchState.h"
 #include "Pico/Engine/NetDriver.h"
+#include "Pico/Engine/NetPlayer.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerController.h"
 #include "Pico/Engine/PlayerState.h"
@@ -444,6 +445,41 @@ void TestGameInstanceLifecycle(FTestRunner& Runner)
         PTestGameInstance::Events
             == std::vector<std::string>({"ModuleStartup", "Init", "WorldInitialized"}),
         "GameInstance initialization happens before its World initialization callback");
+
+    Pico::PGameModeBase* GameMode =
+        GameEngine.GetEngineLoop().GetWorld()->GetGameMode();
+    Pico::PNetPlayer* NetPlayer = Pico::NewObject<Pico::PNetPlayer>(
+        GameInstance, "RegressionNetPlayer");
+    Pico::PPlayerController* NetController = GameMode != nullptr
+        ? GameMode->Login(NetPlayer) : nullptr;
+    const bool bNetworkPlayerStarted = NetController != nullptr
+        && GameMode->HandleStartingNewPlayer(NetController);
+    Pico::PPawn* NetPawn = NetController != nullptr
+        ? NetController->GetPawn() : nullptr;
+    Pico::PNetPlayer* SecondNetPlayer = Pico::NewObject<Pico::PNetPlayer>(
+        GameInstance, "RegressionNetPlayer_2");
+    Pico::PPlayerController* SecondNetController = GameMode != nullptr
+        ? GameMode->Login(SecondNetPlayer) : nullptr;
+    const bool bSecondNetworkPlayerStarted = SecondNetController != nullptr
+        && GameMode->HandleStartingNewPlayer(SecondNetController);
+    Pico::PPawn* SecondNetPawn = SecondNetController != nullptr
+        ? SecondNetController->GetPawn() : nullptr;
+    Runner.Expect(bNetworkPlayerStarted && bSecondNetworkPlayerStarted
+            && NetPawn != nullptr && SecondNetPawn != nullptr
+            && InitialPawn != nullptr
+            && NetPawn != InitialPawn && SecondNetPawn != InitialPawn,
+        "Network players spawn new Pawn instances instead of taking the local Auto Possess Pawn");
+    Runner.Expect(NetPawn != nullptr && SecondNetPawn != nullptr
+            && GameMode != nullptr
+            && NetPawn->GetClass() == GameMode->GetDefaultPawnClass()
+            && SecondNetPawn->GetClass() == GameMode->GetDefaultPawnClass(),
+        "All network players use the configured default Pawn class");
+    if (GameMode != nullptr && NetController != nullptr)
+        GameMode->Logout(NetController);
+    if (GameMode != nullptr && SecondNetController != nullptr)
+        GameMode->Logout(SecondNetController);
+    if (NetPlayer != nullptr) Pico::DestroyObjectTree(NetPlayer);
+    if (SecondNetPlayer != nullptr) Pico::DestroyObjectTree(SecondNetPlayer);
 
     const Pico::FObjectHandle GameInstanceHandle = GameInstance->GetHandle();
     Pico::CollectGarbage();

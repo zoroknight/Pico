@@ -14,6 +14,7 @@ bool PPawn::RegisterProperties(PClass& Class)
 {
     FPropertyMetadata Metadata;
     Metadata.Flags = EPropertyFlags::Transient | EPropertyFlags::Replicated;
+    Metadata.ReplicationCondition = EReplicationCondition::OwnerOnly;
     std::vector<PProperty> Properties;
     PICO_ADD_PROPERTY_METADATA(Properties, Controller, Metadata);
     FPropertyMetadata AutoPossessMetadata;

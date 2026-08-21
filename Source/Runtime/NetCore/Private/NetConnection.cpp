@@ -43,9 +43,11 @@ void FNetConnection::Close(std::string Reason)
     State = ENetConnectionState::Closed;
     CloseReason = std::move(Reason);
     PendingReliable.clear();
+    PendingUnreliable.clear();
     SentPackets.clear();
     BufferedReliableMessages.clear();
     DeliveredReliableMessages.clear();
+    DeliveredUnreliableMessages.clear();
     AcknowledgedReliableIds.clear();
 }
 
@@ -82,6 +84,14 @@ bool FNetConnection::HandlePacket(
     {
         bAckPending = true;
         return HandleReliable(Packet);
+    }
+    if (HasAnyFlags(Packet.Header.Flags, ENetPacketFlags::Unreliable))
+    {
+        if (Packet.Payload.empty()) return false;
+        DeliveredUnreliableMessages.push_back(Packet.Payload);
+        ++Statistics.UnreliableMessagesDelivered;
+        bAckPending = true;
+        return true;
     }
     if (HasAnyFlags(Packet.Header.Flags, ENetPacketFlags::Heartbeat))
     {
@@ -165,6 +175,16 @@ std::vector<FNetOutboundPacket> FNetConnection::BuildOutgoingPackets(
             ++Reliable.Attempts;
         }
 
+        while (!PendingUnreliable.empty()
+            && Result.size() < Config.MaxPacketsPerFlush)
+        {
+            Result.push_back(BuildPacket(
+                ENetPacketFlags::Unreliable,
+                PendingUnreliable.front(), 0, NowSeconds));
+            PendingUnreliable.pop_front();
+            ++Statistics.UnreliableMessagesSent;
+        }
+
         if (Result.empty()
             && (LastSendSeconds < 0.0
                 || NowSeconds - LastSendSeconds >= Config.HeartbeatSeconds))
@@ -203,12 +223,34 @@ bool FNetConnection::QueueReliable(
     return true;
 }
 
+bool FNetConnection::QueueUnreliable(std::span<const uint8> Payload)
+{
+    constexpr std::size_t PacketHeaderBytes = 26;
+    if (State != ENetConnectionState::Open || Payload.empty()
+        || PendingUnreliable.size() >= Config.MaxReliableQueue
+        || Payload.size() + PacketHeaderBytes > MaxNetDatagramBytes)
+    {
+        return false;
+    }
+    PendingUnreliable.emplace_back(Payload.begin(), Payload.end());
+    return true;
+}
+
 std::vector<std::vector<uint8>>
 FNetConnection::ConsumeDeliveredReliableMessages()
 {
     std::vector<std::vector<uint8>> Result =
         std::move(DeliveredReliableMessages);
     DeliveredReliableMessages.clear();
+    return Result;
+}
+
+std::vector<std::vector<uint8>>
+FNetConnection::ConsumeDeliveredUnreliableMessages()
+{
+    std::vector<std::vector<uint8>> Result =
+        std::move(DeliveredUnreliableMessages);
+    DeliveredUnreliableMessages.clear();
     return Result;
 }
 

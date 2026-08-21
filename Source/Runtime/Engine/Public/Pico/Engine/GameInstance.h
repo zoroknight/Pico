@@ -2,7 +2,9 @@
 
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ReflectionMacros.h"
+#include "Pico/Net/NetTypes.h"
 
+#include <span>
 #include <string>
 #include <vector>
 
@@ -11,6 +13,7 @@ namespace Pico
 class FGameEngine;
 class FReferenceCollector;
 class PLocalPlayer;
+class PNetPlayer;
 class PWorld;
 
 class PGameInstance : public PObject
@@ -46,10 +49,17 @@ private:
     void LoginLocalPlayers(PWorld* World);
     void LogoutLocalPlayers(PWorld* World);
     void RefreshLocalPlayers() const;
+    void DispatchNetworkEvents(
+        std::span<const FNetConnectionId> Opened,
+        std::span<const FNetConnectionId> Closed);
+    void LoginNetworkPlayer(FNetConnectionId ConnectionId);
+    void LogoutNetworkPlayer(FNetConnectionId ConnectionId);
+    void RefreshClientControllerBinding();
 
     FGameEngine* OwningGameEngine = nullptr;
     FObjectHandle WorldHandle;
     std::vector<FObjectHandle> LocalPlayerHandles;
+    std::vector<FObjectHandle> NetPlayerHandles;
     mutable std::vector<PLocalPlayer*> LocalPlayerCache;
     bool bInitialized = false;
 };

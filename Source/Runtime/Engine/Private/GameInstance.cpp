@@ -1,9 +1,15 @@
 #include "Pico/Engine/GameInstance.h"
 
+#include "Pico/Engine/GameEngine.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/LocalPlayer.h"
+#include "Pico/Engine/NetPlayer.h"
+#include "Pico/Engine/NetDriver.h"
+#include "Pico/Engine/Level.h"
 #include "Pico/Engine/GameModeBase.h"
 #include "Pico/Engine/PlayerController.h"
+#include "Pico/Engine/PlayerState.h"
+#include "Pico/Engine/Pawn.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ReferenceCollector.h"
 
@@ -142,16 +148,130 @@ void PGameInstance::RefreshLocalPlayers() const
     }
 }
 
+void PGameInstance::DispatchNetworkEvents(
+    std::span<const FNetConnectionId> Opened,
+    std::span<const FNetConnectionId> Closed)
+{
+    if (!bInitialized || OwningGameEngine == nullptr) return;
+    if (OwningGameEngine->GetNetDriver().GetNetMode() == ENetMode::Server)
+    {
+        for (FNetConnectionId ConnectionId : Closed)
+            LogoutNetworkPlayer(ConnectionId);
+        for (FNetConnectionId ConnectionId : Opened)
+            LoginNetworkPlayer(ConnectionId);
+    }
+    else if (OwningGameEngine->GetNetDriver().GetNetMode() == ENetMode::Client)
+    {
+        RefreshClientControllerBinding();
+    }
+}
+
+void PGameInstance::LoginNetworkPlayer(FNetConnectionId ConnectionId)
+{
+    PWorld* World = GetWorld();
+    PGameModeBase* GameMode = World != nullptr ? World->GetGameMode() : nullptr;
+    if (!ConnectionId.IsValid() || GameMode == nullptr) return;
+    for (FObjectHandle Handle : NetPlayerHandles)
+    {
+        PObject* Object = ResolveObject(Handle);
+        if (Object != nullptr && Object->IsA(PNetPlayer::StaticClass())
+            && static_cast<PNetPlayer*>(Object)->GetConnectionId() == ConnectionId)
+            return;
+    }
+
+    PNetPlayer* NetPlayer = NewObject<PNetPlayer>(
+        this, "NetPlayer_" + std::to_string(ConnectionId.Value));
+    if (NetPlayer == nullptr) return;
+    NetPlayer->SetConnectionId(ConnectionId);
+    PPlayerController* Controller = GameMode->Login(NetPlayer);
+    if (Controller == nullptr)
+    {
+        DestroyObjectTree(NetPlayer);
+        return;
+    }
+    Controller->SetReplicates(true);
+    Controller->SetOnlyRelevantToOwner(true);
+    GameMode->DispatchPostLogin(Controller);
+    GameMode->HandleStartingNewPlayer(Controller);
+    if (PPlayerState* State = Controller->GetPlayerState())
+        State->SetReplicates(true);
+    if (PPawn* Pawn = Controller->GetPawn()) Pawn->SetReplicates(true);
+    OwningGameEngine->GetNetDriver().SetActorOwningConnection(
+        Controller, ConnectionId);
+    NetPlayerHandles.push_back(NetPlayer->GetHandle());
+}
+
+void PGameInstance::LogoutNetworkPlayer(FNetConnectionId ConnectionId)
+{
+    PWorld* World = GetWorld();
+    PGameModeBase* GameMode = World != nullptr ? World->GetGameMode() : nullptr;
+    for (auto It = NetPlayerHandles.begin(); It != NetPlayerHandles.end();)
+    {
+        PObject* Object = ResolveObject(*It);
+        PNetPlayer* NetPlayer = Object != nullptr
+                && Object->IsA(PNetPlayer::StaticClass())
+            ? static_cast<PNetPlayer*>(Object) : nullptr;
+        if (NetPlayer == nullptr)
+        {
+            It = NetPlayerHandles.erase(It);
+            continue;
+        }
+        if (NetPlayer->GetConnectionId() != ConnectionId)
+        {
+            ++It;
+            continue;
+        }
+        if (GameMode != nullptr && NetPlayer->GetPlayerController() != nullptr)
+            GameMode->Logout(NetPlayer->GetPlayerController());
+        DestroyObjectTree(NetPlayer);
+        It = NetPlayerHandles.erase(It);
+    }
+}
+
+void PGameInstance::RefreshClientControllerBinding()
+{
+    PWorld* World = GetWorld();
+    PLocalPlayer* LocalPlayer = GetPrimaryLocalPlayer();
+    if (World == nullptr || LocalPlayer == nullptr) return;
+    PPlayerController* AutonomousController = nullptr;
+    for (PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr) continue;
+        for (PActor* Actor : Level->GetActors())
+        {
+            if (Actor != nullptr
+                && Actor->IsA(PPlayerController::StaticClass())
+                && Actor->GetLocalRole() == ENetRole::AutonomousProxy)
+            {
+                AutonomousController = static_cast<PPlayerController*>(Actor);
+                break;
+            }
+        }
+        if (AutonomousController != nullptr) break;
+    }
+    if (AutonomousController == nullptr
+        || LocalPlayer->GetPlayerController() == AutonomousController) return;
+    PPlayerController* Previous = LocalPlayer->GetPlayerController();
+    if (Previous != nullptr && World->GetGameMode() != nullptr
+        && Previous->GetLocalRole() == ENetRole::Authority)
+    {
+        World->GetGameMode()->Logout(Previous);
+    }
+    LocalPlayer->SetPlayerController(AutonomousController);
+}
+
 void PGameInstance::AddReferencedObjects(FReferenceCollector& Collector) const
 {
     PObject::AddReferencedObjects(Collector);
     Collector.AddReferencedHandles(LocalPlayerHandles);
+    Collector.AddReferencedHandles(NetPlayerHandles);
 }
 
 void PGameInstance::BeginDestroy()
 {
     LocalPlayerCache.clear();
     LocalPlayerHandles.clear();
+    NetPlayerHandles.clear();
     PObject::BeginDestroy();
 }
 
@@ -162,7 +282,10 @@ bool PGameInstance::DispatchInit(FGameEngine& InGameEngine)
         return false;
     }
     OwningGameEngine = &InGameEngine;
-    bInitialized = CreateLocalPlayer() != nullptr && Init(InGameEngine);
+    const bool bNeedsLocalPlayer =
+        InGameEngine.GetNetDriver().GetNetMode() != ENetMode::Server;
+    bInitialized = (!bNeedsLocalPlayer || CreateLocalPlayer() != nullptr)
+        && Init(InGameEngine);
     if (!bInitialized)
     {
         OwningGameEngine = nullptr;
@@ -187,6 +310,21 @@ void PGameInstance::DispatchWorldCleanup(PWorld* World)
     {
         return;
     }
+    PGameModeBase* GameMode = World->GetGameMode();
+    for (FObjectHandle Handle : NetPlayerHandles)
+    {
+        PObject* Object = ResolveObject(Handle);
+        PNetPlayer* NetPlayer = Object != nullptr
+                && Object->IsA(PNetPlayer::StaticClass())
+            ? static_cast<PNetPlayer*>(Object) : nullptr;
+        if (NetPlayer != nullptr)
+        {
+            if (GameMode != nullptr && NetPlayer->GetPlayerController() != nullptr)
+                GameMode->Logout(NetPlayer->GetPlayerController());
+            DestroyObjectTree(NetPlayer);
+        }
+    }
+    NetPlayerHandles.clear();
     LogoutLocalPlayers(World);
     OnWorldCleanup(World);
     WorldHandle = {};

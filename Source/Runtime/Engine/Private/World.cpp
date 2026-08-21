@@ -528,6 +528,15 @@ PGameStateBase* PWorld::GetGameState() const
         : nullptr;
 }
 
+void PWorld::BindReplicatedGameState(PGameStateBase* GameState)
+{
+    if (State == EWorldState::Initialized && !GameModeHandle.IsValid()
+        && GameState != nullptr)
+    {
+        GameStateHandle = GameState->GetHandle();
+    }
+}
+
 uint64 PWorld::GetPhysicsStepCount() const { return PhysicsStepCount; }
 uint64 PWorld::GetPhysicsHitCount() const { return PhysicsHitCount; }
 uint64 PWorld::GetPhysicsBeginOverlapCount() const { return PhysicsBeginOverlapCount; }
@@ -650,6 +659,8 @@ void PWorld::DestroyActorNow(PActor* Actor)
 {
     if (Actor != nullptr)
     {
+        if (Actor->GetHandle() == GameModeHandle) GameModeHandle = {};
+        if (Actor->GetHandle() == GameStateHandle) GameStateHandle = {};
         DestroyObjectTree(Actor);
     }
 }

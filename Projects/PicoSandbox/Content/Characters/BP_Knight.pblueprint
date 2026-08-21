@@ -1,5 +1,6 @@
 [ActorDefaults]
 AutoPossessPlayerIndex=0
+ThirdPersonControlProfileAsset=/Game/Controls/ThirdPersonDefault.pcontrolprofile
 
 [Blueprint]
 Components=CollisionCapsule;CharacterMovement;SandboxPlayerMesh;SandboxAnimatedMesh;CameraBoom;FollowCamera

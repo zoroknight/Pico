@@ -3,6 +3,7 @@
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ClassRegistry.h"
 #include "Pico/Object/Property.h"
+#include "Pico/Asset/ThirdPersonControlProfile.h"
 #include "Pico/Engine/GameEngine.h"
 #include "Pico/Engine/GameModeBase.h"
 #include "Pico/Engine/GameModule.h"
@@ -12,6 +13,7 @@
 #include "Pico/Engine/Character.h"
 #include "Pico/Engine/CharacterMovementComponent.h"
 #include "Pico/Engine/LocalPlayer.h"
+#include "Pico/Engine/NetPlayer.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerController.h"
@@ -45,10 +47,56 @@ int main()
         / "Saved"
         / "Tests"
         / "SandboxWorkflow.pobj";
+    Pico::FThirdPersonControlProfileData ControlProfile;
 
     {
         PicoSandbox::FSandboxSession Session(TestPath);
         Runner.Expect(Session.Initialize(), "Sandbox initializes Pico and registers project classes");
+
+        const std::filesystem::path ControlProfileFile =
+            PicoSandbox::FSandboxSession::GetSandboxRootDirectory()
+            / "Content" / "Controls" / "ThirdPersonDefault.pcontrolprofile";
+        Runner.Expect(
+            Pico::LoadThirdPersonControlProfileFromFile(
+                ControlProfileFile, ControlProfile)
+                && ControlProfile.MovementReference
+                    == Pico::EThirdPersonMovementReference::ControlRotation
+                && ControlProfile.MaxWalkSpeed == 250.0f
+                && ControlProfile.MinimumCameraPitch == -75.0f
+                && ControlProfile.MaximumCameraPitch == 55.0f,
+            "Third-person control profile preserves the tuned movement and camera policy");
+        const std::filesystem::path RoundTripProfileFile =
+            TestPath.parent_path() / "ThirdPersonRoundTrip.pcontrolprofile";
+        Pico::FThirdPersonControlProfileData RoundTripProfile;
+        Runner.Expect(
+            Pico::SaveThirdPersonControlProfileToFile(
+                RoundTripProfileFile, ControlProfile)
+                && Pico::LoadThirdPersonControlProfileFromFile(
+                    RoundTripProfileFile, RoundTripProfile)
+                && Pico::HashThirdPersonControlProfile(ControlProfile)
+                    == Pico::HashThirdPersonControlProfile(RoundTripProfile),
+            "Third-person control profile saves and reloads without changing its policy hash");
+
+        const Pico::FThirdPersonMovementBasis CameraYawZero =
+            Pico::BuildThirdPersonMovementBasis(
+                Pico::EThirdPersonMovementReference::ControlRotation,
+                0.0f, 90.0f);
+        const Pico::FThirdPersonMovementBasis CameraYawNinety =
+            Pico::BuildThirdPersonMovementBasis(
+                Pico::EThirdPersonMovementReference::ControlRotation,
+                90.0f, 0.0f);
+        const Pico::FThirdPersonMovementBasis ActorYawNinety =
+            Pico::BuildThirdPersonMovementBasis(
+                Pico::EThirdPersonMovementReference::ActorRotation,
+                0.0f, 90.0f);
+        Runner.Expect(
+            CameraYawZero.Forward.Equals({1.0f, 0.0f, 0.0f}, 0.001f)
+                && CameraYawZero.ScreenRight.Equals({0.0f, -1.0f, 0.0f}, 0.001f)
+                && CameraYawNinety.Forward.Equals({0.0f, 1.0f, 0.0f}, 0.001f)
+                && CameraYawNinety.ScreenRight.Equals({1.0f, 0.0f, 0.0f}, 0.001f)
+                && ActorYawNinety.Forward.Equals(
+                    CameraYawNinety.Forward, 0.001f),
+            "Golden movement basis locks W and D for camera-relative and actor-relative yaw");
 
         const Pico::PClass* EntityClass = PicoSandbox::PSandboxEntity::StaticClass();
         const Pico::PClass* CharacterClass = PicoSandbox::PSandboxCharacter::StaticClass();
@@ -76,6 +124,15 @@ int main()
                 && CharacterClass->FindProperty(Pico::FName("ViewRotation"))->GetType()
                     == Pico::EPropertyType::Rotator,
             "Project vector and rotator use typed reflection metadata");
+        const Pico::PProperty* ControlProfileProperty =
+            PicoSandbox::PSandboxPawn::StaticClass()->FindProperty(
+                Pico::FName("ThirdPersonControlProfileAsset"));
+        Runner.Expect(
+            ControlProfileProperty != nullptr
+                && ControlProfileProperty->GetType() == Pico::EPropertyType::AssetPath
+                && ControlProfileProperty->GetAssetReferenceType()
+                    == Pico::EAssetReferenceType::ThirdPersonControlProfile,
+            "PHT exposes the control profile as a typed asset picker property");
 
         Runner.Expect(Session.RunFullWorkflow(), "Sandbox completes the full persistence workflow");
         Runner.Expect(std::filesystem::is_regular_file(TestPath), "Sandbox writes a .pobj inside its project directory");
@@ -421,6 +478,16 @@ int main()
                     && Pawn->GetMovementReference()
                         == PicoSandbox::EMovementReference::ControlRotation,
                 "Sandbox defaults match the UE third-person free-look control policy");
+            Runner.Expect(
+                Pawn->HasLoadedControlProfile()
+                    && Pawn->GetActiveControlProfileHash()
+                        == Pico::HashThirdPersonControlProfile(ControlProfile)
+                    && Movement != nullptr
+                    && Movement->GetMaxWalkSpeed() == ControlProfile.MaxWalkSpeed
+                    && CameraBoom != nullptr
+                    && CameraBoom->GetTargetArmLength()
+                        == ControlProfile.DefaultCameraArmLength,
+                "Possess loads one reusable profile into movement and camera components");
 
             Input.BeginFrame();
             Input.SetKeyState(Pico::EKey::W, false);
@@ -512,6 +579,57 @@ int main()
                     && Controller->GetPawn() != nullptr
                     && Controller->GetPawn()->GetHandle() != OldPawnHandle,
                 "Sandbox GameMode respawns and re-possesses a new Pawn without replacing the Controller");
+
+            Pico::PNetPlayer* FirstNetPlayer =
+                Pico::NewObject<Pico::PNetPlayer>(
+                    GameInstance, "SandboxTestNetPlayer_1");
+            Pico::PNetPlayer* SecondNetPlayer =
+                Pico::NewObject<Pico::PNetPlayer>(
+                    GameInstance, "SandboxTestNetPlayer_2");
+            Pico::PPlayerController* FirstNetController =
+                GameMode->Login(FirstNetPlayer);
+            Pico::PPlayerController* SecondNetController =
+                GameMode->Login(SecondNetPlayer);
+            const bool bFirstStarted = FirstNetController != nullptr
+                && GameMode->HandleStartingNewPlayer(FirstNetController);
+            const bool bSecondStarted = SecondNetController != nullptr
+                && GameMode->HandleStartingNewPlayer(SecondNetController);
+            Pico::PPawn* FirstNetPawn = FirstNetController != nullptr
+                ? FirstNetController->GetPawn() : nullptr;
+            Pico::PPawn* SecondNetPawn = SecondNetController != nullptr
+                ? SecondNetController->GetPawn() : nullptr;
+            Runner.Expect(bFirstStarted && bSecondStarted
+                    && FirstNetPawn != nullptr && SecondNetPawn != nullptr
+                    && FirstNetPawn->GetClass()
+                        == GameMode->GetDefaultPawnClass()
+                    && SecondNetPawn->GetClass()
+                        == GameMode->GetDefaultPawnClass()
+                    && !FirstNetPawn->GetActorLocation().Equals(
+                        SecondNetPawn->GetActorLocation()),
+                "Sandbox network players use the same default Pawn class at separated spawn positions");
+            const auto* FirstSandboxPawn = FirstNetPawn != nullptr
+                    && FirstNetPawn->IsA(PicoSandbox::PSandboxPawn::StaticClass())
+                ? static_cast<const PicoSandbox::PSandboxPawn*>(FirstNetPawn) : nullptr;
+            const auto* SecondSandboxPawn = SecondNetPawn != nullptr
+                    && SecondNetPawn->IsA(PicoSandbox::PSandboxPawn::StaticClass())
+                ? static_cast<const PicoSandbox::PSandboxPawn*>(SecondNetPawn) : nullptr;
+            Runner.Expect(
+                FirstSandboxPawn != nullptr && SecondSandboxPawn != nullptr
+                    && FirstSandboxPawn->HasLoadedControlProfile()
+                    && SecondSandboxPawn->HasLoadedControlProfile()
+                    && FirstSandboxPawn->GetThirdPersonControlProfileAsset()
+                        == SecondSandboxPawn->GetThirdPersonControlProfileAsset()
+                    && FirstSandboxPawn->GetActiveControlProfileHash()
+                        == SecondSandboxPawn->GetActiveControlProfileHash(),
+                "Every network player spawns the same Pawn class with the same control policy");
+            if (FirstNetController != nullptr)
+                GameMode->Logout(FirstNetController);
+            if (SecondNetController != nullptr)
+                GameMode->Logout(SecondNetController);
+            if (FirstNetPlayer != nullptr)
+                Pico::DestroyObjectTree(FirstNetPlayer);
+            if (SecondNetPlayer != nullptr)
+                Pico::DestroyObjectTree(SecondNetPlayer);
         }
 
         GameEngine.Exit();
@@ -522,5 +640,7 @@ int main()
 
     std::error_code FileError;
     std::filesystem::remove(TestPath, FileError);
+    std::filesystem::remove(
+        TestPath.parent_path() / "ThirdPersonRoundTrip.pcontrolprofile", FileError);
     return Runner.Finish();
 }

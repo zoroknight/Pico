@@ -3,6 +3,7 @@
 #include "Pico/Net/NetTypes.h"
 #include "Pico/Object/ObjectTypes.h"
 #include "Pico/Object/Property.h"
+#include "Pico/Object/Function.h"
 
 #include <functional>
 #include <memory>
@@ -92,6 +93,9 @@ struct FReplicationStatistics
     uint64 MessagesReceived = 0;
     uint64 RejectedMessages = 0;
     uint64 OnRepCalls = 0;
+    uint64 RpcMessagesSent = 0;
+    uint64 RpcMessagesReceived = 0;
+    uint64 RpcMessagesRejected = 0;
     std::size_t ChannelCount = 0;
     std::size_t NetObjectCount = 0;
     std::size_t UnresolvedReferenceCount = 0;
@@ -110,11 +114,15 @@ public:
         std::function<bool(std::span<const uint8>, uint32*)>;
 
     void SetWorld(PWorld* InWorld);
+    void BeginNetworkFrame();
     void Reset();
     void ReplicateServerConnection(
         FNetConnectionId ConnectionId,
         const FQueueReliable& QueueReliable);
     bool HandleReliableMessage(
+        FNetConnectionId ConnectionId,
+        std::span<const uint8> Payload);
+    bool HandleUnreliableMessage(
         FNetConnectionId ConnectionId,
         std::span<const uint8> Payload);
     void HandleReliableAcknowledged(
@@ -125,11 +133,23 @@ public:
     const FNetObjectRegistry& GetObjectRegistry() const { return ObjectRegistry; }
     std::vector<FActorChannelSnapshot> GetChannelSnapshots() const;
     FReplicationStatistics GetStatistics() const;
+    void SetActorOwningConnection(PActor* Actor, FNetConnectionId ConnectionId);
+    FNetConnectionId GetActorOwningConnection(const PActor* Actor) const;
+    bool BuildRpcMessage(
+        PActor* Target,
+        FName FunctionName,
+        std::span<const FFunctionValue> Arguments,
+        std::vector<uint8>& OutMessage);
+    void RecordRpcSent();
 
 private:
     std::shared_ptr<FImpl> Impl;
     PWorld* World = nullptr;
     FNetObjectRegistry ObjectRegistry;
     FReplicationStatistics Statistics;
+    bool HandleMessage(
+        FNetConnectionId ConnectionId,
+        std::span<const uint8> Payload,
+        bool bReliable);
 };
 }

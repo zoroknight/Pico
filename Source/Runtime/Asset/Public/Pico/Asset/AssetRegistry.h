@@ -24,6 +24,7 @@ enum class EAssetType
     AnimationSet,
     AnimationMontage,
     CharacterProfile,
+    ThirdPersonControlProfile,
     ActorBlueprint
 };
 

@@ -25,6 +25,7 @@ struct FProperty
     std::vector<std::string> Specifiers;
     std::string RepNotify;
     std::string ReplicationCondition;
+    std::string AssetReferenceType;
 };
 
 struct FFunction
@@ -257,6 +258,13 @@ FProperty ParsePropertySpecifiers(
             Index += 2;
             continue;
         }
+        if (Specifier == "Asset" && Index + 2 < Close
+            && Tokens[Index + 1].Text == "=")
+        {
+            Result.AssetReferenceType = Tokens[Index + 2].Text;
+            Index += 2;
+            continue;
+        }
         Diagnostics.Error(Tokens[Index], "PHT1003",
             "unknown specifier '" + Specifier + "'");
     }
@@ -425,6 +433,32 @@ std::vector<FClass> Parse(const std::vector<FToken>& Tokens, FDiagnostics& Diagn
                     continue;
                 }
                 Function.Parameters = ParseParameters(Tokens, Open, Close);
+                const auto HasSpecifier = [&Function](std::string_view Value)
+                {
+                    return std::find(
+                        Function.Specifiers.begin(),
+                        Function.Specifiers.end(),
+                        Value) != Function.Specifiers.end();
+                };
+                const int DirectionCount =
+                    static_cast<int>(HasSpecifier("Server"))
+                    + static_cast<int>(HasSpecifier("Client"))
+                    + static_cast<int>(HasSpecifier("NetMulticast"));
+                if (DirectionCount > 1)
+                {
+                    Diagnostics.Error(Tokens[Member], "PHT4003",
+                        "Server, Client, and NetMulticast are mutually exclusive");
+                }
+                if (HasSpecifier("Reliable") && DirectionCount == 0)
+                {
+                    Diagnostics.Error(Tokens[Member], "PHT4004",
+                        "Reliable requires Server, Client, or NetMulticast");
+                }
+                if (HasSpecifier("Pure") && DirectionCount != 0)
+                {
+                    Diagnostics.Error(Tokens[Member], "PHT4005",
+                        "network functions cannot be Pure");
+                }
                 Class.Functions.push_back(std::move(Function));
                 Member = Close;
             }
@@ -469,6 +503,11 @@ std::string PropertyMetadata(const FProperty& Property)
     {
         Result += "Metadata.RepNotifyFunction = ::Pico::FName(\""
             + Property.RepNotify + "\"); ";
+    }
+    if (!Property.AssetReferenceType.empty())
+    {
+        Result += "Metadata.AssetReferenceType = ::Pico::EAssetReferenceType::"
+            + Property.AssetReferenceType + "; ";
     }
     Result += "return Metadata; }())";
     return Result;
@@ -521,7 +560,8 @@ std::string GenerateSource(const FOptions& Options, const std::vector<FClass>& C
             Out << "    std::vector<::Pico::PProperty> Properties;\n";
             for (const auto& Property : Class.Properties)
             {
-                if (Property.Specifiers.empty())
+                if (Property.Specifiers.empty()
+                    && Property.AssetReferenceType.empty())
                     Out << "    PICO_ADD_PROPERTY(Properties, " << Property.Name << ");\n";
                 else
                     Out << "    PICO_ADD_PROPERTY_METADATA(Properties, " << Property.Name

@@ -54,6 +54,8 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - 按 UE 第三人称模板拆分旋转职责：`DoMove` 以 ControlRotation Yaw 生成世界 Forward/Right 输入，
   CharacterMovement 让 Actor 朝移动方向转身，SpringArm 独立计算 Camera TargetRotation，不再把
   ControlRotation 写入相对 Transform；固定鼠标按 S 时角色转身而镜头 Yaw 保持不变。
+- 将已经调优的行为保存为 Actor Blueprint 引用的可复用 `.pcontrolprofile`；共享移动方向函数、稳定策略
+  Hash、F1 身份诊断和 0/90 度黄金测试保证未来本地预测与服务器重演使用同一套控制语义。
 - Controller 提供可反射的俯仰角上下限，Sandbox 默认限制为 `-75` 到 `+55` 度；SpringArm 参考 UE 的
   球形 Sweep 在墙壁、地板或天花板前回缩，并可通过 `Do Collision Test` 和 `Probe Size` 独立配置。
 - 编辑器顶部可显示平滑后的 FPS 与帧耗时，通过 `View -> Frame Rate` 开关；Editor、Game 与打包 EXE 使用
@@ -524,6 +526,8 @@ private:
 - [网络开发风险登记](Docs/NetworkRiskRegister.zh-CN.md)
 - [网络传输、连接与帧阶段](Docs/Month09_1_NetTransportAndConnection.md)
 - [Actor、属性复制与可视化验收场](Docs/Month09_2_ActorReplication.md)
+- [Gameplay RPC、所有权与开门验收场](Docs/Month09_3_GameplayRpcAndOwnership.md)
+- [第三人称控制基线与跨项目复用](Docs/Month09_3_5_ThirdPersonControlBaseline.md)
 - [反射类编写指南](Docs/ReflectionAuthoringGuide.md)
 - [Native 委托编写指南](Docs/DelegateAuthoringGuide.md)
 - [PicoInspector Developer Sandbox 计划](Docs/PicoInspector_DeveloperSandbox_Plan.zh-CN.md)

@@ -4,6 +4,7 @@
 #include "Pico/Core/Log.h"
 #include "Pico/Core/Math/Transform.h"
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/GameStateBase.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Net/NetPacket.h"
@@ -22,17 +23,20 @@ namespace Pico
 {
 namespace
 {
+constexpr uint32 MaxRpcCallsPerConnectionPerFrame = 32;
 constexpr uint16 ReplicationMagic = 0x5052;
 constexpr uint8 ReplicationVersion = 1;
 constexpr std::size_t MaxReplicatedFields = 64;
 constexpr std::size_t MaxReplicationStringBytes = 255;
 constexpr std::size_t MaxPendingObjectReferences = 256;
+constexpr std::size_t MaxRpcArguments = 8;
 
 enum class EReplicationMessageType : uint8
 {
     Spawn = 1,
     Delta = 2,
-    Destroy = 3
+    Destroy = 3,
+    Rpc = 4
 };
 
 struct FFieldValue
@@ -117,6 +121,154 @@ bool ReadTransform(FNetByteReader& Reader, FTransform& OutValue)
         && ReadVector(Reader, OutValue.Scale);
 }
 
+bool EncodeRpcArgument(
+    const FFunctionValue& Value,
+    const FFunctionValueDescriptor& Descriptor,
+    const FNetObjectRegistry& Registry,
+    std::vector<uint8>& OutData)
+{
+    if (!IsFunctionValueCompatible(Value, Descriptor)) return false;
+    FNetByteWriter Writer;
+    switch (Descriptor.Type)
+    {
+    case EFunctionValueType::Int32:
+        if (!Writer.WriteUInt32(static_cast<uint32>(std::get<int32>(Value)))) return false;
+        break;
+    case EFunctionValueType::Float:
+        if (!WriteFloat(Writer, std::get<float>(Value))) return false;
+        break;
+    case EFunctionValueType::Bool:
+        if (!Writer.WriteUInt8(std::get<bool>(Value) ? 1 : 0)) return false;
+        break;
+    case EFunctionValueType::Name:
+        if (!WriteString(Writer, std::get<FName>(Value).ToString())) return false;
+        break;
+    case EFunctionValueType::String:
+        if (!WriteString(Writer, std::get<std::string>(Value))) return false;
+        break;
+    case EFunctionValueType::Vector3:
+        if (!WriteVector(Writer, std::get<FVector3>(Value))) return false;
+        break;
+    case EFunctionValueType::Rotator:
+    {
+        const FRotator& ValueRotator = std::get<FRotator>(Value);
+        if (!WriteFloat(Writer, ValueRotator.Pitch)
+            || !WriteFloat(Writer, ValueRotator.Yaw)
+            || !WriteFloat(Writer, ValueRotator.Roll)) return false;
+        break;
+    }
+    case EFunctionValueType::Transform:
+        if (!WriteTransform(Writer, std::get<FTransform>(Value))) return false;
+        break;
+    case EFunctionValueType::AssetPath:
+        if (!WriteString(Writer, std::get<FAssetPath>(Value).ToString())) return false;
+        break;
+    case EFunctionValueType::Object:
+    {
+        PObject* Object = std::get<PObject*>(Value);
+        PActor* Actor = Object != nullptr && Object->IsA(PActor::StaticClass())
+            ? static_cast<PActor*>(Object) : nullptr;
+        const FNetObjectId NetId = Actor != nullptr
+            ? Registry.FindNetId(Actor->GetHandle()) : FNetObjectId {};
+        if (Object != nullptr && !NetId.IsValid()) return false;
+        if (!Writer.WriteUInt32(NetId.Value)) return false;
+        break;
+    }
+    case EFunctionValueType::Void:
+        return false;
+    }
+    OutData = Writer.GetBytes();
+    return true;
+}
+
+bool DecodeRpcArgument(
+    std::span<const uint8> Data,
+    const FFunctionValueDescriptor& Descriptor,
+    const FNetObjectRegistry& Registry,
+    FFunctionValue& OutValue)
+{
+    FNetByteReader Reader(Data);
+    switch (Descriptor.Type)
+    {
+    case EFunctionValueType::Int32:
+    {
+        uint32 Value = 0;
+        if (!Reader.ReadUInt32(Value)) return false;
+        OutValue = static_cast<int32>(Value);
+        break;
+    }
+    case EFunctionValueType::Float:
+    {
+        float Value = 0.0f;
+        if (!ReadFloat(Reader, Value)) return false;
+        OutValue = Value;
+        break;
+    }
+    case EFunctionValueType::Bool:
+    {
+        uint8 Value = 0;
+        if (!Reader.ReadUInt8(Value) || Value > 1) return false;
+        OutValue = Value != 0;
+        break;
+    }
+    case EFunctionValueType::Name:
+    case EFunctionValueType::String:
+    case EFunctionValueType::AssetPath:
+    {
+        std::string Value;
+        if (!ReadString(Reader, Value)) return false;
+        if (Descriptor.Type == EFunctionValueType::Name) OutValue = FName(Value);
+        else if (Descriptor.Type == EFunctionValueType::String) OutValue = Value;
+        else
+        {
+            FAssetPath Path;
+            if (!FAssetPath::TryParse(Value, Path)) return false;
+            OutValue = Path;
+        }
+        break;
+    }
+    case EFunctionValueType::Vector3:
+    {
+        FVector3 Value;
+        if (!ReadVector(Reader, Value)) return false;
+        OutValue = Value;
+        break;
+    }
+    case EFunctionValueType::Rotator:
+    {
+        FRotator Value;
+        if (!ReadFloat(Reader, Value.Pitch)
+            || !ReadFloat(Reader, Value.Yaw)
+            || !ReadFloat(Reader, Value.Roll)) return false;
+        OutValue = Value;
+        break;
+    }
+    case EFunctionValueType::Transform:
+    {
+        FTransform Value;
+        if (!ReadTransform(Reader, Value)) return false;
+        OutValue = Value;
+        break;
+    }
+    case EFunctionValueType::Object:
+    {
+        uint32 RawNetId = 0;
+        if (!Reader.ReadUInt32(RawNetId)) return false;
+        PActor* Actor = RawNetId != 0
+            ? Registry.ResolveActor({RawNetId}) : nullptr;
+        if (RawNetId != 0 && Actor == nullptr) return false;
+        const PClass* RequiredClass = Descriptor.ResolveObjectClass();
+        if (Actor != nullptr && RequiredClass != nullptr
+            && !Actor->IsA(RequiredClass)) return false;
+        OutValue = static_cast<PObject*>(Actor);
+        break;
+    }
+    case EFunctionValueType::Void:
+        return false;
+    }
+    return Reader.GetRemainingBytes() == 0;
+}
+
 std::vector<uint8> EncodeTransform(const FTransform& Transform)
 {
     FNetByteWriter Writer;
@@ -141,14 +293,17 @@ uint32 HashBytes(uint32 Hash, std::string_view Value)
     return Hash;
 }
 
-bool ShouldReplicate(EReplicationCondition Condition, bool bInitial)
+bool ShouldReplicate(
+    EReplicationCondition Condition,
+    bool bInitial,
+    bool bIsOwner)
 {
     switch (Condition)
     {
     case EReplicationCondition::Always: return true;
     case EReplicationCondition::InitialOnly: return bInitial;
-    case EReplicationCondition::OwnerOnly: return false;
-    case EReplicationCondition::SkipOwner: return true;
+    case EReplicationCondition::OwnerOnly: return bIsOwner;
+    case EReplicationCondition::SkipOwner: return !bIsOwner;
     }
     return false;
 }
@@ -614,6 +769,18 @@ struct FReplicationSystem::FImpl
 
     std::vector<FChannel> Channels;
     std::vector<FPendingReference> PendingReferences;
+    struct FOwnership
+    {
+        FObjectHandle ActorHandle;
+        FNetConnectionId ConnectionId;
+    };
+    std::vector<FOwnership> Ownership;
+    struct FRpcFrameCount
+    {
+        FNetConnectionId ConnectionId;
+        uint32 Count = 0;
+    };
+    std::vector<FRpcFrameCount> RpcFrameCounts;
 };
 
 namespace
@@ -637,13 +804,14 @@ std::vector<FFieldValue> CaptureValues(
     const FReplicationSchema& Schema,
     const PActor* Actor,
     const FNetObjectRegistry& Registry,
-    bool bInitial)
+    bool bInitial,
+    bool bIsOwner)
 {
     std::vector<FFieldValue> Result;
     for (const FReplicationFieldDescriptor& Field : Schema.GetFields())
     {
         if (Field.Property == nullptr
-            || !ShouldReplicate(Field.Condition, bInitial)) continue;
+            || !ShouldReplicate(Field.Condition, bInitial, bIsOwner)) continue;
         FFieldValue Value;
         Value.FieldId = Field.FieldId;
         Value.Type = Field.Property->GetType();
@@ -704,11 +872,12 @@ bool QueueSpawn(
     PActor* Actor,
     const FReplicationSchema& Schema,
     const FNetObjectRegistry& Registry,
-    const FReplicationSystem::FQueueReliable& Queue)
+    const FReplicationSystem::FQueueReliable& Queue,
+    bool bIsOwner)
 {
     FNetByteWriter Writer;
     const std::vector<FFieldValue> Values = CaptureValues(
-        Schema, Actor, Registry, true);
+        Schema, Actor, Registry, true, bIsOwner);
     const std::vector<uint8> Transform = Actor->GetRootComponent() != nullptr
         ? EncodeTransform(Actor->GetActorTransform())
         : std::vector<uint8> {};
@@ -716,6 +885,7 @@ bool QueueSpawn(
         || !Writer.WriteUInt32(Channel.NetObjectId.Value)
         || !WriteString(Writer, Actor->GetClass()->GetName().ToString())
         || !WriteString(Writer, Actor->GetName().ToString())
+        || !Writer.WriteUInt8(bIsOwner ? 1 : 0)
         || !Writer.WriteUInt32(Schema.GetHash())
         || !Writer.WriteUInt16(static_cast<uint16>(Transform.size()))
         || !Writer.WriteBytes(Transform)
@@ -735,10 +905,11 @@ bool QueueDelta(
     PActor* Actor,
     const FReplicationSchema& Schema,
     const FNetObjectRegistry& Registry,
-    const FReplicationSystem::FQueueReliable& Queue)
+    const FReplicationSystem::FQueueReliable& Queue,
+    bool bIsOwner)
 {
     const std::vector<FFieldValue> Current = CaptureValues(
-        Schema, Actor, Registry, false);
+        Schema, Actor, Registry, false, bIsOwner);
     const std::vector<FFieldValue> Delta = BuildDelta(
         Current, Channel.Baseline);
     const std::vector<uint8> Transform = Actor->GetRootComponent() != nullptr
@@ -793,12 +964,19 @@ void FReplicationSystem::SetWorld(PWorld* InWorld)
     World = InWorld;
 }
 
+void FReplicationSystem::BeginNetworkFrame()
+{
+    if (Impl != nullptr) Impl->RpcFrameCounts.clear();
+}
+
 void FReplicationSystem::Reset()
 {
     if (Impl != nullptr)
     {
         Impl->Channels.clear();
         Impl->PendingReferences.clear();
+        Impl->Ownership.clear();
+        Impl->RpcFrameCounts.clear();
     }
     ObjectRegistry.Reset();
     Statistics = {};
@@ -830,6 +1008,9 @@ void FReplicationSystem::ReplicateServerConnection(
 
     for (PActor* Actor : ReplicatedActors)
     {
+        const bool bIsOwner =
+            GetActorOwningConnection(Actor) == ConnectionId;
+        if (Actor->IsOnlyRelevantToOwner() && !bIsOwner) continue;
         const FNetObjectId NetId = ObjectRegistry.FindNetId(
             Actor->GetHandle());
         if (!NetId.IsValid()) continue;
@@ -849,11 +1030,13 @@ void FReplicationSystem::ReplicateServerConnection(
         if (Schema.GetClass() == nullptr) continue;
         if (Channel->State == EActorChannelState::PendingOpen)
         {
-            if (QueueSpawn(*Channel, Actor, Schema, ObjectRegistry, QueueReliable))
+            if (QueueSpawn(*Channel, Actor, Schema, ObjectRegistry,
+                    QueueReliable, bIsOwner))
                 ++Statistics.SpawnMessagesSent;
         }
         else if (Channel->State == EActorChannelState::Open
-            && QueueDelta(*Channel, Actor, Schema, ObjectRegistry, QueueReliable))
+            && QueueDelta(*Channel, Actor, Schema, ObjectRegistry,
+                QueueReliable, bIsOwner))
         {
             ++Statistics.DeltaMessagesSent;
         }
@@ -882,6 +1065,21 @@ bool FReplicationSystem::HandleReliableMessage(
     FNetConnectionId ConnectionId,
     std::span<const uint8> Payload)
 {
+    return HandleMessage(ConnectionId, Payload, true);
+}
+
+bool FReplicationSystem::HandleUnreliableMessage(
+    FNetConnectionId ConnectionId,
+    std::span<const uint8> Payload)
+{
+    return HandleMessage(ConnectionId, Payload, false);
+}
+
+bool FReplicationSystem::HandleMessage(
+    FNetConnectionId ConnectionId,
+    std::span<const uint8> Payload,
+    bool bReliable)
+{
     if (World == nullptr || !ConnectionId.IsValid()) return false;
     if (Impl == nullptr) Impl = std::make_shared<FImpl>();
     FNetByteReader Reader(Payload);
@@ -902,6 +1100,85 @@ bool FReplicationSystem::HandleReliableMessage(
     uint32 RawNetId = 0;
     if (!Reader.ReadUInt32(RawNetId) || RawNetId == 0) return Reject();
     const FNetObjectId NetId {RawNetId};
+
+    if (Type == EReplicationMessageType::Rpc)
+    {
+        const auto RejectRpc = [this, &Reject]()
+        {
+            ++Statistics.RpcMessagesRejected;
+            return Reject();
+        };
+        auto CountIt = std::find_if(
+            Impl->RpcFrameCounts.begin(), Impl->RpcFrameCounts.end(),
+            [ConnectionId](const FImpl::FRpcFrameCount& Count)
+            {
+                return Count.ConnectionId == ConnectionId;
+            });
+        if (CountIt == Impl->RpcFrameCounts.end())
+        {
+            Impl->RpcFrameCounts.push_back({ConnectionId, 0});
+            CountIt = std::prev(Impl->RpcFrameCounts.end());
+        }
+        if (CountIt->Count >= MaxRpcCallsPerConnectionPerFrame)
+            return RejectRpc();
+        ++CountIt->Count;
+        PActor* Target = ObjectRegistry.ResolveActor(NetId);
+        std::string FunctionName;
+        uint8 ArgumentCount = 0;
+        if (Target == nullptr
+            || !ReadString(Reader, FunctionName)
+            || !Reader.ReadUInt8(ArgumentCount)
+            || ArgumentCount > MaxRpcArguments) return RejectRpc();
+        const PFunction* Function = Target->GetClass()->FindFunction(
+            FName(FunctionName));
+        if (Function == nullptr
+            || Function->GetReturnValue().Type != EFunctionValueType::Void
+            || Function->GetParameters().size() != ArgumentCount)
+            return RejectRpc();
+        const EFunctionFlags Flags = Function->GetFlags();
+        const bool bServerFunction = HasAnyFlags(Flags, EFunctionFlags::Server);
+        const bool bClientFunction = HasAnyFlags(Flags, EFunctionFlags::Client);
+        const bool bMulticastFunction =
+            HasAnyFlags(Flags, EFunctionFlags::NetMulticast);
+        if (static_cast<int>(bServerFunction)
+                + static_cast<int>(bClientFunction)
+                + static_cast<int>(bMulticastFunction) != 1
+            || HasAnyFlags(Flags, EFunctionFlags::Reliable) != bReliable)
+            return RejectRpc();
+        if (Target->GetLocalRole() == ENetRole::Authority)
+        {
+            if (!bServerFunction
+                || GetActorOwningConnection(Target) != ConnectionId)
+                return RejectRpc();
+        }
+        else if (!bClientFunction && !bMulticastFunction)
+        {
+            return RejectRpc();
+        }
+
+        std::vector<FFunctionValue> Arguments;
+        Arguments.reserve(ArgumentCount);
+        for (std::size_t Index = 0; Index < ArgumentCount; ++Index)
+        {
+            uint16 ValueSize = 0;
+            std::vector<uint8> Data;
+            if (!Reader.ReadUInt16(ValueSize)
+                || !Reader.ReadBytes(ValueSize, Data)) return RejectRpc();
+            FFunctionValue Value;
+            if (!DecodeRpcArgument(
+                    Data,
+                    Function->GetParameters()[Index].Value,
+                    ObjectRegistry,
+                    Value)) return RejectRpc();
+            Arguments.push_back(std::move(Value));
+        }
+        if (Reader.GetRemainingBytes() != 0
+            || Target->ProcessEvent(Function, Arguments)
+                != EFunctionInvokeResult::Success) return RejectRpc();
+        ++Statistics.RpcMessagesReceived;
+        ++Statistics.MessagesReceived;
+        return true;
+    }
 
     if (Type == EReplicationMessageType::Destroy)
     {
@@ -934,10 +1211,13 @@ bool FReplicationSystem::HandleReliableMessage(
     {
         std::string ClassName;
         std::string ActorName;
+        uint8 OwnedByConnection = 0;
         uint32 SchemaHash = 0;
         uint16 TransformSize = 0;
         if (!ReadString(Reader, ClassName)
             || !ReadString(Reader, ActorName)
+            || !Reader.ReadUInt8(OwnedByConnection)
+            || OwnedByConnection > 1
             || !Reader.ReadUInt32(SchemaHash)
             || !Reader.ReadUInt16(TransformSize)
             || !Reader.ReadBytes(TransformSize, TransformData)
@@ -977,6 +1257,16 @@ bool FReplicationSystem::HandleReliableMessage(
             if (Actor == nullptr
                 || !ObjectRegistry.RegisterRemoteObject(NetId, Actor)) return Reject();
             Actor->SetReplicates(true);
+        }
+        Actor->SetNetRoles(
+            OwnedByConnection != 0
+                ? ENetRole::AutonomousProxy
+                : ENetRole::SimulatedProxy,
+            ENetRole::Authority);
+        if (Actor->IsA(PGameStateBase::StaticClass()))
+        {
+            World->BindReplicatedGameState(
+                static_cast<PGameStateBase*>(Actor));
         }
         if (FindChannel(*Impl, ConnectionId, NetId) == nullptr)
         {
@@ -1121,6 +1411,57 @@ bool FReplicationSystem::HandleReliableMessage(
     return true;
 }
 
+bool FReplicationSystem::BuildRpcMessage(
+    PActor* Target,
+    FName FunctionName,
+    std::span<const FFunctionValue> Arguments,
+    std::vector<uint8>& OutMessage)
+{
+    OutMessage.clear();
+    if (Target == nullptr || FunctionName.IsNone()
+        || Arguments.size() > MaxRpcArguments) return false;
+    const PFunction* Function = Target->GetClass()->FindFunction(FunctionName);
+    if (Function == nullptr
+        || Function->GetReturnValue().Type != EFunctionValueType::Void
+        || Function->GetParameters().size() != Arguments.size()) return false;
+    const EFunctionFlags Flags = Function->GetFlags();
+    const int DirectionCount =
+        static_cast<int>(HasAnyFlags(Flags, EFunctionFlags::Server))
+        + static_cast<int>(HasAnyFlags(Flags, EFunctionFlags::Client))
+        + static_cast<int>(HasAnyFlags(Flags, EFunctionFlags::NetMulticast));
+    if (DirectionCount != 1) return false;
+
+    FNetObjectId NetId = ObjectRegistry.FindNetId(Target->GetHandle());
+    if (!NetId.IsValid() && Target->GetLocalRole() == ENetRole::Authority)
+        NetId = ObjectRegistry.RegisterAuthorityObject(Target);
+    if (!NetId.IsValid()) return false;
+
+    FNetByteWriter Writer;
+    if (!WriteMessageHeader(Writer, EReplicationMessageType::Rpc)
+        || !Writer.WriteUInt32(NetId.Value)
+        || !WriteString(Writer, FunctionName.ToString())
+        || !Writer.WriteUInt8(static_cast<uint8>(Arguments.size()))) return false;
+    for (std::size_t Index = 0; Index < Arguments.size(); ++Index)
+    {
+        std::vector<uint8> Data;
+        if (!EncodeRpcArgument(
+                Arguments[Index],
+                Function->GetParameters()[Index].Value,
+                ObjectRegistry,
+                Data)
+            || Data.size() > std::numeric_limits<uint16>::max()
+            || !Writer.WriteUInt16(static_cast<uint16>(Data.size()))
+            || !Writer.WriteBytes(Data)) return false;
+    }
+    OutMessage = Writer.GetBytes();
+    return true;
+}
+
+void FReplicationSystem::RecordRpcSent()
+{
+    ++Statistics.RpcMessagesSent;
+}
+
 void FReplicationSystem::HandleReliableAcknowledged(
     FNetConnectionId ConnectionId,
     uint32 ReliableId)
@@ -1186,6 +1527,11 @@ void FReplicationSystem::HandleConnectionClosed(
         {
             return Channel.ConnectionId == ConnectionId;
         });
+    std::erase_if(Impl->Ownership,
+        [ConnectionId](const FImpl::FOwnership& Ownership)
+        {
+            return Ownership.ConnectionId == ConnectionId;
+        });
     for (FNetObjectId NetId : CandidateIds)
     {
         const bool bStillUsed = std::any_of(
@@ -1197,6 +1543,40 @@ void FReplicationSystem::HandleConnectionClosed(
         if (!bStillUsed && ObjectRegistry.ResolveActor(NetId) == nullptr)
             ObjectRegistry.RemoveByNetId(NetId);
     }
+}
+
+void FReplicationSystem::SetActorOwningConnection(
+    PActor* Actor, FNetConnectionId ConnectionId)
+{
+    if (Actor == nullptr) return;
+    if (Impl == nullptr) Impl = std::make_shared<FImpl>();
+    std::erase_if(Impl->Ownership,
+        [Actor](const FImpl::FOwnership& Ownership)
+        {
+            return Ownership.ActorHandle == Actor->GetHandle();
+        });
+    if (ConnectionId.IsValid())
+    {
+        Impl->Ownership.push_back({Actor->GetHandle(), ConnectionId});
+    }
+}
+
+FNetConnectionId FReplicationSystem::GetActorOwningConnection(
+    const PActor* Actor) const
+{
+    if (Actor == nullptr || Impl == nullptr) return {};
+    for (const PActor* Current = Actor; Current != nullptr;
+        Current = Current->GetOwner())
+    {
+        const auto It = std::find_if(
+            Impl->Ownership.begin(), Impl->Ownership.end(),
+            [Current](const FImpl::FOwnership& Ownership)
+            {
+                return Ownership.ActorHandle == Current->GetHandle();
+            });
+        if (It != Impl->Ownership.end()) return It->ConnectionId;
+    }
+    return {};
 }
 
 std::vector<FActorChannelSnapshot>

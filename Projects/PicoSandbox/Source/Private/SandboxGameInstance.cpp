@@ -3,10 +3,13 @@
 #include "Pico/Engine/GameEngine.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/NetDriver.h"
+#include "Pico/Engine/LocalPlayer.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Input/InputSystem.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "PicoSandbox/SandboxReplicationLabActor.h"
+#include "PicoSandbox/SandboxPlayerController.h"
+#include "PicoSandbox/SandboxPawn.h"
 
 #include <iomanip>
 #include <sstream>
@@ -129,7 +132,45 @@ void PSandboxGameInstance::AppendGameplayDebugLines(
         : Pico::ENetMode::Standalone;
     OutLines.emplace_back(std::string("Replication Lab | endpoint: ")
         + Pico::ToString(Mode));
-    OutLines.emplace_back("Authority controls: T Spawn | Y Move | U Change State | I Destroy");
+    OutLines.emplace_back(
+        "Authority: T Spawn | Y Move | U Change State | I Destroy | Client: F Use Door");
+    OutLines.emplace_back(
+        "Movement networking: client-local only until Week 4 SavedMove/server replay; the separate server has no local input.");
+
+    const Pico::PLocalPlayer* LocalPlayer = GetPrimaryLocalPlayer();
+    const auto* Controller = LocalPlayer != nullptr
+            && LocalPlayer->GetPlayerController() != nullptr
+            && LocalPlayer->GetPlayerController()->IsA(
+                PSandboxPlayerController::StaticClass())
+        ? static_cast<const PSandboxPlayerController*>(
+            LocalPlayer->GetPlayerController()) : nullptr;
+    if (Controller != nullptr)
+    {
+        OutLines.emplace_back(std::string("Local controller role: ")
+            + Pico::ToString(Controller->GetLocalRole())
+            + " | Client RPC replies: "
+            + std::to_string(Controller->GetClientInteractionResultCount())
+            + " | last accepted: "
+            + (Controller->WasLastInteractionAccepted() ? "yes" : "no"));
+        const auto* Pawn = Controller->GetPawn() != nullptr
+                && Controller->GetPawn()->IsA(PSandboxPawn::StaticClass())
+            ? static_cast<const PSandboxPawn*>(Controller->GetPawn()) : nullptr;
+        if (Pawn != nullptr)
+        {
+            std::ostringstream ControlIdentity;
+            ControlIdentity << "Pawn class: " << Pawn->GetClass()->GetName().ToString()
+                << " | control profile: "
+                << Pawn->GetThirdPersonControlProfileAsset().ToString();
+            OutLines.push_back(ControlIdentity.str());
+            std::ostringstream Policy;
+            Policy << "Control policy: "
+                << Pico::ToString(Pawn->GetMovementReference())
+                << " | hash: 0x" << std::hex << std::uppercase
+                << Pawn->GetActiveControlProfileHash()
+                << " | loaded: " << (Pawn->HasLoadedControlProfile() ? "yes" : "no");
+            OutLines.push_back(Policy.str());
+        }
+    }
 
     const PSandboxReplicationLabActor* Actor = ResolveReplicationLabActor();
     if (Actor == nullptr)
@@ -150,6 +191,11 @@ void PSandboxGameInstance::AppendGameplayDebugLines(
         + std::to_string(Actor->GetInitialSpawnMarker())
         + " | revision: " + std::to_string(Actor->GetLabRevision())
         + " | local OnRep calls: " + std::to_string(Actor->GetRepNotifyCount()));
+    OutLines.emplace_back(std::string("Door: ")
+        + (Actor->IsDoorOpen() ? "open" : "closed")
+        + " | authority uses: " + std::to_string(Actor->GetDoorUseCount())
+        + " | multicast pulses: "
+        + std::to_string(Actor->GetMulticastPulseCount()));
     OutLines.emplace_back("Last action: " + ReplicationLabLastAction);
 }
 

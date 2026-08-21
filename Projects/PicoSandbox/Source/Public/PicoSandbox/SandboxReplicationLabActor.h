@@ -17,6 +17,10 @@ public:
     Pico::int32 GetRepNotifyCount() const;
     void SetAuthoritySpawnMarker(Pico::int32 Marker);
     void AdvanceRevision();
+    bool IsDoorOpen() const;
+    Pico::int32 GetDoorUseCount() const;
+    Pico::int32 GetMulticastPulseCount() const;
+    bool ToggleDoor();
 
 protected:
     explicit PSandboxReplicationLabActor(
@@ -35,6 +39,17 @@ private:
     PFUNCTION()
     void OnRep_LabRevision();
 
+    PPROPERTY(Replicated, Transient, NotSerializable, RepNotify=OnRep_DoorOpen)
+    bool bDoorOpen = false;
+
+    PFUNCTION()
+    void OnRep_DoorOpen();
+
+    PFUNCTION(NetMulticast)
+    void MulticastDoorPulse(Pico::int32 Revision);
+
     Pico::int32 RepNotifyCount = 0;
+    Pico::int32 DoorUseCount = 0;
+    Pico::int32 MulticastPulseCount = 0;
 };
 }

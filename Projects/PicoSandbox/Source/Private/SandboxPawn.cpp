@@ -1,12 +1,15 @@
 #include "PicoSandbox/SandboxPawn.h"
 
 #include "Pico/Core/AssetPath.h"
+#include "Pico/Asset/AssetManager.h"
+#include "Pico/Asset/AssetRegistry.h"
 #include "Pico/Engine/CapsuleComponent.h"
 #include "Pico/Engine/CharacterMovementComponent.h"
 #include "Pico/Engine/CameraComponent.h"
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/SkeletalMeshComponent.h"
+#include "Pico/Engine/World.h"
 #include "Pico/Object/ObjectInitializer.h"
 #include "Pico/Object/ObjectGlobals.h"
 
@@ -14,19 +17,16 @@ namespace PicoSandbox
 {
 const char* ToString(EMovementReference Reference)
 {
-    switch (Reference)
-    {
-    case EMovementReference::ControlRotation: return "ControlRotation";
-    case EMovementReference::ActorRotation: return "ActorRotation";
-    case EMovementReference::World: return "World";
-    }
-    return "Unknown";
+    return Pico::ToString(Reference).data();
 }
 
 PSandboxPawn::PSandboxPawn(const Pico::FObjectConstructionParams& Params)
     : PCharacter(Params)
 {
     PrimaryActorTick.SetCanEverTick(false);
+    Pico::FAssetPath::TryParse(
+        "/Game/Controls/ThirdPersonDefault.pcontrolprofile",
+        ThirdPersonControlProfileAsset);
 }
 
 EMovementReference PSandboxPawn::GetMovementReference() const
@@ -42,6 +42,74 @@ EMovementReference PSandboxPawn::GetMovementReference() const
 void PSandboxPawn::SetMovementReference(EMovementReference Reference)
 {
     MovementReferenceValue = static_cast<Pico::int32>(Reference);
+}
+
+const Pico::FAssetPath& PSandboxPawn::GetThirdPersonControlProfileAsset() const
+{
+    return ThirdPersonControlProfileAsset;
+}
+
+void PSandboxPawn::SetThirdPersonControlProfileAsset(const Pico::FAssetPath& AssetPath)
+{
+    ThirdPersonControlProfileAsset = AssetPath;
+    bLoadedControlProfile = false;
+}
+
+bool PSandboxPawn::LoadAndApplyThirdPersonControlProfile()
+{
+    Pico::PWorld* World = GetWorld();
+    Pico::FAssetRegistry* Registry = World != nullptr ? World->GetAssetRegistry() : nullptr;
+    Pico::FAssetManager* Manager = World != nullptr ? World->GetAssetManager() : nullptr;
+    if (!ThirdPersonControlProfileAsset.IsValid()
+        || Registry == nullptr || Manager == nullptr)
+    {
+        bLoadedControlProfile = false;
+        return false;
+    }
+    const auto Profile = Manager->LoadThirdPersonControlProfile(
+        ThirdPersonControlProfileAsset, *Registry);
+    if (Profile == nullptr)
+    {
+        bLoadedControlProfile = false;
+        return false;
+    }
+    ActiveControlProfile = *Profile;
+    ActiveControlProfileHash = Pico::HashThirdPersonControlProfile(*Profile);
+    bLoadedControlProfile = true;
+    SetMovementReference(Profile->MovementReference);
+    SetUseControllerRotationYaw(Profile->bUseControllerRotationYaw);
+    if (Pico::PCharacterMovementComponent* Movement = GetCharacterMovement())
+    {
+        Movement->SetMaxWalkSpeed(Profile->MaxWalkSpeed);
+        Movement->SetRotationRate(Profile->RotationRate);
+        Movement->SetOrientRotationToMovement(Profile->bOrientRotationToMovement);
+    }
+    Pico::PObject* BoomObject = Pico::FindObject(this, Pico::FName("CameraBoom"));
+    auto* Boom = BoomObject != nullptr
+            && BoomObject->IsA(Pico::PSpringArmComponent::StaticClass())
+        ? static_cast<Pico::PSpringArmComponent*>(BoomObject) : nullptr;
+    if (Boom != nullptr)
+    {
+        Boom->SetTargetArmLength(Profile->DefaultCameraArmLength);
+        Boom->SetUsePawnControlRotation(Profile->bCameraUsesControlRotation);
+    }
+    return true;
+}
+
+const Pico::FThirdPersonControlProfileData&
+PSandboxPawn::GetActiveControlProfile() const
+{
+    return ActiveControlProfile;
+}
+
+Pico::uint64 PSandboxPawn::GetActiveControlProfileHash() const
+{
+    return ActiveControlProfileHash;
+}
+
+bool PSandboxPawn::HasLoadedControlProfile() const
+{
+    return bLoadedControlProfile;
 }
 
 bool PSandboxPawn::DefineDefaultSubobjects(Pico::FObjectInitializer& Initializer)

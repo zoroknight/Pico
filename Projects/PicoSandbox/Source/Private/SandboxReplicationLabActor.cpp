@@ -23,7 +23,7 @@ bool PSandboxReplicationLabActor::DefineDefaultSubobjects(
     {
         return false;
     }
-    Cube->SetExtent({55.0f, 55.0f, 55.0f});
+    Cube->SetExtent({35.0f, 110.0f, 120.0f});
     Cube->SetCollisionEnabled(Pico::ECollisionEnabled::NoCollision);
     Cube->SetColor({0.10f, 0.85f, 0.35f});
     return Initializer.SetRootSubobject(Cube);
@@ -55,10 +55,37 @@ void PSandboxReplicationLabActor::AdvanceRevision()
     ApplyVisualState();
 }
 
+bool PSandboxReplicationLabActor::IsDoorOpen() const { return bDoorOpen; }
+Pico::int32 PSandboxReplicationLabActor::GetDoorUseCount() const
+{ return DoorUseCount; }
+Pico::int32 PSandboxReplicationLabActor::GetMulticastPulseCount() const
+{ return MulticastPulseCount; }
+
+bool PSandboxReplicationLabActor::ToggleDoor()
+{
+    if (GetLocalRole() != Pico::ENetRole::Authority) return false;
+    bDoorOpen = !bDoorOpen;
+    ++DoorUseCount;
+    ++LabRevision;
+    SetActorLocation({180.0f, bDoorOpen ? 220.0f : 0.0f, 130.0f});
+    ApplyVisualState();
+    return true;
+}
+
 void PSandboxReplicationLabActor::OnRep_LabRevision()
 {
     ++RepNotifyCount;
     ApplyVisualState();
+}
+
+void PSandboxReplicationLabActor::OnRep_DoorOpen()
+{
+    ApplyVisualState();
+}
+
+void PSandboxReplicationLabActor::MulticastDoorPulse(Pico::int32 Revision)
+{
+    MulticastPulseCount = Revision;
 }
 
 void PSandboxReplicationLabActor::ApplyVisualState()
@@ -76,6 +103,8 @@ void PSandboxReplicationLabActor::ApplyVisualState()
         {0.95f, 0.22f, 0.55f}
     };
     static_cast<Pico::PCubeComponent*>(Object)->SetColor(
-        Colors[static_cast<std::size_t>(LabRevision) % std::size(Colors)]);
+        bDoorOpen
+            ? Pico::FVector3(0.15f, 0.70f, 1.0f)
+            : Colors[static_cast<std::size_t>(LabRevision) % std::size(Colors)]);
 }
 }

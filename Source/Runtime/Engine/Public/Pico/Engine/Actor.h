@@ -4,6 +4,7 @@
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/TickFunction.h"
 #include "Pico/Net/NetTypes.h"
+#include "Pico/Engine/NetRole.h"
 #include "Pico/Object/ObjectDelegate.h"
 #include "Pico/Object/ReflectionMacros.h"
 
@@ -35,6 +36,10 @@ public:
     bool GetIsReplicated() const;
     void SetReplicates(bool bInReplicates);
     FNetObjectId GetNetObjectId() const;
+    ENetRole GetLocalRole() const;
+    ENetRole GetRemoteRole() const;
+    bool IsOnlyRelevantToOwner() const;
+    void SetOnlyRelevantToOwner(bool bValue);
     bool HasBegunPlay() const;
     bool IsPendingDestroy() const;
     bool Destroy();
@@ -95,6 +100,7 @@ private:
     void MarkPendingDestroy();
     void SetOwner(PActor* InOwner);
     void SetNetObjectId(FNetObjectId InNetObjectId);
+    void SetNetRoles(ENetRole InLocalRole, ENetRole InRemoteRole);
     PActorComponent* ResolveComponent(FObjectHandle Handle) const;
     bool OwnsComponent(const PActorComponent* Component) const;
     void RegisterAllComponents();
@@ -115,6 +121,9 @@ private:
     bool bHasEndedPlay = false;
     bool bPendingDestroy = false;
     bool bReplicates = false;
+    bool bOnlyRelevantToOwner = false;
+    ENetRole LocalRole = ENetRole::Authority;
+    ENetRole RemoteRole = ENetRole::SimulatedProxy;
     bool bDestroyedEventBroadcast = false;
 };
 }

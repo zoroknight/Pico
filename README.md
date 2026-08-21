@@ -83,6 +83,9 @@ The current implementation can:
 - Match the UE third-person template's rotation ownership: `DoMove` converts ControlRotation yaw into
   world-space forward/right input, CharacterMovement turns the Actor toward movement, and SpringArm
   evaluates an independent camera target rotation instead of writing ControlRotation into its relative transform.
+- Preserve that tuned behavior as a reusable `.pcontrolprofile` referenced by the Actor Blueprint;
+  a shared movement-basis function, stable policy hash, F1 identity diagnostics, and 0/90-degree golden
+  tests keep local prediction and future server replay on the same control semantics.
 - Clamp reflected Controller view pitch to configurable limits (`-75` to `+55` degrees in Sandbox),
   and retract SpringArm through an optional UE-style sphere sweep with a configurable probe size.
 - Show smoothed FPS/frame time in the editor through `View -> Frame Rate`; Editor, Game, and packaged
@@ -627,6 +630,7 @@ See:
 - [Network Risk Register (Chinese)](Docs/NetworkRiskRegister.zh-CN.md)
 - [Network Transport, Connection, and Frame Phases (Chinese)](Docs/Month09_1_NetTransportAndConnection.md)
 - [Actor and Property Replication with Visual Lab (Chinese)](Docs/Month09_2_ActorReplication.md)
+- [Reusable Third-Person Control Baseline (Chinese)](Docs/Month09_3_5_ThirdPersonControlBaseline.md)
 - [Reflection Authoring Guide](Docs/ReflectionAuthoringGuide.md)
 - [PicoHeaderTool](Docs/Month03_17_PicoHeaderTool.md)
 - [Mark-Sweep Garbage Collection](Docs/Month03_18_GarbageCollection.md)
@@ -665,6 +669,10 @@ See:
 - [Default Subobject Templates](Docs/Month03_14_DefaultSubobjects.md)
 - [Native Delegates and Weak Object Binding](Docs/Month03_15_NativeDelegates.md)
 - [Reflected Functions and ProcessEvent](Docs/Month03_16_ReflectedFunctions.md)
+- [Network Transport and Connections](Docs/Month09_1_NetTransportAndConnection.md)
+- [Actor and Property Replication](Docs/Month09_2_ActorReplication.md)
+- [Gameplay RPC and Ownership](Docs/Month09_3_GameplayRpcAndOwnership.md)
+- [Reusable Third-Person Control Baseline](Docs/Month09_3_5_ThirdPersonControlBaseline.md)
 
 ## Roadmap
 
@@ -694,9 +702,15 @@ The pre-network runtime baseline now exposes explicit `BeforeWorldTick` and `Aft
 slots. `PGameInstance` runs before World simulation, while GC and frame pacing remain after the
 World and post-World callback. Editor document tests use a temporary project copy and cannot modify
 the working PicoSandbox map. See [Pre-Network Readiness](Docs/Month08_14_PreNetworkReadiness.md).
+The network stack now includes UDP connections, reliable ordered messages, per-connection ActorChannels,
+Spawn/Delta/Destroy replication, ownership-aware roles, and reflected Server/Client/Multicast RPC. PicoSandbox
+contains a client-to-server door interaction whose durable state is replicated while Client and Multicast RPCs
+provide directed and transient feedback. Runtime F1 diagnostics expose roles, NetIds, channels, RPC rejection,
+and reliable/unreliable message counters.
+
 The remaining learning path is:
 
-- Gameplay RPC, ownership, character network movement, client prediction, and correction
+- Character network movement, client prediction, correction, and simulated-proxy interpolation
 - Dedicated-server/WAN validation, dependency-pruned Cook, Shipping, and clean-machine packaging
 - A compact `PicoTask` worker pool and game-thread dispatcher for asynchronous Cook, build, and AI
   work while runtime objects remain game-thread-owned

@@ -24,6 +24,7 @@ class PGameStateBase;
 class PLevel;
 class IWorldCollisionQuery;
 class IPhysicsScene;
+class FReplicationSystem;
 
 using FOnActorSpawned = TObjectMulticastDelegate<void(PActor*)>;
 
@@ -112,6 +113,8 @@ protected:
     ~PWorld() override;
 
 private:
+    friend class FReplicationSystem;
+
     struct FActiveOverlapPair
     {
         FObjectHandle A;
@@ -127,6 +130,7 @@ private:
     void DestroyActorNow(PActor* Actor);
     void SyncDynamicPhysicsBodies();
     void DispatchPhysicsEvents();
+    void BindReplicatedGameState(PGameStateBase* GameState);
 
     std::vector<FObjectHandle> LevelHandles;
     std::vector<FObjectHandle> PendingDestroyActorHandles;

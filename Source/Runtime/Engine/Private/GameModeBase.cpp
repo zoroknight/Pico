@@ -1,6 +1,7 @@
 #include "Pico/Engine/GameModeBase.h"
 
 #include "Pico/Engine/GameStateBase.h"
+#include "Pico/Engine/LocalPlayer.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/Player.h"
 #include "Pico/Engine/PlayerController.h"
@@ -11,7 +12,9 @@
 #include "Pico/Core/Log.h"
 #include "Pico/Object/ObjectGlobals.h"
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
 namespace Pico
 {
@@ -35,6 +38,64 @@ FName MakeUniqueActorName(PWorld& World, std::string BaseName)
         }
     }
     return FName();
+}
+
+std::vector<PPlayerStart*> CollectPlayerStarts(PWorld* World)
+{
+    std::vector<PPlayerStart*> Result;
+    if (World == nullptr) return Result;
+    for (PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr) continue;
+        for (PActor* Actor : Level->GetActors())
+        {
+            if (Actor != nullptr && !Actor->IsPendingDestroy()
+                && Actor->IsA(PPlayerStart::StaticClass()))
+            {
+                Result.push_back(static_cast<PPlayerStart*>(Actor));
+            }
+        }
+    }
+    return Result;
+}
+
+int32 GetPlayerStartIndex(PController* Controller)
+{
+    const auto* PlayerController = Controller != nullptr
+            && Controller->IsA(PPlayerController::StaticClass())
+        ? static_cast<const PPlayerController*>(Controller) : nullptr;
+    const PPlayerState* State = PlayerController != nullptr
+        ? PlayerController->GetPlayerState() : nullptr;
+    return State != nullptr ? std::max(0, State->GetPlayerId()) : 0;
+}
+
+bool IsPlayerSpawnOccupied(
+    PWorld* World,
+    const PPawn* SpawnedPawn,
+    const FVector3& Location,
+    float MinimumSeparation)
+{
+    if (World == nullptr) return false;
+    const float MinimumDistanceSquared = MinimumSeparation * MinimumSeparation;
+    for (PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr) continue;
+        for (PActor* Actor : Level->GetActors())
+        {
+            const auto* Pawn = Actor != nullptr
+                    && Actor != SpawnedPawn
+                    && Actor->IsA(PPawn::StaticClass())
+                ? static_cast<const PPawn*>(Actor) : nullptr;
+            if (Pawn != nullptr && !Pawn->IsPendingDestroy()
+                && Pawn->GetController() != nullptr
+                && (Pawn->GetActorLocation() - Location).SizeSquared()
+                    < MinimumDistanceSquared)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 }
 
@@ -178,7 +239,10 @@ void PGameModeBase::DispatchPostLogin(PPlayerController* NewPlayer)
 bool PGameModeBase::HandleStartingNewPlayer(PPlayerController* NewPlayer)
 {
     PWorld* World = GetWorld();
-    if (World != nullptr && NewPlayer != nullptr)
+    PPlayer* Player = NewPlayer != nullptr ? NewPlayer->GetPlayer() : nullptr;
+    const bool bIsLocalPlayer = Player != nullptr
+        && Player->IsA(PLocalPlayer::StaticClass());
+    if (World != nullptr && NewPlayer != nullptr && bIsLocalPlayer)
     {
         for (PLevel* Level : World->GetLevels())
         {
@@ -396,30 +460,13 @@ bool PGameModeBase::CanTransitionTo(EMatchState NewState) const
             && NewState == EMatchState::WaitingPostMatch);
 }
 
-PPlayerStart* PGameModeBase::ChoosePlayerStart(PController*)
+PPlayerStart* PGameModeBase::ChoosePlayerStart(PController* Player)
 {
-    PWorld* World = GetWorld();
-    if (World == nullptr)
-    {
-        return nullptr;
-    }
-    for (PLevel* Level : World->GetLevels())
-    {
-        if (Level == nullptr)
-        {
-            continue;
-        }
-        for (PActor* Actor : Level->GetActors())
-        {
-            if (Actor != nullptr
-                && !Actor->IsPendingDestroy()
-                && Actor->IsA(PPlayerStart::StaticClass()))
-            {
-                return static_cast<PPlayerStart*>(Actor);
-            }
-        }
-    }
-    return nullptr;
+    const std::vector<PPlayerStart*> Starts = CollectPlayerStarts(GetWorld());
+    if (Starts.empty()) return nullptr;
+    const std::size_t Index = static_cast<std::size_t>(
+        GetPlayerStartIndex(Player)) % Starts.size();
+    return Starts[Index];
 }
 
 PPawn* PGameModeBase::SpawnDefaultPawnFor(
@@ -445,7 +492,19 @@ PPawn* PGameModeBase::SpawnDefaultPawnFor(
         : nullptr;
     if (Pawn != nullptr && StartSpot != nullptr)
     {
-        Pawn->SetActorTransform(StartSpot->GetActorTransform());
+        FTransform SpawnTransform = StartSpot->GetActorTransform();
+        constexpr float MinimumSpawnSeparation = 180.0f;
+        const FVector3 OffsetDirection =
+            SpawnTransform.Rotation.RotateVector(FVector3::RightVector);
+        for (int32 Attempt = 0; Attempt < 16
+            && IsPlayerSpawnOccupied(
+                World, Pawn, SpawnTransform.Translation,
+                MinimumSpawnSeparation); ++Attempt)
+        {
+            SpawnTransform.Translation +=
+                OffsetDirection * MinimumSpawnSeparation;
+        }
+        Pawn->SetActorTransform(SpawnTransform);
     }
     return Pawn;
 }

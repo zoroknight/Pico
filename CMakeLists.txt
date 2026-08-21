@@ -167,6 +167,7 @@ endif()
 
 add_library(PicoAsset STATIC
     Source/Runtime/Asset/Private/CharacterProfile.cpp
+    Source/Runtime/Asset/Private/ThirdPersonControlProfile.cpp
     Source/Runtime/Asset/Private/AssetManager.cpp
     Source/Runtime/Asset/Private/AssetRegistry.cpp
     Source/Runtime/Asset/Private/Material.cpp
@@ -436,6 +437,7 @@ add_library(PicoEngine STATIC
     Source/Runtime/Engine/Private/Level.cpp
     Source/Runtime/Engine/Private/LightComponent.cpp
     Source/Runtime/Engine/Private/LocalPlayer.cpp
+    Source/Runtime/Engine/Private/NetPlayer.cpp
     Source/Runtime/Engine/Private/MovementComponent.cpp
     Source/Runtime/Engine/Private/NetDriver.cpp
     Source/Runtime/Engine/Private/Pawn.cpp

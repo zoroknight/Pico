@@ -222,6 +222,31 @@ void TestConnectionHandshakeAndReliability(FTestRunner& Runner)
     SendPackets(Server, ServerTransport, Now);
     ReceivePackets(ClientTransport, Client, Now);
 
+    const std::vector<Pico::uint8> UnreliablePayload { 30, 31, 32 };
+    Runner.Expect(Client.QueueUnreliable(UnreliablePayload),
+        "Open connections accept bounded unreliable messages");
+    Network->DropNextPacket();
+    SendPackets(Client, ClientTransport, Now);
+    for (int Step = 0; Step < 5; ++Step)
+    {
+        Now += 0.1;
+        Network->AdvanceTime(0.1);
+        SendPackets(Client, ClientTransport, Now);
+        ReceivePackets(ServerTransport, Server, Now);
+    }
+    Runner.Expect(Server.ConsumeDeliveredUnreliableMessages().empty(),
+        "A lost unreliable message is not retransmitted");
+
+    Client.QueueUnreliable(UnreliablePayload);
+    Network->DuplicateNextPacket();
+    SendPackets(Client, ClientTransport, Now);
+    ReceivePackets(ServerTransport, Server, Now);
+    const std::vector<std::vector<Pico::uint8>> UnreliableDelivered =
+        Server.ConsumeDeliveredUnreliableMessages();
+    Runner.Expect(UnreliableDelivered.size() == 1
+            && UnreliableDelivered.front() == UnreliablePayload,
+        "Unreliable messages are delivered at most once when packets duplicate");
+
     bool bFilledReliableQueue = true;
     for (std::size_t Index = 0; Index < 128; ++Index)
     {

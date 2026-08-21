@@ -152,6 +152,14 @@ void FGameEngine::Tick()
             }
             if (PGameInstance* GameInstance = GetGameInstance())
             {
+                if (NetDriver != nullptr)
+                {
+                    const std::vector<FNetConnectionId> Opened =
+                        NetDriver->ConsumeOpenedConnections();
+                    const std::vector<FNetConnectionId> Closed =
+                        NetDriver->ConsumeClosedConnections();
+                    GameInstance->DispatchNetworkEvents(Opened, Closed);
+                }
                 GameInstance->Tick(DeltaSeconds);
             }
         };
@@ -215,16 +223,19 @@ bool FGameEngine::LoadMap(
 
     if (GameInstance != nullptr)
     {
-        const PClass* GameModeClass = GameModule != nullptr
-            ? GameModule->GetGameModeClass()
-            : nullptr;
-        if (GameModeClass == nullptr)
+        if (NetDriver == nullptr || NetDriver->GetNetMode() != ENetMode::Client)
         {
-            GameModeClass = PGameModeBase::StaticClass();
-        }
-        if (!EngineLoop.GetWorld()->InitializeGameplay(GameModeClass))
-        {
-            return false;
+            const PClass* GameModeClass = GameModule != nullptr
+                ? GameModule->GetGameModeClass()
+                : nullptr;
+            if (GameModeClass == nullptr)
+            {
+                GameModeClass = PGameModeBase::StaticClass();
+            }
+            if (!EngineLoop.GetWorld()->InitializeGameplay(GameModeClass))
+            {
+                return false;
+            }
         }
         GameInstance->DispatchWorldInitialized(EngineLoop.GetWorld());
     }

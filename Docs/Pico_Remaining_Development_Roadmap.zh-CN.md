@@ -689,7 +689,8 @@ SkeletalMesh、17 个动画、材质、CharacterProfile 和 Data-Only Actor Blue
 | --- | --- | --- |
 | 第 1 周（已完成） | 新增 `PicoNetCore`；实现内存 Loopback 与 Windows UDP `INetTransport`、Packet Header、Connection、握手、Sequence、Ack/AckBits、心跳/超时、有限可靠队列；定义 NetMode、NetRole、`FNetObjectId`；NetDriver 接入帧阶段；编辑器增加多进程 Play Session 配置与编排 | 本机一个服务器与两个客户端完成 UDP 握手；可靠消息在丢包下确认/重发并恰好一次、有序交付；编辑器可启动/监控/统一停止可视化服务器与 1～4 个客户端；网络身份不复用 ObjectHandle/SceneId |
 | 第 2 周（已完成） | ActorChannel、Spawn/Destroy、网络对象引用、反射 Replication Schema、Dirty Tracking、Replication Condition、OnRep、每连接已确认属性基线和 Delta | 服务器 Actor 可在客户端生成、更新、引用和销毁；未变化字段不重复发送；断开与 GC 后无悬空 Channel/引用 |
-| 第 3 周 | Server/Client/Multicast RPC、可靠/不可靠、参数网络序列化、`ProcessEvent` 调用、方向/Role/Ownership/参数校验；落实 Gameplay Framework 网络可见性；完成开门或拾取纵向实例 | 合法交互 RPC 可执行并通过属性复制同步结果；非拥有者、错误方向和非法参数调用零副作用；三进程 Gameplay 状态一致 |
+| 第 3 周（已完成） | Server/Client/Multicast RPC、可靠/不可靠、参数网络序列化、`ProcessEvent` 调用、方向/Role/Ownership/参数校验；落实 Gameplay Framework 网络可见性；完成开门纵向实例 | 合法交互 RPC 可执行并通过属性复制同步结果；非拥有者、错误方向和非法参数调用零副作用；三进程 Gameplay 状态一致 |
+| 第 3.5 阶段（已完成） | 将调优后的第三人称移动/摄像机参数提取为 `.pcontrolprofile`；统一移动方向纯函数；增加策略 Hash、F1 诊断和 0/90 度黄金行为测试 | 控制策略可由 Actor Blueprint 引用并跨项目复用；所有网络玩家使用相同 Pawn Class 与策略；第 4 周预测和服务器重演不得复制另一套移动方向算法 |
 | 第 4 周 | SavedMove、输入序号、服务器重演、Ack/Correction、纠错快照、未确认输入回滚重演、模拟代理快照缓冲与插值；延迟/抖动/丢包模拟；Network Debug 与 Play Session 网络模拟控制 | 100～150 ms 延迟和少量丢包下所属角色可预测和纠正，其他角色平滑显示；一个服务器加两个客户端连续运行，重演、快照和可靠队列均有上限 |
 
 第 1 周完成记录：`PicoNetCore` 与 `FNetDriver` 已落地；Loopback 和真实 Winsock UDP 均通过一个服务器加两个客户端
@@ -712,6 +713,15 @@ F1 Project Debug 同时显示 NetId、`InitialOnly` marker、revision 与客户�
 2026-08-18 已在编辑器启动一个可视化服务器和两个客户端完成 Spawn、`Y` Transform、`U` RepNotify、`I` Destroy、
 `T` 重新 Spawn 的全流程人工验收；三端状态与调试计数一致，第 2 周可视化准入门槛通过。
 实现说明见 [`Month09_2_ActorReplication.md`](Month09_2_ActorReplication.md)。
+
+第 3 周实现记录：新增 `PNetPlayer` 与 Connection Ownership，服务器连接沿 `Login/PostLogin/RestartPlayer/Possess`
+建立网络玩家链；独立服务器不再创建 LocalPlayer，Client World 不再创建 GameMode，复制到客户端的 GameState 会绑定
+回 World。PlayerController 仅所属连接可见，Pawn/PlayerState 对其他客户端可见，客户端角色区分 AutonomousProxy 与
+SimulatedProxy。Server/Client/NetMulticast RPC 已通过 PFunction 元数据、参数线格式和 ProcessEvent 接入；可靠 RPC
+复用确认重发队列，不可靠 RPC 单次发送。运行时校验方向、Role、Ownership、参数、可靠性和每连接每帧 32 次上限。
+Sandbox 新增客户端 `F` 开门闭环及 F1 Role/RPC/门状态统计。完整 Debug 自动化测试 19/19 通过；三进程人工验收
+完成后即可进入第 4 周预测阶段。
+实现说明见 [`Month09_3_GameplayRpcAndOwnership.md`](Month09_3_GameplayRpcAndOwnership.md)。
 
 ### 第 6 月每周准入门槛
 
@@ -806,6 +816,12 @@ P2P/NAT 穿透和商业级拥塞控制。对应概念保留扩展点，但不得
 ## 第 7 月：广域网、PicoTask、Cook 与 Package
 
 进入网络主线前的人物装配缺口已经关闭：地图可以持久保存一个 `Auto Possess Player 0` 的可玩 Pawn；编辑器提供 Pawn Class/Profile 创建器和 Project Settings 资源选择器；运行时具备 ControlRotation、鼠标第三人称视角、视角相对移动、移动朝向旋转与 8 槽材质覆写。网络实现应复制 Pawn/Actor 的权威 Transform 和 Controller 的必要视角状态，不复制仅用于修正源资产坐标的 SkeletalMesh Relative Transform。
+
+第 4 周前已额外完成第三人称控制基线加固：`.pcontrolprofile` 独立保存移动、转向、摄像机和俯仰策略，
+Actor Blueprint 只持有类型化资产引用；客户端本地移动和服务器重演必须共同调用
+`BuildThirdPersonMovementBasis`。F1 显示 Pawn Class、Profile 路径及策略 Hash，黄金测试固定 W/S/A/D 在
+0/90 度视角下的语义。实现与复用指南见
+[Month09_3_5_ThirdPersonControlBaseline.md](Month09_3_5_ThirdPersonControlBaseline.md)。
 
 编辑器观察与装配体验也已经完成一次加固：主视口具有可关闭的世界 XYZ 原点轴线和可拖拽方向控件；
 Actor Blueprint 以编辑器同进程的独立原生窗口打开，并用带箭头的局部轴明确 Actor `+X/+Y/+Z`。

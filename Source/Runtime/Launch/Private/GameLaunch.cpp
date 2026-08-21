@@ -221,6 +221,10 @@ struct FGameplayDebugPanel
         ImGui::Text("Received: %llu   rejected: %llu",
             static_cast<unsigned long long>(Replication.MessagesReceived),
             static_cast<unsigned long long>(Replication.RejectedMessages));
+        ImGui::Text("RPC: sent %llu  received %llu  rejected %llu",
+            static_cast<unsigned long long>(Replication.RpcMessagesSent),
+            static_cast<unsigned long long>(Replication.RpcMessagesReceived),
+            static_cast<unsigned long long>(Replication.RpcMessagesRejected));
         const std::vector<Pico::FNetConnectionSnapshot> Connections =
             NetDriver.GetConnectionSnapshots();
         if (Connections.empty()) ImGui::TextDisabled("No network connections");
@@ -241,6 +245,13 @@ struct FGameplayDebugPanel
                 static_cast<unsigned long long>(Connection.Statistics.DuplicatePackets),
                 static_cast<unsigned long long>(Connection.Statistics.OutOfOrderPackets),
                 Connection.PendingReliableMessages);
+            ImGui::Text("Messages: reliable sent %llu  unreliable sent %llu / delivered %llu",
+                static_cast<unsigned long long>(
+                    Connection.Statistics.ReliableMessagesSent),
+                static_cast<unsigned long long>(
+                    Connection.Statistics.UnreliableMessagesSent),
+                static_cast<unsigned long long>(
+                    Connection.Statistics.UnreliableMessagesDelivered));
             if (!Connection.CloseReason.empty())
             {
                 ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.25f, 1.0f),
@@ -578,6 +589,15 @@ private:
             Object->GetName().ToString().c_str(),
             Handle.Index,
             Handle.Serial);
+        if (Object->IsA(Pico::PActor::StaticClass()))
+        {
+            const auto* Actor = static_cast<const Pico::PActor*>(Object);
+            ImGui::SameLine();
+            ImGui::TextDisabled("role %s / remote %s  NetId %u",
+                Pico::ToString(Actor->GetLocalRole()),
+                Pico::ToString(Actor->GetRemoteRole()),
+                Actor->GetNetObjectId().Value);
+        }
     }
 
     void Observe(

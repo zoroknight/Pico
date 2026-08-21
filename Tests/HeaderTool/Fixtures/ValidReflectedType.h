@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Pico/Object/ReflectionMacros.h"
+#include "Pico/Core/AssetPath.h"
 #include "ValidReflectedType.generated.h"
 
 namespace PicoTest
@@ -17,7 +18,13 @@ public:
     PFUNCTION()
     void OnRep_Score();
 
+    PFUNCTION(Server, Reliable)
+    void ServerSetScore(int32 NewScore);
+
 private:
+    PPROPERTY(Asset=ThirdPersonControlProfile)
+    Pico::FAssetPath ControlProfile;
+
     PPROPERTY(Replicated, ReadOnly, InitialOnly, RepNotify=OnRep_Score)
     int32 Score = 42;
 };

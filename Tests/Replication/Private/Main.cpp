@@ -28,6 +28,26 @@ public:
     PReplicationTestActor* GetTarget() const { return Target.Get(); }
     int GetRepNotifyCount() const { return RepNotifyCount; }
     void OnRep_Value() { ++RepNotifyCount; }
+    void ServerSetValue(Pico::int32 InValue)
+    {
+        Value = InValue;
+        ++ServerRpcCount;
+    }
+    void ClientConfirm(bool bAccepted)
+    {
+        bClientConfirmed = bAccepted;
+        ++ClientRpcCount;
+    }
+    void MulticastPulse(Pico::int32 InValue)
+    {
+        LastMulticastValue = InValue;
+        ++MulticastRpcCount;
+    }
+    int GetServerRpcCount() const { return ServerRpcCount; }
+    int GetClientRpcCount() const { return ClientRpcCount; }
+    int GetMulticastRpcCount() const { return MulticastRpcCount; }
+    bool IsClientConfirmed() const { return bClientConfirmed; }
+    Pico::int32 GetLastMulticastValue() const { return LastMulticastValue; }
 
 protected:
     explicit PReplicationTestActor(
@@ -50,6 +70,11 @@ private:
     Pico::int32 InitialValue = 0;
     Pico::TObjectPtr<PReplicationTestActor> Target;
     int RepNotifyCount = 0;
+    int ServerRpcCount = 0;
+    int ClientRpcCount = 0;
+    int MulticastRpcCount = 0;
+    bool bClientConfirmed = false;
+    Pico::int32 LastMulticastValue = 0;
 };
 
 PICO_DEFINE_CLASS(PReplicationTestActor)
@@ -78,6 +103,15 @@ bool PReplicationTestActor::RegisterProperties(Pico::PClass& Class)
         Functions,
         OnRep_Value,
         Pico::EFunctionFlags::Callable);
+    PICO_ADD_FUNCTION(Functions, ServerSetValue,
+        Pico::EFunctionFlags::Server | Pico::EFunctionFlags::Reliable,
+        Pico::FName("InValue"));
+    PICO_ADD_FUNCTION(Functions, ClientConfirm,
+        Pico::EFunctionFlags::Client | Pico::EFunctionFlags::Reliable,
+        Pico::FName("bAccepted"));
+    PICO_ADD_FUNCTION(Functions, MulticastPulse,
+        Pico::EFunctionFlags::NetMulticast,
+        Pico::FName("InValue"));
     return Class.AddFunctions(std::move(Functions));
 }
 
@@ -143,6 +177,7 @@ void TestReplicationLifecycle(FTestRunner& Runner)
         EngineLoop.Exit();
         return;
     }
+
     Source->SetValue(10);
     Source->SetInitialValue(7);
     Source->SetTarget(Target);
@@ -153,6 +188,7 @@ void TestReplicationLifecycle(FTestRunner& Runner)
     ServerReplication.SetWorld(ServerWorld);
     ClientReplication.SetWorld(ClientWorld);
     const Pico::FNetConnectionId Connection {1};
+    ServerReplication.SetActorOwningConnection(Source, Connection);
     Pico::uint32 NextReliableId = 1;
     std::vector<FQueuedMessage> Messages;
     const auto Queue = [&](std::span<const Pico::uint8> Payload,
@@ -203,6 +239,59 @@ void TestReplicationLifecycle(FTestRunner& Runner)
         && ClientSource->GetTarget() == ClientTarget
         && ClientReplication.GetStatistics().UnresolvedReferenceCount == 0,
         "A later Spawn repairs pending object references");
+
+    Runner.Expect(ClientSource->GetLocalRole() == Pico::ENetRole::AutonomousProxy
+            && ClientTarget->GetLocalRole() == Pico::ENetRole::SimulatedProxy,
+        "Spawn ownership assigns autonomous and simulated proxy roles");
+
+    std::vector<Pico::uint8> RpcMessage;
+    const std::vector<Pico::FFunctionValue> ServerArguments {
+        Pico::FFunctionValue(Pico::int32(77))};
+    Runner.Expect(ClientReplication.BuildRpcMessage(
+            ClientSource, Pico::FName("ServerSetValue"),
+            ServerArguments, RpcMessage)
+            && ServerReplication.HandleReliableMessage(Connection, RpcMessage)
+            && Source->GetValue() == 77 && Source->GetServerRpcCount() == 1,
+        "An owning autonomous proxy can invoke a reliable Server RPC");
+    Runner.Expect(!ServerReplication.HandleReliableMessage(
+            Pico::FNetConnectionId {2}, RpcMessage)
+            && !ServerReplication.HandleUnreliableMessage(Connection, RpcMessage)
+            && Source->GetServerRpcCount() == 1,
+        "Server RPC rejects non-owners and reliability mismatches");
+
+    const std::vector<Pico::FFunctionValue> ClientArguments {
+        Pico::FFunctionValue(true)};
+    Runner.Expect(ServerReplication.BuildRpcMessage(
+            Source, Pico::FName("ClientConfirm"), ClientArguments, RpcMessage)
+            && ClientReplication.HandleReliableMessage(Connection, RpcMessage)
+            && ClientSource->GetClientRpcCount() == 1
+            && ClientSource->IsClientConfirmed(),
+        "A reliable Client RPC executes on the owning proxy");
+
+    const std::vector<Pico::FFunctionValue> MulticastArguments {
+        Pico::FFunctionValue(Pico::int32(314))};
+    Runner.Expect(ServerReplication.BuildRpcMessage(
+            Source, Pico::FName("MulticastPulse"),
+            MulticastArguments, RpcMessage)
+            && ClientReplication.HandleUnreliableMessage(Connection, RpcMessage)
+            && ClientSource->GetMulticastRpcCount() == 1
+            && ClientSource->GetLastMulticastValue() == 314,
+        "An unreliable multicast RPC executes once on a remote proxy");
+
+    ServerReplication.BeginNetworkFrame();
+    ClientReplication.BuildRpcMessage(
+        ClientSource, Pico::FName("ServerSetValue"),
+        ServerArguments, RpcMessage);
+    bool bAcceptedFrameBudget = true;
+    for (Pico::uint32 Index = 0; Index < 32; ++Index)
+    {
+        bAcceptedFrameBudget = ServerReplication.HandleReliableMessage(
+            Connection, RpcMessage) && bAcceptedFrameBudget;
+    }
+    Runner.Expect(bAcceptedFrameBudget
+            && !ServerReplication.HandleReliableMessage(Connection, RpcMessage),
+        "RPC dispatch enforces a per-connection per-frame call budget");
+    Source->SetValue(10);
 
     for (const FQueuedMessage& Message : Messages)
     {

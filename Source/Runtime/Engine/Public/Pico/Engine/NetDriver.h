@@ -3,6 +3,7 @@
 #include "Pico/Net/NetConnection.h"
 #include "Pico/Net/NetTransport.h"
 #include "Pico/Engine/Replication.h"
+#include "Pico/Engine/NetRole.h"
 
 #include <memory>
 #include <vector>
@@ -10,23 +11,7 @@
 namespace Pico
 {
 class PWorld;
-enum class ENetMode : uint8
-{
-    Standalone,
-    Server,
-    Client
-};
-
-enum class ENetRole : uint8
-{
-    None,
-    SimulatedProxy,
-    AutonomousProxy,
-    Authority
-};
-
-const char* ToString(ENetMode Mode);
-const char* ToString(ENetRole Role);
+class PActor;
 
 struct FNetConnectionSnapshot
 {
@@ -64,6 +49,14 @@ public:
     const std::string& GetLastError() const { return LastError; }
     std::vector<FActorChannelSnapshot> GetActorChannelSnapshots() const;
     FReplicationStatistics GetReplicationStatistics() const;
+    std::vector<FNetConnectionId> ConsumeOpenedConnections();
+    std::vector<FNetConnectionId> ConsumeClosedConnections();
+    void SetActorOwningConnection(PActor* Actor, FNetConnectionId ConnectionId);
+    FNetConnectionId GetActorOwningConnection(const PActor* Actor) const;
+    bool CallRemoteFunction(
+        PActor* Target,
+        FName FunctionName,
+        std::span<const FFunctionValue> Arguments = {});
 
 private:
     FNetConnection* FindConnection(
@@ -84,6 +77,8 @@ private:
     uint64 InvalidPacketCount = 0;
     std::string LastError;
     FReplicationSystem ReplicationSystem;
+    std::vector<FNetConnectionId> OpenedConnections;
+    std::vector<FNetConnectionId> ClosedConnections;
     bool bInitialized = false;
 };
 }

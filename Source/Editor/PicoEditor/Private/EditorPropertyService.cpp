@@ -36,6 +36,8 @@ bool MatchesAssetType(EAssetType AssetType, EAssetReferenceType ReferenceType)
         return AssetType == EAssetType::AnimationMontage;
     case EAssetReferenceType::CharacterProfile:
         return AssetType == EAssetType::CharacterProfile;
+    case EAssetReferenceType::ThirdPersonControlProfile:
+        return AssetType == EAssetType::ThirdPersonControlProfile;
     case EAssetReferenceType::Texture:
         return AssetType == EAssetType::Texture;
     case EAssetReferenceType::Material:

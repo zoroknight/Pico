@@ -1,16 +1,22 @@
 #include "PicoSandbox/SandboxPlayerController.h"
 
-#include "Pico/Core/Math/Quat.h"
+#include "Pico/Asset/ThirdPersonControlProfile.h"
 #include "Pico/Engine/GameEngine.h"
 #include "Pico/Engine/GameInstance.h"
 #include "Pico/Engine/GameModeBase.h"
 #include "Pico/Engine/Player.h"
+#include "Pico/Engine/LocalPlayer.h"
+#include "Pico/Engine/NetDriver.h"
+#include "Pico/Engine/Level.h"
 #include "Pico/Engine/CharacterMovementComponent.h"
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Input/InputSystem.h"
 #include "PicoSandbox/SandboxPawn.h"
+#include "PicoSandbox/SandboxReplicationLabActor.h"
+
+#include <array>
 
 namespace PicoSandbox
 {
@@ -24,8 +30,6 @@ const char* ToString(ECharacterControlMode Mode)
     return "Unknown";
 }
 
-PICO_DEFINE_CLASS_NO_PROPERTIES(PSandboxPlayerController)
-
 PSandboxPlayerController::PSandboxPlayerController(
     const Pico::FObjectConstructionParams& Params)
     : PPlayerController(Params)
@@ -36,8 +40,18 @@ PSandboxPlayerController::PSandboxPlayerController(
 void PSandboxPlayerController::OnPossess(Pico::PPawn* InPawn)
 {
     PPlayerController::OnPossess(InPawn);
-    if (InPawn != nullptr)
-        SetControlRotation({-15.0f, InPawn->GetActorRotation().Yaw, 0.0f});
+    PSandboxPawn* SandboxPawn = InPawn != nullptr
+            && InPawn->IsA(PSandboxPawn::StaticClass())
+        ? static_cast<PSandboxPawn*>(InPawn) : nullptr;
+    if (SandboxPawn != nullptr)
+    {
+        SandboxPawn->LoadAndApplyThirdPersonControlProfile();
+        const Pico::FThirdPersonControlProfileData& Profile =
+            SandboxPawn->GetActiveControlProfile();
+        SetViewPitchLimits(Profile.MinimumCameraPitch, Profile.MaximumCameraPitch);
+        SetControlRotation({Profile.InitialCameraPitch,
+            InPawn->GetActorRotation().Yaw, 0.0f});
+    }
     ApplyControlMode();
 }
 
@@ -59,15 +73,19 @@ void PSandboxPlayerController::ApplyControlMode()
         ? static_cast<PSandboxPawn*>(GetPawn()) : nullptr;
     if (SandboxPawn == nullptr) return;
     Pico::PCharacterMovementComponent* Movement = SandboxPawn->GetCharacterMovement();
+    const Pico::FThirdPersonControlProfileData& Profile =
+        SandboxPawn->GetActiveControlProfile();
     if (Movement != nullptr)
     {
         Movement->SetOrientRotationToMovement(
             ControlMode == ECharacterControlMode::FreeLook
+                && Profile.bOrientRotationToMovement
                 && SandboxPawn->GetMovementReference() != EMovementReference::ActorRotation);
         Movement->SetUseControllerDesiredRotation(
-            ControlMode == ECharacterControlMode::Strafe);
+            ControlMode == ECharacterControlMode::Strafe
+                && Profile.bUseControllerDesiredRotationWhenAiming);
     }
-    SandboxPawn->SetUseControllerRotationYaw(false);
+    SandboxPawn->SetUseControllerRotationYaw(Profile.bUseControllerRotationYaw);
     Pico::PObject* BoomObject = Pico::FindObject(SandboxPawn, Pico::FName("CameraBoom"));
     auto* Boom = BoomObject != nullptr
             && BoomObject->IsA(Pico::PSpringArmComponent::StaticClass())
@@ -75,10 +93,11 @@ void PSandboxPlayerController::ApplyControlMode()
     if (Boom != nullptr)
     {
         Boom->SetTargetArmLength(
-            ControlMode == ECharacterControlMode::Strafe ? 340.0f : 420.0f);
+            ControlMode == ECharacterControlMode::Strafe
+                ? Profile.AimCameraArmLength : Profile.DefaultCameraArmLength);
         Boom->SetSocketOffset(
             ControlMode == ECharacterControlMode::Strafe
-                ? Pico::FVector3(0.0f, 65.0f, 10.0f)
+                ? Profile.AimCameraSocketOffset
                 : Pico::FVector3::ZeroVector);
     }
 }
@@ -90,30 +109,27 @@ void PSandboxPlayerController::DoMove(float Right, float Forward)
         ? static_cast<PSandboxPawn*>(GetPawn()) : nullptr;
     if (ControlledPawn == nullptr) return;
 
-    float BasisYaw = 0.0f;
     const EMovementReference Reference = ControlMode == ECharacterControlMode::Strafe
         ? EMovementReference::ControlRotation
         : ControlledPawn->GetMovementReference();
-    if (Reference == EMovementReference::ControlRotation)
-        BasisYaw = GetControlRotation().Yaw;
-    else if (Reference == EMovementReference::ActorRotation)
-        BasisYaw = ControlledPawn->GetActorRotation().Yaw;
-
-    const Pico::FQuat YawRotation = Pico::FQuat::FromRotator(
-        {0.0f, BasisYaw, 0.0f});
-    const Pico::FVector3 ForwardDirection = YawRotation.RotateVector(
-        Pico::FVector3::ForwardVector).GetSafeNormal();
-    const Pico::FVector3 RightDirection = Pico::FVector3::Cross(
-        ForwardDirection, Pico::FVector3::UpVector).GetSafeNormal();
-
-    ControlledPawn->AddMovementInput(ForwardDirection, Forward);
-    ControlledPawn->AddMovementInput(RightDirection, Right);
+    const Pico::FThirdPersonMovementBasis Basis =
+        Pico::BuildThirdPersonMovementBasis(
+            Reference,
+            GetControlRotation().Yaw,
+            ControlledPawn->GetActorRotation().Yaw);
+    ControlledPawn->AddMovementInput(Basis.Forward, Forward);
+    ControlledPawn->AddMovementInput(Basis.ScreenRight, Right);
 }
 
 void PSandboxPlayerController::Tick(float DeltaSeconds)
 {
     PPlayerController::Tick(DeltaSeconds);
     Pico::PPlayer* OwningPlayer = GetPlayer();
+    if (OwningPlayer == nullptr
+        || !OwningPlayer->IsA(Pico::PLocalPlayer::StaticClass()))
+    {
+        return;
+    }
     Pico::PGameInstance* GameInstance =
         OwningPlayer != nullptr ? OwningPlayer->GetGameInstance() : nullptr;
     Pico::FGameEngine* GameEngine =
@@ -155,5 +171,73 @@ void PSandboxPlayerController::Tick(float DeltaSeconds)
             World->GetGameMode()->RestartPlayer(this);
         }
     }
+    if (Input.WasKeyPressed(Pico::EKey::F))
+    {
+        Pico::PWorld* World = GetWorld();
+        PSandboxReplicationLabActor* Door = nullptr;
+        if (World != nullptr)
+        {
+            for (Pico::PLevel* Level : World->GetLevels())
+            {
+                if (Level == nullptr) continue;
+                for (Pico::PActor* Actor : Level->GetActors())
+                {
+                    if (Actor != nullptr
+                        && Actor->IsA(PSandboxReplicationLabActor::StaticClass())
+                        && !Actor->IsPendingDestroy())
+                    {
+                        Door = static_cast<PSandboxReplicationLabActor*>(Actor);
+                        break;
+                    }
+                }
+                if (Door != nullptr) break;
+            }
+        }
+        if (Door != nullptr)
+        {
+            const std::array<Pico::FFunctionValue, 1> Arguments = {
+                static_cast<Pico::PObject*>(Door)
+            };
+            GameEngine->GetNetDriver().CallRemoteFunction(
+                this, Pico::FName("ServerTryInteract"), Arguments);
+        }
+    }
+}
+
+void PSandboxPlayerController::ServerTryInteract(Pico::PActor* Target)
+{
+    PSandboxReplicationLabActor* Door = Target != nullptr
+            && Target->IsA(PSandboxReplicationLabActor::StaticClass())
+        ? static_cast<PSandboxReplicationLabActor*>(Target) : nullptr;
+    Pico::PPawn* ControlledPawn = GetPawn();
+    Pico::PPlayer* OwningPlayer = GetPlayer();
+    Pico::PGameInstance* GameInstance =
+        OwningPlayer != nullptr ? OwningPlayer->GetGameInstance() : nullptr;
+    Pico::FGameEngine* GameEngine =
+        GameInstance != nullptr ? GameInstance->GetGameEngine() : nullptr;
+    const bool bAccepted = Door != nullptr
+        && ControlledPawn != nullptr
+        && (ControlledPawn->GetActorLocation() - Door->GetActorLocation()).Size()
+            <= 500.0f
+        && Door->ToggleDoor();
+    if (GameEngine == nullptr) return;
+
+    const std::array<Pico::FFunctionValue, 1> ResultArguments = {bAccepted};
+    GameEngine->GetNetDriver().CallRemoteFunction(
+        this, Pico::FName("ClientInteractionResult"), ResultArguments);
+    if (bAccepted)
+    {
+        const std::array<Pico::FFunctionValue, 1> PulseArguments = {
+            Door->GetDoorUseCount()
+        };
+        GameEngine->GetNetDriver().CallRemoteFunction(
+            Door, Pico::FName("MulticastDoorPulse"), PulseArguments);
+    }
+}
+
+void PSandboxPlayerController::ClientInteractionResult(bool bAccepted)
+{
+    bLastInteractionAccepted = bAccepted;
+    ++ClientInteractionResultCount;
 }
 }

@@ -146,7 +146,8 @@ bool DecodeNetPacket(
     constexpr uint16 KnownFlags =
         static_cast<uint16>(ENetPacketFlags::Handshake)
         | static_cast<uint16>(ENetPacketFlags::Reliable)
-        | static_cast<uint16>(ENetPacketFlags::Heartbeat);
+        | static_cast<uint16>(ENetPacketFlags::Heartbeat)
+        | static_cast<uint16>(ENetPacketFlags::Unreliable);
     if (OutPacket.Header.Magic != NetProtocolMagic
         || OutPacket.Header.Version != NetProtocolVersion
         || (RawFlags & ~KnownFlags) != 0

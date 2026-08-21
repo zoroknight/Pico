@@ -286,12 +286,48 @@ std::shared_ptr<const FCharacterProfileData> FAssetManager::LoadCharacterProfile
     return Loaded;
 }
 
+std::shared_ptr<const FThirdPersonControlProfileData>
+FAssetManager::LoadThirdPersonControlProfile(
+    const FAssetPath& AssetPath,
+    const FAssetRegistry& Registry,
+    EThirdPersonControlProfileError* OutError)
+{
+    if (OutError != nullptr) *OutError = EThirdPersonControlProfileError::None;
+    const FAssetRecord* Record = Registry.Find(AssetPath);
+    if (Record == nullptr || Record->Type != EAssetType::ThirdPersonControlProfile)
+    {
+        if (OutError != nullptr)
+            *OutError = EThirdPersonControlProfileError::InvalidArgument;
+        return {};
+    }
+    auto Found = std::find_if(
+        ThirdPersonControlProfiles.begin(), ThirdPersonControlProfiles.end(),
+        [Record](const auto& Entry) { return Entry.AssetPath == Record->AssetPath; });
+    if (Found != ThirdPersonControlProfiles.end()
+        && Found->FileSize == Record->FileSize
+        && Found->LastWriteTime == Record->LastWriteTime)
+    {
+        return Found->Data;
+    }
+    auto Loaded = std::make_shared<FThirdPersonControlProfileData>();
+    if (!LoadThirdPersonControlProfileFromFile(Record->FilePath, *Loaded, OutError))
+        return {};
+    if (Found != ThirdPersonControlProfiles.end())
+        *Found = {Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded};
+    else
+        ThirdPersonControlProfiles.push_back(
+            {Record->AssetPath, Record->FileSize, Record->LastWriteTime, Loaded});
+    return Loaded;
+}
+
 std::size_t FAssetManager::GetCachedSkeletonCount() const { return Skeletons.size(); }
 std::size_t FAssetManager::GetCachedSkeletalMeshCount() const { return SkeletalMeshes.size(); }
 std::size_t FAssetManager::GetCachedAnimationClipCount() const { return AnimationClips.size(); }
 std::size_t FAssetManager::GetCachedAnimationSetCount() const { return AnimationSets.size(); }
 std::size_t FAssetManager::GetCachedAnimationMontageCount() const { return AnimationMontages.size(); }
 std::size_t FAssetManager::GetCachedCharacterProfileCount() const { return CharacterProfiles.size(); }
+std::size_t FAssetManager::GetCachedThirdPersonControlProfileCount() const
+{ return ThirdPersonControlProfiles.size(); }
 
 void FAssetManager::Invalidate(const FAssetPath& AssetPath)
 {
@@ -337,6 +373,7 @@ void FAssetManager::Invalidate(const FAssetPath& AssetPath)
     EraseAnimation(AnimationSets);
     EraseAnimation(AnimationMontages);
     EraseAnimation(CharacterProfiles);
+    EraseAnimation(ThirdPersonControlProfiles);
 }
 
 void FAssetManager::Clear()
@@ -350,5 +387,6 @@ void FAssetManager::Clear()
     AnimationSets.clear();
     AnimationMontages.clear();
     CharacterProfiles.clear();
+    ThirdPersonControlProfiles.clear();
 }
 }

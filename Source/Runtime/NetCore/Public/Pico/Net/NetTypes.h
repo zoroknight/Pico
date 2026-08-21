@@ -58,6 +58,8 @@ struct FNetStatistics
     uint64 ReliableMessagesSent = 0;
     uint64 ReliableMessagesDelivered = 0;
     uint64 ReliableMessagesResent = 0;
+    uint64 UnreliableMessagesSent = 0;
+    uint64 UnreliableMessagesDelivered = 0;
     double SmoothedRoundTripSeconds = 0.0;
 };
 }

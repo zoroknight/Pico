@@ -49,7 +49,9 @@ public:
     bool QueueReliable(
         std::span<const uint8> Payload,
         uint32* OutReliableId = nullptr);
+    bool QueueUnreliable(std::span<const uint8> Payload);
     std::vector<std::vector<uint8>> ConsumeDeliveredReliableMessages();
+    std::vector<std::vector<uint8>> ConsumeDeliveredUnreliableMessages();
     std::vector<uint32> ConsumeAcknowledgedReliableIds();
 
     ENetConnectionState GetState() const { return State; }
@@ -118,9 +120,11 @@ private:
     bool bServerSide = false;
     bool bClientAckPending = false;
     std::deque<FPendingReliable> PendingReliable;
+    std::deque<std::vector<uint8>> PendingUnreliable;
     std::deque<FSentPacket> SentPackets;
     std::unordered_map<uint32, std::vector<uint8>> BufferedReliableMessages;
     std::vector<std::vector<uint8>> DeliveredReliableMessages;
+    std::vector<std::vector<uint8>> DeliveredUnreliableMessages;
     std::vector<uint32> AcknowledgedReliableIds;
 };
 }

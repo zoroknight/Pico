@@ -5,6 +5,7 @@
 #include "Pico/Asset/Material.h"
 #include "Pico/Asset/SkeletalAnimation.h"
 #include "Pico/Asset/StaticMesh.h"
+#include "Pico/Asset/ThirdPersonControlProfile.h"
 #include "Pico/Asset/Texture.h"
 
 #include <memory>
@@ -51,6 +52,10 @@ public:
         const FAssetPath& AssetPath,
         const FAssetRegistry& Registry,
         ECharacterProfileError* OutError = nullptr);
+    std::shared_ptr<const FThirdPersonControlProfileData> LoadThirdPersonControlProfile(
+        const FAssetPath& AssetPath,
+        const FAssetRegistry& Registry,
+        EThirdPersonControlProfileError* OutError = nullptr);
     std::size_t GetCachedStaticMeshCount() const;
     std::size_t GetCachedTextureCount() const;
     std::size_t GetCachedMaterialCount() const;
@@ -60,6 +65,7 @@ public:
     std::size_t GetCachedAnimationSetCount() const;
     std::size_t GetCachedAnimationMontageCount() const;
     std::size_t GetCachedCharacterProfileCount() const;
+    std::size_t GetCachedThirdPersonControlProfileCount() const;
     void Invalidate(const FAssetPath& AssetPath);
     void Clear();
 
@@ -106,5 +112,7 @@ private:
     std::vector<TAnimationCacheEntry<FAnimationSetData>> AnimationSets;
     std::vector<TAnimationCacheEntry<FAnimationMontageData>> AnimationMontages;
     std::vector<TAnimationCacheEntry<FCharacterProfileData>> CharacterProfiles;
+    std::vector<TAnimationCacheEntry<FThirdPersonControlProfileData>>
+        ThirdPersonControlProfiles;
 };
 }

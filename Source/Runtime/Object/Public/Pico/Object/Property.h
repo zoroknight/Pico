@@ -63,6 +63,7 @@ enum class EAssetReferenceType : uint8
     AnimationSet,
     AnimationMontage,
     CharacterProfile,
+    ThirdPersonControlProfile,
     Texture,
     Material
 };

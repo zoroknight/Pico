@@ -202,7 +202,7 @@ public:
         static const std::set<std::string> NativeExtensions {
             ".pworld", ".pmesh", ".ptex", ".pmat", ".pskeleton",
             ".pskeletalmesh", ".panimation", ".panimset", ".pmontage",
-            ".pcharprofile", ".pblueprint"
+            ".pcharprofile", ".pcontrolprofile", ".pblueprint"
         };
         static const std::set<std::string> ExcludedDirectories {
             "source", "saved", "intermediate"

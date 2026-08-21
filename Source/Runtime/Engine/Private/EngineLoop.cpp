@@ -26,6 +26,7 @@
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/LightComponent.h"
 #include "Pico/Engine/LocalPlayer.h"
+#include "Pico/Engine/NetPlayer.h"
 #include "Pico/Engine/MovementComponent.h"
 #include "Pico/Engine/Player.h"
 #include "Pico/Engine/Pawn.h"
@@ -311,6 +312,7 @@ int FEngineLoop::Init()
 
     if (!PPlayer::RegisterClass()
         || !PLocalPlayer::RegisterClass()
+        || !PNetPlayer::RegisterClass()
         || !PGameInstance::RegisterClass()
         || !PAnimInstance::RegisterClass()
         || !PActorComponent::RegisterClass()
