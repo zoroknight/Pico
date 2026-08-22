@@ -28,6 +28,9 @@ The current implementation can:
 - Validate that path in the PicoSandbox Replication Lab: an authority-spawned cube exposes matching
   NetId/InitialOnly state in three F1 panels, while server keys exercise Transform Delta, OnRep,
   Destroy, and fresh Spawn across two clients.
+- Run the same Windows Development Stage across two physical Windows PCs on a LAN: PC A hosts the
+  separate server and client 1, while PC B runs client 2; movement, jumping, and Gameplay RPCs stay
+  synchronized through the authoritative UDP path.
 - Configure editor Play as Standalone or a visible separate server plus one to four clients; persist
   port/window settings and launch, monitor, log, and stop the complete multi-process Play Session.
 - Scope Windows `SIO_UDP_CONNRESET` suppression to each Pico UDP socket so startup-race Winsock
@@ -144,6 +147,8 @@ The current implementation can:
 - Package a saved project through the standalone `PicoPackager` or the editor File menu into an
   atomic Windows Development Stage, driven by a target receipt, native-asset contributors,
   validation, a file report, and an optional repository-external smoke test.
+- Build `PicoPackager` automatically as a dependency of `PicoEditor`, so a standalone Release editor
+  build always places the packaging tool beside the editor entry point.
 - Explicitly replace a stable package name or create a side-by-side custom Stage; unique internal
   staging directories are cleaned after success or failure without damaging the last good package.
 - Represent persistent references with validated `/Game/...` asset paths instead of machine-specific
@@ -723,7 +728,8 @@ Project month 6 is complete for the learning MVP. Character movement now adds or
 autonomous-proxy prediction, server replay and validation, Ack/Correction with unacknowledged-move replay,
 simulated-proxy interpolation or bounded extrapolation, and independent Mesh smoothing. A deterministic
 36,000-frame regression covers the equivalent of 150 ms RTT with about 5% snapshot loss and verifies bounded
-buffers plus final convergence; the complete Debug suite passes 19/19 tests.
+buffers plus final convergence; the complete Debug suite passes 19/19 tests. The packaged Development Stage
+has also passed a two-PC LAN session with one separate server and two playable clients.
 
 The remaining learning path is:
 

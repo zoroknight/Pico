@@ -18,6 +18,10 @@ stopped, then launches `PicoPackager` as a separate process. Progress and the fi
 reported through Message Log. Closing the editor does not make packaging code part of the runtime or
 editor process.
 
+`PicoEditor` has an explicit CMake dependency on `PicoPackager`. Building the editor target therefore
+also places the matching packager executable beside it, while the tool remains a separate process and
+module boundary at runtime.
+
 From PowerShell:
 
 ```powershell

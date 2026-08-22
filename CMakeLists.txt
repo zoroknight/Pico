@@ -752,6 +752,8 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Private/PicoEditorApp.h
     )
 
+    add_dependencies(PicoEditor PicoPackager)
+
     target_link_libraries(PicoEditor
         PRIVATE
             PicoImGui

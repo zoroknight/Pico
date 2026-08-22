@@ -552,7 +552,7 @@ struct FActorBlueprintEditor::FImpl
         {
             ImGui::TableSetupColumn("Components", ImGuiTableColumnFlags_WidthFixed, 260.0f);
             ImGui::TableSetupColumn("Viewport", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Details", ImGuiTableColumnFlags_WidthFixed, 390.0f);
+            ImGui::TableSetupColumn("Details", ImGuiTableColumnFlags_WidthFixed, 450.0f);
             ImGui::TableNextColumn();
             if (ImGui::BeginChild("BlueprintComponents")) DrawComponentTree();
             ImGui::EndChild();

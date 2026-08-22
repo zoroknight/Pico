@@ -448,14 +448,20 @@ void FDetailsPanel::DrawReflectedProperties(PObject* Object)
 
     ImGui::Separator();
     ImGui::TextUnformatted("Reflected Properties");
+    const float AvailableWidth = ImGui::GetContentRegionAvail().x;
+    const float PropertyColumnWidth = std::clamp(
+        AvailableWidth * 0.48f, 150.0f, 230.0f);
     if (ImGui::BeginTable(
             "ReflectedProperties",
             2,
             ImGuiTableFlags_SizingStretchProp
+                | ImGuiTableFlags_Resizable
                 | ImGuiTableFlags_BordersInnerH
+                | ImGuiTableFlags_BordersInnerV
                 | ImGuiTableFlags_NoSavedSettings))
     {
-        ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+        ImGui::TableSetupColumn(
+            "Property", ImGuiTableColumnFlags_WidthFixed, PropertyColumnWidth);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
         for (const PProperty* Property : Properties)
         {
@@ -681,7 +687,16 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
     ImGui::AlignTextToFramePadding();
+    const float LabelWidth = ImGui::GetContentRegionAvail().x;
+    ImGui::PushTextWrapPos(
+        ImGui::GetCursorPosX() + std::max(LabelWidth, 1.0f));
     ImGui::TextUnformatted(DisplayName.c_str());
+    ImGui::PopTextWrapPos();
+    if (ImGui::IsItemHovered()
+        && ImGui::CalcTextSize(DisplayName.c_str()).x > LabelWidth)
+    {
+        ImGui::SetTooltip("%s", DisplayName.c_str());
+    }
     ImGui::TableSetColumnIndex(1);
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::PushID(Property);

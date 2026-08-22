@@ -25,6 +25,8 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   [`Docs/Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md`](Docs/Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md)。
 - PicoSandbox Replication Lab 可用一个可视化服务器和两个客户端验证完整路径：三个 F1 面板显示一致的 NetId 与
   InitialOnly 状态，服务器按键可触发 Transform Delta、OnRep、Destroy 和重新 Spawn。
+- 同一次 Windows Development Stage 已在两台真实 Windows 电脑上完成局域网验收：电脑 A 同时运行独立服务器与
+  客户端 1，电脑 B 运行客户端 2，双方移动、跳跃和 Gameplay RPC 可通过 UDP 权威链路同步。
 - 编辑器 Play 下拉菜单可在 Standalone 与“可视化独立服务器 + 1～4 个客户端”之间切换，持久化端口和窗口
   尺寸，并以独立标题、日志和进程句柄启动、监控及统一停止整组 Play Session。
 - Windows UDP Transport 针对自身 Socket 关闭 `SIO_UDP_CONNRESET`，并将启动竞态产生的 Winsock `10054`
@@ -113,6 +115,8 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   仍能由 Manifest 定位 Engine、项目和资产并正常运行。
 - 可以通过独立 `PicoPackager` 或编辑器 File 菜单生成原子替换的 Windows Development Stage；Target Receipt、
   原生资产 Contributor、校验、文件报告和可选的仓库外冒烟测试共同组成第一版打包链路。
+- `PicoEditor` 构建目标显式依赖 `PicoPackager`，单独构建 Release 编辑器也会在同一 Binaries 目录生成打包器，
+  避免编辑器入口因遗漏工具目标而失效。
 - 打包窗口支持自定义 Package Name 和显式 `Replace Package`：稳定名称用于更新已有包，自定义名称用于并列输出；
   唯一内部 Stage 工作目录会在成功或失败后清理，失败不会破坏上一次可用包。
 - 使用经过校验的 `/Game/...` 资产路径保存持久引用，不把本机磁盘路径写入对象或场景。
@@ -583,11 +587,11 @@ private:
 [Data-Only Actor Blueprint 与角色装配编辑器](Docs/Month08_9_DataOnlyActorBlueprint.md)。Data-Only Blueprint
 负责可复用的 Actor/组件默认值和生成类；行为节点仍属于后续 PicoGraph，不与当前装配工作流耦合。后续学习路线为：
 
-第 6 月前的运行时基线已经增加明确的 `BeforeWorldTick/AfterWorldTick` 阶段：GameInstance 在 World 模拟前运行，
-GC 与帧率限制位于 World 和帧末回调之后；编辑器文档测试改用临时项目副本，不会再修改真实 PicoSandbox 地图。
-具体边界见 [第 6 月前网络准入基线](Docs/Month08_14_PreNetworkReadiness.md)。
+第 6 月网络学习型 MVP 已完成并通过双机局域网验收：UDP Connection、ActorChannel、属性复制、RPC/Ownership、
+SavedMove、本地预测、服务器重演、Ack/Correction、模拟代理平滑和网络模拟已经形成可打包运行的双人闭环。
+具体边界见 [角色网络移动、预测与插值](Docs/Month09_4_CharacterNetworkMovement.md) 和
+[网络风险登记](Docs/NetworkRiskRegister.zh-CN.md)。
 
-- Gameplay RPC、Ownership、角色网络移动、客户端预测与修正
 - Dedicated Server/广域网验证、依赖裁剪 Cook、Shipping 与全新电脑打包验收
 - 精简的 `PicoTask` Worker Pool 与 Game Thread Dispatcher，用于异步 Cook、构建和 AI 请求；运行时对象仍由 Game Thread 修改
 - 精简版 Gameplay Ability System 与 AbilityTask，随后接入 AI 工具和 Agent 工作流

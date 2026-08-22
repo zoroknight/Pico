@@ -734,6 +734,10 @@ Debug 全量自动化 19/19 通过；`PicoCharacterMovementTests` 增加固定�
 单程快照延迟对应 150 ms RTT，并丢弃约 5% 快照，验证延迟队列、Mesh 平滑偏移和快照历史有界，停止输入后
 模拟代理与权威位置完全收敛。三进程 40 ms RTT 已完成人工操作检查。项目按学习型 MVP 标准关闭本月；真实等待
 10 分钟的 100～150 ms/5% 长稳测试保留为发布或公网验证前的可选加固，不再阻塞后续月份。
+2026-08-22 又使用同一次 Windows Development Stage 完成两台真实 Windows 电脑的局域网验收：电脑 A 运行
+独立服务器与客户端 1，电脑 B 运行客户端 2，连接、双向角色移动、跳跃和 Gameplay RPC 均通过。因此第 6 月
+计划范围与真实局域网交付证据均按 100% 关闭；公网 Dedicated Server、重连和 Client/Server Shipping 包仍属于
+第 7 月，不反向扩大本月范围。
 实现说明见 [`Month09_4_CharacterNetworkMovement.md`](Month09_4_CharacterNetworkMovement.md)。
 
 第 4 周后低延迟加固顺序固定为：先增加端到端阶段计时，再建立服务器时间同步与 UE5 风格动态平滑，然后补
@@ -861,6 +865,7 @@ Windows Development Package V1 已提前完成。`PicoPackager` 与编辑器 Fil
 Pico 原生资产和声明式 Runtime Dependency，在临时目录完成校验及仓库外冒烟测试后原子替换成功 Stage；
 `Content/Source`、Saved、Intermediate、FBX/glTF/GLB/OBJ 和 Assimp 不进入包。该基线按
 `Game/Client/Server + Development/Shipping + IPackageContributor` 扩展，网络和后端替换不应重写 StageBuilder。
+`PicoEditor` 目标现在显式依赖 `PicoPackager`，单独构建编辑器时不会再遗漏同目录的打包工具。
 同名输出必须显式选择 Replace，自定义 Package Name 只改变 Stage 文件夹名；唯一内部工作目录在成功或失败后
 清理。Game Target 使用 Windows GUI 子系统，后续 Dedicated Server Target 仍可单独保留控制台日志行为。
 
