@@ -356,18 +356,35 @@ int main(int Argc, char** Argv)
             | ImGuiConfigFlags_ViewportsEnable;
         IO.IniFilename = nullptr;
         const float UiScale = FindUiScale(Argc, Argv);
+        const float FontSize = 16.0f * UiScale;
         const std::filesystem::path InterfaceFont = "C:/Windows/Fonts/segoeui.ttf";
         if (std::filesystem::is_regular_file(InterfaceFont))
         {
             IO.FontDefault = IO.Fonts->AddFontFromFileTTF(
                 InterfaceFont.string().c_str(),
-                16.0f * UiScale);
+                FontSize);
         }
         if (IO.FontDefault == nullptr)
         {
             ImFontConfig FontConfig;
-            FontConfig.SizePixels = 16.0f * UiScale;
+            FontConfig.SizePixels = FontSize;
             IO.FontDefault = IO.Fonts->AddFontDefault(&FontConfig);
+        }
+        for (const std::filesystem::path& ChineseFont : {
+                 std::filesystem::path("C:/Windows/Fonts/msyh.ttc"),
+                 std::filesystem::path("C:/Windows/Fonts/simhei.ttf") })
+        {
+            if (!std::filesystem::is_regular_file(ChineseFont))
+                continue;
+            ImFontConfig MergeConfig;
+            MergeConfig.MergeMode = true;
+            MergeConfig.PixelSnapH = true;
+            if (IO.Fonts->AddFontFromFileTTF(
+                    ChineseFont.string().c_str(), FontSize, &MergeConfig,
+                    IO.Fonts->GetGlyphRangesChineseFull()) != nullptr)
+            {
+                break;
+            }
         }
         ApplyEditorStyle(UiScale);
         ImGui::GetStyle().WindowRounding = 0.0f;
@@ -478,6 +495,9 @@ int main(int Argc, char** Argv)
             ProjectHistory.Add(ProjectFile);
             ProjectHistory.Save(EditorSettingsFile);
             Pico::FPicoEditorApp App(&EngineLoop, &ViewportRenderer, Window);
+            Pico::FEngineFrameCallbacks FrameCallbacks;
+            FrameCallbacks.BeforeWorldTick =
+                [&App](float) { App.PumpGameThreadTasks(); };
             while (!EngineLoop.ShouldExit())
             {
                 glfwPollEvents();
@@ -486,7 +506,7 @@ int main(int Argc, char** Argv)
                     glfwSetWindowShouldClose(Window, GLFW_FALSE);
                     App.RequestClose();
                 }
-                EngineLoop.Tick();
+                EngineLoop.Tick(FrameCallbacks);
 
                 ImGui_ImplOpenGL3_NewFrame();
                 ImGui_ImplGlfw_NewFrame();

@@ -13,6 +13,20 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 
 当前实现可以：
 
+- 通过独立 `PicoTasks` 固定 Worker Pool 执行可取消的纯数据后台任务，并在 `BeforeWorldTick` 由带帧预算的
+  Game Thread Dispatcher 安全应用结果；关闭编辑器时停止接收任务、请求取消并等待 Worker 退出。
+- 通过不依赖 Editor/World/UI 的 `PicoAgentCore` 运行确定性 Agent 流程：Provider 与 Tool Executor 可替换，
+  状态迁移受校验，修复和步骤有预算，支持协作取消、追加式 JSONL Session、Checkpoint、重启恢复和
+  ToolCall ID 幂等。
+- Agent 工具执行固定经过 JSON Schema、权限、审批、现有 World Snapshot 事务、后置验证和回滚；阶段 Trace
+  写入 Session，CallId 不能换参数复用授权，Agent 创建的 Actor 可直接进入编辑器原有 Undo 历史。
+- Agent 可通过通用工具发现 Actor/Component 的 `PProperty`、当前值和语义元数据，并在一次审批与 Undo 事务中
+  批量修改支持的 `Editable` 属性；新增普通反射属性不需要再手写专用工具。
+- AI Chat 支持按 Provider 隔离的多会话、新建/删除、重启恢复、自动定位最新消息、气泡复制，以及基于 MD4C 的
+  Markdown/JSON 代码块显示；代码块可展开，但不会抢占外层聊天记录的滚轮。
+- 场景 Agent 可搜索真实资产、创建碰撞房间、放置或删除 Data-Only Actor Blueprint 实例、装配第三人称角色、
+  校验并保存 World，并通过独立的 `editor.play.start/stop` 启停游戏。运行与打包使用不同工具和硬意图检查，
+  “运行项目”不会误调用 Packager。
 - 运行类似 UE 的 `PreInit -> Init -> Tick -> Exit` 引擎循环。
 - 通过独立 `PicoNetCore` 使用确定性 Loopback 或非阻塞 Windows UDP 连接一个服务器和多个客户端，提供版本化
   Packet、握手、Sequence/Ack、有界且有序的可靠交付、心跳、超时，以及 World 前后 NetDriver 阶段。
@@ -190,6 +204,8 @@ PicoSandboxGame
 | 模块 | 职责 |
 | --- | --- |
 | `PicoCore` | App状态、命令行、配置、日志、FName、路径、时间、数学和项目描述 |
+| `PicoTasks` | 固定 Worker Pool、任务状态、协作取消、异常隔离和带帧预算的 Game Thread Dispatcher |
+| `PicoAgentCore` | Provider/Runtime 边界、Agent 状态机、预算、追加式 Session、Checkpoint、恢复和 ToolCall 幂等 |
 | `PicoInput` | 逐帧按键与指针状态，以及可配置的 Action/Axis 映射 |
 | `PicoNetCore` | 网络地址与身份、Packet 编解码、确定性 Loopback、非阻塞 UDP、握手、Ack、有界可靠交付、心跳和超时 |
 | `PicoAsset` | 经过校验的虚拟资产发现、确定性项目注册表和文件元数据 |
@@ -530,6 +546,12 @@ private:
 
 相关文档：
 
+- [AI 优先后续开发路线（当前首要计划）](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)
+- [PicoTasks 与 Game Thread Dispatcher](Docs/AIPhase01_PicoTasksAndGameThreadDispatcher.md)
+- [Pico Agent Core 与可恢复 Session](Docs/AIPhase02_PicoAgentCoreAndSessions.md)
+- [Agent Tool 安全管线与编辑器事务](Docs/AIPhase03_AgentToolPipeline.md)
+- [AI Chat Workspace 与 DeepSeek/Kimi Provider](Docs/AIPhase04_ChatWorkspaceAndProviders.md)
+- [场景 Agent 通用反射属性工具](Docs/AIPhase05_ReflectedPropertyTools.md)
 - [Pico 剩余开发路线](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
 - [第 6 月前网络准入基线](Docs/Month08_14_PreNetworkReadiness.md)
 - [网络开发风险登记](Docs/NetworkRiskRegister.zh-CN.md)
@@ -593,8 +615,8 @@ SavedMove、本地预测、服务器重演、Ack/Correction、模拟代理平滑
 [网络风险登记](Docs/NetworkRiskRegister.zh-CN.md)。
 
 - Dedicated Server/广域网验证、依赖裁剪 Cook、Shipping 与全新电脑打包验收
-- 精简的 `PicoTask` Worker Pool 与 Game Thread Dispatcher，用于异步 Cook、构建和 AI 请求；运行时对象仍由 Game Thread 修改
-- 精简版 Gameplay Ability System 与 AbilityTask，随后接入 AI 工具和 Agent 工作流
+- 扩充 AI 的资产、材质、灯光、保存、Play 和 Package 确定性工具
+- 精简版 Gameplay Ability System 与 AbilityTask，随后实现 PicoGraph 和 AI 编排玩法
 
-持续维护的排期和验收标准位于 [Pico 剩余开发路线](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)，
+当前优先排期和验收标准位于 [AI 优先后续开发路线](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)，
 其他阶段记录位于 [`Docs`](Docs)。

@@ -1,4 +1,5 @@
 #include "PicoEditorApp.h"
+#include "AgentChatWorkspace.h"
 #include "NativeFileDialog.h"
 
 #include "Pico/Developer/ReflectionDebug.h"
@@ -131,6 +132,7 @@ void BuildDefaultDockLayout(ImGuiID DockspaceId, const ImVec2& DockspaceSize)
     ImGui::DockBuilderDockWindow("Details", DetailsNodeId);
     ImGui::DockBuilderDockWindow("Content Browser", ContentBrowserNodeId);
     ImGui::DockBuilderDockWindow("Message Log", ContentBrowserNodeId);
+    ImGui::DockBuilderDockWindow("AI Chat", DetailsNodeId);
     ImGui::DockBuilderFinish(DockspaceId);
 }
 
@@ -204,6 +206,10 @@ FPicoEditorApp::FPicoEditorApp(
             ViewportPanel.InvalidateStaticMesh(AssetPath);
         })
 {
+    if (!TaskSystem.Initialize())
+    {
+        throw std::runtime_error("Pico task system initialization failed");
+    }
     FPaths::TryGetProjectWritePath(
         EProjectWriteRoot::Saved,
         "Editor/PlaySettings.ini",
@@ -272,13 +278,90 @@ FPicoEditorApp::FPicoEditorApp(
     }
     SaveEditorSession(true);
     UpdateWindowTitle();
+    AgentChatWorkspace = std::make_unique<FAgentChatWorkspace>(
+        EngineLoop,
+        &Selection,
+        &TransactionManager,
+        &TaskSystem,
+        &GameThreadDispatcher,
+        [this]() { WorldDocument.MarkDirty(); },
+        &CommandService,
+        &WorldDocument,
+        [this](const std::filesystem::path& OutputRoot,
+               const std::string& PackageName,
+               bool bSmokeTest)
+        {
+            if (PackageProcess.IsValid())
+                return std::pair<bool, std::string> {
+                    false, "A package operation is already running"};
+            std::snprintf(PackageOutputRootSetting.data(),
+                PackageOutputRootSetting.size(), "%s", OutputRoot.string().c_str());
+            std::snprintf(PackageNameSetting.data(), PackageNameSetting.size(),
+                "%s", PackageName.c_str());
+            bPackageSmokeTest = bSmokeTest;
+            StartPackageProject();
+            return std::pair<bool, std::string> {
+                PackageProcess.IsValid(),
+                PackageProcess.IsValid()
+                    ? "Packaging started: " + PackageOutputDirectory.string()
+                    : Status};
+        },
+        [this]()
+        {
+            if (PlaySession.IsActive())
+                return std::pair<bool, std::string> {
+                    false, "A Play Session is already active"};
+            FinishInteractiveEdit();
+            if (!FPaths::HasProject())
+                return std::pair<bool, std::string> {
+                    false, "Play requires an active Pico project"};
+            const FEditorCommandResult Validation =
+                CommandService.ValidateGameplayForPlay();
+            if (!Validation.bSucceeded)
+                return std::pair<bool, std::string> {false, Validation.Message};
+            if (!WorldDocument.HasAssetPath() || WorldDocument.IsDirty())
+                return std::pair<bool, std::string> {
+                    false, "Save the active World before starting Play"};
+            LaunchGame(Validation.Message);
+            return std::pair<bool, std::string> {
+                PlaySession.IsActive(),
+                PlaySession.IsActive()
+                    ? "Play Session started with "
+                        + std::to_string(PlaySession.GetProcessCount())
+                        + " process(es); it remains active until Stop"
+                    : Status};
+        },
+        [this]()
+        {
+            if (!PlaySession.IsActive())
+                return std::pair<bool, std::string> {
+                    false, "No Play Session is active"};
+            StopGame(true);
+            return std::pair<bool, std::string> {
+                !PlaySession.IsActive(),
+                !PlaySession.IsActive()
+                    ? "Play Session stopped"
+                    : "One or more Play processes could not be stopped"};
+        });
 }
 
 FPicoEditorApp::~FPicoEditorApp()
 {
+    if (AgentChatWorkspace)
+    {
+        AgentChatWorkspace->Shutdown();
+    }
+    TaskSystem.Shutdown();
+    GameThreadDispatcher.Shutdown();
+    AgentChatWorkspace.reset();
     SaveEditorSession(true);
     StopGame(false);
     PackageProcess.Reset();
+}
+
+void FPicoEditorApp::PumpGameThreadTasks()
+{
+    GameThreadDispatcher.Pump();
 }
 
 void FPicoEditorApp::Draw()
@@ -528,6 +611,10 @@ void FPicoEditorApp::Draw()
     AssetWorkflow.Draw();
     SkeletalAssetEditor.Draw();
     ActorBlueprintEditor.Draw();
+    if (AgentChatWorkspace && bAgentChatOpen)
+    {
+        AgentChatWorkspace->Draw(&bAgentChatOpen);
+    }
 
     if (bCancelInteractiveEditRequested)
     {
@@ -1181,6 +1268,7 @@ void FPicoEditorApp::DrawViewMenu()
         return;
     }
     ImGui::MenuItem("Message Log", nullptr, &bMessageLogOpen);
+    ImGui::MenuItem("AI Chat", nullptr, &bAgentChatOpen);
     ImGui::MenuItem("Frame Rate", nullptr, &bShowFrameRate);
     ImGui::EndMenu();
 }

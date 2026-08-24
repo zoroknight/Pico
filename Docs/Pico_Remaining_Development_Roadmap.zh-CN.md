@@ -1,5 +1,9 @@
 # Pico 剩余开发路线
 
+> 后续排期已经调整为 AI 优先主线。新的未完成任务、实施顺序和验收标准以
+> [`Pico_AI_First_Development_Roadmap.zh-CN.md`](Pico_AI_First_Development_Roadmap.zh-CN.md) 为准。
+> 本文档继续保留已完成基线、历史计划和长期架构决策；两份文档冲突时优先采用新路线。
+
 本文档是 Pico 后续开发的长期基准，用于避免因对话上下文压缩、计划迭代或项目月份混淆而遗忘关键目标。
 
 计划中的“月份”均指项目开发月份，不是自然月。项目第 5 月主线与 Montage Lite/人物装配已经验收完成；
@@ -52,6 +56,12 @@ Pico 是一个以学习 Unreal Engine 5 源码和完整游戏引擎链路为主�
 - CDO、默认子对象、Native Delegate、`PFunction/ProcessEvent`、PicoHeaderTool 和 Stop-the-world Mark-Sweep GC。
 - Dynamic Multicast Delegate、签名校验、弱目标清理，以及 `.pworld` v4 稳定引用和动态绑定恢复。
 - 反射属性 Pre/Post 变化通知、ValueSet/Interactive/Load/UndoRedo 来源和 PicoInspector 可视化实验。
+- `PicoTasks` Worker Pool、Game Thread Dispatcher，以及可取消、安全关闭的后台任务边界。
+- `PicoAgentCore` 可恢复状态机、追加式 JSONL Session、工具预算/幂等，以及 Schema -> Permission -> Approval ->
+  Transaction -> Execute -> Verify 的安全执行管线。
+- AI Chat 多会话与 Markdown 工作区、DeepSeek/Kimi Provider、通用反射属性工具，以及资产搜索、碰撞房间、
+  第三人称装配、Blueprint Actor 创建/删除、World 保存、真实 Play/Stop、项目创建和受控 Package 竖切。
+- Play 与 Package 的工具和意图硬隔离：模型误选工具时在审批与副作用之前拒绝。
 
 项目输入由 PlayerController/Gameplay Policy 转换为世界空间移动意图，Pawn 只缓存输入，MovementComponent
 消费后经统一移动函数修改 Transform。输入参考系属于 Gameplay 策略，不写死在 Engine；Jolt、Root Motion

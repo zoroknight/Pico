@@ -35,6 +35,21 @@ The current implementation can:
   port/window settings and launch, monitor, log, and stop the complete multi-process Play Session.
 - Scope Windows `SIO_UDP_CONNRESET` suppression to each Pico UDP socket so startup-race Winsock
   `10054` reports remain retryable without changing other applications or bypassing handshake timeout.
+- Run deterministic Agent workflows through UI-independent `PicoAgentCore`: injectable providers and
+  tool executors, validated state transitions, bounded repair, cooperative cancellation, append-only
+  JSONL sessions, checkpoints, restart recovery, and stable ToolCall idempotency.
+- Validate Agent tools through deterministic JSON schemas, permission and approval policy, existing
+  World snapshot transactions, postcondition verification, rollback, persistent stage traces, and
+  conflict-safe ToolCall IDs; Agent-created Actors enter the normal editor Undo history.
+- Discover Actor and Component `PProperty` metadata through generic Agent tools, then read or batch-edit
+  supported `Editable` values in one approved Undo transaction without per-property tool code.
+- Keep provider-isolated multi-chat histories with create/delete/recovery, newest-message scrolling,
+  per-bubble copy, and MD4C-backed Markdown plus formatted JSON code blocks whose expansion does not
+  steal the transcript's mouse wheel.
+- Let the scene Agent search real AssetRegistry entries, create an undoable collision room, assemble a
+  third-person Pawn from a Data-Only Actor Blueprint and Character Profile, validate/save the World,
+  spawn or delete Blueprint Actors, create a content-only project from the proven template, and launch
+  either a real Play Session or the existing approved packager through distinct tools and intent guards.
 - Launch a standalone `PicoGame` runtime with frame-based input, configurable Action/Axis mappings,
   and a project default map or command-line map override.
 - Build a project-specific `PicoSandboxGame` runtime whose statically linked Game Module registers
@@ -229,6 +244,8 @@ PicoSandboxGame
 | Module | Responsibility |
 | --- | --- |
 | `PicoCore` | App state, command line, config, logging, names, paths, time, math, project descriptor |
+| `PicoTasks` | Fixed worker pool, task state, cooperative cancellation, exception isolation, and a frame-budgeted Game Thread dispatcher |
+| `PicoAgentCore` | Provider/runtime boundaries, Agent state machine, budgets, append-only sessions, checkpoints, recovery, and ToolCall idempotency |
 | `PicoInput` | Frame-based key and pointer state plus configurable Action/Axis mappings |
 | `PicoNetCore` | Network addresses and IDs, packet codec, deterministic loopback, non-blocking UDP, handshake, Ack, bounded reliable delivery, heartbeat, and timeout |
 | `PicoAsset` | Validated virtual asset discovery, deterministic project registry, and file metadata |
@@ -639,6 +656,13 @@ the existing `PClass`, `PProperty`, and `PFunction` runtime. Generated files liv
 
 See:
 
+- [AI-First Development Roadmap (Chinese)](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)
+- [PicoTasks and Game Thread Dispatcher (Chinese)](Docs/AIPhase01_PicoTasksAndGameThreadDispatcher.md)
+- [Pico Agent Core and Recoverable Sessions (Chinese)](Docs/AIPhase02_PicoAgentCoreAndSessions.md)
+- [Agent Tool Safety Pipeline and Editor Transactions (Chinese)](Docs/AIPhase03_AgentToolPipeline.md)
+- [AI Chat Workspace and DeepSeek/Kimi Providers (Chinese)](Docs/AIPhase04_ChatWorkspaceAndProviders.md)
+- [Generic Reflected Property Tools for the Scene Agent (Chinese)](Docs/AIPhase05_ReflectedPropertyTools.md)
+- [AI Game Assembly Vertical Slice (Chinese)](Docs/AIPhase06_GameAssemblyVerticalSlice.md)
 - [Remaining Development Roadmap (Chinese)](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
 - [Pre-Network Readiness (Chinese)](Docs/Month08_14_PreNetworkReadiness.md)
 - [Network Risk Register (Chinese)](Docs/NetworkRiskRegister.zh-CN.md)
@@ -734,10 +758,9 @@ has also passed a two-PC LAN session with one separate server and two playable c
 The remaining learning path is:
 
 - Dedicated-server/WAN validation, dependency-pruned Cook, Shipping, and clean-machine packaging
-- A compact `PicoTask` worker pool and game-thread dispatcher for asynchronous Cook, build, and AI
-  work while runtime objects remain game-thread-owned
-- A compact Gameplay Ability System with AbilityTask, followed by AI tools and an Agent workflow
+- Expand deterministic AI tools for assets, materials, lights, save, Play, and Package
+- A compact Gameplay Ability System with AbilityTask, followed by PicoGraph and AI-authored workflows
 
 The maintained schedule and acceptance criteria are in the
-[Remaining Development Roadmap](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md). Detailed milestone
+[AI-First Development Roadmap](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md). Detailed milestone
 notes are also available in [`Docs`](Docs).

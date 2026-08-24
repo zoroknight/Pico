@@ -99,6 +99,63 @@ add_library(PicoCore STATIC
     Source/Runtime/Core/Private/Time.cpp
 )
 
+find_package(Threads REQUIRED)
+
+add_library(PicoTasks STATIC
+    Source/Runtime/Tasks/Private/GameThreadDispatcher.cpp
+    Source/Runtime/Tasks/Private/TaskSystem.cpp
+)
+
+target_include_directories(PicoTasks
+    PUBLIC
+        Source/Runtime/Tasks/Public
+)
+
+target_link_libraries(PicoTasks
+    PUBLIC
+        PicoCore
+        Threads::Threads
+)
+
+set_target_properties(PicoTasks PROPERTIES FOLDER "Pico")
+
+if(MSVC)
+    target_compile_options(PicoTasks PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoTasks PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_library(PicoAgentCore STATIC
+    Source/Developer/Agent/Private/AgentCredentialStore.cpp
+    Source/Developer/Agent/Private/AgentProvider.cpp
+    Source/Developer/Agent/Private/AgentRuntime.cpp
+    Source/Developer/Agent/Private/AgentSession.cpp
+    Source/Developer/Agent/Private/AgentToolRegistry.cpp
+    Source/Developer/Agent/Private/AgentTypes.cpp
+    Source/Developer/Agent/Private/FakeAgentProvider.cpp
+    Source/Developer/Agent/Private/OpenAICompatibleProvider.cpp
+    Source/Developer/Agent/Private/PlatformAgentHttpTransport.cpp
+)
+
+target_include_directories(PicoAgentCore
+    PUBLIC
+        Source/Developer/Agent/Public
+    PRIVATE
+        ThirdParty/NlohmannJson/single_include
+)
+
+target_link_libraries(PicoAgentCore PUBLIC PicoTasks)
+if(WIN32)
+    target_link_libraries(PicoAgentCore PRIVATE winhttp)
+endif()
+set_target_properties(PicoAgentCore PROPERTIES FOLDER "Pico/Developer")
+
+if(MSVC)
+    target_compile_options(PicoAgentCore PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoAgentCore PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_library(PicoPackaging STATIC
     Source/Developer/Packaging/Private/Packaging.cpp
 )
@@ -495,6 +552,20 @@ add_executable(PicoPackager
     Source/Programs/PicoPackager/Private/Main.cpp
 )
 
+add_executable(PicoAgentHost
+    Source/Programs/PicoAgentHost/Private/Main.cpp
+)
+
+target_include_directories(PicoAgentHost PRIVATE ThirdParty/NlohmannJson/single_include)
+target_link_libraries(PicoAgentHost PRIVATE PicoAgentCore)
+set_target_properties(PicoAgentHost PROPERTIES FOLDER "Programs")
+
+if(MSVC)
+    target_compile_options(PicoAgentHost PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoAgentHost PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 target_link_libraries(PicoPackager PRIVATE PicoPackaging)
 set_target_properties(PicoPackager PROPERTIES FOLDER "Programs")
 
@@ -658,8 +729,15 @@ if(PICO_BUILD_INSPECTOR)
 
     set_target_properties(PicoImGuizmo PROPERTIES FOLDER "ThirdParty")
 
+    add_library(PicoMd4c STATIC
+        ThirdParty/MD4C/md4c.c
+    )
+    target_include_directories(PicoMd4c PUBLIC ThirdParty/MD4C)
+    set_target_properties(PicoMd4c PROPERTIES FOLDER "ThirdParty")
+
     add_library(PicoEditorCore STATIC
         Source/Editor/PicoEditor/Private/AssetDependencyService.cpp
+        Source/Editor/PicoEditor/Private/EditorAgentTools.cpp
         Source/Editor/PicoEditor/Private/EditorAssetSelection.cpp
         Source/Editor/PicoEditor/Private/EditorAssetService.cpp
         Source/Editor/PicoEditor/Private/EditorCommandService.cpp
@@ -686,7 +764,10 @@ if(PICO_BUILD_INSPECTOR)
         PUBLIC
             PicoEngine
             PicoAssetImport
+            PicoAgentCore
     )
+
+    target_include_directories(PicoEditorCore PRIVATE ThirdParty/NlohmannJson/single_include)
 
     set_target_properties(PicoEditorCore PROPERTIES FOLDER "Pico")
 
@@ -721,6 +802,10 @@ if(PICO_BUILD_INSPECTOR)
     set_target_properties(PicoInspector PROPERTIES FOLDER "Programs")
 
     add_executable(PicoEditor
+        Source/Editor/PicoEditor/Private/AgentChatWorkspace.cpp
+        Source/Editor/PicoEditor/Private/AgentChatWorkspace.h
+        Source/Editor/PicoEditor/Private/MarkdownRenderer.cpp
+        Source/Editor/PicoEditor/Private/MarkdownRenderer.h
         Source/Editor/PicoEditor/Private/ActorBlueprintEditor.cpp
         Source/Editor/PicoEditor/Private/ActorBlueprintEditor.h
         Source/Editor/PicoEditor/Private/AssetReferenceWidget.cpp
@@ -752,15 +837,19 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Private/PicoEditorApp.h
     )
 
+    target_include_directories(PicoEditor PRIVATE ThirdParty/NlohmannJson/single_include)
+
     add_dependencies(PicoEditor PicoPackager)
 
     target_link_libraries(PicoEditor
         PRIVATE
             PicoImGui
             PicoImGuizmo
+            PicoMd4c
             PicoEditorCore
             PicoEngine
             PicoRender
+            PicoTasks
             PicoReflectionTools
             PicoAssetImport
     )
@@ -820,6 +909,34 @@ endif()
 add_executable(PicoCoreTests
     Tests/Core/Private/Main.cpp
 )
+
+add_executable(PicoTaskTests
+    Tests/Tasks/Private/Main.cpp
+)
+
+target_include_directories(PicoTaskTests PRIVATE Tests/Common)
+target_link_libraries(PicoTaskTests PRIVATE PicoTasks)
+set_target_properties(PicoTaskTests PROPERTIES FOLDER "Tests/Core")
+
+if(MSVC)
+    target_compile_options(PicoTaskTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoTaskTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(PicoAgentTests
+    Tests/Agent/Private/Main.cpp
+)
+
+target_include_directories(PicoAgentTests PRIVATE Tests/Common)
+target_link_libraries(PicoAgentTests PRIVATE PicoAgentCore)
+set_target_properties(PicoAgentTests PROPERTIES FOLDER "Tests/Developer")
+
+if(MSVC)
+    target_compile_options(PicoAgentTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoAgentTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 add_executable(PicoPackagingTests
     Tests/Packaging/Private/Main.cpp
@@ -1084,6 +1201,8 @@ if(BUILD_TESTING)
             -P ${PICO_ROOT_DIR}/Tests/HeaderTool/RunHeaderToolTests.cmake
     )
     add_test(NAME PicoCoreTests COMMAND PicoCoreTests)
+    add_test(NAME PicoTaskTests COMMAND PicoTaskTests)
+    add_test(NAME PicoAgentTests COMMAND PicoAgentTests)
     add_test(NAME PicoPackagingTests COMMAND PicoPackagingTests)
     add_test(NAME PicoAssetTests COMMAND PicoAssetTests)
     add_test(NAME PicoAssetImportTests COMMAND PicoAssetImportTests)
@@ -1103,6 +1222,12 @@ if(BUILD_TESTING)
         add_test(NAME PicoEditorAssetTests COMMAND PicoEditorAssetTests)
     endif()
     set_tests_properties(PicoCoreTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoTaskTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoAgentTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoPackagingTests PROPERTIES

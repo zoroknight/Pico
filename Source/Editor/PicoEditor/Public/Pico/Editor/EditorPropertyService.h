@@ -13,6 +13,8 @@ namespace Pico
 {
 class FEditorSelection;
 class FEngineLoop;
+class PObject;
+class PProperty;
 
 using FEditorPropertyValue = std::variant<
     int32,
@@ -29,6 +31,12 @@ struct FEditorPropertyResult
     std::string Message;
 };
 
+FEditorPropertyResult ApplyEditorPropertyValue(
+    FEngineLoop* EngineLoop,
+    PObject* Object,
+    const PProperty* Property,
+    const FEditorPropertyValue& Value);
+
 class FEditorPropertyService
 {
 public:
@@ -44,10 +52,6 @@ public:
         const FEditorPropertyValue& Value);
 
 private:
-    bool ValidateAssetReference(
-        const class PProperty& Property,
-        const FAssetPath& AssetPath) const;
-
     FEngineLoop* EngineLoop = nullptr;
     FEditorSelection* Selection = nullptr;
     FEditorTransactionManager* Transactions = nullptr;

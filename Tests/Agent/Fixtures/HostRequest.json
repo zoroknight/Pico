@@ -1,0 +1,6 @@
+{
+  "session_id": "host-smoke",
+  "event_log": "BuildCodex/AgentHostTest/host-smoke.jsonl",
+  "prompt": "Run the deterministic host smoke test",
+  "fake_scenario": "tool"
+}

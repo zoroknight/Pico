@@ -18,7 +18,13 @@ bool PPrimitiveComponent::RegisterProperties(PClass& Class)
 {
     std::vector<PProperty> Properties;
     PICO_ADD_PROPERTY(Properties, bVisible);
-    PICO_ADD_PROPERTY(Properties, Color);
+    FPropertyMetadata ColorMetadata;
+    ColorMetadata.Description = "Linear RGB tint with each channel in the 0 to 1 range";
+    ColorMetadata.Semantic = "Color";
+    ColorMetadata.Units = "LinearRGB";
+    ColorMetadata.Minimum = 0.0;
+    ColorMetadata.Maximum = 1.0;
+    PICO_ADD_PROPERTY_METADATA(Properties, Color, ColorMetadata);
     FPropertyMetadata CollisionMetadata;
     CollisionMetadata.DisplayName = "Collision Enabled";
     CollisionMetadata.EnumOptions = {
@@ -262,7 +268,13 @@ void PPrimitiveComponent::PostEditChangeProperty(
     }
 
     const FName PropertyName = Event.Property->GetName();
-    if (PropertyName == FName("PhysicsBodyTypeValue"))
+    if (PropertyName == FName("Color"))
+    {
+        Color.X = std::clamp(Color.X, 0.0f, 1.0f);
+        Color.Y = std::clamp(Color.Y, 0.0f, 1.0f);
+        Color.Z = std::clamp(Color.Z, 0.0f, 1.0f);
+    }
+    else if (PropertyName == FName("PhysicsBodyTypeValue"))
     {
         PhysicsBodyTypeValue = std::clamp(
             PhysicsBodyTypeValue,

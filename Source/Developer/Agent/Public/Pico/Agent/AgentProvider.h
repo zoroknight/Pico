@@ -1,0 +1,48 @@
+#pragma once
+
+#include "Pico/Agent/AgentTypes.h"
+
+#include <string>
+#include <vector>
+
+namespace Pico
+{
+class FCancellationToken;
+
+struct FAgentProviderRequest
+{
+    std::vector<FAgentMessage> Messages;
+    std::size_t Step = 0;
+    std::size_t RepairAttempt = 0;
+};
+
+struct FAgentProviderResponse
+{
+    bool bSucceeded = true;
+    bool bFinal = false;
+    std::string Content;
+    std::string Error;
+    std::vector<FAgentToolCall> ToolCalls;
+};
+
+class IAgentProvider
+{
+public:
+    virtual ~IAgentProvider() = default;
+    virtual FAgentProviderResponse Generate(
+        const FAgentProviderRequest& Request,
+        const FCancellationToken* CancellationToken) = 0;
+};
+
+class IAgentToolExecutor
+{
+public:
+    virtual ~IAgentToolExecutor() = default;
+    virtual bool RequiresApproval(const FAgentToolCall& Call) const;
+    virtual void PrepareApproval(const FAgentToolCall& Call);
+    virtual std::string GetLastExecutionTraceJson() const;
+    virtual FAgentToolResult Execute(
+        const FAgentToolCall& Call,
+        const FCancellationToken* CancellationToken) = 0;
+};
+}

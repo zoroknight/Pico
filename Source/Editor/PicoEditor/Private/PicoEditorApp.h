@@ -23,9 +23,12 @@
 #include "Pico/Editor/EditorTransactionManager.h"
 #include "Pico/Editor/EditorWorldDocument.h"
 #include "Pico/Object/ObjectTypes.h"
+#include "Pico/Tasks/GameThreadDispatcher.h"
+#include "Pico/Tasks/TaskSystem.h"
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -42,6 +45,7 @@ class PProperty;
 class PSceneComponent;
 class PWorld;
 class FSceneViewportRenderer;
+class FAgentChatWorkspace;
 
 class FPicoEditorApp
 {
@@ -53,6 +57,7 @@ public:
     ~FPicoEditorApp();
 
     void Draw();
+    void PumpGameThreadTasks();
     void RequestClose();
     bool ShouldClose() const;
 
@@ -204,6 +209,9 @@ private:
     FEditorAssetWorkflowController AssetWorkflow;
     FPlaySession PlaySession;
     FPlaySessionSettings PlaySettings;
+    FTaskSystem TaskSystem;
+    FGameThreadDispatcher GameThreadDispatcher;
+    std::unique_ptr<FAgentChatWorkspace> AgentChatWorkspace;
     FProcessHandle PackageProcess;
     std::filesystem::path PendingProjectFile;
     std::filesystem::path PlaySettingsFile;
@@ -235,6 +243,7 @@ private:
     bool bStatusIsError = false;
     bool bStatusIsWarning = false;
     bool bMessageLogOpen = true;
+    bool bAgentChatOpen = true;
     bool bShowFrameRate = true;
     bool bFocusMessageLog = false;
     bool bOpenPlayValidationPopup = false;

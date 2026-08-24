@@ -12,6 +12,7 @@ public:
     const FVector3& GetExtent() const;
     void SetExtent(const FVector3& InExtent);
     FCollisionShape GetCollisionShape() const override;
+    void PostEditChangeProperty(const FPropertyChangedEvent& Event) override;
 
 protected:
     explicit PCubeComponent(const FObjectConstructionParams& Params);

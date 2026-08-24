@@ -1,4 +1,5 @@
 #include "Pico/Editor/EditorCommandService.h"
+#include "Pico/Editor/EditorAgentTools.h"
 #include "Pico/Editor/EditorProjectManager.h"
 #include "Pico/Editor/EditorSceneClipboard.h"
 #include "Pico/Editor/EditorSelection.h"
@@ -6,6 +7,10 @@
 #include "Pico/Editor/EditorTransactionManager.h"
 #include "Pico/Editor/EditorWorldDocument.h"
 #include "Pico/Editor/PlaySession.h"
+
+#include "Pico/Agent/AgentRuntime.h"
+#include "Pico/Agent/AgentCredentialStore.h"
+#include "Pico/Agent/FakeAgentProvider.h"
 
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorBlueprint.h"
@@ -37,6 +42,22 @@
 
 namespace
 {
+class FEditorAgentApproval final : public Pico::IAgentToolApproval
+{
+public:
+    bool RequestApproval(
+        const Pico::FAgentToolCall&,
+        Pico::EAgentToolPermission,
+        std::string_view) override
+    {
+        ++RequestCount;
+        return bApprove;
+    }
+
+    bool bApprove = false;
+    int RequestCount = 0;
+};
+
 bool CopyEditorTestProject(
     const std::filesystem::path& SourceRoot,
     const std::filesystem::path& DestinationRoot)
@@ -853,6 +874,263 @@ void TestEditorCommandService(FTestRunner& Runner)
         !Commands.SpawnPlayableCharacter(Pico::PPawn::StaticClass(), {}).bSucceeded,
         "Playable Character creation rejects a second Player 0 Pawn");
 
+    Selection.Set(EngineLoop.GetWorld());
+    Transactions.Clear();
+    FEditorAgentApproval AgentApproval;
+    Pico::FEditorAgentToolExecutor AgentTools(
+        &EngineLoop, &Selection, &Transactions, &AgentApproval);
+    Runner.Expect(
+        AgentTools.IsInitialized() && AgentTools.GetToolNames().size() == 18,
+        "Editor Agent adapter registers inspection, scene, gameplay, save, project, and package tools");
+    AgentApproval.bApprove = true;
+    bool bAgentPlayActive = false;
+    Pico::FEditorAgentHostServices PlayHostServices;
+    PlayHostServices.StartPlay = [&bAgentPlayActive]()
+    {
+        if (bAgentPlayActive)
+            return std::pair<bool, std::string> {false, "already active"};
+        bAgentPlayActive = true;
+        return std::pair<bool, std::string> {true, "started"};
+    };
+    PlayHostServices.StopPlay = [&bAgentPlayActive]()
+    {
+        if (!bAgentPlayActive)
+            return std::pair<bool, std::string> {false, "not active"};
+        bAgentPlayActive = false;
+        return std::pair<bool, std::string> {true, "stopped"};
+    };
+    Pico::FEditorAgentToolExecutor PlayAgentTools(
+        &EngineLoop, &Selection, &Transactions, &AgentApproval, {},
+        std::move(PlayHostServices));
+    const Pico::FAgentToolCall StartPlayCall {
+        "agent-play-start", "editor.play.start", "{}"};
+    PlayAgentTools.PrepareApproval(StartPlayCall);
+    const auto StartPlayResult = PlayAgentTools.Execute(StartPlayCall, nullptr);
+    const Pico::FAgentToolCall StopPlayCall {
+        "agent-play-stop", "editor.play.stop", "{}"};
+    PlayAgentTools.PrepareApproval(StopPlayCall);
+    const auto StopPlayResult = PlayAgentTools.Execute(StopPlayCall, nullptr);
+    Runner.Expect(
+        StartPlayResult.bSucceeded && StopPlayResult.bSucceeded
+            && !bAgentPlayActive,
+        "Editor Agent starts and explicitly stops the host-owned Play Session");
+    const auto DescribeWorldResult = AgentTools.Execute(
+        {"agent-world-list", "editor.world.describe", "{}"}, nullptr);
+    Runner.Expect(
+        DescribeWorldResult.bSucceeded
+            && DescribeWorldResult.OutputJson.find("actor_count") != std::string::npos
+            && DescribeWorldResult.OutputJson.find("PlayableCharacter") != std::string::npos
+            && DescribeWorldResult.OutputJson.find("auto_possess_player") != std::string::npos,
+        "World description exposes live Actor identities, locations, classes, and Pawn possession");
+
+    const Pico::FAgentToolCall CreateRoom {
+        "agent-room", "editor.scene.create_room",
+        R"({"name":"AgentRoom","center_x":0,"center_y":0,"width":800,"depth":600,"wall_height":300})"
+    };
+    AgentTools.PrepareApproval(CreateRoom);
+    const auto CreateRoomResult = AgentTools.Execute(CreateRoom, nullptr);
+    Runner.Expect(
+        CreateRoomResult.bSucceeded
+            && CreateRoomResult.OutputJson.find("\"parts\":5") != std::string::npos
+            && Transactions.CanUndo(),
+        "Editor Agent creates a collision room as one approved transaction");
+    Runner.Expect(
+        Commands.Undo().bSucceeded
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), "GameWorld.PersistentLevel.AgentRoom_Floor") == nullptr,
+        "One normal editor Undo removes the complete Agent-created room");
+
+    AgentApproval.bApprove = false;
+    const Pico::FAgentToolCall DeniedSpawn {
+        "agent-denied", "editor.actor.spawn",
+        R"({"name":"AgentDenied","kind":"Cube"})"
+    };
+    AgentTools.PrepareApproval(DeniedSpawn);
+    const auto DeniedSpawnResult = AgentTools.Execute(DeniedSpawn, nullptr);
+    Runner.Expect(
+        !DeniedSpawnResult.bSucceeded
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), "GameWorld.PersistentLevel.AgentDenied") == nullptr
+            && !Transactions.CanUndo(),
+        "Denied Editor Agent mutation creates no Actor and no Undo entry");
+
+    AgentApproval.bApprove = true;
+    const Pico::FAgentToolCall ApprovedSpawn {
+        "agent-spawn", "editor.actor.spawn",
+        R"({"name":"AgentCube","kind":"Cube"})"
+    };
+    AgentTools.PrepareApproval(ApprovedSpawn);
+    const auto ApprovedSpawnResult = AgentTools.Execute(ApprovedSpawn, nullptr);
+    const std::string AgentCubePath = Selection.GetObjectPath();
+    Runner.Expect(
+        ApprovedSpawnResult.bSucceeded
+            && Selection.Resolve() != nullptr
+            && Selection.Resolve()->IsA(Pico::PActor::StaticClass())
+            && static_cast<Pico::PActor*>(Selection.Resolve())->GetRootComponent()
+                ->IsA(Pico::PCubeComponent::StaticClass())
+            && Transactions.CanUndo(),
+        "Approved Editor Agent spawn creates a selected Cube Actor in one transaction");
+
+    Pico::PActor* AgentCube = Selection.Resolve() != nullptr
+        && Selection.Resolve()->IsA(Pico::PActor::StaticClass())
+        ? static_cast<Pico::PActor*>(Selection.Resolve()) : nullptr;
+    Pico::PCubeComponent* AgentCubeComponent = AgentCube != nullptr
+        && AgentCube->GetRootComponent() != nullptr
+        && AgentCube->GetRootComponent()->IsA(Pico::PCubeComponent::StaticClass())
+        ? static_cast<Pico::PCubeComponent*>(AgentCube->GetRootComponent()) : nullptr;
+    const std::string AgentCubeComponentPath = AgentCubeComponent != nullptr
+        ? AgentCubeComponent->GetPathName() : std::string {};
+    const auto DescribeAgentCube = AgentTools.Execute(
+        {"agent-describe-object", "editor.object.describe",
+            "{\"object_path\":\"" + AgentCubePath + "\"}"}, nullptr);
+    Runner.Expect(
+        DescribeAgentCube.bSucceeded
+            && DescribeAgentCube.OutputJson.find(AgentCubeComponentPath)
+                != std::string::npos
+            && DescribeAgentCube.OutputJson.find("Extent") != std::string::npos
+            && DescribeAgentCube.OutputJson.find("Color") != std::string::npos
+            && DescribeAgentCube.OutputJson.find("BoxExtent") != std::string::npos,
+        "Generic object description exposes component paths, inherited properties, values, and semantics");
+
+    const Pico::FAgentToolCall SetReflectedProperties {
+        "agent-set-properties", "editor.object.set_properties",
+        "{\"object_path\":\"" + AgentCubeComponentPath
+            + "\",\"properties\":{\"Extent\":{\"x\":80,\"y\":60,\"z\":40},"
+              "\"Color\":{\"x\":1,\"y\":0.25,\"z\":0.1}}}"
+    };
+    AgentTools.PrepareApproval(SetReflectedProperties);
+    const auto SetReflectedResult =
+        AgentTools.Execute(SetReflectedProperties, nullptr);
+    Runner.Expect(
+        SetReflectedResult.bSucceeded && AgentCubeComponent != nullptr
+            && AgentCubeComponent->GetExtent().Equals(Pico::FVector3(80.0f, 60.0f, 40.0f))
+            && AgentCubeComponent->GetColor().Equals(Pico::FVector3(1.0f, 0.25f, 0.1f)),
+        "One approved generic property call changes multiple reflected component properties");
+    Runner.Expect(
+        Commands.Undo().bSucceeded,
+        "One normal editor Undo reverts the complete reflected property batch");
+    AgentCube = dynamic_cast<Pico::PActor*>(
+        Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), AgentCubePath));
+    AgentCubeComponent = AgentCube != nullptr
+        ? dynamic_cast<Pico::PCubeComponent*>(AgentCube->GetRootComponent()) : nullptr;
+    Runner.Expect(
+        AgentCubeComponent != nullptr
+            && AgentCubeComponent->GetExtent().Equals(Pico::FVector3(50.0f))
+            && AgentCubeComponent->GetColor().Equals(
+                Pico::FVector3(0.16f, 0.62f, 0.52f)),
+        "Undo restores every property changed by the Agent batch");
+
+    const Pico::FAgentToolCall InvalidReflectedBatch {
+        "agent-invalid-properties", "editor.object.set_properties",
+        "{\"object_path\":\"" + AgentCubeComponentPath
+            + "\",\"properties\":{\"Color\":{\"x\":0.8,\"y\":0.1,\"z\":0.2},"
+              "\"Extent\":{\"x\":-1,\"y\":50,\"z\":50}}}"
+    };
+    AgentTools.PrepareApproval(InvalidReflectedBatch);
+    const auto InvalidReflectedResult =
+        AgentTools.Execute(InvalidReflectedBatch, nullptr);
+    AgentCube = dynamic_cast<Pico::PActor*>(
+        Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), AgentCubePath));
+    AgentCubeComponent = AgentCube != nullptr
+        ? dynamic_cast<Pico::PCubeComponent*>(AgentCube->GetRootComponent()) : nullptr;
+    Runner.Expect(
+        !InvalidReflectedResult.bSucceeded && AgentCubeComponent != nullptr
+            && AgentCubeComponent->GetExtent().Equals(Pico::FVector3(50.0f))
+            && AgentCubeComponent->GetColor().Equals(
+                Pico::FVector3(0.16f, 0.62f, 0.52f)),
+        "An invalid reflected property rolls back earlier values in the same Agent batch");
+    Runner.Expect(
+        Commands.Undo().bSucceeded
+            && Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), AgentCubePath) == nullptr,
+        "Normal editor Undo removes an Agent-created Actor");
+
+    const std::size_t UndoBeforeInvalid = Transactions.GetUndoCount();
+    const Pico::FAgentToolCall InvalidSpawn {
+        "agent-invalid", "editor.actor.spawn",
+        R"({"name":"Invalid.Name","kind":"Cube"})"
+    };
+    AgentTools.PrepareApproval(InvalidSpawn);
+    const auto InvalidSpawnResult = AgentTools.Execute(InvalidSpawn, nullptr);
+    Runner.Expect(
+        !InvalidSpawnResult.bSucceeded
+            && Transactions.GetUndoCount() == UndoBeforeInvalid
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), "GameWorld.PersistentLevel.Invalid.Name") == nullptr,
+        "Invalid Editor Agent handler input rolls back without adding Undo history");
+
+    const std::size_t UndoBeforeRead = Transactions.GetUndoCount();
+    const int ApprovalBeforeRead = AgentApproval.RequestCount;
+    const auto DescribeResult = AgentTools.Execute(
+        {"agent-read", "editor.world.describe", "{}"}, nullptr);
+    Runner.Expect(
+        DescribeResult.bSucceeded
+            && Transactions.GetUndoCount() == UndoBeforeRead
+            && AgentApproval.RequestCount == ApprovalBeforeRead,
+        "Read-only Editor Agent tool needs neither approval nor transaction");
+
+    Transactions.Clear();
+    Selection.Set(EngineLoop.GetWorld());
+    const std::filesystem::path AgentSessionPath =
+        std::filesystem::temp_directory_path()
+        / "PicoEditorAgentAcceptance.jsonl";
+    std::error_code SessionError;
+    std::filesystem::remove(AgentSessionPath, SessionError);
+    auto AgentSession = Pico::FAgentSession::OpenOrCreate(
+        "editor-agent-acceptance", AgentSessionPath);
+    std::vector<Pico::FFakeAgentStep> AgentSteps;
+    AgentSteps.push_back({Pico::FAgentProviderResponse {
+        true, false, "Inspecting the World", {},
+        {{"accept-describe", "editor.world.describe", "{}"}}}});
+    AgentSteps.push_back({Pico::FAgentProviderResponse {
+        true, false, "Creating the requested Cube", {},
+        {{"accept-spawn", "editor.actor.spawn",
+            R"({"name":"AgentAcceptanceCube","kind":"Cube"})"}}}});
+    AgentSteps.push_back({Pico::FAgentProviderResponse {
+        true, false, "Moving the created Cube", {},
+        {{"accept-move", "editor.actor.set_location",
+            R"({"object_path":"GameWorld.PersistentLevel.AgentAcceptanceCube","x":150,"y":0,"z":100})"}}}});
+    AgentSteps.push_back({Pico::FAgentProviderResponse {
+        true, true, "Scene task completed", {}, {}}});
+    Pico::FFakeAgentProvider SceneProvider(std::move(AgentSteps));
+    Pico::FAgentRunResult AgentRunResult;
+    if (AgentSession)
+    {
+        Pico::FAgentRuntime Runtime(
+            *AgentSession, SceneProvider, AgentTools);
+        AgentRunResult = Runtime.Run(
+            "Create a Cube and move it to (150, 0, 100)");
+    }
+    Pico::PObject* AgentCreatedObject = Pico::FindEditorWorldObjectByPath(
+        EngineLoop.GetWorld(),
+        "GameWorld.PersistentLevel.AgentAcceptanceCube");
+    Runner.Expect(
+        AgentSession.has_value()
+            && AgentRunResult.Status == Pico::EAgentStatus::Completed
+            && AgentCreatedObject != nullptr
+            && AgentCreatedObject->IsA(Pico::PActor::StaticClass())
+            && static_cast<Pico::PActor*>(AgentCreatedObject)->GetActorLocation().Equals(
+                Pico::FVector3(150.0f, 0.0f, 100.0f))
+            && Transactions.GetUndoCount() == 2,
+        "Scene Agent inspects, creates, and moves an Actor through the complete runtime loop");
+    const bool bAgentMoveUndone = Commands.Undo().bSucceeded;
+    Pico::PObject* AgentObjectAfterMoveUndo = Pico::FindEditorWorldObjectByPath(
+        EngineLoop.GetWorld(),
+        "GameWorld.PersistentLevel.AgentAcceptanceCube");
+    Runner.Expect(
+        bAgentMoveUndone
+            && AgentObjectAfterMoveUndo != nullptr
+            && AgentObjectAfterMoveUndo->IsA(Pico::PActor::StaticClass())
+            && static_cast<Pico::PActor*>(AgentObjectAfterMoveUndo)
+                ->GetActorLocation().Equals(Pico::FVector3::ZeroVector),
+        "First normal editor Undo reverts the Agent movement transaction");
+    Runner.Expect(
+        Commands.Undo().bSucceeded
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(),
+                "GameWorld.PersistentLevel.AgentAcceptanceCube") == nullptr,
+        "Second normal editor Undo removes the Agent-created Actor");
+    std::filesystem::remove(AgentSessionPath, SessionError);
+
     EngineLoop.Exit();
     Runner.Expect(
         Pico::FObjectRegistry::GetObjectCount() == 0,
@@ -1256,6 +1534,32 @@ void TestEditorWorldDocument(FTestRunner& Runner)
     Runner.Expect(
         bInitialized,
         "Editor document test initializes a project World");
+
+    std::string CredentialError;
+    std::string LoadedApiKey;
+    const std::filesystem::path ExpectedCredentialPath =
+        TestProjectRoot / "Saved" / "Agent" / "ApiKeys.ini";
+    Runner.Expect(
+        bInitialized
+            && Pico::FAgentCredentialStore::SaveApiKey(
+                "DeepSeek", "sk-pico-test-only", &CredentialError)
+            && Pico::FAgentCredentialStore::GetStoragePath()
+                == ExpectedCredentialPath
+            && std::filesystem::exists(ExpectedCredentialPath),
+        "Agent API keys are stored only in the open project's Saved directory");
+    Runner.Expect(
+        Pico::FAgentCredentialStore::TryLoadApiKey(
+            "DeepSeek", LoadedApiKey, &CredentialError)
+            && LoadedApiKey == "sk-pico-test-only",
+        "Project-local Agent API keys round trip through the credential store");
+    std::fill(LoadedApiKey.begin(), LoadedApiKey.end(), '\0');
+    LoadedApiKey.clear();
+    Runner.Expect(
+        Pico::FAgentCredentialStore::DeleteApiKey(
+            "DeepSeek", &CredentialError)
+            && !std::filesystem::exists(ExpectedCredentialPath),
+        "Removing the final project API key removes the local key file");
+
     Runner.Expect(
         bInitialized && PicoSandbox::RegisterSandboxGameplayClasses(),
         "Editor document test registers the active project's gameplay classes");
@@ -1277,6 +1581,43 @@ void TestEditorWorldDocument(FTestRunner& Runner)
             && !Document.IsDirty()
             && Document.GetAssetPath() == WorldAssetPath,
         "Opening a World establishes a clean document identity");
+
+    Pico::FEditorSelection AgentSelection;
+    Pico::FEditorTransactionManager AgentTransactions;
+    FEditorAgentApproval AgentApproval;
+    AgentApproval.bApprove = true;
+    Pico::FEditorAgentToolExecutor AgentTools(
+        &EngineLoop, &AgentSelection, &AgentTransactions, &AgentApproval);
+    const Pico::FAgentToolCall SpawnBlueprintCall {
+        "spawn-blueprint-npc", "editor.actor.spawn_blueprint",
+        R"({"blueprint_asset":"/Game/Characters/BP_Knight.pblueprint","name":"AgentBlueprintNpc","x":1300,"y":0,"z":95})"
+    };
+    AgentTools.PrepareApproval(SpawnBlueprintCall);
+    const auto SpawnBlueprintResult =
+        AgentTools.Execute(SpawnBlueprintCall, nullptr);
+    Pico::PObject* SpawnedBlueprintObject = Pico::FindEditorWorldObjectByPath(
+        EngineLoop.GetWorld(), "StarterWorld.PersistentLevel.AgentBlueprintNpc");
+    Runner.Expect(
+        SpawnBlueprintResult.bSucceeded
+            && SpawnedBlueprintObject != nullptr
+            && SpawnedBlueprintObject->IsA(Pico::PPawn::StaticClass())
+            && static_cast<Pico::PPawn*>(SpawnedBlueprintObject)
+                ->GetAutoPossessPlayerIndex() == -1
+            && static_cast<Pico::PActor*>(SpawnedBlueprintObject)
+                ->GetComponents().size() >= 4,
+        "Agent spawns a complete Actor Blueprint instance as a non-possessed NPC");
+    const Pico::FAgentToolCall DeleteBlueprintCall {
+        "delete-blueprint-npc", "editor.actor.delete",
+        R"({"object_path":"StarterWorld.PersistentLevel.AgentBlueprintNpc"})"
+    };
+    AgentTools.PrepareApproval(DeleteBlueprintCall);
+    const auto DeleteBlueprintResult =
+        AgentTools.Execute(DeleteBlueprintCall, nullptr);
+    Runner.Expect(
+        DeleteBlueprintResult.bSucceeded
+            && Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(),
+                "StarterWorld.PersistentLevel.AgentBlueprintNpc") == nullptr,
+        "Agent deletes an Actor Blueprint instance through the normal World transaction path");
 
     Pico::FAssetPath RoundTripPath;
     Runner.Expect(

@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -121,6 +122,11 @@ struct FPropertyMetadata
         EReplicationCondition::Always;
     FName RepNotifyFunction;
     std::string DisplayName;
+    std::string Description;
+    std::string Semantic;
+    std::string Units;
+    std::optional<double> Minimum;
+    std::optional<double> Maximum;
 
     struct FEnumOption
     {

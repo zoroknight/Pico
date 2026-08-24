@@ -9,6 +9,8 @@
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/Property.h"
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace Pico
@@ -89,6 +91,94 @@ bool ApplyValue(
     }
     return false;
 }
+
+bool IsFinite(const FVector3& Value)
+{
+    return std::isfinite(Value.X) && std::isfinite(Value.Y)
+        && std::isfinite(Value.Z);
+}
+
+bool IsFinite(const FRotator& Value)
+{
+    return std::isfinite(Value.Pitch) && std::isfinite(Value.Yaw)
+        && std::isfinite(Value.Roll);
+}
+
+bool IsFinite(const FTransform& Value)
+{
+    return IsFinite(Value.Translation) && IsFinite(Value.Scale)
+        && std::isfinite(Value.Rotation.X) && std::isfinite(Value.Rotation.Y)
+        && std::isfinite(Value.Rotation.Z) && std::isfinite(Value.Rotation.W);
+}
+
+bool IsWithinMetadataRange(
+    const FPropertyMetadata& Metadata,
+    const FEditorPropertyValue& Value)
+{
+    const auto InRange = [&Metadata](double Number)
+    {
+        return std::isfinite(Number)
+            && (!Metadata.Minimum || Number >= *Metadata.Minimum)
+            && (!Metadata.Maximum || Number <= *Metadata.Maximum);
+    };
+    if (const int32* Typed = std::get_if<int32>(&Value)) return InRange(*Typed);
+    if (const float* Typed = std::get_if<float>(&Value)) return InRange(*Typed);
+    if (const FVector3* Typed = std::get_if<FVector3>(&Value))
+        return InRange(Typed->X) && InRange(Typed->Y) && InRange(Typed->Z);
+    if (const FRotator* Typed = std::get_if<FRotator>(&Value))
+        return IsFinite(*Typed);
+    if (const FTransform* Typed = std::get_if<FTransform>(&Value))
+        return IsFinite(*Typed);
+    return true;
+}
+}
+
+FEditorPropertyResult ApplyEditorPropertyValue(
+    FEngineLoop* EngineLoop,
+    PObject* Object,
+    const PProperty* Property,
+    const FEditorPropertyValue& Value)
+{
+    if (Object == nullptr || Property == nullptr)
+        return Failure("Object or property is no longer available");
+    if (!Property->HasAnyFlags(EPropertyFlags::Editable)
+        || Property->HasAnyFlags(EPropertyFlags::ReadOnly))
+    {
+        return Failure("Property is not editable");
+    }
+    const FPropertyMetadata& Metadata = Property->GetMetadata();
+    if (!IsWithinMetadataRange(Metadata, Value))
+        return Failure("Property value is outside its reflected range");
+    if (const int32* EnumValue = std::get_if<int32>(&Value);
+        EnumValue != nullptr && !Metadata.EnumOptions.empty())
+    {
+        const bool bFound = std::any_of(
+            Metadata.EnumOptions.begin(), Metadata.EnumOptions.end(),
+            [EnumValue](const FPropertyMetadata::FEnumOption& Option)
+            {
+                return Option.Value == *EnumValue;
+            });
+        if (!bFound) return Failure("Property enum value is not allowed");
+    }
+    if (Property->GetType() == EPropertyType::AssetPath)
+    {
+        const FAssetPath* AssetPath = std::get_if<FAssetPath>(&Value);
+        const FAssetRecord* Record = EngineLoop != nullptr && AssetPath != nullptr
+            && AssetPath->IsValid()
+            ? EngineLoop->GetAssetRegistry().Find(*AssetPath) : nullptr;
+        if (AssetPath == nullptr
+            || (AssetPath->IsValid()
+                && (Record == nullptr
+                    || !MatchesAssetType(
+                        Record->Type, Property->GetAssetReferenceType()))))
+        {
+            return Failure("Asset type is not valid for this property");
+        }
+    }
+    if (!ApplyValue(Object, Property, Value))
+        return Failure("Could not apply property value");
+    return {true, "Changed " + Object->GetPathName() + "."
+        + Property->GetName().ToString()};
 }
 
 FEditorPropertyService::FEditorPropertyService(
@@ -115,20 +205,6 @@ FEditorPropertyResult FEditorPropertyService::SetProperty(
     {
         return Failure("Object or property is no longer available");
     }
-    if (!Property->HasAnyFlags(EPropertyFlags::Editable)
-        || Property->HasAnyFlags(EPropertyFlags::ReadOnly))
-    {
-        return Failure("Property is not editable");
-    }
-    if (Property->GetType() == EPropertyType::AssetPath)
-    {
-        const FAssetPath* AssetPath = std::get_if<FAssetPath>(&Value);
-        if (AssetPath == nullptr || !ValidateAssetReference(*Property, *AssetPath))
-        {
-            return Failure("Asset type is not valid for this property");
-        }
-    }
-
     PWorld* World = EngineLoop != nullptr ? EngineLoop->GetWorld() : nullptr;
     if (World == nullptr || Selection == nullptr || Transactions == nullptr)
     {
@@ -147,19 +223,20 @@ FEditorPropertyResult FEditorPropertyService::SetProperty(
         return Failure("Could not begin property transaction");
     }
 
-    bool bApplied = false;
+    FEditorPropertyResult ApplyResult;
     try
     {
-        bApplied = ApplyValue(Object, Property, Value);
+        ApplyResult = ApplyEditorPropertyValue(
+            EngineLoop, Object, Property, Value);
     }
     catch (...)
     {
-        bApplied = false;
+        ApplyResult = Failure("Could not apply property value");
     }
-    if (!bApplied)
+    if (!ApplyResult.bSucceeded)
     {
         Transactions->Rollback(RestoreSnapshot, &Error);
-        return Failure("Could not apply property value");
+        return ApplyResult;
     }
     if (!Transactions->Commit(
             *World,
@@ -173,17 +250,4 @@ FEditorPropertyResult FEditorPropertyService::SetProperty(
     return {true, "Changed " + Object->GetPathName() + "." + PropertyName.ToString()};
 }
 
-bool FEditorPropertyService::ValidateAssetReference(
-    const PProperty& Property,
-    const FAssetPath& AssetPath) const
-{
-    if (!AssetPath.IsValid())
-    {
-        return true;
-    }
-    const FAssetRecord* Record = EngineLoop != nullptr
-        ? EngineLoop->GetAssetRegistry().Find(AssetPath) : nullptr;
-    return Record != nullptr
-        && MatchesAssetType(Record->Type, Property.GetAssetReferenceType());
-}
 }
