@@ -47,12 +47,13 @@ Provider System Prompt 会解释这一区别，但提示词本身不是安全边
 ## 新项目策略
 
 `project.create_from_third_person_template` 在 `Engine/Projects/<Name>` 下创建内容型项目，复制当前已验证项目的
-`Content` 与 `Config`，生成独立 `.pico` 描述符，但不会复制 `Saved`、API Key、临时文件和用户布局，也不会
+`Content` 与 `Config`，生成独立 `.pico` 描述符，但不会复制项目 `Saved`、临时文件和用户布局，也不会
 覆盖同名项目。这类似于从受控项目模板创建工程，而不是让模型临时拼写 CMake 与游戏模块。
 
-当前 Editor 进程只能编辑启动时加载的一个项目。创建结果会明确返回 `open_required=true`；用户需要用
-`File -> Open Project` 打开新项目，之后 Agent 才能继续修改它的活动 World。项目切换后的自动恢复计划属于后续
-Harness 工作，不在本阶段伪装成已经支持。
+当前 Editor 进程仍只编辑启动时加载的一个项目，但创建工具成功且本轮 Agent 正常完成后，会执行受控进程交接：
+复制已经落盘的当前 Session、写入一次性清单、沿用 Dirty World 的 Save/Discard/Cancel 保护，然后启动新编辑器。
+新进程恢复 Provider、Model、聊天历史和当前 Session；API Key 属于编辑器本地存储，所有项目直接共享而无需复制。实现与边界见
+[`AIPhase07_ProjectHandoffAndLoopControl.md`](AIPhase07_ProjectHandoffAndLoopControl.md)。
 
 ## 安全与事务边界
 
@@ -83,4 +84,4 @@ Development 包输出到 E:/PicoPackages，包名为 AgentDemo，并运行 smoke
 - `PicoAgentTests` 验证项目写入获得批准但不会错误开启 World 事务。
 - `PicoEditorTests` 验证 18 个工具完成注册，房间包含五个碰撞部件，并可由一次普通 Undo 完整移除。
 - 自动化覆盖 Blueprint Actor 创建/删除、Play 启停服务和 Play/Package 意图冲突的副作用前拒绝。
-- Debug 下 Agent 26 项、Editor 126 项测试通过。
+- Debug 下 Agent 38 项、Editor 127 项测试通过。

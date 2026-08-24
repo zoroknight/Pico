@@ -1,0 +1,27 @@
+{
+  "format_version": 1,
+  "id": "package-project",
+  "version": "1.0.0",
+  "description": "Validate, save, and package a Pico project through the approved packager service.",
+  "triggers": ["打包", "导出exe", "发布版本", "package project", "export build"],
+  "allowed_tools": [
+    "editor.world.describe",
+    "editor.play.validate",
+    "editor.world.save",
+    "editor.project.package"
+  ],
+  "preconditions": [
+    "The active World is saved.",
+    "The output root and package name are explicit."
+  ],
+  "workflow": [
+    "Validate gameplay.",
+    "Save the active World.",
+    "Request packaging approval with the exact output root and package name.",
+    "Never substitute Play for Package or Package for Play."
+  ],
+  "completion_criteria": [
+    "The packager service accepted the request.",
+    "The reported output directory matches the approved destination."
+  ]
+}

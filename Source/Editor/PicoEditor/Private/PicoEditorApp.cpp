@@ -342,6 +342,20 @@ FPicoEditorApp::FPicoEditorApp(
                 !PlaySession.IsActive()
                     ? "Play Session stopped"
                     : "One or more Play processes could not be stopped"};
+        },
+        [this](const std::filesystem::path& ProjectFile)
+        {
+            const FEditorProjectResolution Resolution =
+                ResolveEditorProjectPath(ProjectFile);
+            if (!Resolution.IsResolved())
+            {
+                SetStatus("Could not open Agent-created project: "
+                    + Resolution.Message, true);
+                return;
+            }
+            PendingProjectFile = Resolution.ProjectFile;
+            SetStatus("Agent created the project; preparing a clean editor handoff");
+            RequestDocumentAction(DocumentActionOpenProject);
         });
 }
 

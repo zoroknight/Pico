@@ -386,6 +386,27 @@ int main(int Argc, char** Argv)
                 break;
             }
         }
+        const std::filesystem::path SymbolFont =
+            "C:/Windows/Fonts/seguisym.ttf";
+        if (std::filesystem::is_regular_file(SymbolFont))
+        {
+            static const ImWchar SymbolRanges[] = {
+                0x2000, 0x206F, // General punctuation.
+                0x2190, 0x21FF, // Arrows.
+                0x2300, 0x23FF, // Technical symbols.
+                0x2500, 0x257F, // Box drawing.
+                0x2600, 0x26FF, // Miscellaneous symbols.
+                0x2700, 0x27BF, // Dingbats, including check marks.
+                0x2B00, 0x2BFF, // Miscellaneous arrows and symbols.
+                0
+            };
+            ImFontConfig MergeConfig;
+            MergeConfig.MergeMode = true;
+            MergeConfig.PixelSnapH = true;
+            IO.Fonts->AddFontFromFileTTF(
+                SymbolFont.string().c_str(), FontSize, &MergeConfig,
+                SymbolRanges);
+        }
         ApplyEditorStyle(UiScale);
         ImGui::GetStyle().WindowRounding = 0.0f;
         ImGui::GetStyle().Colors[ImGuiCol_WindowBg].w = 1.0f;

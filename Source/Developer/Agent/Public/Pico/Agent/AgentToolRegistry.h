@@ -137,6 +137,7 @@ public:
     std::string BuildToolCatalogJson() const;
 
     bool RequiresApproval(const FAgentToolCall& Call) const override;
+    bool IsReadOnly(const FAgentToolCall& Call) const override;
     void PrepareApproval(const FAgentToolCall& Call) override;
     std::string GetLastExecutionTraceJson() const override;
     FAgentToolResult Execute(

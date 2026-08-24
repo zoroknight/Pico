@@ -1,0 +1,25 @@
+{
+  "format_version": 1,
+  "id": "validate-save-play",
+  "version": "1.0.0",
+  "description": "Validate, save, and launch the active Pico World without invoking packaging.",
+  "triggers": ["运行项目", "启动项目", "试玩", "运行游戏", "play project", "run project", "preview game"],
+  "allowed_tools": [
+    "editor.world.describe",
+    "editor.play.validate",
+    "editor.world.save",
+    "editor.play.start",
+    "editor.play.stop"
+  ],
+  "preconditions": ["The active World has a persistent asset path before Play."],
+  "workflow": [
+    "Validate the active gameplay chain.",
+    "Save the World if it has authored changes.",
+    "Start the editor-owned Play Session exactly once.",
+    "Do not stop it unless the user explicitly asks."
+  ],
+  "completion_criteria": [
+    "Gameplay validation passed.",
+    "The Play Session reports started and remains owned by the editor."
+  ]
+}

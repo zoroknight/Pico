@@ -1,0 +1,32 @@
+{
+  "format_version": 1,
+  "id": "third-person-character",
+  "version": "1.0.0",
+  "description": "Configure the unique playable third-person Player 0 character from existing Pico assets.",
+  "triggers": ["第三人称", "可操控角色", "玩家角色", "third person", "playable character"],
+  "allowed_tools": [
+    "editor.world.describe",
+    "editor.asset.search",
+    "editor.object.describe",
+    "editor.object.set_properties",
+    "editor.gameplay.create_third_person_character",
+    "editor.play.validate",
+    "editor.world.save",
+    "editor.play.start"
+  ],
+  "preconditions": [
+    "A Pawn Actor Blueprint and Character Profile exist.",
+    "Player 0 does not already have an auto-possessed Pawn."
+  ],
+  "workflow": [
+    "Inspect the World and search for the required Blueprint and Character Profile.",
+    "Create exactly one Player 0 Pawn and matching PlayerStart.",
+    "Validate gameplay before Play.",
+    "Save before Play when the World changed."
+  ],
+  "completion_criteria": [
+    "The Pawn uses the requested character assets.",
+    "Player 0 possession validates.",
+    "The Play validation result is successful."
+  ]
+}

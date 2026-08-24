@@ -1,0 +1,33 @@
+{
+  "format_version": 1,
+  "id": "assemble-basic-scene",
+  "version": "1.0.0",
+  "description": "Inspect and assemble a small Pico scene from existing assets and primitive geometry.",
+  "triggers": ["场景", "房间", "地板", "墙壁", "scene", "room", "floor", "wall"],
+  "allowed_tools": [
+    "editor.world.describe",
+    "editor.selection.describe",
+    "editor.asset.search",
+    "editor.object.describe",
+    "editor.object.set_properties",
+    "editor.actor.spawn",
+    "editor.actor.spawn_blueprint",
+    "editor.actor.set_location",
+    "editor.scene.create_room",
+    "editor.play.validate",
+    "editor.world.save"
+  ],
+  "preconditions": ["An editable World is open."],
+  "workflow": [
+    "Inspect the active World once.",
+    "Search assets only when the request needs a project asset.",
+    "Create structural geometry before gameplay Actors.",
+    "Apply reflected properties using exact discovered object paths.",
+    "Validate and save only when requested or required by the goal."
+  ],
+  "completion_criteria": [
+    "Requested Actors exist at the requested transforms.",
+    "Asset references resolve.",
+    "Every mutation passed Pico verification."
+  ]
+}

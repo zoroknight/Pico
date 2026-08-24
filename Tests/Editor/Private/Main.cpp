@@ -11,6 +11,8 @@
 #include "Pico/Agent/AgentRuntime.h"
 #include "Pico/Agent/AgentCredentialStore.h"
 #include "Pico/Agent/FakeAgentProvider.h"
+#include "Pico/Core/Config.h"
+#include "Pico/Core/Paths.h"
 
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorBlueprint.h"
@@ -882,6 +884,13 @@ void TestEditorCommandService(FTestRunner& Runner)
     Runner.Expect(
         AgentTools.IsInitialized() && AgentTools.GetToolNames().size() == 18,
         "Editor Agent adapter registers inspection, scene, gameplay, save, project, and package tools");
+    Runner.Expect(
+        AgentTools.IsReadOnly(
+            {"classify-read", "editor.world.describe", "{}"})
+            && !AgentTools.IsReadOnly(
+                {"classify-write", "editor.actor.spawn",
+                    R"({"name":"ClassificationOnly","kind":"Cube"})"}),
+        "Editor Agent exposes Registry read/write classification to the Harness");
     AgentApproval.bApprove = true;
     bool bAgentPlayActive = false;
     Pico::FEditorAgentHostServices PlayHostServices;
@@ -1538,27 +1547,55 @@ void TestEditorWorldDocument(FTestRunner& Runner)
     std::string CredentialError;
     std::string LoadedApiKey;
     const std::filesystem::path ExpectedCredentialPath =
+        std::filesystem::temp_directory_path()
+            / "PicoEditorDocumentTests" / "EditorLocal" / "ApiKeys.ini";
+    const std::filesystem::path LegacyCredentialPath =
         TestProjectRoot / "Saved" / "Agent" / "ApiKeys.ini";
+    const Pico::FAgentCredentialStore CredentialStore(
+        ExpectedCredentialPath, LegacyCredentialPath);
+    std::filesystem::remove(ExpectedCredentialPath);
+    std::filesystem::remove(LegacyCredentialPath);
+    const Pico::FAgentCredentialStore DefaultCredentialStore;
+    Runner.Expect(
+        DefaultCredentialStore.GetStoragePath()
+            == Pico::FPaths::GetEngineRootDir()
+                / "Saved" / "Editor" / "Agent" / "ApiKeys.ini",
+        "Default Agent API key storage belongs to the local editor checkout, not the project");
     Runner.Expect(
         bInitialized
-            && Pico::FAgentCredentialStore::SaveApiKey(
+            && CredentialStore.SaveApiKey(
                 "DeepSeek", "sk-pico-test-only", &CredentialError)
-            && Pico::FAgentCredentialStore::GetStoragePath()
-                == ExpectedCredentialPath
+            && CredentialStore.GetStoragePath() == ExpectedCredentialPath
             && std::filesystem::exists(ExpectedCredentialPath),
-        "Agent API keys are stored only in the open project's Saved directory");
+        "Agent API keys can use an isolated editor-local credential path");
     Runner.Expect(
-        Pico::FAgentCredentialStore::TryLoadApiKey(
+        CredentialStore.TryLoadApiKey(
             "DeepSeek", LoadedApiKey, &CredentialError)
             && LoadedApiKey == "sk-pico-test-only",
-        "Project-local Agent API keys round trip through the credential store");
+        "Editor-local Agent API keys round trip through the credential store");
     std::fill(LoadedApiKey.begin(), LoadedApiKey.end(), '\0');
     LoadedApiKey.clear();
     Runner.Expect(
-        Pico::FAgentCredentialStore::DeleteApiKey(
+        CredentialStore.DeleteApiKey(
             "DeepSeek", &CredentialError)
             && !std::filesystem::exists(ExpectedCredentialPath),
-        "Removing the final project API key removes the local key file");
+        "Removing the final editor API key removes the local key file");
+    Pico::FConfigFile LegacyCredentialConfig;
+    LegacyCredentialConfig.SetString(
+        "ApiKeys", "DeepSeek", "sk-pico-legacy-test-only");
+    const bool bLegacyFixtureSaved =
+        LegacyCredentialConfig.Save(LegacyCredentialPath);
+    Runner.Expect(
+        bLegacyFixtureSaved
+            && CredentialStore.TryLoadApiKey(
+                "DeepSeek", LoadedApiKey, &CredentialError)
+            && LoadedApiKey == "sk-pico-legacy-test-only"
+            && std::filesystem::exists(ExpectedCredentialPath)
+            && !std::filesystem::exists(LegacyCredentialPath),
+        "The first read migrates a legacy project API key into editor-local storage");
+    std::fill(LoadedApiKey.begin(), LoadedApiKey.end(), '\0');
+    LoadedApiKey.clear();
+    CredentialStore.DeleteApiKey("DeepSeek", &CredentialError);
 
     Runner.Expect(
         bInitialized && PicoSandbox::RegisterSandboxGameplayClasses(),

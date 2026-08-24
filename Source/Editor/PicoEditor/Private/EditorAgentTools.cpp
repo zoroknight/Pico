@@ -7,6 +7,7 @@
 #include "Pico/Editor/EditorWorldDocument.h"
 #include "Pico/Core/Config.h"
 #include "Pico/Core/Paths.h"
+#include "Pico/Core/Log.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorBlueprint.h"
 #include "Pico/Engine/ActorComponent.h"
@@ -489,6 +490,95 @@ struct FEditorAgentToolExecutor::FImpl
         Policy.bAllowLaunchProcess = true;
         Policy.ProjectRoot = EngineLoop ? FPaths::GetProjectRootDir() : std::filesystem::path {};
         return Policy;
+    }
+
+    std::vector<FAgentKnowledgeRecord> CollectKnowledgeRecords() const
+    {
+        std::vector<FAgentKnowledgeRecord> Result;
+        PWorld* World = EngineLoop ? EngineLoop->GetWorld() : nullptr;
+        if (World)
+        {
+            FJson WorldJson{{"world", World->GetPathName()},
+                {"actors", FJson::array()}};
+            for (PLevel* Level : World->GetLevels())
+                if (Level) for (PActor* Actor : Level->GetActors())
+                    if (Actor) WorldJson["actors"].push_back({
+                        {"object_path", Actor->GetPathName()},
+                        {"class", Actor->GetClass()
+                            ? Actor->GetClass()->GetName().ToString() : "Unknown"},
+                        {"location", VectorToJson(Actor->GetActorLocation())}});
+            FAgentKnowledgeRecord Record;
+            Record.SourceType = "world";
+            Record.SourcePath = World->GetPathName();
+            Record.Title = "Active World snapshot";
+            Record.Content = WorldJson.dump();
+            Record.Tags = {"world", "actor", "scene"};
+            Record.Provenance = "Live Game Thread World snapshot";
+            Result.push_back(std::move(Record));
+        }
+
+        if (EngineLoop)
+        {
+            FJson Assets = FJson::array();
+            for (const FAssetRecord& Asset : EngineLoop->GetAssetRegistry().GetAssets())
+                Assets.push_back({{"path", Asset.AssetPath.ToString()},
+                    {"type", ToString(Asset.Type)}, {"size", Asset.FileSize}});
+            FAgentKnowledgeRecord Record;
+            Record.SourceType = "assets";
+            Record.SourcePath = "/Game";
+            Record.Title = "Project AssetRegistry snapshot";
+            Record.Content = Assets.dump();
+            Record.SourceRevision = Assets.size();
+            Record.Tags = {"asset", "assetregistry", "content"};
+            Record.Provenance = "Live AssetRegistry";
+            Result.push_back(std::move(Record));
+        }
+
+        if (Selection && !Selection->GetObjectPath().empty())
+        {
+            PObject* Object = FindEditorWorldObjectByPath(
+                World, Selection->GetObjectPath());
+            if (Object)
+            {
+                FAgentKnowledgeRecord Record;
+                Record.SourceType = "selection";
+                Record.SourcePath = Object->GetPathName();
+                Record.Title = "Current editor selection";
+                Record.Content = DescribeObject(Object, true).dump();
+                Record.Tags = {"selection", "reflection", "property"};
+                Record.Provenance = "Live editor selection and PProperty metadata";
+                Result.push_back(std::move(Record));
+            }
+        }
+
+        const std::vector<FLogRecord> LogRecords = FLog::GetRecordsSince(0);
+        FJson Issues = FJson::array();
+        std::uint64_t LatestIssueSequence = 0;
+        const std::size_t Start = LogRecords.size() > 100
+            ? LogRecords.size() - 100 : 0;
+        for (std::size_t Index = Start; Index < LogRecords.size(); ++Index)
+        {
+            const FLogRecord& Log = LogRecords[Index];
+            if (Log.Level != ELogLevel::Warning && Log.Level != ELogLevel::Error)
+                continue;
+            LatestIssueSequence = std::max(LatestIssueSequence, Log.Sequence);
+            Issues.push_back({{"sequence", Log.Sequence},
+                {"severity", Log.Level == ELogLevel::Error ? "Error" : "Warning"},
+                {"category", Log.Category}, {"message", Log.Message}});
+        }
+        if (!Issues.empty())
+        {
+            FAgentKnowledgeRecord Record;
+            Record.SourceType = "message-log";
+            Record.SourcePath = "PicoEditor/MessageLog";
+            Record.Title = "Recent editor warnings and errors";
+            Record.Content = Issues.dump();
+            Record.SourceRevision = LatestIssueSequence;
+            Record.Tags = {"log", "warning", "error", "build", "package"};
+            Record.Provenance = "FLog warning/error records";
+            Result.push_back(std::move(Record));
+        }
+        return Result;
     }
 
     void RegisterTools()
@@ -1165,7 +1255,7 @@ struct FEditorAgentToolExecutor::FImpl
         FAgentToolDefinition CreateProject;
         CreateProject.Name = "editor.project.create_from_third_person_template";
         CreateProject.Description =
-            "Create a content-only Pico project under Engine/Projects by copying the proven current third-person project Content and Config; never overwrites an existing project";
+            "Create a content-only Pico project under Engine/Projects by copying the proven current third-person project Content and Config; never overwrites an existing project; after the completed Agent turn Pico performs a clean editor-process handoff and restores this conversation in the new project";
         CreateProject.Permission = EAgentToolPermission::WriteProject;
         CreateProject.Schema.Fields = {
             {"project_name", EAgentToolValueType::String, true, {}, {}, 48}
@@ -1231,7 +1321,7 @@ struct FEditorAgentToolExecutor::FImpl
                 {"project_file", ProjectFile.string()},
                 {"startup_map", Config.GetString("Editor", "StartupMap", "")},
                 {"template", "ThirdPerson"},
-                {"open_required", true}});
+                {"editor_handoff", "scheduled_after_turn"}});
         };
         CreateProject.Verifier = [](const FAgentToolCall&, const FAgentToolResult& Result,
                                     std::string& Error)
@@ -1310,6 +1400,11 @@ std::string FEditorAgentToolExecutor::BuildToolCatalogJson() const
 {
     return Impl ? Impl->Registry.BuildToolCatalogJson() : "[]";
 }
+std::vector<FAgentKnowledgeRecord> FEditorAgentToolExecutor::CollectKnowledgeRecords() const
+{
+    return Impl ? Impl->CollectKnowledgeRecords()
+        : std::vector<FAgentKnowledgeRecord> {};
+}
 const std::vector<FAgentToolStageTrace>& FEditorAgentToolExecutor::GetLastTrace() const
 {
     static const std::vector<FAgentToolStageTrace> Empty;
@@ -1318,6 +1413,10 @@ const std::vector<FAgentToolStageTrace>& FEditorAgentToolExecutor::GetLastTrace(
 bool FEditorAgentToolExecutor::RequiresApproval(const FAgentToolCall& Call) const
 {
     return Impl && Impl->Registry.RequiresApproval(Call);
+}
+bool FEditorAgentToolExecutor::IsReadOnly(const FAgentToolCall& Call) const
+{
+    return Impl && Impl->Registry.IsReadOnly(Call);
 }
 void FEditorAgentToolExecutor::PrepareApproval(const FAgentToolCall& Call)
 {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Pico/Agent/AgentToolRegistry.h"
+#include "Pico/Agent/AgentKnowledgeStore.h"
 
 #include <functional>
 #include <filesystem>
@@ -42,9 +43,11 @@ public:
     bool IsInitialized() const;
     std::vector<std::string> GetToolNames() const;
     std::string BuildToolCatalogJson() const;
+    std::vector<FAgentKnowledgeRecord> CollectKnowledgeRecords() const;
     const std::vector<FAgentToolStageTrace>& GetLastTrace() const;
 
     bool RequiresApproval(const FAgentToolCall& Call) const override;
+    bool IsReadOnly(const FAgentToolCall& Call) const override;
     void PrepareApproval(const FAgentToolCall& Call) override;
     std::string GetLastExecutionTraceJson() const override;
     FAgentToolResult Execute(

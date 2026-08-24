@@ -127,9 +127,13 @@ endif()
 
 add_library(PicoAgentCore STATIC
     Source/Developer/Agent/Private/AgentCredentialStore.cpp
+    Source/Developer/Agent/Private/AgentIntent.cpp
+    Source/Developer/Agent/Private/AgentKnowledgeStore.cpp
+    Source/Developer/Agent/Private/AgentProjectHandoff.cpp
     Source/Developer/Agent/Private/AgentProvider.cpp
     Source/Developer/Agent/Private/AgentRuntime.cpp
     Source/Developer/Agent/Private/AgentSession.cpp
+    Source/Developer/Agent/Private/AgentSkill.cpp
     Source/Developer/Agent/Private/AgentToolRegistry.cpp
     Source/Developer/Agent/Private/AgentTypes.cpp
     Source/Developer/Agent/Private/FakeAgentProvider.cpp
@@ -865,7 +869,7 @@ if(PICO_BUILD_INSPECTOR)
     )
 
     if(MSVC)
-        target_compile_options(PicoEditor PRIVATE /W4 /permissive- /FS)
+        target_compile_options(PicoEditor PRIVATE /W4 /permissive- /FS /utf-8)
         target_link_options(PicoEditor PRIVATE "/ENTRY:mainCRTStartup")
     else()
         target_compile_options(PicoEditor PRIVATE -Wall -Wextra -Wpedantic)

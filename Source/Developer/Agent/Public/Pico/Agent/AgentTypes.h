@@ -68,6 +68,10 @@ struct FAgentBudget
 {
     std::size_t MaxSteps = 16;
     std::size_t MaxToolCalls = 32;
+    std::size_t MaxReadOnlyToolCalls = 12;
+    std::size_t MaxMutationToolCalls = 20;
+    std::size_t MaxConsecutiveNoProgressSteps = 2;
+    std::size_t ReservedFinalSteps = 1;
     std::size_t MaxRepairAttempts = 2;
     std::uint64_t MaxElapsedMilliseconds = 30000;
 };
@@ -76,6 +80,10 @@ struct FAgentCounters
 {
     std::size_t Steps = 0;
     std::size_t ToolCalls = 0;
+    std::size_t ReadOnlyToolCalls = 0;
+    std::size_t MutationToolCalls = 0;
+    std::size_t SemanticCacheHits = 0;
+    std::size_t ConsecutiveNoProgressSteps = 0;
     std::size_t RepairAttempts = 0;
 };
 

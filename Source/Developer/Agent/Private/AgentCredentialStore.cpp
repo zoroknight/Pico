@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <system_error>
+#include <utility>
 
 namespace Pico
 {
@@ -35,22 +37,30 @@ bool LoadExistingConfig(
     const bool bExists = std::filesystem::exists(Path, Error);
     if (Error)
     {
-        if (OutError) *OutError = "Could not inspect the project API key file";
+        if (OutError) *OutError = "Could not inspect the local API key file";
         return false;
     }
     if (!bExists) return true;
     if (OutConfig.Load(Path)) return true;
-    if (OutError) *OutError = "Could not read the project API key file";
+    if (OutError) *OutError = "Could not read the local API key file";
     return false;
 }
-}
 
-bool FAgentCredentialStore::IsSupported()
+bool SaveConfigValue(
+    const std::filesystem::path& Path,
+    std::string_view ProviderId,
+    std::string_view ApiKey,
+    std::string* OutError)
 {
-    return !GetStoragePath().empty();
+    FConfigFile Config;
+    if (!LoadExistingConfig(Path, Config, OutError)) return false;
+    Config.SetString("ApiKeys", std::string(ProviderId), std::string(ApiKey));
+    if (Config.Save(Path)) return true;
+    if (OutError) *OutError = "Could not save the editor-local API key file";
+    return false;
 }
 
-std::filesystem::path FAgentCredentialStore::GetStoragePath()
+std::filesystem::path LegacyProjectStoragePath()
 {
     std::filesystem::path Path;
     if (!FPaths::TryGetProjectWritePath(
@@ -60,11 +70,40 @@ std::filesystem::path FAgentCredentialStore::GetStoragePath()
     }
     return Path;
 }
+}
+
+FAgentCredentialStore::FAgentCredentialStore(
+    std::filesystem::path InStoragePathOverride)
+    : StoragePathOverride(std::move(InStoragePathOverride))
+{
+}
+
+FAgentCredentialStore::FAgentCredentialStore(
+    std::filesystem::path InStoragePathOverride,
+    std::filesystem::path InLegacyProjectPathOverride)
+    : StoragePathOverride(std::move(InStoragePathOverride)),
+      LegacyProjectPathOverride(std::move(InLegacyProjectPathOverride))
+{
+}
+
+bool FAgentCredentialStore::IsSupported() const
+{
+    return !GetStoragePath().empty();
+}
+
+std::filesystem::path FAgentCredentialStore::GetStoragePath() const
+{
+    if (!StoragePathOverride.empty()) return StoragePathOverride;
+    const std::filesystem::path& EngineRoot = FPaths::GetEngineRootDir();
+    return EngineRoot.empty()
+        ? std::filesystem::path {}
+        : EngineRoot / "Saved/Editor/Agent/ApiKeys.ini";
+}
 
 bool FAgentCredentialStore::TryLoadApiKey(
     std::string_view ProviderId,
     std::string& OutApiKey,
-    std::string* OutError)
+    std::string* OutError) const
 {
     OutApiKey.clear();
     if (OutError) OutError->clear();
@@ -76,29 +115,34 @@ bool FAgentCredentialStore::TryLoadApiKey(
     const std::filesystem::path Path = GetStoragePath();
     if (Path.empty())
     {
-        if (OutError) *OutError = "No project is open for local API key storage";
+        if (OutError) *OutError = "The Pico editor root is unavailable for local API key storage";
         return false;
     }
     std::error_code Error;
     if (!std::filesystem::exists(Path, Error))
     {
-        if (Error && OutError) *OutError = "Could not inspect the project API key file";
-        return false;
+        if (Error)
+        {
+            if (OutError) *OutError = "Could not inspect the editor-local API key file";
+            return false;
+        }
+        return TryMigrateProjectCredential(ProviderId, OutApiKey, OutError);
     }
     FConfigFile Config;
     if (!Config.Load(Path))
     {
-        if (OutError) *OutError = "Could not read the project API key file";
+        if (OutError) *OutError = "Could not read the editor-local API key file";
         return false;
     }
     OutApiKey = Config.GetString("ApiKeys", ProviderId, "");
-    return !OutApiKey.empty();
+    if (!OutApiKey.empty()) return true;
+    return TryMigrateProjectCredential(ProviderId, OutApiKey, OutError);
 }
 
 bool FAgentCredentialStore::SaveApiKey(
     std::string_view ProviderId,
     std::string_view ApiKey,
-    std::string* OutError)
+    std::string* OutError) const
 {
     if (OutError) OutError->clear();
     if (!IsValidProviderId(ProviderId))
@@ -114,20 +158,15 @@ bool FAgentCredentialStore::SaveApiKey(
     const std::filesystem::path Path = GetStoragePath();
     if (Path.empty())
     {
-        if (OutError) *OutError = "No project is open for local API key storage";
+        if (OutError) *OutError = "The Pico editor root is unavailable for local API key storage";
         return false;
     }
-    FConfigFile Config;
-    if (!LoadExistingConfig(Path, Config, OutError)) return false;
-    Config.SetString("ApiKeys", std::string(ProviderId), std::string(ApiKey));
-    if (Config.Save(Path)) return true;
-    if (OutError) *OutError = "Could not save the project API key file";
-    return false;
+    return SaveConfigValue(Path, ProviderId, ApiKey, OutError);
 }
 
 bool FAgentCredentialStore::DeleteApiKey(
     std::string_view ProviderId,
-    std::string* OutError)
+    std::string* OutError) const
 {
     if (OutError) OutError->clear();
     if (!IsValidProviderId(ProviderId))
@@ -138,7 +177,7 @@ bool FAgentCredentialStore::DeleteApiKey(
     const std::filesystem::path Path = GetStoragePath();
     if (Path.empty())
     {
-        if (OutError) *OutError = "No project is open for local API key storage";
+        if (OutError) *OutError = "The Pico editor root is unavailable for local API key storage";
         return false;
     }
     std::error_code Error;
@@ -150,11 +189,62 @@ bool FAgentCredentialStore::DeleteApiKey(
     {
         std::filesystem::remove(Path, Error);
         if (!Error) return true;
-        if (OutError) *OutError = "Could not remove the project API key file";
+        if (OutError) *OutError = "Could not remove the editor-local API key file";
         return false;
     }
     if (Config.Save(Path)) return true;
-    if (OutError) *OutError = "Could not update the project API key file";
+    if (OutError) *OutError = "Could not update the editor-local API key file";
     return false;
+}
+
+bool FAgentCredentialStore::TryMigrateProjectCredential(
+    std::string_view ProviderId,
+    std::string& OutApiKey,
+    std::string* OutError) const
+{
+    // An isolated store only migrates from an explicitly supplied legacy fixture.
+    const std::filesystem::path LegacyPath = !LegacyProjectPathOverride.empty()
+        ? LegacyProjectPathOverride
+        : (StoragePathOverride.empty()
+            ? LegacyProjectStoragePath()
+            : std::filesystem::path {});
+    if (LegacyPath.empty() || LegacyPath == GetStoragePath()) return false;
+
+    std::error_code Error;
+    if (!std::filesystem::exists(LegacyPath, Error)) return false;
+    if (Error)
+    {
+        if (OutError) *OutError = "Could not inspect the legacy project API key file";
+        return false;
+    }
+
+    FConfigFile LegacyConfig;
+    if (!LegacyConfig.Load(LegacyPath))
+    {
+        if (OutError) *OutError = "Could not read the legacy project API key file";
+        return false;
+    }
+    OutApiKey = LegacyConfig.GetString("ApiKeys", ProviderId, "");
+    if (OutApiKey.empty()) return false;
+    if (!SaveConfigValue(GetStoragePath(), ProviderId, OutApiKey, OutError))
+    {
+        OutApiKey.clear();
+        return false;
+    }
+
+    LegacyConfig.Remove("ApiKeys", ProviderId);
+    if (LegacyConfig.GetSectionEntries("ApiKeys").empty())
+    {
+        std::filesystem::remove(LegacyPath, Error);
+    }
+    else if (!LegacyConfig.Save(LegacyPath))
+    {
+        Error = std::make_error_code(std::errc::io_error);
+    }
+    if (Error && OutError)
+    {
+        *OutError = "API key migrated, but the legacy project copy could not be removed";
+    }
+    return true;
 }
 }

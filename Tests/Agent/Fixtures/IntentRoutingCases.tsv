@@ -1,0 +1,19 @@
+# intent<TAB>comma-separated skill ids<TAB>prompt
+General	assemble-basic-scene	创建一个碰撞房间
+General	assemble-basic-scene	构建一个带地板和墙壁的房间
+General	third-person-character	创建一个第三人称可操控角色
+Play	validate-save-play	运行项目，但不要打包
+Package	package-project	打包项目，但不要运行项目
+General		不要运行，也不要打包，只描述当前世界
+Play	validate-save-play	启动项目
+Package	package-project	导出exe
+Package	package-project	发布版本
+General		保存当前世界
+General		分析刚才的错误
+Play	assemble-basic-scene,validate-save-play	创建碰撞房间然后运行项目
+Package	package-project	验证后打包项目
+Play	validate-save-play	试玩当前关卡
+General	assemble-basic-scene	build a room, do not package project
+Play	validate-save-play	run project without packaging
+Package	package-project	package project without running it
+General		do not package project; describe the world

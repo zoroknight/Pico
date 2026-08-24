@@ -44,7 +44,7 @@ PicoEditor 默认把 `AI Chat` 停靠在 `Details` 一侧，也可以通过 `Vie
 为防止 Fake 脚本历史影响真实模型、或不同供应商互相污染上下文，会话按 Provider 隔离保存：
 
 ```text
-<Project>/Saved/Agent/Sessions/<provider>/<session-id>.jsonl
+<Project>/Saved/Agent/Sessions/editor-chat-<provider>-<timestamp>-<sequence>.jsonl
 ```
 
 会话索引记录显示名称、创建时间和最近使用时间，正文仍是可审计的追加式 JSONL Event Log。切换 Provider 时
@@ -69,20 +69,25 @@ Session 被锁定，Worker 同时捕获当轮会话路径，避免切换导致�
 `reasoning_content`，在该协议进入 Session Event 之前不开放，避免第二轮请求被服务端拒绝。
 
 Windows 使用 WinHTTP HTTPS Transport。HTTP 408、429、5xx 和临时传输错误会按 `Retry-After` 或有限指数退避
-重试；等待退避时可取消。同步 WinHTTP 调用本身受窗口配置的超时上限约束，当前不是流式传输。
+重试；等待退避时可取消。本阶段最初使用同步完整响应，后续已经增加 SSE Streaming，见
+[`AIPhase08_StreamingKnowledgeRagAndSkills.md`](AIPhase08_StreamingKnowledgeRagAndSkills.md)。
 
-编辑器可以把开发期密钥保存到当前项目专属文件：
+编辑器可以把开发期密钥保存到当前 Pico 源码/安装副本专属的编辑器本地文件：
 
 ```text
-<Project>/Saved/Agent/ApiKeys.ini
+<PicoEngineRoot>/Saved/Editor/Agent/ApiKeys.ini
 ```
 
-该文件是明文开发配置，不写入 Windows 系统凭据，也不进入 `.pico`、`Pico.ini`、场景或资产。项目的
-`Saved/` 已被 Git 忽略，Packager 也明确排除 `Saved`，因此正常提交和打包不会携带密钥。拥有项目目录读取权限的
-用户或进程仍能读取它；复制整个项目时也不要手动附带 `Saved/Agent/ApiKeys.ini`。
+该文件是明文开发配置，不写入 Windows 系统凭据，也不进入 `.pico`、`Pico.ini`、场景或资产。引擎根目录的
+`Saved/` 与所有 `ApiKeys.ini` 都被 Git 忽略，Packager 也不收集引擎 `Saved`，因此正常提交和打包不会携带密钥。
+它位于项目根目录之外，Agent 的文件参数又被固定限制在当前 `ProjectRoot`，同时工具注册表没有读取凭据的工具；
+密钥也不会进入 Prompt、请求 JSON、Session、Trace 或日志。这里的安全边界是 Pico Agent 工具层，不是操作系统
+加密：同一 Windows 用户下拥有文件系统权限的其他原生程序仍可读取这个明文文件。
 
-在 `AI Chat -> API Key (Project Local)` 中输入后点击 `Save / Replace Key` 即可保存；界面不会回显已经保存的值，
-`Remove Saved Key` 会删除当前 Provider 的值，最后一个值被删除时同时删除文件。每个 Pico 项目拥有自己的密钥文件。
+在 `AI Chat -> API Key (Editor Local)` 中输入后点击 `Save / Replace Key` 即可保存；界面不会回显已经保存的值，
+`Remove Saved Key` 会删除当前 Provider 的值，最后一个值被删除时同时删除文件。同一 Pico 编辑器副本打开的所有
+项目共享该文件，创建项目或项目进程交接无需复制密钥。首次升级时，如果新位置还没有对应 Provider 的密钥，
+Pico 会读取当前项目旧的 `<Project>/Saved/Agent/ApiKeys.ini`，迁移到编辑器本地位置并删除旧副本。
 
 环境变量优先级高于项目本地文件，可以在启动编辑器前临时设置：
 
@@ -124,18 +129,23 @@ Pico 工具使用带点的稳定名称，例如 `editor.actor.spawn`。Provider 
 3. 重启编辑器，确认恢复最近会话并自动滚动到最后一条消息。
 4. 点击任一气泡右上角复制图标，再双击气泡框选部分文字，分别验证整条复制与局部复制。
 5. 让 Provider 返回列表和 JSON，确认 JSON 以格式化代码块显示；展开长代码块并滚动，确认滚轮仍控制聊天记录。
+6. 让 Provider 返回 GFM 表格，确认它显示为带表头、边框和交替行底色的真实行列布局，并在窄窗口内自动换行。
+7. 让 Provider 返回 `✓ ✗ ☑ ☐ → ← ★`，确认编辑器合并的 Segoe UI Symbol 字形能够直接显示，不出现问号或空框。
 
-真实 Provider 流程相同，在项目本地保存密钥或设置相应环境变量后选择 DeepSeek 或 Kimi。真实 API 会产生外部
+真实 Provider 流程相同，在编辑器本地保存密钥或设置相应环境变量后选择 DeepSeek 或 Kimi。真实 API 会产生外部
 请求和可能的计费，因此自动化测试不会默认调用。
 
 ## 自动化验收
 
 - `PicoAgentTests` 验证 429 重试、API 工具名映射、多轮 Tool Call/Result 协议，以及密钥不进入 JSON。
-- `PicoEditorTests` 使用隔离临时项目验证密钥只写入该项目的 `Saved/Agent/ApiKeys.ini`，并验证读回与删除。
+- `PicoEditorTests` 使用隔离凭据路径验证保存、读回、删除，以及旧项目密钥向编辑器本地位置的一次性迁移；测试
+  不会读取或改写开发者真实的 `ApiKeys.ini`。
 - `PicoAgentTests` 验证完成后的下一轮保留历史但重置每轮预算。
 - `PicoEditorTests` 运行完整 Fake Scene Agent，真实创建并移动 Cube，再通过两次 Editor Undo 完整撤销。
 - `PicoTaskTests` 继续覆盖取消、异常、Dispatcher 帧预算和安全关闭。
-- 当前 Debug 基线为 `PicoAgentTests` 26/26、`PicoEditorTests` 126/126。
+- 当前 Debug 基线为 `PicoAgentTests` 38/38、`PicoEditorTests` 129/129。
+- Progress Ledger、语义查询缓存和无进展保护见
+  [`AIPhase07_ProjectHandoffAndLoopControl.md`](AIPhase07_ProjectHandoffAndLoopControl.md)。
 
 ## 当前边界
 
@@ -144,7 +154,7 @@ Pico 工具使用带点的稳定名称，例如 `editor.actor.spawn`。Provider 
   [`AIPhase05_ReflectedPropertyTools.md`](AIPhase05_ReflectedPropertyTools.md) 与
   [`AIPhase06_GameAssemblyVerticalSlice.md`](AIPhase06_GameAssemblyVerticalSlice.md)。
 - 尚未开放任意材质实例创建、任意玩法代码生成、Shell、Build 系统控制或不受目录约束的文件操作。
-- 当前没有流式 Token、语音、RAG、Skill、MCP、多 Agent 或 LangGraph 依赖。
+- 当前没有语音、Embedding RAG、MCP、多 Agent 或 LangGraph 依赖；Streaming、RAG Lite 与 Skill v0 已在后续阶段完成。
 - 第 7 月完整复杂场景指令仍需后续扩充确定性工具目录；模型不能绕过目录直接调用任意 PFunction。
 
 这些限制是安全边界，不是 UI 缺陷。第 8 月 Mini GAS 和后续 PicoGraph 会在同一审批、事务和验证机制上增加

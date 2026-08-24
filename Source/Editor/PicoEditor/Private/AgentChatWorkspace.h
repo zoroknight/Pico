@@ -32,7 +32,8 @@ public:
         std::function<std::pair<bool, std::string>(
             const std::filesystem::path&, const std::string&, bool)> StartPackage,
         std::function<std::pair<bool, std::string>()> StartPlay,
-        std::function<std::pair<bool, std::string>()> StopPlay);
+        std::function<std::pair<bool, std::string>()> StopPlay,
+        std::function<void(const std::filesystem::path&)> RequestProjectOpen);
     ~FAgentChatWorkspace();
 
     FAgentChatWorkspace(const FAgentChatWorkspace&) = delete;

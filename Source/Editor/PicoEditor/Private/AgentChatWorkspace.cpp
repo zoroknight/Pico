@@ -3,6 +3,10 @@
 
 #include "Pico/Agent/AgentRuntime.h"
 #include "Pico/Agent/AgentCredentialStore.h"
+#include "Pico/Agent/AgentIntent.h"
+#include "Pico/Agent/AgentKnowledgeStore.h"
+#include "Pico/Agent/AgentProjectHandoff.h"
+#include "Pico/Agent/AgentSkill.h"
 #include "Pico/Agent/FakeAgentProvider.h"
 #include "Pico/Agent/OpenAICompatibleProvider.h"
 #include "Pico/Core/Paths.h"
@@ -25,11 +29,13 @@
 #include <filesystem>
 #include <iomanip>
 #include <initializer_list>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -46,31 +52,50 @@ enum class EChatProvider
     Kimi
 };
 
-enum class EAgentTurnIntent
+const char* ApprovalPermissionDisplayName(EAgentToolPermission Permission)
 {
-    General,
-    Play,
-    Package
-};
-
-bool ContainsAny(std::string_view Text,
-    std::initializer_list<std::string_view> Terms)
-{
-    return std::any_of(Terms.begin(), Terms.end(),
-        [Text](std::string_view Term) { return Text.find(Term) != std::string_view::npos; });
+    switch (Permission)
+    {
+    case EAgentToolPermission::ReadOnly: return "只读访问";
+    case EAgentToolPermission::ModifyWorld: return "修改当前场景";
+    case EAgentToolPermission::WriteProject: return "写入项目文件";
+    case EAgentToolPermission::LaunchProcess: return "启动或停止外部进程";
+    }
+    return "未知权限";
 }
 
-EAgentTurnIntent ClassifyTurnIntent(std::string_view Prompt)
+const char* ApprovalToolDisplayName(std::string_view ToolName)
 {
-    std::string Lower(Prompt);
-    std::transform(Lower.begin(), Lower.end(), Lower.begin(),
-        [](unsigned char Character) { return static_cast<char>(std::tolower(Character)); });
-    const bool bPackage = ContainsAny(Lower,
-        {"打包", "构建", "导出", "发布", "package", "packaging", "build", "export"});
-    if (bPackage) return EAgentTurnIntent::Package;
-    const bool bPlay = ContainsAny(Lower,
-        {"运行", "启动", "试玩", "预览", "play", "run", "launch", "preview"});
-    return bPlay ? EAgentTurnIntent::Play : EAgentTurnIntent::General;
+    if (ToolName == "editor.object.set_properties") return "修改对象属性";
+    if (ToolName == "editor.actor.spawn") return "创建场景 Actor";
+    if (ToolName == "editor.actor.spawn_blueprint") return "创建 Actor Blueprint 实例";
+    if (ToolName == "editor.actor.delete") return "删除场景 Actor";
+    if (ToolName == "editor.scene.create_room") return "创建碰撞房间";
+    if (ToolName == "editor.gameplay.create_third_person_character") return "创建第三人称角色";
+    if (ToolName == "editor.actor.set_location") return "修改 Actor 位置";
+    if (ToolName == "editor.play.start") return "运行当前项目";
+    if (ToolName == "editor.play.stop") return "停止当前运行项目";
+    if (ToolName == "editor.world.save") return "保存当前世界";
+    if (ToolName == "editor.project.create_from_third_person_template") return "创建第三人称项目";
+    if (ToolName == "editor.project.package") return "打包当前项目";
+    return "执行 Agent 工具";
+}
+
+const char* ApprovalToolDescription(std::string_view ToolName)
+{
+    if (ToolName == "editor.object.set_properties") return "Agent 将修改对象的反射属性，可通过 Undo 撤销。";
+    if (ToolName == "editor.actor.spawn") return "Agent 将在当前世界中创建一个新的 Actor。";
+    if (ToolName == "editor.actor.spawn_blueprint") return "Agent 将使用指定 Actor Blueprint 在当前世界创建实例。";
+    if (ToolName == "editor.actor.delete") return "Agent 将从当前世界删除指定 Actor，可通过 Undo 撤销。";
+    if (ToolName == "editor.scene.create_room") return "Agent 将在一次事务中创建地板和碰撞墙壁。";
+    if (ToolName == "editor.gameplay.create_third_person_character") return "Agent 将配置可操控角色、PlayerStart 和第三人称 Gameplay 链。";
+    if (ToolName == "editor.actor.set_location") return "Agent 将修改指定 Actor 的世界坐标，可通过 Undo 撤销。";
+    if (ToolName == "editor.play.start") return "Agent 将启动编辑器当前配置的 Play 会话，并保持运行直到你停止。";
+    if (ToolName == "editor.play.stop") return "Agent 将停止编辑器拥有的 Play 会话及其进程。";
+    if (ToolName == "editor.world.save") return "Agent 将把当前世界保存到现有项目资产路径。";
+    if (ToolName == "editor.project.create_from_third_person_template") return "Agent 将复制模板内容并创建一个新的 Pico 项目目录。";
+    if (ToolName == "editor.project.package") return "Agent 将在指定目录生成可分发项目包，可能需要较长时间。";
+    return "Agent 请求执行一个会修改场景、项目文件或进程状态的操作。";
 }
 
 const char* ProviderDisplayName(EChatProvider Provider)
@@ -93,6 +118,14 @@ const char* ProviderSessionSlug(EChatProvider Provider)
     case EChatProvider::Kimi: return "kimi";
     }
     return "unknown";
+}
+
+std::optional<EChatProvider> ParseProviderSessionSlug(std::string_view Provider)
+{
+    if (Provider == "fake") return EChatProvider::Fake;
+    if (Provider == "deepseek") return EChatProvider::DeepSeek;
+    if (Provider == "kimi") return EChatProvider::Kimi;
+    return std::nullopt;
 }
 
 const char* CredentialProviderId(EChatProvider Provider)
@@ -340,6 +373,11 @@ public:
         return EditorTools && EditorTools->RequiresApproval(Call);
     }
 
+    bool IsReadOnly(const FAgentToolCall& Call) const override
+    {
+        return EditorTools && EditorTools->IsReadOnly(Call);
+    }
+
     void PrepareApproval(const FAgentToolCall& Call) override
     {
         if (!IntentError(Call).empty()) return;
@@ -351,13 +389,27 @@ public:
         TurnIntent.store(InIntent);
     }
 
+    void SetAllowedTools(const std::vector<FAgentSkill>& Skills)
+    {
+        std::lock_guard Lock(SkillMutex);
+        bSkillRestricted = !Skills.empty();
+        AllowedTools.clear();
+        for (const FAgentSkill& Skill : Skills)
+            AllowedTools.insert(
+                Skill.AllowedTools.begin(), Skill.AllowedTools.end());
+    }
+
     FAgentToolResult Execute(
         const FAgentToolCall& Call,
         const FCancellationToken* CancellationToken) override
     {
+        LastTraceJson = "[]";
         const std::string BlockedReason = IntentError(Call);
         if (!BlockedReason.empty())
+        {
+            LastTraceJson = FailureTrace("Intent", BlockedReason);
             return {Call.Id, false, "{}", BlockedReason, false};
+        }
         struct FSharedResult
         {
             std::mutex Mutex;
@@ -380,6 +432,8 @@ public:
                     Shared->Condition.notify_all();
                 }) == 0)
         {
+            LastTraceJson = FailureTrace(
+                "Execute", "Game Thread dispatcher is unavailable");
             return {Call.Id, false, "{}", "Game Thread dispatcher is unavailable", false};
         }
 
@@ -387,7 +441,10 @@ public:
         while (!Shared->bDone)
         {
             if (CancellationToken && CancellationToken->IsCancellationRequested())
+            {
+                LastTraceJson = FailureTrace("Execute", "Cancelled");
                 return {Call.Id, false, "{}", "Cancelled", false};
+            }
             Shared->Condition.wait_for(Lock, std::chrono::milliseconds(10));
         }
         LastTraceJson = Tools->GetLastExecutionTraceJson();
@@ -400,8 +457,21 @@ public:
     }
 
 private:
+    static std::string FailureTrace(
+        std::string_view Stage,
+        std::string_view Message)
+    {
+        return FJson::array({{{"stage", Stage}, {"succeeded", false},
+            {"message", Message}}}).dump();
+    }
+
     std::string IntentError(const FAgentToolCall& Call) const
     {
+        {
+            std::lock_guard Lock(SkillMutex);
+            if (bSkillRestricted && !AllowedTools.contains(Call.Name))
+                return "The active Pico Skill does not allow tool '" + Call.Name + "'";
+        }
         const EAgentTurnIntent Intent = TurnIntent.load();
         if (Intent == EAgentTurnIntent::Play
             && Call.Name == "editor.project.package")
@@ -420,6 +490,9 @@ private:
     FGameThreadDispatcher* Dispatcher = nullptr;
     std::string LastTraceJson = "[]";
     std::atomic<EAgentTurnIntent> TurnIntent {EAgentTurnIntent::General};
+    mutable std::mutex SkillMutex;
+    std::unordered_set<std::string> AllowedTools;
+    bool bSkillRestricted = false;
 };
 
 class FFakeSceneAgentProvider final : public IAgentProvider
@@ -524,20 +597,55 @@ struct FAgentChatWorkspace::FImpl
         std::function<std::pair<bool, std::string>(
             const std::filesystem::path&, const std::string&, bool)> StartPackage,
         std::function<std::pair<bool, std::string>()> StartPlay,
-        std::function<std::pair<bool, std::string>()> StopPlay)
+        std::function<std::pair<bool, std::string>()> StopPlay,
+        std::function<void(const std::filesystem::path&)> InRequestProjectOpen)
         : EngineLoop(InEngineLoop)
         , TaskSystem(InTaskSystem)
         , Dispatcher(InDispatcher)
+        , KnowledgeStore(FPaths::GetProjectSavedDir() / "Agent/Knowledge")
         , EditorTools(InEngineLoop, Selection, Transactions, &Approval,
             std::move(OnWorldChanged),
             {Commands, WorldDocument, std::move(StartPackage),
                 std::move(StartPlay), std::move(StopPlay)})
         , GameThreadTools(&EditorTools, InDispatcher)
+        , RequestProjectOpen(std::move(InRequestProjectOpen))
     {
         std::snprintf(Model.data(), Model.size(), "%s", "offline-fake");
-        RefreshSessionList(true);
+        std::string StartupError;
+        if (!KnowledgeStore.Load(&StartupError)) Status = StartupError;
+        std::string SkillError;
+        if (!SkillRegistry.LoadDirectory(
+                FPaths::GetEngineRootDir() / "Config/Agent/Skills",
+                EditorTools.GetToolNames(), &SkillError))
+        {
+            Status = SkillError;
+        }
+        std::string HandoffError;
+        const std::optional<FAgentProjectHandoff> Handoff =
+            ConsumeAgentProjectHandoff(FPaths::GetProjectRootDir(), &HandoffError);
+        if (Handoff)
+        {
+            const std::optional<EChatProvider> HandoffProvider =
+                ParseProviderSessionSlug(Handoff->Provider);
+            if (HandoffProvider)
+            {
+                Provider = *HandoffProvider;
+                SessionId = Handoff->SessionId;
+                if (!Handoff->Model.empty())
+                    std::snprintf(Model.data(), Model.size(), "%s",
+                        Handoff->Model.c_str());
+                Status = "Project handoff restored this conversation";
+            }
+            else
+            {
+                HandoffError = "Project handoff used an unknown Provider";
+            }
+        }
+        RefreshSessionList(!Handoff.has_value());
         RefreshCredentialState();
         RefreshSessionView();
+        if (!HandoffError.empty()) Status = HandoffError;
+        else if (Handoff) Status = "Project handoff restored this conversation";
     }
 
     void RefreshSessionList(bool bSelectLatest)
@@ -632,7 +740,7 @@ struct FAgentChatWorkspace::FImpl
         const char* ProviderId = CredentialProviderId(Provider);
         if (ProviderId[0] == '\0') return;
         std::string ApiKey;
-        bStoredCredential = FAgentCredentialStore::TryLoadApiKey(
+        bStoredCredential = CredentialStore.TryLoadApiKey(
             ProviderId, ApiKey, &CredentialError);
         ClearSecret(ApiKey);
     }
@@ -685,6 +793,7 @@ struct FAgentChatWorkspace::FImpl
     std::unique_ptr<IAgentProvider> CreateProvider(
         EChatProvider ProviderType,
         std::string ModelName,
+        std::string ToolCatalogJson,
         std::string& OutError)
     {
         if (ProviderType == EChatProvider::Fake)
@@ -692,7 +801,7 @@ struct FAgentChatWorkspace::FImpl
 
         FOpenAICompatibleProviderSettings Settings;
         Settings.Model = std::move(ModelName);
-        Settings.ToolCatalogJson = EditorTools.BuildToolCatalogJson();
+        Settings.ToolCatalogJson = std::move(ToolCatalogJson);
         Settings.SystemPrompt =
             "You are the Pico Editor scene assistant. Use only the provided tools. "
             "Inspect before modifying, make the smallest requested change, and report the result. "
@@ -704,7 +813,7 @@ struct FAgentChatWorkspace::FImpl
             "Use editor.project.package only when the user explicitly asks to package, build, or export a distributable project. "
             "Use editor.gameplay.create_third_person_character only when authoring the unique playable Player 0 Pawn and PlayerStart. "
             "For scene assembly, search assets before referencing them, create structural room geometry before gameplay Actors, then validate and save before packaging. "
-            "A project created from the third-person template is complete but must be opened in PicoEditor before tools can edit its active World; state this boundary plainly. "
+            "After creating a project from the third-person template, finish the current answer concisely; Pico will open a clean editor process and restore this conversation in the new project. "
             "Before editing reflected properties, call editor.object.describe and use the exact component object path, property name, current compound value, units, semantic, and range it returns. "
             "Never invent object paths or claim a tool succeeded before receiving its result.";
         Settings.TimeoutMilliseconds = static_cast<std::uint32_t>(TimeoutSeconds * 1000);
@@ -724,7 +833,7 @@ struct FAgentChatWorkspace::FImpl
         if (Settings.ApiKey.empty())
         {
             std::string LocalCredentialError;
-            FAgentCredentialStore::TryLoadApiKey(
+            CredentialStore.TryLoadApiKey(
                 CredentialProviderId(ProviderType), Settings.ApiKey,
                 &LocalCredentialError);
             if (Settings.ApiKey.empty())
@@ -746,21 +855,76 @@ struct FAgentChatWorkspace::FImpl
             std::move(Settings), std::move(Transport));
     }
 
+    std::string RefreshKnowledge(
+        const std::string& Prompt,
+        std::vector<FAgentKnowledgeHit>& OutHits,
+        std::string& OutError)
+    {
+        OutError.clear();
+        std::map<std::string, std::vector<FAgentKnowledgeRecord>> Sources;
+        Sources["world"] = {};
+        Sources["assets"] = {};
+        Sources["selection"] = {};
+        Sources["message-log"] = {};
+        Sources["tool-schema"] = {};
+        Sources["project-file"] = CollectProjectTextKnowledge(
+            FPaths::GetProjectRootDir(), 64 * 1024, 64);
+        for (FAgentKnowledgeRecord& Record : EditorTools.CollectKnowledgeRecords())
+            Sources[Record.SourceType].push_back(std::move(Record));
+
+        FAgentKnowledgeRecord ToolRecord;
+        ToolRecord.SourcePath = "AgentToolRegistry";
+        ToolRecord.Title = "Available Pico Agent tools and JSON schemas";
+        ToolRecord.Content = EditorTools.BuildToolCatalogJson();
+        ToolRecord.Tags = {"agent", "tool", "schema", "reflection"};
+        ToolRecord.Provenance = "Live AgentToolRegistry catalog";
+        Sources["tool-schema"].push_back(std::move(ToolRecord));
+
+        for (auto& [SourceType, Records] : Sources)
+            if (!KnowledgeStore.ReplaceSource(
+                    SourceType, std::move(Records), &OutError))
+                return "{}";
+
+        FAgentKnowledgeQuery Query;
+        Query.Text = Prompt;
+        Query.MaxResults = 8;
+        Query.MaxContextBytes = 12000;
+        return KnowledgeStore.BuildGroundingContextJson(Query, &OutHits);
+    }
+
     void Send()
     {
         if (!TaskSystem || bRunning.load() || Input[0] == '\0') return;
         const std::string Prompt = Input.data();
         Input.fill('\0');
-        GameThreadTools.SetTurnIntent(ClassifyTurnIntent(Prompt));
+        GameThreadTools.SetTurnIntent(ClassifyAgentTurnIntent(Prompt));
         const EChatProvider SelectedProvider = Provider;
         const std::string SelectedModel = Model.data();
         const std::string SelectedProviderName =
             ProviderDisplayName(SelectedProvider);
         const std::string SelectedSessionId = SessionId;
         const std::filesystem::path SelectedSessionPath = SessionPath;
+        std::vector<FAgentKnowledgeHit> KnowledgeHits;
+        std::string KnowledgeError;
+        const std::string KnowledgeContext = RefreshKnowledge(
+            Prompt, KnowledgeHits, KnowledgeError);
+        if (!KnowledgeError.empty())
+        {
+            std::lock_guard Lock(ViewMutex);
+            Status = KnowledgeError;
+            Lines.push_back({"Error", KnowledgeError,
+                ImVec4(1.0f, 0.42f, 0.36f, 1.0f)});
+            return;
+        }
+        const std::vector<FAgentSkill> ActiveSkills = SkillRegistry.Select(Prompt);
+        GameThreadTools.SetAllowedTools(ActiveSkills);
+        const std::string SkillContext =
+            SkillRegistry.BuildSkillContextJson(ActiveSkills);
+        const std::string ToolCatalog = SkillRegistry.FilterToolCatalogJson(
+            EditorTools.BuildToolCatalogJson(), ActiveSkills);
         std::string ProviderError;
         std::unique_ptr<IAgentProvider> NewProvider = CreateProvider(
-            SelectedProvider, SelectedModel, ProviderError);
+            SelectedProvider, SelectedModel, ToolCatalog, ProviderError);
         if (!NewProvider)
         {
             std::lock_guard Lock(ViewMutex);
@@ -773,35 +937,101 @@ struct FAgentChatWorkspace::FImpl
             Status = "Planning with " + SelectedProviderName + " / "
                 + SelectedModel;
             Lines.push_back({"You", Prompt, ImVec4(0.45f, 0.78f, 1.0f, 1.0f)});
+            StreamingText.clear();
+            LastKnowledgeHits = KnowledgeHits;
+            LastActiveSkillIds.clear();
+            for (const FAgentSkill& Skill : ActiveSkills)
+                LastActiveSkillIds.push_back(Skill.Id + "@" + Skill.Version);
         }
         bRunning.store(true);
         std::shared_ptr<IAgentProvider> SharedProvider(std::move(NewProvider));
         ActiveTask = TaskSystem->Submit(
             "Pico Agent chat turn",
             [this, Prompt, AgentProvider = std::move(SharedProvider),
-                SelectedProviderName, SelectedModel, SelectedSessionId,
-                SelectedSessionPath](
+                SelectedProvider, SelectedProviderName, SelectedModel, SelectedSessionId,
+                SelectedSessionPath, KnowledgeContext, SkillContext](
                 const FCancellationToken& Token) mutable
             {
                 std::string Error;
+                std::optional<std::filesystem::path> ProjectToOpen;
                 auto Session = FAgentSession::OpenOrCreate(
                     SelectedSessionId, SelectedSessionPath, &Error);
                 FAgentRunResult Result;
                 if (Session)
                 {
+                    const std::size_t FirstNewEvent = Session->GetEvents().size();
                     FAgentBudget Budget;
                     Budget.MaxSteps = 12;
                     Budget.MaxToolCalls = 16;
+                    Budget.MaxReadOnlyToolCalls = 6;
+                    Budget.MaxMutationToolCalls = 10;
+                    Budget.MaxConsecutiveNoProgressSteps = 2;
+                    Budget.ReservedFinalSteps = 1;
                     Budget.MaxRepairAttempts = 2;
                     Budget.MaxElapsedMilliseconds = 120000;
-                    FAgentRuntime Runtime(
-                        *Session, *AgentProvider, GameThreadTools, Budget);
+                    FAgentRuntimeContext RuntimeContext;
+                    RuntimeContext.KnowledgeContextJson = KnowledgeContext;
+                    RuntimeContext.SkillContextJson = SkillContext;
+                    RuntimeContext.OnAssistantDelta = [this](std::string_view Delta)
+                    {
+                        std::lock_guard Lock(ViewMutex);
+                        StreamingText.append(Delta);
+                        bScrollToBottom.store(true);
+                    };
+                    FAgentRuntime Runtime(*Session, *AgentProvider,
+                        GameThreadTools, Budget, std::move(RuntimeContext));
                     Result = Runtime.Run(Prompt, &Token);
+                    if (Result.Status == EAgentStatus::Completed)
+                    {
+                        std::optional<std::filesystem::path> CreatedProject;
+                        const auto& Events = Session->GetEvents();
+                        for (std::size_t Index = FirstNewEvent;
+                             Index < Events.size(); ++Index)
+                        {
+                            const FAgentEvent& Event = Events[Index];
+                            if (Event.Type != EAgentEventType::ToolResult
+                                || !Event.bSucceeded
+                                || Event.ToolName
+                                    != "editor.project.create_from_third_person_template")
+                                continue;
+                            try
+                            {
+                                CreatedProject = FJson::parse(Event.PayloadJson)
+                                    .at("project_file").get<std::string>();
+                            }
+                            catch (...) { CreatedProject.reset(); }
+                        }
+                        if (CreatedProject)
+                        {
+                            FAgentProjectHandoff Handoff;
+                            Handoff.SourceProjectFile = FPaths::GetProjectFile();
+                            Handoff.TargetProjectFile = *CreatedProject;
+                            Handoff.SessionPath = SelectedSessionPath;
+                            Handoff.SessionId = SelectedSessionId;
+                            Handoff.Provider = ProviderSessionSlug(SelectedProvider);
+                            Handoff.Model = SelectedModel;
+                            Handoff.Goal = Prompt;
+                            std::string HandoffError;
+                            if (PrepareAgentProjectHandoff(Handoff, &HandoffError))
+                            {
+                                ProjectToOpen = *CreatedProject;
+                            }
+                            else
+                            {
+                                Result.Error = "Project was created, but editor handoff failed: "
+                                    + HandoffError;
+                            }
+                        }
+                    }
                 }
                 else
                 {
                     Result.Status = EAgentStatus::Failed;
                     Result.Error = Error;
+                }
+                {
+                    std::lock_guard Lock(ViewMutex);
+                    StreamingText.clear();
                 }
                 RefreshSessionView();
                 {
@@ -811,6 +1041,13 @@ struct FAgentChatWorkspace::FImpl
                     if (!Result.Error.empty()) Status += ": " + Result.Error;
                 }
                 bRunning.store(false);
+                if (ProjectToOpen && Dispatcher && RequestProjectOpen)
+                {
+                    const auto OpenProject = RequestProjectOpen;
+                    const std::filesystem::path ProjectFile = *ProjectToOpen;
+                    Dispatcher->Post("Open Agent-created project",
+                        [OpenProject, ProjectFile]() { OpenProject(ProjectFile); });
+                }
             });
         if (!ActiveTask || !ActiveTask->IsValid())
         {
@@ -872,7 +1109,7 @@ struct FAgentChatWorkspace::FImpl
             ImGui::EndDisabled();
 
             if (ImGui::CollapsingHeader(
-                    "API Key (Project Local)", ImGuiTreeNodeFlags_DefaultOpen))
+                    "API Key (Editor Local)", ImGuiTreeNodeFlags_DefaultOpen))
             {
                 ImGui::SetNextItemWidth(-1.0f);
                 ImGui::InputTextWithHint(
@@ -884,7 +1121,7 @@ struct FAgentChatWorkspace::FImpl
                 {
                     std::string ApiKey(ApiKeyInput.data());
                     std::string Error;
-                    const bool bSaved = FAgentCredentialStore::SaveApiKey(
+                    const bool bSaved = CredentialStore.SaveApiKey(
                         CredentialProviderId(Provider), ApiKey, &Error);
                     ClearSecret(ApiKey);
                     ApiKeyInput.fill('\0');
@@ -892,7 +1129,7 @@ struct FAgentChatWorkspace::FImpl
                     std::lock_guard Lock(ViewMutex);
                     Status = bSaved
                         ? std::string(CredentialProviderId(Provider))
-                            + " API key saved to the project Saved directory"
+                            + " API key saved for this local Pico editor"
                         : Error;
                 }
                 ImGui::EndDisabled();
@@ -901,7 +1138,7 @@ struct FAgentChatWorkspace::FImpl
                 if (ImGui::Button("Remove Saved Key"))
                 {
                     std::string Error;
-                    const bool bRemoved = FAgentCredentialStore::DeleteApiKey(
+                    const bool bRemoved = CredentialStore.DeleteApiKey(
                         CredentialProviderId(Provider), &Error);
                     ApiKeyInput.fill('\0');
                     RefreshCredentialState();
@@ -915,9 +1152,11 @@ struct FAgentChatWorkspace::FImpl
                         "%s", CredentialError.c_str());
                 }
                 const std::string StoragePath =
-                    FAgentCredentialStore::GetStoragePath().string();
+                    CredentialStore.GetStoragePath().string();
                 ImGui::TextDisabled(
-                    "Plaintext development secret; ignored by Git and excluded from packages.");
+                    "Shared by all projects opened from this editor checkout.");
+                ImGui::TextDisabled(
+                    "Plaintext local secret; hidden from Agent tools, ignored by Git, and excluded from packages.");
                 ImGui::TextWrapped("File: %s", StoragePath.c_str());
             }
         }
@@ -973,15 +1212,34 @@ struct FAgentChatWorkspace::FImpl
             ImGui::SliderInt("Timeout (seconds)", &TimeoutSeconds, 5, 120);
             ImGui::SliderInt("Retries", &MaxRetries, 0, 3);
             ImGui::TextDisabled(
-                "Environment variables override project-local Saved/Agent/ApiKeys.ini values.");
+                "Environment variables override editor-local Saved/Editor/Agent/ApiKeys.ini values.");
         }
 
         std::string CurrentStatus;
         std::vector<FChatLine> CurrentLines;
+        std::string CurrentStreamingText;
+        std::vector<FAgentKnowledgeHit> CurrentKnowledgeHits;
+        std::vector<std::string> CurrentSkillIds;
         {
             std::lock_guard Lock(ViewMutex);
             CurrentStatus = Status;
             CurrentLines = Lines;
+            CurrentStreamingText = StreamingText;
+            CurrentKnowledgeHits = LastKnowledgeHits;
+            CurrentSkillIds = LastActiveSkillIds;
+        }
+        if (ImGui::CollapsingHeader("Grounding & Skills"))
+        {
+            ImGui::Text("Knowledge records: %zu | Retrieved: %zu | Skills: %zu",
+                KnowledgeStore.GetRecordCount(), CurrentKnowledgeHits.size(),
+                CurrentSkillIds.size());
+            ImGui::TextWrapped("Store: %s",
+                KnowledgeStore.GetDirectory().string().c_str());
+            for (const std::string& Skill : CurrentSkillIds)
+                ImGui::BulletText("Skill %s", Skill.c_str());
+            for (const FAgentKnowledgeHit& Hit : CurrentKnowledgeHits)
+                ImGui::BulletText("[K:%s] %.1f  %s",
+                    Hit.Record.Id.c_str(), Hit.Score, Hit.Record.Title.c_str());
         }
         ImGui::Separator();
         ImGui::Text("Status: %s", CurrentStatus.c_str());
@@ -992,15 +1250,16 @@ struct FAgentChatWorkspace::FImpl
         if (Approval.GetPending(PendingCall, PendingPermission, PendingDescription))
         {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.20f, 0.17f, 0.08f, 1.0f));
-            ImGui::BeginChild("AgentApproval", ImVec2(0.0f, 150.0f), true);
-            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.28f, 1.0f), "Approval Required");
-            ImGui::Text("%s  [%s]", PendingCall.Name.c_str(),
-                ToString(PendingPermission).data());
-            ImGui::TextWrapped("%s", PendingDescription.c_str());
-            ImGui::TextWrapped("Arguments: %s", PendingCall.ArgumentsJson.c_str());
-            if (ImGui::Button("Approve")) Approval.Decide(true);
+            ImGui::BeginChild("AgentApproval", ImVec2(0.0f, 190.0f), true);
+            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.28f, 1.0f), "需要你的批准");
+            ImGui::Text("操作：%s", ApprovalToolDisplayName(PendingCall.Name));
+            ImGui::Text("权限：%s", ApprovalPermissionDisplayName(PendingPermission));
+            ImGui::TextDisabled("工具：%s", PendingCall.Name.c_str());
+            ImGui::TextWrapped("说明：%s", ApprovalToolDescription(PendingCall.Name));
+            ImGui::TextWrapped("参数：%s", PendingCall.ArgumentsJson.c_str());
+            if (ImGui::Button("批准")) Approval.Decide(true);
             ImGui::SameLine();
-            if (ImGui::Button("Reject")) Approval.Decide(false);
+            if (ImGui::Button("拒绝")) Approval.Decide(false);
             ImGui::EndChild();
             ImGui::PopStyleColor();
         }
@@ -1053,6 +1312,15 @@ struct FAgentChatWorkspace::FImpl
             ImGui::Separator();
             ImGui::PopID();
         }
+        if (!CurrentStreamingText.empty())
+        {
+            ImGui::PushID("StreamingAssistant");
+            ImGui::TextColored(ImVec4(0.72f, 0.90f, 0.74f, 1.0f),
+                "Assistant (streaming)");
+            ImGui::TextWrapped("%s", CurrentStreamingText.c_str());
+            ImGui::Separator();
+            ImGui::PopID();
+        }
         if (bScrollToBottom.exchange(false)) ImGui::SetScrollHereY(1.0f);
         ImGui::EndChild();
 
@@ -1084,6 +1352,9 @@ struct FAgentChatWorkspace::FImpl
     FTaskSystem* TaskSystem = nullptr;
     FGameThreadDispatcher* Dispatcher = nullptr;
     FInteractiveApproval Approval;
+    FAgentCredentialStore CredentialStore;
+    FAgentKnowledgeStore KnowledgeStore;
+    FAgentSkillRegistry SkillRegistry;
     FEditorAgentToolExecutor EditorTools;
     FGameThreadToolExecutor GameThreadTools;
     std::optional<FTaskHandle> ActiveTask;
@@ -1094,6 +1365,9 @@ struct FAgentChatWorkspace::FImpl
     std::optional<std::size_t> SelectableMessageIndex;
     std::mutex ViewMutex;
     std::vector<FChatLine> Lines;
+    std::string StreamingText;
+    std::vector<FAgentKnowledgeHit> LastKnowledgeHits;
+    std::vector<std::string> LastActiveSkillIds;
     std::string Status = "Idle";
     std::array<char, 2048> Input {};
     std::array<char, 128> Model {};
@@ -1106,6 +1380,7 @@ struct FAgentChatWorkspace::FImpl
     std::atomic<bool> bScrollToBottom {true};
     bool bStoredCredential = false;
     std::string CredentialError;
+    std::function<void(const std::filesystem::path&)> RequestProjectOpen;
 };
 
 FAgentChatWorkspace::FAgentChatWorkspace(
@@ -1120,11 +1395,12 @@ FAgentChatWorkspace::FAgentChatWorkspace(
     std::function<std::pair<bool, std::string>(
         const std::filesystem::path&, const std::string&, bool)> StartPackage,
     std::function<std::pair<bool, std::string>()> StartPlay,
-    std::function<std::pair<bool, std::string>()> StopPlay)
+    std::function<std::pair<bool, std::string>()> StopPlay,
+    std::function<void(const std::filesystem::path&)> RequestProjectOpen)
     : Impl(std::make_unique<FImpl>(EngineLoop, Selection, Transactions,
         TaskSystem, Dispatcher, std::move(OnWorldChanged), Commands,
         WorldDocument, std::move(StartPackage), std::move(StartPlay),
-        std::move(StopPlay)))
+        std::move(StopPlay), std::move(RequestProjectOpen)))
 {
 }
 

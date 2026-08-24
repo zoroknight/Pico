@@ -23,10 +23,20 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
 - Agent 可通过通用工具发现 Actor/Component 的 `PProperty`、当前值和语义元数据，并在一次审批与 Undo 事务中
   批量修改支持的 `Editable` 属性；新增普通反射属性不需要再手写专用工具。
 - AI Chat 支持按 Provider 隔离的多会话、新建/删除、重启恢复、自动定位最新消息、气泡复制，以及基于 MD4C 的
-  Markdown/JSON 代码块显示；代码块可展开，但不会抢占外层聊天记录的滚轮。
+  Markdown/JSON 代码块和 GFM 表格显示；代码块可展开但不会抢占外层聊天记录的滚轮，编辑器字体合并常用
+  Symbol/Dingbats 字形以正确显示对号、箭头等符号。
+- DeepSeek/Kimi 支持 SSE 流式文字与 Tool Call 聚合；最终消息只写入 Session 一次。项目 Knowledge Store 以
+  快照和追加审计记录 World、资产、反射、项目文档及错误，RAG Lite 按预算注入带来源的证据；版本化 Pico Skill
+  同时裁剪 Provider 工具和执行权限，不会绕过审批、事务或验证。
+- Agent Intent Router 与生产 Skill 使用 18 条中英文固定提示回归，覆盖否定语义和多 Skill 组合；后续 GAS、
+  PicoGraph 与 ECS 工具必须扩展同一评测集。
 - 场景 Agent 可搜索真实资产、创建碰撞房间、放置或删除 Data-Only Actor Blueprint 实例、装配第三人称角色、
   校验并保存 World，并通过独立的 `editor.play.start/stop` 启停游戏。运行与打包使用不同工具和硬意图检查，
   “运行项目”不会误调用 Packager。
+- Agent 创建内容型项目后会在当前结果落盘后执行受控编辑器进程交接，并在新项目恢复 Provider、模型和同一聊天
+  Session；API Key 保存在被 Git 忽略的编辑器本地目录，所有项目共享且不会暴露给 Agent 工具。Harness 使用
+  StateRevision 语义缓存、结构化 Progress Ledger、分类预算
+  和连续无进展检测约束重复查询。
 - 运行类似 UE 的 `PreInit -> Init -> Tick -> Exit` 引擎循环。
 - 通过独立 `PicoNetCore` 使用确定性 Loopback 或非阻塞 Windows UDP 连接一个服务器和多个客户端，提供版本化
   Packet、握手、Sequence/Ack、有界且有序的可靠交付、心跳、超时，以及 World 前后 NetDriver 阶段。
@@ -552,6 +562,9 @@ private:
 - [Agent Tool 安全管线与编辑器事务](Docs/AIPhase03_AgentToolPipeline.md)
 - [AI Chat Workspace 与 DeepSeek/Kimi Provider](Docs/AIPhase04_ChatWorkspaceAndProviders.md)
 - [场景 Agent 通用反射属性工具](Docs/AIPhase05_ReflectedPropertyTools.md)
+- [AI 游戏搭建纵向切片](Docs/AIPhase06_GameAssemblyVerticalSlice.md)
+- [项目交接与 Agent 循环治理](Docs/AIPhase07_ProjectHandoffAndLoopControl.md)
+- [Streaming、Project Knowledge、RAG Lite 与 Pico Skill v0](Docs/AIPhase08_StreamingKnowledgeRagAndSkills.md)
 - [Pico 剩余开发路线](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
 - [第 6 月前网络准入基线](Docs/Month08_14_PreNetworkReadiness.md)
 - [网络开发风险登记](Docs/NetworkRiskRegister.zh-CN.md)

@@ -2,17 +2,28 @@
 
 #include "Pico/Tasks/TaskSystem.h"
 
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
+
 namespace Pico
 {
+namespace
+{
+using FJson = nlohmann::json;
+}
+
 FAgentRuntime::FAgentRuntime(
     FAgentSession& InSession,
     IAgentProvider& InProvider,
     IAgentToolExecutor& InToolExecutor,
-    FAgentBudget InBudget)
+    FAgentBudget InBudget,
+    FAgentRuntimeContext InContext)
     : Session(InSession)
     , Provider(InProvider)
     , ToolExecutor(InToolExecutor)
     , Budget(InBudget)
+    , Context(std::move(InContext))
     , Counters(InSession.GetStatus() == EAgentStatus::Planning
             || InSession.GetStatus() == EAgentStatus::AwaitingApproval
             || InSession.GetStatus() == EAgentStatus::ExecutingTool
@@ -31,6 +42,7 @@ FAgentRunResult FAgentRuntime::Run(
     std::string Error;
     if (!Prompt.empty())
     {
+        CurrentGoal = Prompt;
         FAgentEvent UserMessage;
         UserMessage.Type = EAgentEventType::Message;
         UserMessage.Role = EAgentRole::User;
@@ -38,6 +50,18 @@ FAgentRunResult FAgentRuntime::Run(
         if (!Session.Append(std::move(UserMessage), &Error))
         {
             return Finish(EAgentStatus::Failed, std::move(Error));
+        }
+    }
+    else if (CurrentGoal.empty())
+    {
+        const std::vector<FAgentMessage> History = Session.BuildMessageHistory();
+        for (auto It = History.rbegin(); It != History.rend(); ++It)
+        {
+            if (It->Role == EAgentRole::User)
+            {
+                CurrentGoal = It->Content;
+                break;
+            }
         }
     }
 
@@ -60,6 +84,10 @@ FAgentRunResult FAgentRuntime::Run(
         ++Counters.Steps;
         FAgentProviderRequest Request;
         Request.Messages = Session.BuildMessageHistory();
+        Request.ProgressLedgerJson = BuildProgressLedgerJson();
+        Request.KnowledgeContextJson = Context.KnowledgeContextJson;
+        Request.SkillContextJson = Context.SkillContextJson;
+        Request.OnTextDelta = Context.OnAssistantDelta;
         Request.Step = Counters.Steps;
         Request.RepairAttempt = Counters.RepairAttempts;
         FAgentProviderResponse Response = Provider.Generate(Request, CancellationToken);
@@ -102,8 +130,17 @@ FAgentRunResult FAgentRuntime::Run(
 
         if (!Response.ToolCalls.empty())
         {
+            if (Budget.ReservedFinalSteps > 0
+                && Counters.Steps > Budget.MaxSteps - std::min(
+                    Budget.MaxSteps, Budget.ReservedFinalSteps))
+            {
+                return Finish(EAgentStatus::Failed,
+                    "Agent used the step reserved for its final answer to request another tool");
+            }
             bool bNeedsApproval = false;
             std::size_t NewToolCallCount = 0;
+            std::size_t NewReadOnlyCallCount = 0;
+            std::size_t NewMutationCallCount = 0;
             for (const FAgentToolCall& Call : Response.ToolCalls)
             {
                 const std::optional<FAgentToolResult> ExistingResult =
@@ -113,14 +150,37 @@ FAgentRunResult FAgentRuntime::Run(
                     return Finish(EAgentStatus::Failed,
                         "ToolCall id was reused with different tool or arguments: " + Call.Id);
                 }
-                if (!ExistingResult) ++NewToolCallCount;
-                bNeedsApproval |= !ExistingResult && ToolExecutor.RequiresApproval(Call);
+                const bool bReadOnly = ToolExecutor.IsReadOnly(Call);
+                const bool bSemanticCacheHit = !ExistingResult && bReadOnly
+                    && ReadOnlyCache.contains(MakeSemanticKey(Call));
+                if (!ExistingResult && !bSemanticCacheHit)
+                {
+                    ++NewToolCallCount;
+                    if (bReadOnly) ++NewReadOnlyCallCount;
+                    else ++NewMutationCallCount;
+                }
+                bNeedsApproval |= !ExistingResult && !bSemanticCacheHit
+                    && ToolExecutor.RequiresApproval(Call);
             }
             if (Counters.ToolCalls > Budget.MaxToolCalls
                 || NewToolCallCount > Budget.MaxToolCalls - Counters.ToolCalls)
             {
                 return Finish(EAgentStatus::Failed,
                     "Agent tool-call budget exhausted before approval");
+            }
+            if (Counters.ReadOnlyToolCalls > Budget.MaxReadOnlyToolCalls
+                || NewReadOnlyCallCount
+                    > Budget.MaxReadOnlyToolCalls - Counters.ReadOnlyToolCalls)
+            {
+                return Finish(EAgentStatus::Failed,
+                    "Agent read-only tool budget exhausted before approval");
+            }
+            if (Counters.MutationToolCalls > Budget.MaxMutationToolCalls
+                || NewMutationCallCount
+                    > Budget.MaxMutationToolCalls - Counters.MutationToolCalls)
+            {
+                return Finish(EAgentStatus::Failed,
+                    "Agent mutation tool budget exhausted before approval");
             }
             if (bNeedsApproval)
             {
@@ -142,6 +202,7 @@ FAgentRunResult FAgentRuntime::Run(
                 return Finish(EAgentStatus::Failed, std::move(Error));
             }
             bool bToolFailed = false;
+            bool bMadeProgress = false;
             for (const FAgentToolCall& Call : Response.ToolCalls)
             {
                 if (IsCancelled(CancellationToken))
@@ -157,6 +218,10 @@ FAgentRunResult FAgentRuntime::Run(
 
                 std::optional<FAgentToolResult> Existing = Session.FindToolResult(Call.Id);
                 FAgentToolResult Result;
+                const bool bReadOnly = ToolExecutor.IsReadOnly(Call);
+                const std::string SemanticKey = bReadOnly
+                    ? MakeSemanticKey(Call) : std::string {};
+                bool bSemanticCacheHit = false;
                 if (Existing)
                 {
                     Result = *Existing;
@@ -164,10 +229,6 @@ FAgentRunResult FAgentRuntime::Run(
                 }
                 else
                 {
-                    if (Counters.ToolCalls >= Budget.MaxToolCalls)
-                    {
-                        return Finish(EAgentStatus::Failed, "Agent tool-call budget exhausted");
-                    }
                     FAgentEvent CallEvent;
                     CallEvent.Type = EAgentEventType::ToolCall;
                     CallEvent.CallId = Call.Id;
@@ -177,9 +238,44 @@ FAgentRunResult FAgentRuntime::Run(
                     {
                         return Finish(EAgentStatus::Failed, std::move(Error));
                     }
-                    ++Counters.ToolCalls;
-                    Result = ToolExecutor.Execute(Call, CancellationToken);
-                    Result.CallId = Call.Id;
+                    const auto Cached = bReadOnly
+                        ? ReadOnlyCache.find(SemanticKey) : ReadOnlyCache.end();
+                    if (Cached != ReadOnlyCache.end())
+                    {
+                        Result = MakeSemanticCacheResult(Call, Cached->second);
+                        bSemanticCacheHit = true;
+                        ++Counters.SemanticCacheHits;
+                    }
+                    else
+                    {
+                        if (Counters.ToolCalls >= Budget.MaxToolCalls)
+                        {
+                            return Finish(EAgentStatus::Failed,
+                                "Agent tool-call budget exhausted");
+                        }
+                        ++Counters.ToolCalls;
+                        if (bReadOnly) ++Counters.ReadOnlyToolCalls;
+                        else ++Counters.MutationToolCalls;
+                        Result = ToolExecutor.Execute(Call, CancellationToken);
+                        Result.CallId = Call.Id;
+                        if (Result.bSucceeded)
+                        {
+                            bMadeProgress = true;
+                            if (bReadOnly)
+                                ReadOnlyCache[SemanticKey] = Result;
+                            else
+                                ++StateRevision;
+                        }
+                    }
+                }
+
+                if (Result.bSucceeded)
+                {
+                    ProgressActions.push_back(
+                        {Call.Name, bReadOnly, Existing.has_value() || bSemanticCacheHit,
+                            StateRevision});
+                    if (ProgressActions.size() > 12)
+                        ProgressActions.erase(ProgressActions.begin());
                 }
 
                 FAgentEvent ResultEvent;
@@ -188,7 +284,9 @@ FAgentRunResult FAgentRuntime::Run(
                 ResultEvent.CallId = Call.Id;
                 ResultEvent.ToolName = Call.Name;
                 ResultEvent.PayloadJson = Result.OutputJson;
-                ResultEvent.TraceJson = ToolExecutor.GetLastExecutionTraceJson();
+                ResultEvent.TraceJson = bSemanticCacheHit
+                    ? R"([{"stage":"Execute","succeeded":true,"message":"Semantic read cache hit; tool handler was not called"}])"
+                    : ToolExecutor.GetLastExecutionTraceJson();
                 ResultEvent.Content = Result.Error;
                 ResultEvent.bSucceeded = Result.bSucceeded;
                 ResultEvent.bReused = Result.bReused;
@@ -220,6 +318,24 @@ FAgentRunResult FAgentRuntime::Run(
                 continue;
             }
 
+            if (bMadeProgress)
+            {
+                Counters.ConsecutiveNoProgressSteps = 0;
+            }
+            else
+            {
+                ++Counters.ConsecutiveNoProgressSteps;
+                if (Budget.MaxConsecutiveNoProgressSteps > 0
+                    && Counters.ConsecutiveNoProgressSteps
+                    >= Budget.MaxConsecutiveNoProgressSteps)
+                {
+                    return Finish(EAgentStatus::Failed,
+                        "Agent stopped after repeated tool calls made no progress; "
+                        "use the cached facts, perform a state-changing action, ask the "
+                        "user for missing information, or return a final answer");
+                }
+            }
+
             if (!Transition(EAgentStatus::Validating, Error)
                 || !Session.WriteCheckpoint(EAgentStatus::Validating, Counters, &Error)
                 || !Transition(EAgentStatus::Planning, Error))
@@ -248,6 +364,87 @@ FAgentRunResult FAgentRuntime::Run(
             return Finish(EAgentStatus::Failed, std::move(Error));
         }
     }
+}
+
+std::string FAgentRuntime::MakeSemanticKey(const FAgentToolCall& Call) const
+{
+    std::string CanonicalArguments = Call.ArgumentsJson;
+    try
+    {
+        CanonicalArguments = FJson::parse(Call.ArgumentsJson).dump();
+    }
+    catch (...)
+    {
+        // Schema validation still owns malformed input diagnostics.
+    }
+    return std::to_string(StateRevision) + "\n" + Call.Name + "\n"
+        + CanonicalArguments;
+}
+
+std::string FAgentRuntime::BuildProgressLedgerJson() const
+{
+    FJson Actions = FJson::array();
+    for (const FProgressAction& Action : ProgressActions)
+    {
+        Actions.push_back({{"tool", Action.ToolName},
+            {"kind", Action.bReadOnly ? "read" : "mutation"},
+            {"reused", Action.bReused},
+            {"state_revision", Action.StateRevision}});
+    }
+    return FJson {{"goal", CurrentGoal},
+        {"state_revision", StateRevision},
+        {"completed_actions", std::move(Actions)},
+        {"budget", {{"steps_used", Counters.Steps},
+            {"steps_remaining", Counters.Steps < Budget.MaxSteps
+                ? Budget.MaxSteps - Counters.Steps : 0},
+            {"read_calls_used", Counters.ReadOnlyToolCalls},
+            {"read_calls_remaining", Counters.ReadOnlyToolCalls
+                    < Budget.MaxReadOnlyToolCalls
+                ? Budget.MaxReadOnlyToolCalls - Counters.ReadOnlyToolCalls : 0},
+            {"mutation_calls_used", Counters.MutationToolCalls},
+            {"mutation_calls_remaining", Counters.MutationToolCalls
+                    < Budget.MaxMutationToolCalls
+                ? Budget.MaxMutationToolCalls - Counters.MutationToolCalls : 0},
+            {"semantic_cache_hits", Counters.SemanticCacheHits},
+            {"consecutive_no_progress_steps",
+                Counters.ConsecutiveNoProgressSteps}}},
+        {"next_action_rule",
+            "Do not repeat a completed read at the same state revision. Mutate once "
+            "arguments are known, ask for missing information, or finish."}}.dump();
+}
+
+FAgentToolResult FAgentRuntime::MakeSemanticCacheResult(
+    const FAgentToolCall& Call,
+    const FAgentToolResult& Cached) const
+{
+    FAgentToolResult Result = Cached;
+    Result.CallId = Call.Id;
+    Result.bReused = true;
+    try
+    {
+        FJson Output = FJson::parse(Result.OutputJson);
+        if (Output.is_object())
+        {
+            Output["_pico_harness"] = {{"semantic_cache_hit", true},
+                {"state_revision", StateRevision},
+                {"guidance", "Use this existing result; do not issue the same read again."}};
+        }
+        else
+        {
+            Output = {{"cached_result", std::move(Output)},
+                {"_pico_harness", {{"semantic_cache_hit", true},
+                    {"state_revision", StateRevision},
+                    {"guidance", "Use this existing result; do not issue the same read again."}}}};
+        }
+        Result.OutputJson = Output.dump();
+    }
+    catch (...)
+    {
+        Result.OutputJson = FJson {{"cached_result", Result.OutputJson},
+            {"_pico_harness", {{"semantic_cache_hit", true},
+                {"state_revision", StateRevision}}}}.dump();
+    }
+    return Result;
 }
 
 bool FAgentRuntime::IsCancelled(const FCancellationToken* CancellationToken) const

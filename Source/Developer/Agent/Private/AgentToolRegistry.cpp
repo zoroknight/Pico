@@ -202,6 +202,12 @@ bool FAgentToolRegistry::RequiresApproval(const FAgentToolCall& Call) const
     return Definition && Policy.RequiresApproval(Definition->Permission);
 }
 
+bool FAgentToolRegistry::IsReadOnly(const FAgentToolCall& Call) const
+{
+    const FAgentToolDefinition* Definition = Find(Call.Name);
+    return Definition && Definition->Permission == EAgentToolPermission::ReadOnly;
+}
+
 void FAgentToolRegistry::PrepareApproval(const FAgentToolCall& Call)
 {
     const FAgentToolDefinition* Definition = Find(Call.Name);

@@ -29,6 +29,7 @@ MinSizeRel/
 
 # Runtime-generated data
 Saved/
+**/ApiKeys.ini
 Projects/*/Packaged/
 imgui.ini
 *.log

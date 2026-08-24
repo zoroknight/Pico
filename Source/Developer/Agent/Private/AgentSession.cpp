@@ -28,7 +28,12 @@ FJson ToJson(const FAgentEvent& Event, std::string_view SessionId)
         {"payload", FJson::parse(Event.PayloadJson)}, {"succeeded", Event.bSucceeded},
         {"trace", FJson::parse(Event.TraceJson)}, {"reused", Event.bReused},
         {"steps", Event.Counters.Steps},
-        {"tool_calls", Event.Counters.ToolCalls}, {"repair_attempts", Event.Counters.RepairAttempts}
+        {"tool_calls", Event.Counters.ToolCalls},
+        {"read_only_tool_calls", Event.Counters.ReadOnlyToolCalls},
+        {"mutation_tool_calls", Event.Counters.MutationToolCalls},
+        {"semantic_cache_hits", Event.Counters.SemanticCacheHits},
+        {"consecutive_no_progress_steps", Event.Counters.ConsecutiveNoProgressSteps},
+        {"repair_attempts", Event.Counters.RepairAttempts}
     };
 }
 
@@ -60,6 +65,11 @@ bool FromJson(const FJson& Json, std::string_view SessionId, FAgentEvent& Out, s
         Out.bReused = Json.value("reused", false);
         Out.Counters.Steps = Json.value("steps", 0U);
         Out.Counters.ToolCalls = Json.value("tool_calls", 0U);
+        Out.Counters.ReadOnlyToolCalls = Json.value("read_only_tool_calls", 0U);
+        Out.Counters.MutationToolCalls = Json.value("mutation_tool_calls", 0U);
+        Out.Counters.SemanticCacheHits = Json.value("semantic_cache_hits", 0U);
+        Out.Counters.ConsecutiveNoProgressSteps =
+            Json.value("consecutive_no_progress_steps", 0U);
         Out.Counters.RepairAttempts = Json.value("repair_attempts", 0U);
         return true;
     }

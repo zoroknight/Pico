@@ -15,7 +15,7 @@ PicoAgentHost（独立进程入口、JSON 文件协议）
   -> PicoTasks（协作取消）
 ```
 
-`IAgentProvider` 只接收消息历史、步骤号和修复次数，并返回文本、结构化 ToolCall 或错误。模型 Provider
+`IAgentProvider` 只接收消息历史、步骤号、修复次数和 Harness 生成的 Progress Ledger，并返回文本、结构化 ToolCall 或错误。模型 Provider
 不认识 World 和编辑器工具。`IAgentToolExecutor` 是刻意保留的窄接口，本周测试使用无副作用的 Fake
 Executor；第 3 周再接入 Schema、权限、审批、事务、执行与验证管线。
 
@@ -32,8 +32,9 @@ Repairing -> Planning
 ```
 
 状态迁移由白名单校验，不能从 `ExecutingTool` 跳过验证直接进入 `Completed`。Provider 失败、Tool
-失败或没有产生有效下一步时进入 `Repairing`，默认最多修复两次。步骤、ToolCall、修复次数和总耗时
-均有预算，避免错误模型形成无限循环。
+失败或没有产生有效下一步时进入 `Repairing`，默认最多修复两次。步骤、实际 ToolCall、只读调用、修改调用、
+修复次数和总耗时分别有预算，并保留最后一个 Step 用于最终回答。相同 StateRevision 下语义相同的只读查询复用
+缓存；连续无进展会提前终止，详见 [`AIPhase07_ProjectHandoffAndLoopControl.md`](AIPhase07_ProjectHandoffAndLoopControl.md)。
 
 ## Event Log 与恢复
 
@@ -76,7 +77,8 @@ PicoAgentHost.exe `
 ## 自动化验收
 
 `PicoAgentTests` 覆盖 Fake Provider 确定流程、Session/Checkpoint 重启恢复、ToolCall 幂等、有限修复、
-Step Budget、PicoTask 协作取消、不完整 JSONL 尾部恢复和状态迁移规则。另有 `PicoAgentHost` 文件协议冒烟测试。
+分类预算、语义只读缓存、无进展检测、Progress Ledger、项目交接、PicoTask 协作取消、不完整 JSONL 尾部恢复和
+状态迁移规则。另有 `PicoAgentHost` 文件协议冒烟测试。
 
 ## 当前边界
 

@@ -23,7 +23,8 @@ enum class EBlockKind
     Code,
     Quote,
     ListItem,
-    Rule
+    Rule,
+    Table
 };
 
 struct FInlineStyle
@@ -50,6 +51,18 @@ struct FFragment
     FInlineStyle Style;
 };
 
+struct FTableCell
+{
+    bool bHeader = false;
+    MD_ALIGN Alignment = MD_ALIGN_DEFAULT;
+    std::vector<FFragment> Fragments;
+};
+
+struct FTableRow
+{
+    std::vector<FTableCell> Cells;
+};
+
 struct FBlock
 {
     EBlockKind Kind = EBlockKind::Paragraph;
@@ -58,6 +71,8 @@ struct FBlock
     std::string Prefix;
     std::string CodeLanguage;
     std::vector<FFragment> Fragments;
+    unsigned TableColumnCount = 0;
+    std::vector<FTableRow> TableRows;
 };
 
 struct FListState
@@ -71,6 +86,8 @@ struct FParseContext
     std::vector<FBlock> Blocks;
     std::vector<FListState> Lists;
     FBlock* Current = nullptr;
+    FBlock* CurrentTable = nullptr;
+    FTableCell* CurrentTableCell = nullptr;
     int QuoteDepth = 0;
     bool bInsideListItem = false;
     std::string PendingListPrefix;
@@ -107,6 +124,20 @@ int EnterBlock(MD_BLOCKTYPE Type, void* Detail, void* UserData)
     auto& Context = *static_cast<FParseContext*>(UserData);
     switch (Type)
     {
+    case MD_BLOCK_TABLE:
+    {
+        Context.Blocks.push_back({});
+        Context.CurrentTable = &Context.Blocks.back();
+        Context.CurrentTable->Kind = EBlockKind::Table;
+        const auto* Table = static_cast<const MD_BLOCK_TABLE_DETAIL*>(Detail);
+        Context.CurrentTable->TableColumnCount = Table ? Table->col_count : 0;
+        Context.Current = nullptr;
+        break;
+    }
+    case MD_BLOCK_TR:
+        if (Context.CurrentTable)
+            Context.CurrentTable->TableRows.push_back({});
+        break;
     case MD_BLOCK_QUOTE:
         ++Context.QuoteDepth;
         break;
@@ -156,8 +187,16 @@ int EnterBlock(MD_BLOCKTYPE Type, void* Detail, void* UserData)
         break;
     case MD_BLOCK_TH:
     case MD_BLOCK_TD:
-        StartTextBlock(Context, EBlockKind::Paragraph);
-        Context.Current->Prefix = "| ";
+        if (Context.CurrentTable && !Context.CurrentTable->TableRows.empty())
+        {
+            const auto* Cell = static_cast<const MD_BLOCK_TD_DETAIL*>(Detail);
+            Context.CurrentTable->TableRows.back().Cells.push_back({});
+            Context.CurrentTableCell =
+                &Context.CurrentTable->TableRows.back().Cells.back();
+            Context.CurrentTableCell->bHeader = Type == MD_BLOCK_TH;
+            Context.CurrentTableCell->Alignment = Cell
+                ? Cell->align : MD_ALIGN_DEFAULT;
+        }
         break;
     default:
         break;
@@ -170,6 +209,11 @@ int LeaveBlock(MD_BLOCKTYPE Type, void*, void* UserData)
     auto& Context = *static_cast<FParseContext*>(UserData);
     switch (Type)
     {
+    case MD_BLOCK_TABLE:
+        Context.CurrentTable = nullptr;
+        Context.CurrentTableCell = nullptr;
+        Context.Current = nullptr;
+        break;
     case MD_BLOCK_QUOTE:
         --Context.QuoteDepth;
         break;
@@ -186,7 +230,7 @@ int LeaveBlock(MD_BLOCKTYPE Type, void*, void* UserData)
     case MD_BLOCK_P:
     case MD_BLOCK_TH:
     case MD_BLOCK_TD:
-        Context.Current = nullptr;
+        Context.CurrentTableCell = nullptr;
         break;
     default:
         break;
@@ -227,7 +271,7 @@ int LeaveSpan(MD_SPANTYPE Type, void*, void* UserData)
 int AddText(MD_TEXTTYPE Type, const MD_CHAR* Text, MD_SIZE Size, void* UserData)
 {
     auto& Context = *static_cast<FParseContext*>(UserData);
-    if (!Context.Current)
+    if (!Context.Current && !Context.CurrentTableCell)
         StartTextBlock(Context, Context.QuoteDepth > 0
             ? EBlockKind::Quote : EBlockKind::Paragraph);
     std::string Value;
@@ -236,14 +280,16 @@ int AddText(MD_TEXTTYPE Type, const MD_CHAR* Text, MD_SIZE Size, void* UserData)
     else if (Type == MD_TEXT_NULLCHAR) Value = "\xEF\xBF\xBD";
     else Value.assign(Text, Size);
     const FInlineStyle Style = CurrentStyle(Context);
-    if (!Context.Current->Fragments.empty() &&
-        Context.Current->Fragments.back().Style == Style)
+    std::vector<FFragment>& Fragments = Context.CurrentTableCell
+        ? Context.CurrentTableCell->Fragments
+        : Context.Current->Fragments;
+    if (!Fragments.empty() && Fragments.back().Style == Style)
     {
-        Context.Current->Fragments.back().Text += Value;
+        Fragments.back().Text += Value;
     }
     else
     {
-        Context.Current->Fragments.push_back({std::move(Value), Style});
+        Fragments.push_back({std::move(Value), Style});
     }
     return 0;
 }
@@ -429,6 +475,49 @@ void DrawCodeBlock(const FBlock& Block)
     ImGui::EndChild();
     ImGui::PopStyleColor();
 }
+
+void DrawTable(const FBlock& Block)
+{
+    unsigned ColumnCount = Block.TableColumnCount;
+    for (const FTableRow& Row : Block.TableRows)
+        ColumnCount = std::max(ColumnCount,
+            static_cast<unsigned>(Row.Cells.size()));
+    if (ColumnCount == 0) return;
+
+    const ImGuiTableFlags Flags = ImGuiTableFlags_Borders
+        | ImGuiTableFlags_RowBg
+        | ImGuiTableFlags_SizingStretchSame
+        | ImGuiTableFlags_NoSavedSettings;
+    if (!ImGui::BeginTable("##MarkdownTable",
+            static_cast<int>(ColumnCount), Flags))
+    {
+        return;
+    }
+    for (unsigned Column = 0; Column < ColumnCount; ++Column)
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
+
+    for (const FTableRow& Row : Block.TableRows)
+    {
+        const bool bHeader = !Row.Cells.empty()
+            && std::all_of(Row.Cells.begin(), Row.Cells.end(),
+                [](const FTableCell& Cell) { return Cell.bHeader; });
+        ImGui::TableNextRow(bHeader ? ImGuiTableRowFlags_Headers
+                                   : ImGuiTableRowFlags_None);
+        for (unsigned Column = 0; Column < ColumnCount; ++Column)
+        {
+            ImGui::TableSetColumnIndex(static_cast<int>(Column));
+            if (Column >= Row.Cells.size()) continue;
+            FBlock CellBlock;
+            CellBlock.Fragments = Row.Cells[Column].Fragments;
+            for (FFragment& Fragment : CellBlock.Fragments)
+                Fragment.Style.bStrong = Fragment.Style.bStrong || bHeader;
+            DrawInline(CellBlock,
+                bHeader ? ImVec4(0.92f, 0.94f, 0.98f, 1.0f)
+                        : ImGui::GetStyleColorVec4(ImGuiCol_Text));
+        }
+    }
+    ImGui::EndTable();
+}
 }
 
 bool DrawMarkdown(std::string_view Markdown)
@@ -461,6 +550,9 @@ bool DrawMarkdown(std::string_view Markdown)
             break;
         case EBlockKind::Rule:
             ImGui::Separator();
+            break;
+        case EBlockKind::Table:
+            DrawTable(Block);
             break;
         default:
             DrawInline(Block, ImGui::GetStyleColorVec4(ImGuiCol_Text));

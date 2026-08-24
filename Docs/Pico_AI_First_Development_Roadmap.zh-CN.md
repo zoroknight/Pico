@@ -74,7 +74,8 @@ PicoAgentHost（半可信独立进程）
 - 所有对象创建、反射属性修改、World 替换和 UI 更新都回到 Game Thread。
 - AgentHost、模型请求或第三方库崩溃不得带崩 PicoEditor。
 - Editor 是工具权限、参数验证、事务和最终副作用的唯一权威。
-- API Key 不进入仓库、Prompt、Session 普通日志或打包产物。
+- API Key 保存到 `<PicoEngineRoot>/Saved/Editor/Agent/ApiKeys.ini`，由同一编辑器副本下的项目共享；该路径被
+  Git 与打包排除，并且不向 Agent 工具、Prompt、Session、Trace 或普通日志暴露。
 
 ### Harness 范围
 
@@ -220,7 +221,18 @@ Idle
 副作用前拒绝和用户原始意图冲突的调用，详见 [`AIPhase06_GameAssemblyVerticalSlice.md`](AIPhase06_GameAssemblyVerticalSlice.md)。
 AI Chat 已升级为按 Provider 隔离的多会话工作区，支持新建/删除、重启恢复、最新消息定位、气泡复制和 MD4C
 Markdown/格式化 JSON 代码块；长代码块可展开且不抢占聊天滚轮。
-运行中跨项目自动切换/恢复、材质实例创建和任意新玩法逻辑仍未开放，模型输出也不能直接映射为任意 PFunction。
+Agent 创建项目后已支持受控新进程交接和同一 Session 恢复；Harness 还会发送结构化 Progress Ledger，在相同
+StateRevision 下缓存等价只读查询，并以分类预算和连续无进展检测阻止 DeepSeek 重复检查。详见
+[`AIPhase07_ProjectHandoffAndLoopControl.md`](AIPhase07_ProjectHandoffAndLoopControl.md)。材质实例创建和任意新玩法
+逻辑仍未开放，模型输出也不能直接映射为任意 PFunction。
+
+进入 Mini GAS 前已经追加完成 SSE Streaming、可审计 Project Knowledge Store、确定性 RAG Lite 和 Pico Skill
+v0。当前来源覆盖项目文本、World、AssetRegistry、选择对象反射、工具 Schema 与 Message Log；四个内置 Skill
+同时裁剪 Provider Schema 并在执行器侧限制工具。Embedding、MCP 与跨项目长期知识仍延期。详见
+[`AIPhase08_StreamingKnowledgeRagAndSkills.md`](AIPhase08_StreamingKnowledgeRagAndSkills.md)。
+Agent 阶段收尾还将 Intent Router 提取到 `PicoAgentCore`，并冻结 18 条中英文生产提示评测，覆盖 Play/Package
+否定语义、场景/角色 Skill 和多 Skill 组合。后续 Gameplay 模块必须通过扩展该评测集接入 Agent，不能在聊天
+窗口中增加另一套临时意图判断。
 
 ## 第 8 月：Mini GAS 与 AbilityTask
 
@@ -275,8 +287,8 @@ AI 只能通过 `CreateGraph/AddNode/ConnectPins/SetDefaultValue/CompileGraph/Va
 
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |
-| 第 1 周 | Pico Skill 格式、版本、允许工具、前置条件、验收标准；第三人称、拾取、触发门、GAS 和打包 Skills | Skill 可审核、禁用和固定版本，不提升权限 |
-| 第 2 周 | RAG Lite：反射、World、选中对象、AssetRegistry、文档、Message Log、构建错误和上下文预算 | 回答和工具规划引用当前项目真实数据，不需要向量数据库 |
+| 第 1 周 | 在已完成 Skill v0 上增加拾取、触发门、GAS 和 PicoGraph Skills，并做版本迁移/禁用 UI | Gameplay Skill 可审核、禁用和固定版本，不提升权限 |
+| 第 2 周 | 扩展已完成 RAG Lite：加入 GAS/PicoGraph Schema、验证结果和固定检索评测；按真实数据决定是否做 Embedding 对照 | 回答和工具规划引用新增 Gameplay 真实数据 |
 | 第 3 周 | 自动验证、Graph 编译、资产引用检查、Play、日志读取和最多两轮修复 | 失败保留现场并报告，不无限循环或掩盖错误 |
 | 第 4 周 | AI 完整游戏 Demo、Windows Package 和回归评测；可选本地 MCP Adapter | 从中文需求到可运行 Stage 形成可审计闭环 |
 

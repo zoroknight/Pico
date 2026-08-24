@@ -44,12 +44,23 @@ The current implementation can:
 - Discover Actor and Component `PProperty` metadata through generic Agent tools, then read or batch-edit
   supported `Editable` values in one approved Undo transaction without per-property tool code.
 - Keep provider-isolated multi-chat histories with create/delete/recovery, newest-message scrolling,
-  per-bubble copy, and MD4C-backed Markdown plus formatted JSON code blocks whose expansion does not
-  steal the transcript's mouse wheel.
+  per-bubble copy, and MD4C-backed Markdown with GFM tables plus formatted JSON code blocks whose
+  expansion does not steal the transcript's mouse wheel; merge common Symbol/Dingbats glyphs for
+  check marks, arrows, and related status text.
+- Stream OpenAI-compatible text and Tool Call fragments over SSE while persisting only aggregate
+  messages; ground turns through an audited project Knowledge Store and bounded cited RAG Lite, then
+  narrow both advertised and executable tools with versioned Pico Skills.
+- Regression-test the production Intent Router and Skill manifests with 18 tracked Chinese/English
+  prompts, including negation and multi-Skill routing, before later GAS or PicoGraph tools extend them.
 - Let the scene Agent search real AssetRegistry entries, create an undoable collision room, assemble a
   third-person Pawn from a Data-Only Actor Blueprint and Character Profile, validate/save the World,
   spawn or delete Blueprint Actors, create a content-only project from the proven template, and launch
   either a real Play Session or the existing approved packager through distinct tools and intent guards.
+- Hand an Agent-created project to a clean editor process only after the current result and checkpoint
+  are durable, restoring its Provider, model, and JSONL conversation while all projects share an
+  editor-local, Git-ignored API key store that Agent tools cannot read. Bound repeated planning with
+  StateRevision-aware read caching, a structured progress ledger,
+  categorized budgets, a reserved final-answer step, and consecutive no-progress detection.
 - Launch a standalone `PicoGame` runtime with frame-based input, configurable Action/Axis mappings,
   and a project default map or command-line map override.
 - Build a project-specific `PicoSandboxGame` runtime whose statically linked Game Module registers
@@ -663,6 +674,8 @@ See:
 - [AI Chat Workspace and DeepSeek/Kimi Providers (Chinese)](Docs/AIPhase04_ChatWorkspaceAndProviders.md)
 - [Generic Reflected Property Tools for the Scene Agent (Chinese)](Docs/AIPhase05_ReflectedPropertyTools.md)
 - [AI Game Assembly Vertical Slice (Chinese)](Docs/AIPhase06_GameAssemblyVerticalSlice.md)
+- [Project Handoff and Agent Loop Control (Chinese)](Docs/AIPhase07_ProjectHandoffAndLoopControl.md)
+- [Streaming, Project Knowledge, RAG Lite, and Pico Skill v0 (Chinese)](Docs/AIPhase08_StreamingKnowledgeRagAndSkills.md)
 - [Remaining Development Roadmap (Chinese)](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
 - [Pre-Network Readiness (Chinese)](Docs/Month08_14_PreNetworkReadiness.md)
 - [Network Risk Register (Chinese)](Docs/NetworkRiskRegister.zh-CN.md)

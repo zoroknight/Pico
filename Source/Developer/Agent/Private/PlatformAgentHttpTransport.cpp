@@ -53,6 +53,23 @@ public:
         const FAgentHttpRequest& Request,
         const FCancellationToken* CancellationToken) override
     {
+        return Post(Request, {}, CancellationToken);
+    }
+
+    FAgentHttpResponse PostJsonStream(
+        const FAgentHttpRequest& Request,
+        const std::function<bool(std::string_view)>& OnChunk,
+        const FCancellationToken* CancellationToken) override
+    {
+        return Post(Request, OnChunk, CancellationToken);
+    }
+
+private:
+    FAgentHttpResponse Post(
+        const FAgentHttpRequest& Request,
+        const std::function<bool(std::string_view)>& OnChunk,
+        const FCancellationToken* CancellationToken)
+    {
         if (CancellationToken && CancellationToken->IsCancellationRequested())
             return {false, 0, {}, 0, "Cancelled"};
         const std::wstring Url = ToWide(Request.Url);
@@ -149,7 +166,20 @@ public:
                 WinHttpCloseHandle(Session);
                 return {false, 0, {}, 0, Error};
             }
-            Body.append(Buffer.data(), Read);
+            if (OnChunk && StatusCode >= 200 && StatusCode < 300)
+            {
+                if (!OnChunk(std::string_view(Buffer.data(), Read)))
+                {
+                    WinHttpCloseHandle(HttpRequest);
+                    WinHttpCloseHandle(Connection);
+                    WinHttpCloseHandle(Session);
+                    return {false, 0, {}, 0, "Provider stream parser rejected a response event"};
+                }
+            }
+            else
+            {
+                Body.append(Buffer.data(), Read);
+            }
         }
 
         std::uint32_t RetryAfterMilliseconds = 0;

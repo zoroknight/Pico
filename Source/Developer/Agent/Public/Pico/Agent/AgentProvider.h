@@ -2,7 +2,9 @@
 
 #include "Pico/Agent/AgentTypes.h"
 
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Pico
@@ -12,6 +14,10 @@ class FCancellationToken;
 struct FAgentProviderRequest
 {
     std::vector<FAgentMessage> Messages;
+    std::string ProgressLedgerJson = "{}";
+    std::string KnowledgeContextJson = "{}";
+    std::string SkillContextJson = "[]";
+    std::function<void(std::string_view)> OnTextDelta;
     std::size_t Step = 0;
     std::size_t RepairAttempt = 0;
 };
@@ -39,6 +45,7 @@ class IAgentToolExecutor
 public:
     virtual ~IAgentToolExecutor() = default;
     virtual bool RequiresApproval(const FAgentToolCall& Call) const;
+    virtual bool IsReadOnly(const FAgentToolCall& Call) const;
     virtual void PrepareApproval(const FAgentToolCall& Call);
     virtual std::string GetLastExecutionTraceJson() const;
     virtual FAgentToolResult Execute(

@@ -3,6 +3,7 @@
 #include "Pico/Agent/AgentProvider.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -33,6 +34,10 @@ public:
     virtual FAgentHttpResponse PostJson(
         const FAgentHttpRequest& Request,
         const FCancellationToken* CancellationToken) = 0;
+    virtual FAgentHttpResponse PostJsonStream(
+        const FAgentHttpRequest& Request,
+        const std::function<bool(std::string_view)>& OnChunk,
+        const FCancellationToken* CancellationToken);
 };
 
 struct FOpenAICompatibleProviderSettings
