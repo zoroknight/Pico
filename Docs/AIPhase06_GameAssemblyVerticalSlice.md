@@ -28,7 +28,8 @@ editor.project.package
   `actor.delete` 只删除可解析的当前 World Actor，两者都进入普通编辑器 Undo 事务。
 - `play.validate` 复用正式编辑器的 Gameplay 校验；`world.save` 复用 World Document 安全保存。
 - `play.start/stop` 复用编辑器 `FPlaySession`，真实启动或停止独立 `PicoGame`，不会把运行伪装为打包。
-- `project.package` 复用 PicoPackager，只启动受控参数的打包进程，不向模型开放命令行。
+- `project.package` 复用 PicoPackager，不向模型开放命令行。Game Thread 只负责启动受控进程，Agent Worker
+  等待异步完成；退出码、`PackageReport.ini` 和 `PicoPackage.complete` 全部验证通过后才返回成功。
 
 ## Play 与 Package 的严格分离
 

@@ -33,6 +33,7 @@
 #include "Pico/Object/Property.h"
 #include "Pico/Render/SceneViewportRenderer.h"
 #include "PicoSandbox/SandboxModule.h"
+
 #include "TestRunner.h"
 
 #include <algorithm>
@@ -923,6 +924,47 @@ void TestEditorCommandService(FTestRunner& Runner)
         StartPlayResult.bSucceeded && StopPlayResult.bSucceeded
             && !bAgentPlayActive,
         "Editor Agent starts and explicitly stops the host-owned Play Session");
+
+    Pico::FEditorAgentPackageCompletion PackageCompletion;
+    PackageCompletion.bSucceeded = true;
+    PackageCompletion.ExitCode = 0;
+    PackageCompletion.OutputDirectory =
+        std::filesystem::temp_directory_path() / "PicoAgentPackage";
+    PackageCompletion.Message = "verified";
+    Pico::FEditorAgentHostServices PackageHostServices;
+    PackageHostServices.StartPackage = [](
+        const std::filesystem::path&, const std::string&, bool)
+    {
+        return std::pair<bool, std::string> {true, "started"};
+    };
+    PackageHostServices.WaitForPackage = [&PackageCompletion](
+        const Pico::FCancellationToken*)
+    {
+        return PackageCompletion;
+    };
+    Pico::FEditorAgentToolExecutor PackageAgentTools(
+        &EngineLoop, &Selection, &Transactions, &AgentApproval, {},
+        std::move(PackageHostServices));
+    const Pico::FAgentToolCall PackageCall {"agent-package",
+        "editor.project.package",
+        R"({"output_root":"E:/PicoAgentPackageTest","package_name":"AgentPackage","smoke_test":false})"};
+    PackageAgentTools.PrepareApproval(PackageCall);
+    const auto PackageStarted = PackageAgentTools.Execute(PackageCall, nullptr);
+    const auto PackageFinished = PackageAgentTools.WaitForAsyncCompletion(
+        PackageCall, PackageStarted, nullptr);
+    PackageCompletion.bSucceeded = false;
+    PackageCompletion.ExitCode = 7;
+    PackageCompletion.Message = "packager failed";
+    const auto PackageFailed = PackageAgentTools.WaitForAsyncCompletion(
+        PackageCall, PackageStarted, nullptr);
+    Runner.Expect(
+        PackageStarted.bSucceeded
+            && PackageStarted.OutputJson.find("running") != std::string::npos
+            && PackageFinished.bSucceeded
+            && PackageFinished.OutputJson.find("completed") != std::string::npos
+            && !PackageFailed.bSucceeded
+            && PackageFailed.Error.find("packager failed") != std::string::npos,
+        "Editor Agent package results distinguish process start from verified completion and failure");
     const auto DescribeWorldResult = AgentTools.Execute(
         {"agent-world-list", "editor.world.describe", "{}"}, nullptr);
     Runner.Expect(

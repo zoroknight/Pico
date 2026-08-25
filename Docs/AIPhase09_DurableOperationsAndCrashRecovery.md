@@ -50,8 +50,10 @@ Projects/.AgentStaging/<Name>-<OperationHash>
 ### 打包
 
 PicoPackager 原有 `.PicoStaging-*`、验证、旧 Stage 备份和最终目录替换保持不变。成功 Stage 新增
-`PicoPackage.complete`，只有报告和完成标记都写成功才提交正式目录。Agent 的 Package Tool Result 表示
-“Packager 已成功启动”，最终是否完成应检查进程退出码、`PackageReport.ini` 和完成标记。
+`PicoPackage.complete`，只有报告和完成标记都写成功才提交正式目录。Agent 的 Package Handler 在 Game Thread
+启动进程后返回 `running`，Agent Worker 等待编辑器轮询到进程退出；只有退出码为 0、`PackageReport.ini`
+报告成功且 `PicoPackage.complete` 状态为 Complete，最终 Tool Result 才写入 `completed/succeeded` 并进入
+Operation Journal 的 Applied/Committed。失败或取消同样回写原 Tool Result，不再把“成功启动”当成“打包完成”。
 
 ### Play 与打包进程
 
@@ -80,7 +82,8 @@ Windows 下编辑器为每次 Play Session 和打包进程建立独立 Job Objec
 ## 当前边界
 
 - 这不是跨机器分布式事务，也不尝试回滚已经发送到外部服务的请求。
-- Package Tool 目前记录“启动已接受”，没有把异步最终退出状态回写到原 Tool Result；最终状态由 Stage 标记证明。
+- Package Tool 已回写异步最终状态；用户取消会请求 Game Thread 终止本次受 Job Object 管理的 Packager，并在
+  真实退出后记录取消；编辑器关闭时 Journal 保留 Executing 记录供恢复面板判断，不会伪造成功结果。
 - `Prepared/Executing` 只能依赖对应工具的幂等、原子写或暂存提交边界；以后新增项目写工具必须先声明自己的
   Commit Marker、Verifier 和清理策略，不能仅靠 Journal 获得安全性。
 - Committed 记录作为审计保留，后续可增加按会话或保留期归档，而不是在当前阶段自动删除。

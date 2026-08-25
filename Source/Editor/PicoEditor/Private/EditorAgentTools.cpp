@@ -2029,7 +2029,8 @@ struct FEditorAgentToolExecutor::FImpl
             const auto Result = HostServices.StartPackage(OutputRoot, PackageName,
                 Arguments.at("smoke_test").get<bool>());
             return Result.first
-                ? Success(Call, {{"started", true}, {"message", Result.second},
+                ? Success(Call, {{"state", "running"}, {"started", true},
+                    {"message", Result.second},
                     {"output", (OutputRoot / PackageName).string()}})
                 : Failure(Call, Result.second);
         };
@@ -2108,5 +2109,37 @@ FAgentToolResult FEditorAgentToolExecutor::Execute(
 {
     return Impl ? Impl->Registry.Execute(Call, CancellationToken)
         : FAgentToolResult {Call.Id, false, "{}", "Editor tool executor is unavailable", false};
+}
+
+FAgentToolResult FEditorAgentToolExecutor::WaitForAsyncCompletion(
+    const FAgentToolCall& Call,
+    FAgentToolResult StartedResult,
+    const FCancellationToken* CancellationToken) const
+{
+    if (!Impl || Call.Name != "editor.project.package"
+        || !StartedResult.bSucceeded)
+    {
+        return StartedResult;
+    }
+    if (!Impl->HostServices.WaitForPackage)
+    {
+        return FAgentToolResult {Call.Id, false, "{}",
+            "Package process started, but no completion service is available", false};
+    }
+
+    const FEditorAgentPackageCompletion Completion =
+        Impl->HostServices.WaitForPackage(CancellationToken);
+    if (!Completion.bSucceeded)
+    {
+        return FAgentToolResult {Call.Id, false, "{}",
+            Completion.Message.empty()
+                ? "Package process did not complete successfully"
+                : Completion.Message,
+            false};
+    }
+    return Success(Call, {{"state", "completed"}, {"started", true},
+        {"succeeded", true}, {"exit_code", Completion.ExitCode},
+        {"output", Completion.OutputDirectory.string()},
+        {"message", Completion.Message}});
 }
 }

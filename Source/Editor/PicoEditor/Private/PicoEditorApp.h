@@ -38,6 +38,7 @@ namespace Pico
 {
 class FEngineLoop;
 class PActor;
+struct FPackageOperationState;
 class PActorComponent;
 class PLevel;
 class PObject;
@@ -212,6 +213,7 @@ private:
     FTaskSystem TaskSystem;
     FGameThreadDispatcher GameThreadDispatcher;
     std::unique_ptr<FAgentChatWorkspace> AgentChatWorkspace;
+    std::shared_ptr<FPackageOperationState> PackageOperationState;
     FProcessHandle PackageProcess;
     FProcessGroup PackageProcessGroup;
     std::filesystem::path PendingProjectFile;

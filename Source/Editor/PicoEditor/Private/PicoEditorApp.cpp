@@ -38,8 +38,10 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <fstream>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -48,6 +50,16 @@
 
 namespace Pico
 {
+struct FPackageOperationState
+{
+    std::mutex Mutex;
+    std::condition_variable Condition;
+    FEditorAgentPackageCompletion Completion;
+    bool bActive = false;
+    bool bComplete = false;
+    bool bCancelRequested = false;
+};
+
 namespace
 {
 enum EDocumentAction
@@ -278,6 +290,7 @@ FPicoEditorApp::FPicoEditorApp(
     }
     SaveEditorSession(true);
     UpdateWindowTitle();
+    PackageOperationState = std::make_shared<FPackageOperationState>();
     AgentChatWorkspace = std::make_unique<FAgentChatWorkspace>(
         EngineLoop,
         &Selection,
@@ -294,17 +307,49 @@ FPicoEditorApp::FPicoEditorApp(
             if (PackageProcess.IsValid())
                 return std::pair<bool, std::string> {
                     false, "A package operation is already running"};
+            {
+                std::lock_guard Lock(PackageOperationState->Mutex);
+                PackageOperationState->Completion = {};
+                PackageOperationState->bActive = true;
+                PackageOperationState->bComplete = false;
+                PackageOperationState->bCancelRequested = false;
+            }
             std::snprintf(PackageOutputRootSetting.data(),
                 PackageOutputRootSetting.size(), "%s", OutputRoot.string().c_str());
             std::snprintf(PackageNameSetting.data(), PackageNameSetting.size(),
                 "%s", PackageName.c_str());
             bPackageSmokeTest = bSmokeTest;
             StartPackageProject();
+            if (!PackageProcess.IsValid())
+            {
+                std::lock_guard Lock(PackageOperationState->Mutex);
+                PackageOperationState->Completion.Message = Status;
+                PackageOperationState->bComplete = true;
+                PackageOperationState->bActive = false;
+                PackageOperationState->Condition.notify_all();
+            }
             return std::pair<bool, std::string> {
                 PackageProcess.IsValid(),
                 PackageProcess.IsValid()
                     ? "Packaging started: " + PackageOutputDirectory.string()
-                    : Status};
+                     : Status};
+        },
+        [State = PackageOperationState](
+            const FCancellationToken* CancellationToken)
+        {
+            std::unique_lock Lock(State->Mutex);
+            while (!State->bComplete)
+            {
+                if (CancellationToken
+                    && CancellationToken->IsCancellationRequested())
+                {
+                    State->bCancelRequested = true;
+                    State->Condition.notify_all();
+                }
+                State->Condition.wait_for(
+                    Lock, std::chrono::milliseconds(25));
+            }
+            return State->Completion;
         },
         [this]()
         {
@@ -366,6 +411,17 @@ FPicoEditorApp::FPicoEditorApp(
 
 FPicoEditorApp::~FPicoEditorApp()
 {
+    if (PackageOperationState)
+    {
+        std::lock_guard Lock(PackageOperationState->Mutex);
+        if (!PackageOperationState->bComplete)
+        {
+            PackageOperationState->Completion.Message =
+                "Editor closed before packaging completed";
+            PackageOperationState->bComplete = true;
+            PackageOperationState->Condition.notify_all();
+        }
+    }
     if (AgentChatWorkspace)
     {
         AgentChatWorkspace->Shutdown();
@@ -2106,6 +2162,18 @@ void FPicoEditorApp::DrawPackageProjectPopup()
 
 void FPicoEditorApp::UpdatePackageProcess()
 {
+    bool bCancelRequested = false;
+    if (PackageOperationState)
+    {
+        std::lock_guard Lock(PackageOperationState->Mutex);
+        bCancelRequested = PackageOperationState->bActive
+            && PackageOperationState->bCancelRequested;
+    }
+    if (PackageProcess.IsValid() && bCancelRequested
+        && FPlatformProcess::IsRunning(PackageProcess))
+    {
+        FPlatformProcess::Terminate(PackageProcess, 1);
+    }
     if (!PackageProcess.IsValid()
         || FPlatformProcess::IsRunning(PackageProcess))
     {
@@ -2137,16 +2205,58 @@ void FPicoEditorApp::UpdatePackageProcess()
         }
         if (Detail.empty()) Detail = std::move(FallbackDetail);
     }
-    if (ExitCode == 0)
+    FConfigFile Report;
+    FConfigFile CompletionMarker;
+    const bool bCompletionArtifactsValid = ExitCode == 0
+        && Report.Load(PackageOutputDirectory / "PackageReport.ini")
+        && Report.GetBool("Package", "Succeeded", false)
+        && CompletionMarker.Load(
+            PackageOutputDirectory / "PicoPackage.complete")
+        && CompletionMarker.GetString("Package", "State", "") == "Complete";
+    if (ExitCode == 0 && !bCompletionArtifactsValid)
+    {
+        Detail = "Packager exited successfully, but PackageReport.ini or "
+            "PicoPackage.complete did not confirm the output";
+    }
+    const bool bSucceeded = !bCancelRequested
+        && ExitCode == 0 && bCompletionArtifactsValid;
+    if (bSucceeded)
     {
         SetStatus("Package succeeded: " + PackageOutputDirectory.string());
     }
     else
     {
-        SetStatus(
-            "Package failed with code " + std::to_string(ExitCode)
-                + (Detail.empty() ? "" : ": " + Detail),
+        SetStatus(ExitCode == 0
+                ? "Package verification failed"
+                    + (Detail.empty() ? std::string {} : ": " + Detail)
+                : "Package failed with code " + std::to_string(ExitCode)
+                    + (Detail.empty() ? "" : ": " + Detail),
             true);
+    }
+    if (PackageOperationState)
+    {
+        {
+            std::lock_guard Lock(PackageOperationState->Mutex);
+            if (PackageOperationState->bActive)
+            {
+                PackageOperationState->Completion.bSucceeded = bSucceeded;
+                PackageOperationState->Completion.ExitCode = ExitCode;
+                PackageOperationState->Completion.OutputDirectory =
+                    PackageOutputDirectory;
+                PackageOperationState->Completion.Message = bCancelRequested
+                    ? "Package operation was cancelled"
+                    : bSucceeded
+                    ? "Package completed and its report and completion marker were verified"
+                    : ExitCode == 0
+                    ? "Package verification failed"
+                        + (Detail.empty() ? std::string {} : ": " + Detail)
+                    : "Package failed with code " + std::to_string(ExitCode)
+                        + (Detail.empty() ? std::string {} : ": " + Detail);
+                PackageOperationState->bComplete = true;
+                PackageOperationState->bActive = false;
+            }
+        }
+        PackageOperationState->Condition.notify_all();
     }
 }
 

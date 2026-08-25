@@ -41,7 +41,8 @@ The current implementation can:
 - Journal mutating Agent operations through `Prepared -> Executing -> Applied -> Committed`, reuse an
   applied result after restart without repeating its handler, and expose incomplete records in AI Chat.
   Create projects through a hidden staging directory; own Play/package children with Windows Job
-  Objects; require `PicoPackage.complete` before a staged package is considered complete.
+  Objects; keep Agent package tools pending after process launch and report success only after the exit
+  code, `PackageReport.ini`, and `PicoPackage.complete` all verify the final Stage.
 - Validate Agent tools through deterministic JSON schemas, permission and approval policy, existing
   World snapshot transactions, postcondition verification, rollback, persistent stage traces, and
   conflict-safe ToolCall IDs; Agent-created Actors enter the normal editor Undo history.

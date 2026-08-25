@@ -18,6 +18,15 @@ class FEditorTransactionManager;
 class FEditorCommandService;
 class FEditorWorldDocument;
 class FEngineLoop;
+class FCancellationToken;
+
+struct FEditorAgentPackageCompletion
+{
+    bool bSucceeded = false;
+    int ExitCode = -1;
+    std::filesystem::path OutputDirectory;
+    std::string Message;
+};
 
 struct FEditorAgentHostServices
 {
@@ -25,6 +34,8 @@ struct FEditorAgentHostServices
     FEditorWorldDocument* WorldDocument = nullptr;
     std::function<std::pair<bool, std::string>(
         const std::filesystem::path&, const std::string&, bool)> StartPackage;
+    std::function<FEditorAgentPackageCompletion(
+        const FCancellationToken*)> WaitForPackage;
     std::function<std::pair<bool, std::string>()> StartPlay;
     std::function<std::pair<bool, std::string>()> StopPlay;
     FEditorTransactionManager::FRestoreSnapshot RestoreSnapshot;
@@ -58,6 +69,10 @@ public:
     FAgentToolResult Execute(
         const FAgentToolCall& Call,
         const FCancellationToken* CancellationToken) override;
+    FAgentToolResult WaitForAsyncCompletion(
+        const FAgentToolCall& Call,
+        FAgentToolResult StartedResult,
+        const FCancellationToken* CancellationToken) const;
 
 private:
     struct FImpl;

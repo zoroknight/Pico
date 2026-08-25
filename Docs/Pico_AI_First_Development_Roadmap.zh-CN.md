@@ -266,14 +266,83 @@ Pico 保留自研 C++ Harness，不为了功能数量迁移到 LangChain/LangGra
 
 ## 第 8 月：Mini GAS 与 AbilityTask
 
-目标：学习 UE GAS 的核心职责，为 PicoGraph 的异步节点和 AI 可组合 Gameplay 工具提供稳定能力。
+目标：学习 UE GAS 的核心职责和对象关系，为 PicoGraph 的异步节点与 AI 可组合 Gameplay 工具提供稳定能力。
+本月实现的是可运行、可验证、可联网的 Mini GAS，不追求一次复制 UE GAS 的全部复杂度。
 
-| 周次 | 任务 | 周末验收 |
+### 模块与依赖边界
+
+新增独立 Runtime 模块，依赖方向固定为：
+
+```text
+PicoGameplayAbilities
+ -> PicoEngine
+ -> PicoObject
+ -> PicoCore
+```
+
+- `PicoGameplayAbilities` 不依赖 PicoEditor、Agent、Provider 或 Inspector；编辑器和 AI 只能从外层调用 Runtime API。
+- Ability、Effect 和 Attribute 的状态修改只发生在 Game Thread；Worker 只能处理不持有 `PObject*` 的纯数据。
+- Class/CDO 保存 Ability 与 Effect 的默认配置；每个角色的运行状态保存在 Spec、Handle 和 Active Effect 中，不能修改 CDO。
+- 跨帧、GC、网络和序列化身份使用稳定 Handle、NetId 或对象引用扫描，不长期保存未经跟踪的裸指针。
+
+首批核心类型：
+
+```text
+FGameplayTag / FGameplayTagContainer
+FGameplayAttributeData / PAttributeSet
+PGameplayAbilitySystemComponent
+PGameplayAbility / FGameplayAbilitySpec / FGameplayAbilitySpecHandle
+PGameplayEffect / FGameplayEffectSpec / FActiveGameplayEffectHandle
+PAbilityTask / FGameplayEventData / FPredictionKey
+```
+
+### UE5 源码学习对照
+
+| Pico 范围 | UE5 重点参照 | 本月学习重点 |
 | --- | --- | --- |
-| 第 1 周 | GameplayTag、AttributeSet、AbilitySystemComponent、AbilitySpec | 属性和 Ability 可反射、授予和撤销 |
-| 第 2 周 | GameplayEffect、Cost、Cooldown、Duration、Periodic 和 Tag 条件 | Effect 生命周期、叠加边界和属性修改可测试 |
-| 第 3 周 | AbilityTask、WaitDelay、WaitGameplayEvent、PlayAnimationAndWait | Task 可完成、取消、清理弱委托并响应 Montage 事件 |
-| 第 4 周 | Dash、Fireball、Stun、网络预测与拒绝；向 AI 暴露受控 GAS 工具 | 双人网络 Demo 一致；AI 能配置已有能力；新增 GAS Skill、Verifier、路由 Eval 和 Golden Task |
+| Tag | `FGameplayTag`、`FGameplayTagContainer`、`UGameplayTagsManager` | 层级 Tag、容器查询和确定性注册 |
+| Ability | `UAbilitySystemComponent`、`UGameplayAbility`、`FGameplayAbilitySpec` | CDO 定义与每实例 Spec 状态分离，授予、激活、提交、取消和结束 |
+| Attribute | `UAttributeSet`、`FGameplayAttributeData` | Base/Current 值、修改入口和变更通知 |
+| Effect | `UGameplayEffect`、`FGameplayEffectSpec`、`FActiveGameplayEffectsContainer` | 配置、运行时 Spec、持续时间、周期、叠加和清理 |
+| Task | `UAbilityTask`、WaitDelay、WaitGameplayEvent、PlayMontageAndWait | 异步等待、委托、取消和生命周期归属 |
+| Prediction | `FPredictionKey`、`FScopedPredictionWindow`、`ServerTryActivateAbility` | 客户端预测、服务端确认/拒绝和最小纠错闭环 |
+
+参照的是职责划分、数据流和生命周期，不照搬 UE 的模板、宏体系、Fast Array 或完整 Aggregator。
+
+### 四周交付计划
+
+| 周次 | 任务 | 周末验收 | 月度累计 |
+| --- | --- | --- | --- |
+| 第 1 周 | GameplayTag、AttributeSet、ASC、Ability、Spec/Handle、反射与 GC 接入 | Inspector 可授予、激活、取消和移除 Ability；属性与引用生命周期正确 | 25% |
+| 第 2 周 | GameplayEffect、Cost、Cooldown、Duration、Infinite、Periodic、Stack 和 Tag 条件 | Damage、Regen、Stun 可组合；属性与 Effect 委托可观察 | 55% |
+| 第 3 周 | AbilityTask、WaitDelay、WaitGameplayEvent、PlayAnimationAndWait | Task 可完成、取消、清理弱委托并响应 Montage 事件 | 78% |
+| 第 4 周 | Dash、Fireball、Stun、服务端权威、Dash 预测与拒绝、GAS Agent 工具和评测 | 双客户端结果一致；AI 可配置已有能力；新增 Skill、Verifier、路由 Eval 和 Golden Task | 100% |
+
+### 第 1 周：Tag、Attribute 与 Ability 骨架
+
+- 实现层级 GameplayTag、精确匹配、父级匹配、容器包含/追加/移除，并保证注册与序列化结果确定。
+- `FGameplayAttributeData` 区分 BaseValue 与 CurrentValue；所有修改经过统一入口并广播旧值、新值和来源。
+- 首个 `PAttributeSet` 提供 `Health`、`MaxHealth`、`Mana`、`MoveSpeed`，接入反射、序列化、GC 引用扫描和调试描述。
+- ASC 明确 OwnerActor 与 AvatarActor；负责 AttributeSet、AbilitySpec、GameplayTag 和后续 ActiveEffect 容器。
+- Ability 提供 `CanActivate/Activate/Commit/Cancel/End`；CDO 保存默认 Cost、Cooldown 和 Tag 配置。
+- Spec 保存稳定 Handle、Ability Class、Level、InputId 和实例激活状态，避免把角色运行状态写回 CDO。
+- 新增独立 `PicoGameplayAbilitiesTests`，并在 PicoInspector 增加 GAS Lab，而不是依赖完整 3D 场景才能验证。
+
+周末验收：Inspector 显示 Health=100、MoveSpeed=600；同一 Ability 可授予、激活、取消和移除；销毁 Owner 或
+切换 World 后 ASC、Spec 和委托不残留，GC 测试通过。
+
+### 第 2 周：GameplayEffect 与组合规则
+
+- Effect DurationPolicy 支持 Instant、Duration、Infinite；Modifier 首版支持 Add、Multiply、Override。
+- Runtime Spec 保存来源、目标、等级、持续时间、周期、Tag 和计算后的 Modifier；ActiveEffect 使用稳定 Handle。
+- 支持 Periodic、最小可解释 Stack 规则、Application/Granted/Blocked Tag 条件和统一移除路径。
+- Cost 与 Cooldown 复用 GameplayEffect，不在 Ability 中建立第二套扣费和计时系统。
+- 暴露 AttributeChanged、EffectApplied、EffectRemoved 和 GameplayTagChanged 委托，为 UI、动画、网络和任务接入。
+
+周末验收：Damage 立即扣血，Regen 周期恢复，Stun 在持续期内授予 `State.Stunned`；Mana 不足或 Cooldown
+存在时激活失败；Effect 到期、取消或目标销毁后属性和 Tag 恢复且无重复回调。
+
+### 第 3 周：AbilityTask 异步生命周期
 
 AbilityTask 生命周期固定为：
 
@@ -283,6 +352,50 @@ Created -> ReadyForActivation -> Active -> Finished / Cancelled -> Destroyed
 
 Ability 强引用活动 Task；Task 的事件绑定使用弱对象委托；Ability 结束、预测被拒绝、Actor 销毁、World
 替换或引擎退出时必须取消 Task 并解除绑定。
+
+- `WaitDelay` 使用 World 时间和现有 Tick/Timer 调度，不创建线程，也不依赖编辑器帧率。
+- `WaitGameplayEvent` 支持精确 Tag 和父级 Tag 匹配，并携带可反射的 `FGameplayEventData`。
+- `PlayAnimationAndWait` 复用 Montage Lite，区分 Completed、Interrupted、Cancelled 和 Notify/Event 输出。
+- `EndTask`、Ability 结束和外部取消必须幂等，不能重复广播、重复移除或访问已经销毁的对象。
+- Inspector GAS Lab 展示 Active Tasks、等待条件、完成原因和清理结果，允许手动触发事件。
+
+周末验收：Delay 到时只广播一次；GameplayEvent 可推进 Ability；Montage 完成、中断和取消进入正确分支；
+销毁 Actor、替换 World 或退出 Play 后 Active Task 数量归零。
+
+### 第 4 周：联网 Demo 与 Agent 适配
+
+- Dash：客户端创建 PredictionKey 并立即表现移动，服务端校验 Cost、Cooldown、Tag 和位置；接受后确认，拒绝后回滚/纠正。
+- Fireball：客户端只请求激活，投射物生成、命中和伤害由服务端权威执行；本月不预测伤害。
+- Stun：服务端应用持续 Effect，同步 Tag、剩余时间和必要属性；`State.Stunned` 阻止移动和相关 Ability。
+- 网络首版同步 Attribute、GameplayTag、Ability 激活结果和基础 ActiveEffect；只有 Dash 完成本地预测闭环。
+- Agent 增加 ASC 描述、授予/移除已有 Ability、应用已有 Effect、设置数据化默认值等受控工具。
+- 新增 GAS Knowledge Source、`configure-character-abilities.pskill`、确定性 Verifier、路由 Eval 和 Golden Task。
+- Agent 仍经过 Validate、Permission、Approval、Transaction、Execute、Verify；不允许模型直接生成任意 Ability C++。
+
+联网验收：一台服务器加两个客户端分别执行 Dash、Fireball 和 Stun；三端最终 Health、Tag、Cooldown 和位置一致；
+模拟拒绝 Dash 后客户端完成纠正。AI 验收指令为“给这个角色配置冲刺、火球和眩晕能力”，结果必须引用已有资产、
+保存项目并通过 Gameplay 验证器，而不是仅由模型宣称成功。
+
+### 月末质量门槛
+
+- Debug/Release 构建通过，新增模块单元测试与 Inspector 可视化测试同时存在。
+- 现有 21 个测试模块不回归；涉及网络的用例至少覆盖服务器接受、拒绝、断开与 World 清理。
+- 新增 GAS Skill 必须同时具备 Knowledge、Verifier、Routing Eval 和 Golden Task，不能只增加 Tool。
+- Ability/Task/Effect 在取消、Actor 销毁、World 替换和引擎退出时均能完成清理。
+- Spec、Effect、Task 和网络对象使用稳定 Handle/NetId，不把裸指针当作持久身份。
+- 先证明 Runtime API，再接编辑器和 Agent；UI 或模型失败不得破坏底层 Gameplay 状态。
+
+### 本月明确不实现
+
+- 完整 GameplayCue、Attribute Capture/Aggregator、MMC 与 Execution Calculation。
+- 完整 TargetData/TargetActor、UE 的全部 Replication Mode 与 Fast Array 兼容实现。
+- 预测投射物、预测伤害、复杂回滚和多 Ability 连锁预测。
+- 蓝图 Ability 编辑器、AI 生成任意 C++ Ability，以及 ECS 与 GAS 的深度整合。
+
+### 风险降级顺序
+
+若第 4 周时间不足，优先级固定为：服务端权威与校验 > Attribute/Tag/Effect 同步 > 一个 Dash
+预测与拒绝闭环 > 服务端 Fireball > Agent 配置已有 Ability。不得为了功能数量牺牲生命周期、GC、权威边界和测试。
 
 ## 第 9 月：PicoGraph Lite
 
@@ -425,7 +538,7 @@ PrimitiveComponent
 | Event Log 与幂等 | 第 7 月第 2 周 | 每个 Tool Call/Result 配对；重复 ID 零额外副作用 |
 | Tool Policy 与事务 | 第 7 月第 3 周 | 非法输入、拒绝、路径穿越和未知工具零副作用 |
 | Provider 隔离 | 第 7 月第 4 周 | 切换 DeepSeek/Kimi 不修改 Editor Tool 实现 |
-| 跨进程持久操作 | 第 7 月收尾 | Journal 区分 Applied/Committed；项目和 Package 使用 Staging；Play/Package 子进程归属 Job Object |
+| 跨进程持久操作 | 第 7 月收尾并已加固 | Journal 区分 Applied/Committed；项目和 Package 使用 Staging；Play/Package 子进程归属 Job Object；Package 最终退出码、报告和完成标记回写原 Tool Result |
 | Skill 路由 | 第 10 月第 1 周 | 候选筛选后才允许结构化模型选 Skill；未知、低置信度和越权结果无副作用；固定 Eval 覆盖误路由 |
 | Graph 类型和执行预算 | 第 9 月第 3 周 | 非法图不可运行；超预算终止当前执行而不阻塞 World |
 | AI 完成判定 | 第 10 月第 3 周 | 编译、引用、Play、日志和 Package 由验证器判定 |

@@ -895,40 +895,11 @@ Pico 原生资产和声明式 Runtime Dependency，在临时目录完成校验�
 
 ## 第 8 月：Mini GAS、AbilityTask 与 AI
 
-| 周次 | 任务 | 月末验收 |
-| --- | --- | --- |
-| 第 1 周 | GameplayTag、AttributeSet、AbilitySystemComponent、AbilitySpec | 属性和 Ability 可授予 |
-| 第 2 周 | GameplayEffect、Cost、Cooldown、Duration、Periodic 和 Tag 条件 | Effect 生命周期正确 |
-| 第 3 周 | 基于已完成的 Montage Lite 实现 AbilityTask、WaitGameplayEvent、WaitDelay、PlayAnimationAndWait 和 Ability 网络预测 | 异步 Ability 可等待、取消和预测；Montage 完成/中断/Notify 能可靠结束或推进 Task |
-| 第 4 周 | 基于 PicoTask 的异步 DeepSeek/Kimi Provider、Tool Registry、中文命令、保存、构建和打包 | AI 请求不阻塞编辑器，并可驱动受控编辑器命令 |
-
-Mini GAS Demo 包含：
-
-- Dash：Stamina、Cooldown 和本地预测。
-- Fireball：Server RPC 生成投射物并应用伤害。
-- Stun：持续 Effect 和 `State.Stunned`。
-- WaitGameplayEvent：等待命中或动画窗口事件。
-
-AbilityTask 生命周期固定为：
-
-```text
-Created -> ReadyForActivation -> Active -> Finished/Cancelled -> Destroyed
-```
-
-Ability 强引用 ActiveTasks；Task 的事件绑定使用弱对象委托；Ability 结束或预测被拒绝时必须清理对应 Task。
-
-AI 只能调用受控工具，例如：
-
-```text
-CreateActor
-SetProperty
-AssignAsset
-SaveWorld
-BuildProject
-PackageProject
-```
-
-AI 不直接执行模型生成的任意 Shell 命令，也不直接修改未知内存。
+本节为旧路线中的历史摘要。当前第 8 月以
+[`Pico_AI_First_Development_Roadmap.zh-CN.md`](Pico_AI_First_Development_Roadmap.zh-CN.md#第-8-月mini-gas-与-abilitytask)
+为准：新增独立 `PicoGameplayAbilities` Runtime 模块，按 Tag/Attribute/ASC、GameplayEffect、AbilityTask、
+网络 Demo 与 Agent 适配四周推进。旧计划中“第 4 周才实现异步 Provider/Tool Registry”的内容已在第 7 月
+提前完成，不再作为 GAS 阶段的新任务。
 
 ## 最终验收 Demo
 

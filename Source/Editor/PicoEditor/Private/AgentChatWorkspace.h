@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Pico/Editor/EditorAgentTools.h"
 #include "Pico/Editor/EditorTransactionManager.h"
 #include "Pico/Tasks/TaskSystem.h"
 
@@ -32,6 +33,8 @@ public:
         FEditorWorldDocument* WorldDocument,
         std::function<std::pair<bool, std::string>(
             const std::filesystem::path&, const std::string&, bool)> StartPackage,
+        std::function<FEditorAgentPackageCompletion(
+            const FCancellationToken*)> WaitForPackage,
         std::function<std::pair<bool, std::string>()> StartPlay,
         std::function<std::pair<bool, std::string>()> StopPlay,
         FEditorTransactionManager::FRestoreSnapshot RestoreSnapshot,

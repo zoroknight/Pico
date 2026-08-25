@@ -484,6 +484,18 @@ public:
         }
         LastTraceJson = Tools->GetLastExecutionTraceJson();
         FAgentToolResult Result = Shared->Result;
+        if (Result.bSucceeded)
+        {
+            Result = Tools->WaitForAsyncCompletion(
+                Call, std::move(Result), CancellationToken);
+            if (!Result.bSucceeded)
+            {
+                LastTraceJson = FailureTrace(
+                    "AsyncCompletion",
+                    Result.Error.empty()
+                        ? "Asynchronous tool operation failed" : Result.Error);
+            }
+        }
         if (bDurable)
         {
             std::string JournalError;
@@ -688,6 +700,8 @@ struct FAgentChatWorkspace::FImpl
         FEditorWorldDocument* WorldDocument,
         std::function<std::pair<bool, std::string>(
             const std::filesystem::path&, const std::string&, bool)> StartPackage,
+        std::function<FEditorAgentPackageCompletion(
+            const FCancellationToken*)> WaitForPackage,
         std::function<std::pair<bool, std::string>()> StartPlay,
         std::function<std::pair<bool, std::string>()> StopPlay,
         FEditorTransactionManager::FRestoreSnapshot RestoreSnapshot,
@@ -699,6 +713,7 @@ struct FAgentChatWorkspace::FImpl
         , EditorTools(InEngineLoop, Selection, Transactions, &Approval,
             std::move(OnWorldChanged),
             {Commands, WorldDocument, std::move(StartPackage),
+                std::move(WaitForPackage),
                 std::move(StartPlay), std::move(StopPlay),
                 std::move(RestoreSnapshot),
                 FPaths::GetProjectSavedDir() / "Agent/ChangeSets"})
@@ -1507,13 +1522,16 @@ FAgentChatWorkspace::FAgentChatWorkspace(
     FEditorWorldDocument* WorldDocument,
     std::function<std::pair<bool, std::string>(
         const std::filesystem::path&, const std::string&, bool)> StartPackage,
+    std::function<FEditorAgentPackageCompletion(
+        const FCancellationToken*)> WaitForPackage,
     std::function<std::pair<bool, std::string>()> StartPlay,
     std::function<std::pair<bool, std::string>()> StopPlay,
     FEditorTransactionManager::FRestoreSnapshot RestoreSnapshot,
     std::function<void(const std::filesystem::path&)> RequestProjectOpen)
     : Impl(std::make_unique<FImpl>(EngineLoop, Selection, Transactions,
         TaskSystem, Dispatcher, std::move(OnWorldChanged), Commands,
-        WorldDocument, std::move(StartPackage), std::move(StartPlay),
+        WorldDocument, std::move(StartPackage), std::move(WaitForPackage),
+        std::move(StartPlay),
         std::move(StopPlay), std::move(RestoreSnapshot),
         std::move(RequestProjectOpen)))
 {
