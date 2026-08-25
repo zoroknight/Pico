@@ -10,6 +10,7 @@
     "editor.asset.search",
     "editor.object.describe",
     "editor.object.set_properties",
+    "editor.object.batch_set_properties",
     "editor.actor.spawn",
     "editor.actor.spawn_blueprint",
     "editor.actor.set_location",
@@ -22,7 +23,7 @@
     "Inspect the active World once.",
     "Search assets only when the request needs a project asset.",
     "Create structural geometry before gameplay Actors.",
-    "Apply reflected properties using exact discovered object paths.",
+    "Apply reflected properties using exact discovered object paths; use the batch tool when several objects must change together.",
     "Validate and save only when requested or required by the goal."
   ],
   "completion_criteria": [

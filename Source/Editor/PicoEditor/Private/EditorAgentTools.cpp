@@ -21,6 +21,7 @@
 #include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/Object.h"
+#include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/Property.h"
 #include "Pico/Tasks/TaskSystem.h"
@@ -33,7 +34,11 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <optional>
+#include <set>
+#include <sstream>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 
 namespace Pico
@@ -60,6 +65,16 @@ bool IsSafeObjectName(std::string_view Name)
         if (!std::isalnum(Character) && Character != '_') return false;
     }
     return true;
+}
+
+bool IsSafeRunId(std::string_view RunId)
+{
+    return !RunId.empty() && RunId.size() <= 128
+        && std::all_of(RunId.begin(), RunId.end(), [](unsigned char Character)
+        {
+            return std::isalnum(Character) || Character == '-'
+                || Character == '_';
+        });
 }
 
 std::string StableOperationSuffix(std::string_view Text)
@@ -396,10 +411,66 @@ bool JsonEquivalent(const FJson& Left, const FJson& Right)
     }
     return Left == Right;
 }
+
+bool FingerprintWorld(
+    const FWorldAssetData& Data,
+    std::string& OutFingerprint,
+    std::string& OutError)
+{
+    FMemoryWriter Writer;
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    if (!SerializeWorldAsset(Writer, Data, &Error) || Writer.HasError())
+    {
+        OutError = "Could not fingerprint World: " + std::string(ToString(Error));
+        return false;
+    }
+    const std::vector<uint8>& Bytes = Writer.GetData();
+    OutFingerprint = StableOperationSuffix(std::string_view(
+        reinterpret_cast<const char*>(Bytes.data()), Bytes.size()));
+    return true;
+}
+
+std::vector<std::string> DiffObjectLabels(
+    const FWorldAssetData& Left,
+    const FWorldAssetData& Right)
+{
+    std::unordered_set<uint64> RightIds;
+    for (const FSceneObjectRecord& Record : Right.Objects)
+        RightIds.insert(Record.Id.Value);
+    std::vector<std::string> Result;
+    for (const FSceneObjectRecord& Record : Left.Objects)
+        if (!RightIds.contains(Record.Id.Value))
+            Result.push_back(Record.ClassName + ":" + Record.ObjectName);
+    std::sort(Result.begin(), Result.end());
+    return Result;
+}
+
+bool ReplaceFile(
+    const std::filesystem::path& Staging,
+    const std::filesystem::path& Destination,
+    std::string& OutError)
+{
+    std::error_code Error;
+    std::filesystem::remove(Destination, Error);
+    Error.clear();
+    std::filesystem::rename(Staging, Destination, Error);
+    if (!Error) return true;
+    OutError = "Could not publish ChangeSet file: " + Error.message();
+    return false;
+}
 }
 
 struct FEditorAgentToolExecutor::FImpl
 {
+    struct FPendingChangeSet
+    {
+        std::string RunId;
+        FWorldAssetData Before;
+        std::vector<std::string> SelectedObjectPaths;
+        std::string PrimaryObjectPath;
+        std::string BeforeFingerprint;
+    };
+
     class FTransaction final : public IAgentToolTransaction
     {
     public:
@@ -407,10 +478,12 @@ struct FEditorAgentToolExecutor::FImpl
             FEngineLoop* InEngineLoop,
             FEditorSelection* InSelection,
             FEditorTransactionManager* InTransactions,
+            FEditorTransactionManager::FRestoreSnapshot InRestoreSnapshot,
             std::function<void()> InOnWorldChanged)
             : EngineLoop(InEngineLoop)
             , Selection(InSelection)
             , Transactions(InTransactions)
+            , RestoreSnapshot(std::move(InRestoreSnapshot))
             , OnWorldChanged(std::move(InOnWorldChanged))
         {
         }
@@ -458,6 +531,10 @@ struct FEditorAgentToolExecutor::FImpl
                 [this](const FEditorWorldSnapshot& Snapshot,
                        EWorldSerializationError* RestoreError)
                 {
+                    if (RestoreSnapshot)
+                    {
+                        return RestoreSnapshot(Snapshot, RestoreError);
+                    }
                     if (!EngineLoop || !Selection
                         || !EngineLoop->ReplaceWorld(Snapshot.WorldData, RestoreError))
                     {
@@ -481,6 +558,7 @@ struct FEditorAgentToolExecutor::FImpl
         FEngineLoop* EngineLoop = nullptr;
         FEditorSelection* Selection = nullptr;
         FEditorTransactionManager* Transactions = nullptr;
+        FEditorTransactionManager::FRestoreSnapshot RestoreSnapshot;
         std::function<void()> OnWorldChanged;
     };
 
@@ -494,10 +572,112 @@ struct FEditorAgentToolExecutor::FImpl
         : EngineLoop(InEngineLoop)
         , Selection(InSelection)
         , HostServices(std::move(InHostServices))
-        , Transaction(InEngineLoop, InSelection, InTransactions, std::move(OnWorldChanged))
+        , Transaction(InEngineLoop, InSelection, InTransactions,
+            HostServices.RestoreSnapshot, std::move(OnWorldChanged))
         , Registry(BuildPolicy(InEngineLoop), Approval, &Transaction)
     {
         RegisterTools();
+    }
+
+    void BeginRun(std::string_view RunId)
+    {
+        PendingChangeSet.reset();
+        LastChangeSetError.clear();
+        if (HostServices.ChangeSetDirectory.empty() || !IsSafeRunId(RunId)) return;
+        PWorld* World = EngineLoop ? EngineLoop->GetWorld() : nullptr;
+        if (!World) return;
+        FPendingChangeSet Pending;
+        Pending.RunId = RunId;
+        EWorldSerializationError Error = EWorldSerializationError::None;
+        if (!CaptureWorld(*World, Pending.Before, &Error))
+        {
+            LastChangeSetError = "Could not capture Agent Run start: "
+                + std::string(ToString(Error));
+            return;
+        }
+        if (!FingerprintWorld(Pending.Before, Pending.BeforeFingerprint,
+                LastChangeSetError))
+            return;
+        if (Selection)
+        {
+            Pending.SelectedObjectPaths = Selection->GetObjectPaths();
+            Pending.PrimaryObjectPath = Selection->GetObjectPath();
+        }
+        PendingChangeSet = std::move(Pending);
+    }
+
+    void EndRun(std::string_view RunId, EAgentStatus Status)
+    {
+        if (!PendingChangeSet || PendingChangeSet->RunId != RunId) return;
+        FPendingChangeSet Pending = std::move(*PendingChangeSet);
+        PendingChangeSet.reset();
+        PWorld* World = EngineLoop ? EngineLoop->GetWorld() : nullptr;
+        if (!World) return;
+        FWorldAssetData After;
+        EWorldSerializationError WorldError = EWorldSerializationError::None;
+        if (!CaptureWorld(*World, After, &WorldError))
+        {
+            LastChangeSetError = "Could not capture Agent Run end: "
+                + std::string(ToString(WorldError));
+            return;
+        }
+        std::string AfterFingerprint;
+        if (!FingerprintWorld(After, AfterFingerprint, LastChangeSetError)
+            || AfterFingerprint == Pending.BeforeFingerprint)
+            return;
+
+        const std::filesystem::path Directory = HostServices.ChangeSetDirectory;
+        const std::filesystem::path BeforePath = Directory
+            / (Pending.RunId + ".before.pworld");
+        const std::filesystem::path AfterPath = Directory
+            / (Pending.RunId + ".after.pworld");
+        const std::filesystem::path MetadataPath = Directory
+            / (Pending.RunId + ".json");
+        const std::filesystem::path BeforeStaging = BeforePath.string() + ".tmp";
+        const std::filesystem::path AfterStaging = AfterPath.string() + ".tmp";
+        const std::filesystem::path MetadataStaging = MetadataPath.string() + ".tmp";
+        std::error_code FileError;
+        std::filesystem::create_directories(Directory, FileError);
+        if (FileError)
+        {
+            LastChangeSetError = "Could not create Agent ChangeSet directory: "
+                + FileError.message();
+            return;
+        }
+        if (!SaveWorldAssetDataToFile(BeforeStaging, Pending.Before, &WorldError)
+            || !SaveWorldAssetDataToFile(AfterStaging, After, &WorldError))
+        {
+            LastChangeSetError = "Could not stage Agent ChangeSet: "
+                + std::string(ToString(WorldError));
+            return;
+        }
+        FJson Metadata = {{"format_version", 1}, {"run_id", Pending.RunId},
+            {"status", ToString(Status)},
+            {"before_file", BeforePath.filename().string()},
+            {"after_file", AfterPath.filename().string()},
+            {"before_fingerprint", Pending.BeforeFingerprint},
+            {"after_fingerprint", AfterFingerprint},
+            {"before_object_count", Pending.Before.Objects.size()},
+            {"after_object_count", After.Objects.size()},
+            {"added_objects", DiffObjectLabels(After, Pending.Before)},
+            {"removed_objects", DiffObjectLabels(Pending.Before, After)},
+            {"selected_object_paths", Pending.SelectedObjectPaths},
+            {"primary_object_path", Pending.PrimaryObjectPath}};
+        {
+            std::ofstream Stream(MetadataStaging,
+                std::ios::binary | std::ios::trunc);
+            Stream << Metadata.dump(2) << '\n';
+            Stream.flush();
+            if (!Stream)
+            {
+                LastChangeSetError = "Could not stage Agent ChangeSet metadata";
+                return;
+            }
+        }
+        if (!ReplaceFile(BeforeStaging, BeforePath, LastChangeSetError)
+            || !ReplaceFile(AfterStaging, AfterPath, LastChangeSetError)
+            || !ReplaceFile(MetadataStaging, MetadataPath, LastChangeSetError))
+            return;
     }
 
     static FAgentToolPolicy BuildPolicy(FEngineLoop* EngineLoop)
@@ -651,6 +831,238 @@ struct FEditorAgentToolExecutor::FImpl
                 {"actors", std::move(Actors)}});
         };
         bInitialized = Registry.Register(std::move(DescribeWorld));
+
+        FAgentToolDefinition ListChanges;
+        ListChanges.Name = "editor.agent.list_changes";
+        ListChanges.Description =
+            "List recent persisted Agent Run ChangeSets and their added or removed objects before choosing an exact RunId to revert";
+        ListChanges.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            FJson Changes = FJson::array();
+            std::string CurrentFingerprint;
+            std::size_t CurrentObjectCount = 0;
+            std::string CurrentFingerprintError;
+            FWorldAssetData Current;
+            EWorldSerializationError CurrentWorldError = EWorldSerializationError::None;
+            PWorld* CurrentWorld = EngineLoop ? EngineLoop->GetWorld() : nullptr;
+            const bool bHasCurrentFingerprint = CurrentWorld
+                && CaptureWorld(*CurrentWorld, Current, &CurrentWorldError)
+                && FingerprintWorld(Current, CurrentFingerprint,
+                    CurrentFingerprintError);
+            if (bHasCurrentFingerprint) CurrentObjectCount = Current.Objects.size();
+            const std::filesystem::path Directory = HostServices.ChangeSetDirectory;
+            std::error_code Error;
+            if (!Directory.empty() && std::filesystem::is_directory(Directory, Error))
+            {
+                struct FEntry
+                {
+                    std::filesystem::path Path;
+                    std::filesystem::file_time_type Time;
+                };
+                std::vector<FEntry> Entries;
+                for (const auto& Entry : std::filesystem::directory_iterator(Directory, Error))
+                {
+                    if (Error || !Entry.is_regular_file()
+                        || Entry.path().extension() != ".json")
+                        continue;
+                    Entries.push_back({Entry.path(), Entry.last_write_time(Error)});
+                    Error.clear();
+                }
+                std::sort(Entries.begin(), Entries.end(),
+                    [](const FEntry& Left, const FEntry& Right)
+                    {
+                        return Left.Time > Right.Time;
+                    });
+                if (Entries.size() > 20) Entries.resize(20);
+                for (const FEntry& Entry : Entries)
+                {
+                    try
+                    {
+                        std::ifstream Stream(Entry.Path, std::ios::binary);
+                        FJson Metadata;
+                        Stream >> Metadata;
+                        if (Metadata.value("format_version", 0) != 1) continue;
+                        Changes.push_back({{"run_id", Metadata.value("run_id", "")},
+                            {"status", Metadata.value("status", "")},
+                            {"before_object_count", Metadata.value("before_object_count", 0U)},
+                            {"after_object_count", Metadata.value("after_object_count", 0U)},
+                            {"added_objects", Metadata.value(
+                                "added_objects", std::vector<std::string> {})},
+                            {"removed_objects", Metadata.value(
+                                "removed_objects", std::vector<std::string> {})},
+                            {"matches_current_before", bHasCurrentFingerprint
+                                && CurrentFingerprint == Metadata.value(
+                                    "before_fingerprint", "")},
+                            {"matches_current_after", bHasCurrentFingerprint
+                                && CurrentFingerprint == Metadata.value(
+                                    "after_fingerprint", "")}});
+                    }
+                    catch (...) { }
+                }
+            }
+            return Success(Call, {{"changes", std::move(Changes)},
+                {"current_serialized_object_count", CurrentObjectCount},
+                {"serialized_count_includes_world_and_levels", true},
+                {"current_fingerprint_error", CurrentFingerprintError},
+                {"last_recording_error", LastChangeSetError}});
+        };
+        bInitialized = Registry.Register(std::move(ListChanges)) && bInitialized;
+
+        FAgentToolDefinition RevertRun;
+        RevertRun.Name = "editor.agent.revert_run";
+        RevertRun.Description =
+            "Restore the exact World snapshot from before one Agent Run when the current World still matches that Run's recorded after-state";
+        RevertRun.Permission = EAgentToolPermission::ModifyWorld;
+        RevertRun.Schema.Fields = {
+            {"run_id", EAgentToolValueType::String, true, {}, {}, 128}
+        };
+        RevertRun.Preflight = [this](
+            const FAgentToolCall& Call, std::string& Error)
+        {
+            const std::string RunId = FJson::parse(Call.ArgumentsJson)
+                .at("run_id").get<std::string>();
+            if (!IsSafeRunId(RunId) || HostServices.ChangeSetDirectory.empty())
+            {
+                Error = "Agent ChangeSet RunId is invalid or unavailable";
+                return false;
+            }
+            FJson Metadata;
+            try
+            {
+                std::ifstream Stream(
+                    HostServices.ChangeSetDirectory / (RunId + ".json"),
+                    std::ios::binary);
+                Stream >> Metadata;
+            }
+            catch (...)
+            {
+                Error = "Agent ChangeSet metadata was not found";
+                return false;
+            }
+            if (Metadata.value("format_version", 0) != 1
+                || Metadata.value("run_id", "") != RunId)
+            {
+                Error = "Agent ChangeSet metadata is invalid";
+                return false;
+            }
+            PWorld* World = EngineLoop ? EngineLoop->GetWorld() : nullptr;
+            FWorldAssetData Current;
+            EWorldSerializationError WorldError = EWorldSerializationError::None;
+            if (!World || !CaptureWorld(*World, Current, &WorldError))
+            {
+                Error = "Could not capture current World before revert";
+                return false;
+            }
+            std::string CurrentFingerprint;
+            if (!FingerprintWorld(Current, CurrentFingerprint, Error)) return false;
+            if (CurrentFingerprint == Metadata.value("before_fingerprint", ""))
+            {
+                Error = "World already matches the state before this Agent Run; "
+                    "Undo or an earlier restore already completed the requested recovery";
+                return false;
+            }
+            if (CurrentFingerprint != Metadata.value("after_fingerprint", ""))
+            {
+                Error = "World no longer matches this Agent Run's after-state; "
+                    "later edits or Undo changed it, so revert would overwrite other work";
+                return false;
+            }
+            return true;
+        };
+        RevertRun.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const std::string RunId = FJson::parse(Call.ArgumentsJson)
+                .at("run_id").get<std::string>();
+            if (!IsSafeRunId(RunId) || HostServices.ChangeSetDirectory.empty())
+                return Failure(Call, "Agent ChangeSet RunId is invalid or unavailable");
+            const std::filesystem::path MetadataPath =
+                HostServices.ChangeSetDirectory / (RunId + ".json");
+            FJson Metadata;
+            try
+            {
+                std::ifstream Stream(MetadataPath, std::ios::binary);
+                Stream >> Metadata;
+            }
+            catch (...)
+            {
+                return Failure(Call, "Agent ChangeSet metadata was not found");
+            }
+            if (Metadata.value("format_version", 0) != 1
+                || Metadata.value("run_id", "") != RunId)
+                return Failure(Call, "Agent ChangeSet metadata is invalid");
+            const std::filesystem::path BeforeFile =
+                Metadata.value("before_file", "");
+            const std::filesystem::path AfterFile =
+                Metadata.value("after_file", "");
+            if (BeforeFile.empty() || BeforeFile != BeforeFile.filename()
+                || AfterFile.empty() || AfterFile != AfterFile.filename())
+                return Failure(Call, "Agent ChangeSet snapshot paths are invalid");
+            FWorldAssetData Before;
+            FWorldAssetData After;
+            EWorldSerializationError WorldError = EWorldSerializationError::None;
+            if (!LoadWorldAssetDataFromFile(
+                    HostServices.ChangeSetDirectory / BeforeFile, Before, &WorldError)
+                || !LoadWorldAssetDataFromFile(
+                    HostServices.ChangeSetDirectory / AfterFile, After, &WorldError))
+                return Failure(Call, "Could not load Agent ChangeSet snapshots: "
+                    + std::string(ToString(WorldError)));
+            std::string StoredAfterFingerprint;
+            std::string FingerprintError;
+            if (!FingerprintWorld(After, StoredAfterFingerprint, FingerprintError)
+                || StoredAfterFingerprint != Metadata.value("after_fingerprint", ""))
+                return Failure(Call, "Agent ChangeSet after-snapshot is inconsistent");
+            PWorld* World = EngineLoop ? EngineLoop->GetWorld() : nullptr;
+            FWorldAssetData Current;
+            if (!World || !CaptureWorld(*World, Current, &WorldError))
+                return Failure(Call, "Could not capture current World before revert");
+            std::string CurrentFingerprint;
+            if (!FingerprintWorld(Current, CurrentFingerprint, FingerprintError))
+                return Failure(Call, FingerprintError);
+            const std::string ExpectedAfter = Metadata.value("after_fingerprint", "");
+            if (CurrentFingerprint != ExpectedAfter)
+                return Failure(Call,
+                    "World changed after this Agent Run; refusing to overwrite later edits");
+            const FEditorWorldSnapshot Snapshot {Before,
+                Metadata.value("selected_object_paths", std::vector<std::string> {}),
+                Metadata.value("primary_object_path", "")};
+            const bool bRestored = HostServices.RestoreSnapshot
+                ? HostServices.RestoreSnapshot(Snapshot, &WorldError)
+                : EngineLoop->ReplaceWorld(Before, &WorldError);
+            if (!bRestored)
+                return Failure(Call, "Could not restore Agent ChangeSet: "
+                    + std::string(ToString(WorldError)));
+            if (!HostServices.RestoreSnapshot && Selection)
+                Selection->Restore(EngineLoop->GetWorld(),
+                    Metadata.value("selected_object_paths", std::vector<std::string> {}),
+                    Metadata.value("primary_object_path", ""));
+            return Success(Call, {{"reverted_run_id", RunId},
+                {"restored_fingerprint", Metadata.value("before_fingerprint", "")},
+                {"restored_object_count", Before.Objects.size()}});
+        };
+        RevertRun.Verifier = [this](const FAgentToolCall&,
+            const FAgentToolResult& Result, std::string& Error)
+        {
+            PWorld* World = EngineLoop ? EngineLoop->GetWorld() : nullptr;
+            FWorldAssetData Current;
+            EWorldSerializationError WorldError = EWorldSerializationError::None;
+            if (!World || !CaptureWorld(*World, Current, &WorldError))
+            {
+                Error = "Could not verify reverted World";
+                return false;
+            }
+            std::string Fingerprint;
+            if (!FingerprintWorld(Current, Fingerprint, Error)
+                || Fingerprint != FJson::parse(Result.OutputJson)
+                    .at("restored_fingerprint").get<std::string>())
+            {
+                if (Error.empty()) Error = "Reverted World fingerprint does not match";
+                return false;
+            }
+            return true;
+        };
+        bInitialized = Registry.Register(std::move(RevertRun)) && bInitialized;
 
         FAgentToolDefinition DescribeSelection;
         DescribeSelection.Name = "editor.selection.describe";
@@ -842,6 +1254,125 @@ struct FEditorAgentToolExecutor::FImpl
         };
         bInitialized = Registry.Register(std::move(SetProperties)) && bInitialized;
 
+        FAgentToolDefinition BatchSetProperties;
+        BatchSetProperties.Name = "editor.object.batch_set_properties";
+        BatchSetProperties.Description =
+            "Set reflected Editable properties on up to 32 explicit World objects in one approved all-or-nothing Undo transaction";
+        BatchSetProperties.Permission = EAgentToolPermission::ModifyWorld;
+        BatchSetProperties.Schema.Fields = {
+            {"edits", EAgentToolValueType::Array, true}
+        };
+        BatchSetProperties.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            const FJson& Edits = Arguments.at("edits");
+            if (Edits.empty() || Edits.size() > 32)
+                return Failure(Call, "Edits must contain between 1 and 32 objects");
+            struct FPendingProperty
+            {
+                const PProperty* Property = nullptr;
+                FEditorPropertyValue Value;
+            };
+            struct FPendingObject
+            {
+                PObject* Object = nullptr;
+                std::string Path;
+                std::vector<FPendingProperty> Properties;
+            };
+            std::vector<FPendingObject> PendingObjects;
+            std::unordered_set<std::string> SeenPaths;
+            std::size_t TotalProperties = 0;
+            for (const FJson& Edit : Edits)
+            {
+                if (!Edit.is_object() || Edit.size() != 2
+                    || !Edit.contains("object_path") || !Edit.at("object_path").is_string()
+                    || !Edit.contains("properties") || !Edit.at("properties").is_object())
+                    return Failure(Call, "Each edit requires object_path and properties only");
+                const std::string Path = Edit.at("object_path").get<std::string>();
+                if (Path.empty() || Path.size() > 512 || !SeenPaths.insert(Path).second)
+                    return Failure(Call, "Edit object paths must be unique and valid");
+                PObject* Object = FindEditorWorldObjectByPath(
+                    EngineLoop ? EngineLoop->GetWorld() : nullptr, Path);
+                const FJson& Values = Edit.at("properties");
+                if (!Object || Values.empty() || Values.size() > 32
+                    || TotalProperties + Values.size() > 128)
+                    return Failure(Call, "Batch property target or property count is invalid");
+                FPendingObject Pending;
+                Pending.Object = Object;
+                Pending.Path = Path;
+                for (auto It = Values.begin(); It != Values.end(); ++It)
+                {
+                    if (It.key().empty() || It.key().size() > 128)
+                        return Failure(Call, "Property name is invalid");
+                    const PProperty* Property = Object->GetClass()->FindProperty(FName(It.key()));
+                    if (!Property)
+                        return Failure(Call, Path + ": unknown property " + It.key());
+                    FEditorPropertyValue Value;
+                    std::string Error;
+                    if (!JsonToPropertyValue(*Property, It.value(), Value, Error))
+                        return Failure(Call, Path + "." + It.key() + ": " + Error);
+                    Pending.Properties.push_back({Property, std::move(Value)});
+                }
+                TotalProperties += Values.size();
+                PendingObjects.push_back(std::move(Pending));
+            }
+
+            FJson AppliedObjects = FJson::array();
+            for (FPendingObject& Pending : PendingObjects)
+            {
+                FJson Applied = FJson::object();
+                for (FPendingProperty& Entry : Pending.Properties)
+                {
+                    const FEditorPropertyResult Result = ApplyEditorPropertyValue(
+                        EngineLoop, Pending.Object, Entry.Property, Entry.Value);
+                    if (!Result.bSucceeded)
+                        return Failure(Call, Pending.Path + "."
+                            + Entry.Property->GetName().ToString() + ": " + Result.Message);
+                    FJson Value;
+                    if (!PropertyValueToJson(*Entry.Property, Pending.Object, Value))
+                        return Failure(Call, "Could not read back batch property value");
+                    Applied[Entry.Property->GetName().ToString()] = std::move(Value);
+                }
+                AppliedObjects.push_back(
+                    {{"object_path", Pending.Path}, {"properties", std::move(Applied)}});
+            }
+            if (Selection && !PendingObjects.empty())
+                Selection->Set(PendingObjects.back().Object);
+            return Success(Call, {{"objects", std::move(AppliedObjects)}});
+        };
+        BatchSetProperties.Verifier = [this](const FAgentToolCall&,
+            const FAgentToolResult& Result, std::string& Error)
+        {
+            const FJson Objects = FJson::parse(Result.OutputJson).at("objects");
+            for (const FJson& Entry : Objects)
+            {
+                PObject* Object = FindEditorWorldObjectByPath(
+                    EngineLoop ? EngineLoop->GetWorld() : nullptr,
+                    Entry.at("object_path").get<std::string>());
+                if (!Object)
+                {
+                    Error = "Batch changed object no longer exists";
+                    return false;
+                }
+                for (auto It = Entry.at("properties").begin();
+                    It != Entry.at("properties").end(); ++It)
+                {
+                    const PProperty* Property =
+                        Object->GetClass()->FindProperty(FName(It.key()));
+                    FJson Actual;
+                    if (!Property || !PropertyValueToJson(*Property, Object, Actual)
+                        || !JsonEquivalent(Actual, It.value()))
+                    {
+                        Error = "Batch property postcondition failed: " + It.key();
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+        bInitialized = Registry.Register(std::move(BatchSetProperties)) && bInitialized;
+
         FAgentToolDefinition SpawnActor;
         SpawnActor.Name = "editor.actor.spawn";
         SpawnActor.Description = "Create an Empty or Cube Actor in the active World";
@@ -1005,6 +1536,70 @@ struct FEditorAgentToolExecutor::FImpl
             return true;
         };
         bInitialized = Registry.Register(std::move(DeleteActor)) && bInitialized;
+
+        FAgentToolDefinition DeleteActors;
+        DeleteActors.Name = "editor.actor.delete_many";
+        DeleteActors.Description =
+            "Delete up to 64 explicit Actors from the active World in one approved all-or-nothing Undo transaction";
+        DeleteActors.Permission = EAgentToolPermission::ModifyWorld;
+        DeleteActors.Schema.Fields = {
+            {"object_paths", EAgentToolValueType::Array, true}
+        };
+        DeleteActors.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            const FJson& Paths = Arguments.at("object_paths");
+            if (Paths.empty() || Paths.size() > 64)
+                return Failure(Call, "object_paths must contain between 1 and 64 Actors");
+            std::vector<FObjectHandle> Handles;
+            std::vector<std::string> StablePaths;
+            std::unordered_set<std::string> Seen;
+            for (const FJson& Value : Paths)
+            {
+                if (!Value.is_string())
+                    return Failure(Call, "Every delete target must be an object path string");
+                const std::string Path = Value.get<std::string>();
+                if (Path.empty() || Path.size() > 512 || !Seen.insert(Path).second)
+                    return Failure(Call, "Delete target paths must be unique and valid");
+                PObject* Object = FindEditorWorldObjectByPath(
+                    EngineLoop ? EngineLoop->GetWorld() : nullptr, Path);
+                if (!Object || !Object->IsA(PActor::StaticClass()))
+                    return Failure(Call, "Actor delete target was not found: " + Path);
+                Handles.push_back(Object->GetHandle());
+                StablePaths.push_back(Path);
+            }
+            PWorld* World = EngineLoop ? EngineLoop->GetWorld() : nullptr;
+            if (!World) return Failure(Call, "Active World is unavailable");
+            for (FObjectHandle Handle : Handles)
+            {
+                PObject* Object = ResolveObject(Handle);
+                PActor* Actor = Object && Object->IsA(PActor::StaticClass())
+                    ? static_cast<PActor*>(Object) : nullptr;
+                if (!Actor || Actor->GetWorld() != World || !World->DestroyActor(Actor))
+                    return Failure(Call, "Could not delete every requested Actor");
+            }
+            if (Selection) Selection->Set(World);
+            return Success(Call, {{"deleted_object_paths", StablePaths},
+                {"deleted_count", StablePaths.size()}});
+        };
+        DeleteActors.Verifier = [this](const FAgentToolCall&,
+            const FAgentToolResult& Result, std::string& Error)
+        {
+            const FJson Paths = FJson::parse(Result.OutputJson)
+                .at("deleted_object_paths");
+            for (const FJson& Path : Paths)
+                if (FindEditorWorldObjectByPath(
+                        EngineLoop ? EngineLoop->GetWorld() : nullptr,
+                        Path.get<std::string>()))
+                {
+                    Error = "A batch-deleted Actor still resolves: "
+                        + Path.get<std::string>();
+                    return false;
+                }
+            return true;
+        };
+        bInitialized = Registry.Register(std::move(DeleteActors)) && bInitialized;
 
         FAgentToolDefinition CreateRoom;
         CreateRoom.Name = "editor.scene.create_room";
@@ -1446,6 +2041,8 @@ struct FEditorAgentToolExecutor::FImpl
     FEditorAgentHostServices HostServices;
     FTransaction Transaction;
     FAgentToolRegistry Registry;
+    std::optional<FPendingChangeSet> PendingChangeSet;
+    std::string LastChangeSetError;
     bool bInitialized = true;
 };
 
@@ -1463,6 +2060,14 @@ FEditorAgentToolExecutor::FEditorAgentToolExecutor(
 
 FEditorAgentToolExecutor::~FEditorAgentToolExecutor() = default;
 bool FEditorAgentToolExecutor::IsInitialized() const { return Impl && Impl->bInitialized; }
+void FEditorAgentToolExecutor::BeginRun(std::string_view RunId)
+{
+    if (Impl) Impl->BeginRun(RunId);
+}
+void FEditorAgentToolExecutor::EndRun(std::string_view RunId, EAgentStatus Status)
+{
+    if (Impl) Impl->EndRun(RunId, Status);
+}
 std::vector<std::string> FEditorAgentToolExecutor::GetToolNames() const
 {
     return Impl ? Impl->Registry.GetToolNames() : std::vector<std::string> {};

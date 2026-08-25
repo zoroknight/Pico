@@ -1,12 +1,13 @@
 # AI 场景 Agent：通用反射属性工具
 
 本阶段解决“每增加一个属性就要手写一个 Agent Tool”的扩展性问题。PicoEditor 不向模型开放裸内存或任意
-`PFunction`，而是把已有 `PClass`、`PProperty`、属性通知和 Editor Transaction 组合成三个稳定工具：
+`PFunction`，而是把已有 `PClass`、`PProperty`、属性通知和 Editor Transaction 组合成四个稳定工具：
 
 ```text
 editor.object.describe
 editor.object.get_property
 editor.object.set_properties
+editor.object.batch_set_properties
 ```
 
 ## 工作流程
@@ -27,6 +28,10 @@ Undo 事务；任一属性类型错误、越界、只读、资产类型不匹配
   }
 }
 ```
+
+当一次任务需要同时修改多个对象时，`editor.object.batch_set_properties` 接收最多 32 个精确对象路径，
+每个对象最多 32 个属性且总数不超过 128。工具先解析并验证全部对象和属性，再进入同一个审批、World 快照事务
+和后置验证边界，因此不会出现第一个对象已经改变、第二个对象才发现参数错误的部分完成状态。
 
 `Extent` 是半尺寸，因此上述值产生 `100 x 100 x 100 cm` 的 Cube。`Color` 是 0 到 1 的 Linear RGB。
 

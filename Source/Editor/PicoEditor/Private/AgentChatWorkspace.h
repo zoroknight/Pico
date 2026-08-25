@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Pico/Editor/EditorTransactionManager.h"
 #include "Pico/Tasks/TaskSystem.h"
 
 #include <functional>
@@ -33,6 +34,7 @@ public:
             const std::filesystem::path&, const std::string&, bool)> StartPackage,
         std::function<std::pair<bool, std::string>()> StartPlay,
         std::function<std::pair<bool, std::string>()> StopPlay,
+        FEditorTransactionManager::FRestoreSnapshot RestoreSnapshot,
         std::function<void(const std::filesystem::path&)> RequestProjectOpen);
     ~FAgentChatWorkspace();
 

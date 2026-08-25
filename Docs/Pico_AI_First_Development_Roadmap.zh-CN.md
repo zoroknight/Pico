@@ -230,9 +230,39 @@ StateRevision 下缓存等价只读查询，并以分类预算和连续无进展
 v0。当前来源覆盖项目文本、World、AssetRegistry、选择对象反射、工具 Schema 与 Message Log；四个内置 Skill
 同时裁剪 Provider Schema 并在执行器侧限制工具。Embedding、MCP 与跨项目长期知识仍延期。详见
 [`AIPhase08_StreamingKnowledgeRagAndSkills.md`](AIPhase08_StreamingKnowledgeRagAndSkills.md)。
-Agent 阶段收尾还将 Intent Router 提取到 `PicoAgentCore`，并冻结 18 条中英文生产提示评测，覆盖 Play/Package
+Agent 阶段收尾已将 Intent Router 提取到 `PicoAgentCore`，并冻结 37 条中英文生产提示评测，覆盖 Play/Package
 否定语义、场景/角色 Skill 和多 Skill 组合。后续 Gameplay 模块必须通过扩展该评测集接入 Agent，不能在聊天
 窗口中增加另一套临时意图判断。
+
+## Harness 成熟度加固路线
+
+Pico 保留自研 C++ Harness，不为了功能数量迁移到 LangChain/LangGraph。后续重点是把现有纵向链路变得可观察、
+可评测、可恢复和可扩展；加固工作伴随 GAS、PicoGraph 主线增量完成，不另起一套 Agent Runtime。
+
+| 优先级与时机 | 任务 | 验收标准 |
+| --- | --- | --- |
+| P0：已完成基础版 | 统一 `SessionId/RunId/TurnId/SpanId`，为 Model、Tool、Approval、Validation 建立父子 Span | Session JSONL 可还原调用顺序、耗时、结果和失败位置；旧日志兼容；编辑器时间线 UI 后续补充 |
+| P0：已完成离线基线 | 将路由 Eval 从 18 条扩展到 37 条；建立端到端 Eval Runner 和首批 10 个 Golden Tasks；增加原子批量属性/删除与冲突保护的 Run ChangeSet | 确定性测试不访问真实 Provider；生成带 RunId、耗时、计数和证据路径的报告；真实 Editor Fixture 留到第 10 月 |
+| P0：第 8～9 月伴随主线 | 建立上下文分区预算、摘要快照和大结果 Artifact/Handle，避免把完整日志和 Tool Result 反复送入模型 | 超预算时可解释地裁剪；关键指令、审批状态、引用来源和最近错误不丢失 |
+| P0：第 8 月持续 | 完善 Provider 超时、取消、可重试/不可重试错误、指数退避、限流和单 Run Token/费用预算 | Provider 断网、限流或非法响应不会破坏项目，也不会形成无限重试 |
+| P0：第 8～9 月伴随主线 | 在 Durable Operation Journal 上增加轻量 `RunCheckpoint`，记录 Skill、已完成 ToolCall、待审批调用、预算和下一步 | 仅从 Tool 边界恢复；先 reconcile 再重试；不承诺从工具函数内部某一行继续 |
+| P0：第 9 月 Skill 增长时 | Skill Registry 返回带匹配 Trigger/Tag、分数和排除理由的确定性候选列表 | 候选结果可解释、可固定测试，不增加权限，也不依赖模型或网络 |
+| P1：第 10 月 | 对歧义候选启用结构化模型路由 Shadow Mode，并扩展到至少 20 个端到端 Golden Tasks | 模型结果先只记录比较；达到固定准确率、误触发和禁止副作用门槛后才处理歧义路由 |
+
+伴随开发规则：
+
+- GAS、PicoGraph、ECS 每新增一组 Tool/Skill，必须同时注册 Knowledge Source、Verifier、路由 Eval 和至少一个端到端任务。
+- Trace、Session、Journal、Checkpoint 和 Eval 报告使用同一组 Run/ToolCall 标识，避免形成彼此无法关联的日志系统。
+- 离线确定性测试验证 Runtime、Tool Pipeline、Skill、Guardrail 和恢复；真实 DeepSeek/Kimi 测试只验证外部模型行为和协议兼容。
+- AI 代码/文件生成正式开放前，先增加固定工作区、路径白名单、Diff 审批、进程边界和生成后构建/测试验证。
+
+明确延期：
+
+- 多 Agent、Handoff 和并行子 Agent：单 Agent 的 Gameplay/资产/构建职责出现可测量瓶颈后再引入。
+- LangChain/LangGraph 运行时迁移：只参考 Checkpoint、Interrupt 和 State Graph 思想，不替换 Pico 的 C++/Game Thread 集成。
+- 完整 MCP 生态、跨项目长期记忆、Embedding/向量数据库：先由真实检索 Eval 证明现有 RAG Lite 不足。
+- 云端 Trace、分布式任务队列、多租户与远程 Worker：本地单用户编辑器阶段不实现。
+- 任意 Shell、无约束脚本和模型直接写字节码：不作为成熟度升级方向。
 
 ## 第 8 月：Mini GAS 与 AbilityTask
 
@@ -243,7 +273,7 @@ Agent 阶段收尾还将 Intent Router 提取到 `PicoAgentCore`，并冻结 18 
 | 第 1 周 | GameplayTag、AttributeSet、AbilitySystemComponent、AbilitySpec | 属性和 Ability 可反射、授予和撤销 |
 | 第 2 周 | GameplayEffect、Cost、Cooldown、Duration、Periodic 和 Tag 条件 | Effect 生命周期、叠加边界和属性修改可测试 |
 | 第 3 周 | AbilityTask、WaitDelay、WaitGameplayEvent、PlayAnimationAndWait | Task 可完成、取消、清理弱委托并响应 Montage 事件 |
-| 第 4 周 | Dash、Fireball、Stun、网络预测与拒绝；向 AI 暴露受控 GAS 工具 | 双人网络 Demo 一致；AI 能配置已有能力 |
+| 第 4 周 | Dash、Fireball、Stun、网络预测与拒绝；向 AI 暴露受控 GAS 工具 | 双人网络 Demo 一致；AI 能配置已有能力；新增 GAS Skill、Verifier、路由 Eval 和 Golden Task |
 
 AbilityTask 生命周期固定为：
 
@@ -263,7 +293,7 @@ Ability 强引用活动 Task；Task 的事件绑定使用弱对象委托；Abili
 | 第 1 周 | `.pgraph`、稳定 Node/Pin/Link ID、变量、Entry Event、版本、序列化、Undo/Redo 和基础节点编辑器 | 保存重开后图结构与布局恢复 |
 | 第 2 周 | Graph Schema、Pin 类型、控制流/数据流校验、Typed IR、字节码编译和诊断 | 非法图不能编译；合法图产生确定字节码 |
 | 第 3 周 | `FPicoScriptVM`、执行上下文、指令/循环/调用深度预算、`PScriptComponent`、PFunction/Property/Delegate 节点 | 原生 Actor 可运行图；错误图不能卡死 Game Thread |
-| 第 4 周 | Delay、WaitGameplayEvent、PlayMontageAndWait、ActivateAbility、Cook/Package、AI Graph Tools 和可视化状态 | AI 可生成受限图；仓库外 Runtime 执行 Cook 后字节码 |
+| 第 4 周 | Delay、WaitGameplayEvent、PlayMontageAndWait、ActivateAbility、Cook/Package、AI Graph Tools 和可视化状态 | AI 可生成受限图；仓库外 Runtime 执行 Cook 后字节码；新增 Graph Skill、Verifier、路由 Eval 和 Golden Task |
 
 固定管线：
 
@@ -287,10 +317,10 @@ AI 只能通过 `CreateGraph/AddNode/ConnectPins/SetDefaultValue/CompileGraph/Va
 
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |
-| 第 1 周 | 在已完成 Skill v0 上增加拾取、触发门、GAS 和 PicoGraph Skills，并做版本迁移/禁用 UI | Gameplay Skill 可审核、禁用和固定版本，不提升权限 |
+| 第 1 周 | 在已完成 Skill v0 上增加拾取、触发门、GAS 和 PicoGraph Skills，并做版本迁移/禁用 UI；加入“候选筛选 + 结构化模型路由” | 明确输入继续走确定性规则；歧义输入只返回通过 Schema 校验的候选 Skill ID；Gameplay Skill 可审核、禁用和固定版本，不提升权限 |
 | 第 2 周 | 扩展已完成 RAG Lite：加入 GAS/PicoGraph Schema、验证结果和固定检索评测；按真实数据决定是否做 Embedding 对照 | 回答和工具规划引用新增 Gameplay 真实数据 |
 | 第 3 周 | 自动验证、Graph 编译、资产引用检查、Play、日志读取和最多两轮修复 | 失败保留现场并报告，不无限循环或掩盖错误 |
-| 第 4 周 | AI 完整游戏 Demo、Windows Package 和回归评测；可选本地 MCP Adapter | 从中文需求到可运行 Stage 形成可审计闭环 |
+| 第 4 周 | AI 完整游戏 Demo、Windows Package、端到端 Golden Tasks 和回归评测；可选本地 MCP Adapter | 从中文需求到场景修改、保存、Play、验证和可运行 Stage 形成可审计闭环；已有能力无回归 |
 
 最终指令示例：
 
@@ -300,6 +330,37 @@ AI 只能通过 `CreateGraph/AddNode/ConnectPins/SetDefaultValue/CompileGraph/Va
 ```
 
 AI 可以分步规划和申请审批，但完成定义必须由确定性验证器判定，不能由模型自行宣布成功。
+
+### Skill 路由演进原则
+
+Skill 数量增加后采用分层路由，而不是用模型替换现有规则：
+
+```text
+确定性意图/否定/安全规则
+    -> 关键词、Tag 和 Skill 元数据筛选候选
+    -> 仅在候选存在歧义时调用结构化模型路由
+    -> Skill Registry 校验 ID、版本和启用状态
+    -> AllowedTools、Tool Policy、审批、事务和验证器硬检查
+```
+
+- “运行但不要打包”等明确意图、否定词和安全边界继续由确定性代码处理，不能交给模型自由解释。
+- 模型只能从候选集合中返回符合 Schema 的 Skill ID、置信度和简短理由；不能创建未知 Skill、扩大 AllowedTools 或授予权限。
+- 无候选、低置信度或候选冲突时，回退到安全的澄清/拒绝路径，不猜测执行具有副作用的工作流。
+- 固定 Agent Eval 增加同义表达、否定表达、相似 Skill、多 Skill 组合、未知 Skill 和越权 Tool Call 用例；比较路由准确率、误触发率和禁止副作用。
+- 先保留当前轻量关键词路由。仅当 GAS、PicoGraph 等 Skill 增多并出现真实歧义后启用模型层，避免过早增加延迟、成本和不确定性。
+
+### 端到端 Golden Tasks
+
+现有 37 条 `IntentRoutingCases.tsv` 和 10 个离线 Golden Tasks 继续负责快速验证 Harness；第 10 月在其上增加真实
+Editor Fixture，并扩展到至少 20 个固定端到端
+Golden Tasks，覆盖“自然语言需求 -> Agent 规划 -> Tool Pipeline -> 场景修改 -> 保存 -> Play/验证 -> Package”的真实链路。
+
+- 每个任务固定输入需求、初始项目/World、允许副作用、禁止副作用和确定性验收条件。
+- 场景结果由对象、组件、反射属性和资产引用检查判定；不能以 Assistant 声称“已完成”作为成功依据。
+- Play 由进程状态、运行日志和玩法验证器判定；Package 由退出码、Stage 清单和可执行文件启动结果判定。
+- 记录任务成功率、路由准确率、工具调用数、Token、耗时、审批次数、恢复/修复轮次和禁止副作用。
+- Golden Tasks 使用可重建的 Fixture 项目或临时副本运行，失败时保留 Journal、Session、Tool Trace 和验证报告，避免污染开发项目。
+- 修改 Provider、Prompt、Skill、RAG、Tool Schema 或 Agent Runtime 后必须重跑；路由 Eval 负责快速定位，端到端 Eval 负责发现跨模块回归。
 
 ## 第 11 月：ECS 纵向切片
 
@@ -365,8 +426,10 @@ PrimitiveComponent
 | Tool Policy 与事务 | 第 7 月第 3 周 | 非法输入、拒绝、路径穿越和未知工具零副作用 |
 | Provider 隔离 | 第 7 月第 4 周 | 切换 DeepSeek/Kimi 不修改 Editor Tool 实现 |
 | 跨进程持久操作 | 第 7 月收尾 | Journal 区分 Applied/Committed；项目和 Package 使用 Staging；Play/Package 子进程归属 Job Object |
+| Skill 路由 | 第 10 月第 1 周 | 候选筛选后才允许结构化模型选 Skill；未知、低置信度和越权结果无副作用；固定 Eval 覆盖误路由 |
 | Graph 类型和执行预算 | 第 9 月第 3 周 | 非法图不可运行；超预算终止当前执行而不阻塞 World |
 | AI 完成判定 | 第 10 月第 3 周 | 编译、引用、Play、日志和 Package 由验证器判定 |
+| 端到端 Agent Eval | 第 10 月第 4 周 | 至少 20 个 Golden Tasks 可重复运行；覆盖场景修改、保存、Play、验证、Package 和禁止副作用 |
 
 从第一版开始覆盖以下故障测试：
 

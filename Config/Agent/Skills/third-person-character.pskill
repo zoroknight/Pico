@@ -9,6 +9,7 @@
     "editor.asset.search",
     "editor.object.describe",
     "editor.object.set_properties",
+    "editor.object.batch_set_properties",
     "editor.gameplay.create_third_person_character",
     "editor.play.validate",
     "editor.world.save",

@@ -5,12 +5,28 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 
 namespace Pico
 {
 namespace
 {
 using FJson = nlohmann::json;
+
+std::string MakeTraceId(std::string_view Prefix)
+{
+    static std::atomic<std::uint64_t> Counter {0};
+    const auto Now = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    return std::string(Prefix) + "_" + std::to_string(Now) + "_"
+        + std::to_string(Counter.fetch_add(1, std::memory_order_relaxed));
+}
+
+std::int64_t NowMilliseconds()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
 }
 
 FAgentRuntime::FAgentRuntime(
@@ -39,6 +55,10 @@ FAgentRunResult FAgentRuntime::Run(
     const FCancellationToken* CancellationToken)
 {
     StartTime = std::chrono::steady_clock::now();
+    RunId = MakeTraceId("run");
+    TurnId.clear();
+    RunSpan = BeginSpan("AgentRun", {});
+    ToolExecutor.BeginRun(RunId);
     std::string Error;
     if (!Prompt.empty())
     {
@@ -82,6 +102,7 @@ FAgentRunResult FAgentRuntime::Run(
         }
 
         ++Counters.Steps;
+        BeginTurn();
         FAgentProviderRequest Request;
         Request.Messages = Session.BuildMessageHistory();
         Request.ProgressLedgerJson = BuildProgressLedgerJson();
@@ -90,9 +111,14 @@ FAgentRunResult FAgentRuntime::Run(
         Request.OnTextDelta = Context.OnAssistantDelta;
         Request.Step = Counters.Steps;
         Request.RepairAttempt = Counters.RepairAttempts;
+        FActiveSpan ModelSpan = BeginSpan("Model.Generate", TurnSpan.Id);
         FAgentProviderResponse Response = Provider.Generate(Request, CancellationToken);
+        const bool bProviderCancelled = IsCancelled(CancellationToken)
+            || Response.Error == "Cancelled";
+        EndSpan(ModelSpan, Response.bSucceeded && !bProviderCancelled,
+            bProviderCancelled ? "Agent run was cancelled" : Response.Error);
 
-        if (IsCancelled(CancellationToken) || Response.Error == "Cancelled")
+        if (bProviderCancelled)
         {
             return Finish(EAgentStatus::Cancelled, "Agent run was cancelled");
         }
@@ -113,6 +139,7 @@ FAgentRunResult FAgentRuntime::Run(
             {
                 return Finish(EAgentStatus::Failed, std::move(Error));
             }
+            EndTurn(false, Response.Error.empty() ? "Provider failed" : Response.Error);
             continue;
         }
 
@@ -184,8 +211,10 @@ FAgentRunResult FAgentRuntime::Run(
             }
             if (bNeedsApproval)
             {
+                FActiveSpan ApprovalSpan = BeginSpan("Tool.Approval", TurnSpan.Id);
                 if (!Transition(EAgentStatus::AwaitingApproval, Error))
                 {
+                    EndSpan(ApprovalSpan, false, Error);
                     return Finish(EAgentStatus::Failed, std::move(Error));
                 }
                 for (const FAgentToolCall& Call : Response.ToolCalls)
@@ -196,6 +225,7 @@ FAgentRunResult FAgentRuntime::Run(
                         ToolExecutor.PrepareApproval(Call);
                     }
                 }
+                EndSpan(ApprovalSpan, true);
             }
             if (!Transition(EAgentStatus::ExecutingTool, Error))
             {
@@ -215,6 +245,9 @@ FAgentRunResult FAgentRuntime::Run(
                     Error = "Provider emitted a tool call without a stable id or name";
                     break;
                 }
+
+                FActiveSpan ToolSpan = BeginSpan(
+                    "Tool." + Call.Name, TurnSpan.Id);
 
                 std::optional<FAgentToolResult> Existing = Session.FindToolResult(Call.Id);
                 FAgentToolResult Result;
@@ -236,6 +269,7 @@ FAgentRunResult FAgentRuntime::Run(
                     CallEvent.PayloadJson = Call.ArgumentsJson;
                     if (!Session.Append(std::move(CallEvent), &Error))
                     {
+                        EndSpan(ToolSpan, false, Error);
                         return Finish(EAgentStatus::Failed, std::move(Error));
                     }
                     const auto Cached = bReadOnly
@@ -250,6 +284,8 @@ FAgentRunResult FAgentRuntime::Run(
                     {
                         if (Counters.ToolCalls >= Budget.MaxToolCalls)
                         {
+                            EndSpan(ToolSpan, false,
+                                "Agent tool-call budget exhausted");
                             return Finish(EAgentStatus::Failed,
                                 "Agent tool-call budget exhausted");
                         }
@@ -292,9 +328,11 @@ FAgentRunResult FAgentRuntime::Run(
                 ResultEvent.bReused = Result.bReused;
                 if (!Session.Append(std::move(ResultEvent), &Error))
                 {
+                    EndSpan(ToolSpan, false, Error);
                     return Finish(EAgentStatus::Failed, std::move(Error));
                 }
                 ToolExecutor.CommitDurableResult(Call);
+                EndSpan(ToolSpan, Result.bSucceeded, Result.Error);
                 if (!Result.bSucceeded)
                 {
                     bToolFailed = true;
@@ -316,6 +354,7 @@ FAgentRunResult FAgentRuntime::Run(
                 {
                     return Finish(EAgentStatus::Failed, std::move(Error));
                 }
+                EndTurn(false, Error);
                 continue;
             }
 
@@ -337,12 +376,16 @@ FAgentRunResult FAgentRuntime::Run(
                 }
             }
 
+            FActiveSpan ValidationSpan = BeginSpan("Run.Validation", TurnSpan.Id);
             if (!Transition(EAgentStatus::Validating, Error)
                 || !Session.WriteCheckpoint(EAgentStatus::Validating, Counters, &Error)
                 || !Transition(EAgentStatus::Planning, Error))
             {
+                EndSpan(ValidationSpan, false, Error);
                 return Finish(EAgentStatus::Failed, std::move(Error));
             }
+            EndSpan(ValidationSpan, true);
+            EndTurn(true);
             continue;
         }
 
@@ -364,6 +407,7 @@ FAgentRunResult FAgentRuntime::Run(
         {
             return Finish(EAgentStatus::Failed, std::move(Error));
         }
+        EndTurn(false, "Provider returned neither a final answer nor a tool call");
     }
 }
 
@@ -495,6 +539,69 @@ FAgentRunResult FAgentRuntime::Finish(EAgentStatus Status, std::string Error)
     Session.SetStatus(Status, &PersistenceError);
     Session.WriteCheckpoint(Status, Counters, &PersistenceError);
     if (!PersistenceError.empty() && Error.empty()) Error = PersistenceError;
-    return {Status, {}, std::move(Error), Counters};
+    ToolExecutor.EndRun(RunId, Status);
+    EndTurn(Status == EAgentStatus::Completed, Error);
+    EndSpan(RunSpan, Status == EAgentStatus::Completed, Error);
+    Session.SetTraceContext({}, {}, {});
+    FAgentRunResult Result;
+    Result.Status = Status;
+    Result.Error = std::move(Error);
+    Result.Counters = Counters;
+    Result.RunId = RunId;
+    return Result;
+}
+
+FAgentRuntime::FActiveSpan FAgentRuntime::BeginSpan(
+    std::string Name,
+    std::string ParentId)
+{
+    FActiveSpan Span;
+    Span.Id = MakeTraceId("span");
+    Span.ParentId = std::move(ParentId);
+    Span.Name = std::move(Name);
+    Span.StartedTimestampMilliseconds = NowMilliseconds();
+    Span.StartedAt = std::chrono::steady_clock::now();
+    Session.SetTraceContext(RunId, TurnId, Span.Id);
+    return Span;
+}
+
+void FAgentRuntime::EndSpan(
+    FActiveSpan& Span,
+    bool bSucceeded,
+    std::string Error)
+{
+    if (Span.Id.empty()) return;
+    const auto Duration = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - Span.StartedAt).count();
+    FAgentEvent Event;
+    Event.Type = EAgentEventType::TraceSpan;
+    Event.RunId = RunId;
+    Event.TurnId = TurnId;
+    Event.SpanId = Span.Id;
+    Event.ParentSpanId = Span.ParentId;
+    Event.SpanName = Span.Name;
+    Event.StartedTimestampMilliseconds = Span.StartedTimestampMilliseconds;
+    Event.DurationMicroseconds = Duration > 0
+        ? static_cast<std::uint64_t>(Duration) : 0;
+    Event.bSucceeded = bSucceeded;
+    Event.Content = std::move(Error);
+    Session.Append(std::move(Event));
+    const std::string ParentId = Span.ParentId;
+    Span.Id.clear();
+    Session.SetTraceContext(RunId, TurnId, ParentId);
+}
+
+void FAgentRuntime::BeginTurn()
+{
+    TurnId = MakeTraceId("turn");
+    TurnSpan = BeginSpan("AgentTurn", RunSpan.Id);
+}
+
+void FAgentRuntime::EndTurn(bool bSucceeded, std::string Error)
+{
+    if (TurnSpan.Id.empty()) return;
+    EndSpan(TurnSpan, bSucceeded, std::move(Error));
+    TurnId.clear();
+    Session.SetTraceContext(RunId, {}, RunSpan.Id);
 }
 }

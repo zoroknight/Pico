@@ -27,6 +27,11 @@ FJson ToJson(const FAgentEvent& Event, std::string_view SessionId)
         {"content", Event.Content}, {"call_id", Event.CallId}, {"tool_name", Event.ToolName},
         {"payload", FJson::parse(Event.PayloadJson)}, {"succeeded", Event.bSucceeded},
         {"trace", FJson::parse(Event.TraceJson)}, {"reused", Event.bReused},
+        {"run_id", Event.RunId}, {"turn_id", Event.TurnId},
+        {"span_id", Event.SpanId}, {"parent_span_id", Event.ParentSpanId},
+        {"span_name", Event.SpanName},
+        {"started_timestamp_ms", Event.StartedTimestampMilliseconds},
+        {"duration_us", Event.DurationMicroseconds},
         {"steps", Event.Counters.Steps},
         {"tool_calls", Event.Counters.ToolCalls},
         {"read_only_tool_calls", Event.Counters.ReadOnlyToolCalls},
@@ -61,6 +66,14 @@ bool FromJson(const FJson& Json, std::string_view SessionId, FAgentEvent& Out, s
         Out.ToolName = Json.value("tool_name", "");
         Out.PayloadJson = Json.value("payload", FJson::object()).dump();
         Out.TraceJson = Json.value("trace", FJson::array()).dump();
+        Out.RunId = Json.value("run_id", "");
+        Out.TurnId = Json.value("turn_id", "");
+        Out.SpanId = Json.value("span_id", "");
+        Out.ParentSpanId = Json.value("parent_span_id", "");
+        Out.SpanName = Json.value("span_name", "");
+        Out.StartedTimestampMilliseconds = Json.value(
+            "started_timestamp_ms", std::int64_t {0});
+        Out.DurationMicroseconds = Json.value("duration_us", std::uint64_t {0});
         Out.bSucceeded = Json.value("succeeded", false);
         Out.bReused = Json.value("reused", false);
         Out.Counters.Steps = Json.value("steps", 0U);
@@ -109,6 +122,9 @@ bool FAgentSession::Append(FAgentEvent Event, std::string* OutError)
 {
     try
     {
+        if (Event.RunId.empty()) Event.RunId = CurrentRunId;
+        if (Event.TurnId.empty()) Event.TurnId = CurrentTurnId;
+        if (Event.SpanId.empty()) Event.SpanId = CurrentSpanId;
         const FJson ValidatedPayload = FJson::parse(Event.PayloadJson);
         Event.PayloadJson = ValidatedPayload.dump();
         const FJson ValidatedTrace = FJson::parse(Event.TraceJson);
@@ -138,6 +154,16 @@ bool FAgentSession::Append(FAgentEvent Event, std::string* OutError)
         if (OutError) *OutError = Exception.what();
         return false;
     }
+}
+
+void FAgentSession::SetTraceContext(
+    std::string RunId,
+    std::string TurnId,
+    std::string SpanId)
+{
+    CurrentRunId = std::move(RunId);
+    CurrentTurnId = std::move(TurnId);
+    CurrentSpanId = std::move(SpanId);
 }
 
 bool FAgentSession::SetStatus(EAgentStatus InStatus, std::string* OutError)

@@ -17,3 +17,22 @@ General	assemble-basic-scene	build a room, do not package project
 Play	validate-save-play	run project without packaging
 Package	package-project	package project without running it
 General		do not package project; describe the world
+General	assemble-basic-scene	在场景里放置地板和墙壁
+General	third-person-character	添加一个玩家角色
+Play	validate-save-play	运行游戏并保持窗口打开
+Play	validate-save-play	preview game without packaging
+Package	package-project	生成安装包
+Package	package-project	release build, do not run game
+General		不要启动游戏，只检查日志
+General		never package; inspect assets
+Play	third-person-character,validate-save-play	创建第三人称角色并运行游戏
+Package	assemble-basic-scene,package-project	创建一个房间并打包
+General	assemble-basic-scene,third-person-character	在场景中创建地板和一个可操控角色
+General		修改选中对象颜色
+General	scene-cleanup	删除刚才新增的 Cube
+General	scene-cleanup	我不需要这些新增的cube了，想恢复到原来
+General	scene-cleanup	remove the cubes created in the previous turn
+General	scene-cleanup	revert the last Agent run
+General	scene-cleanup	清理临时方块
+General		不要删除任何 Actor，只描述当前世界
+General	assemble-basic-scene,scene-cleanup	恢复刚才整轮 Agent 对场景的修改

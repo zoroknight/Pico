@@ -127,6 +127,7 @@ endif()
 
 add_library(PicoAgentCore STATIC
     Source/Developer/Agent/Private/AgentCredentialStore.cpp
+    Source/Developer/Agent/Private/AgentEvaluation.cpp
     Source/Developer/Agent/Private/AgentIntent.cpp
     Source/Developer/Agent/Private/AgentKnowledgeStore.cpp
     Source/Developer/Agent/Private/AgentOperationJournal.cpp

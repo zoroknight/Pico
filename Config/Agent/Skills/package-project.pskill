@@ -3,7 +3,7 @@
   "id": "package-project",
   "version": "1.0.0",
   "description": "Validate, save, and package a Pico project through the approved packager service.",
-  "triggers": ["打包", "导出exe", "发布版本", "package project", "export build"],
+  "triggers": ["打包", "导出exe", "导出 EXE", "发布版本", "生成安装包", "package", "packaging", "package project", "package the project", "export build", "export executable", "release build"],
   "allowed_tools": [
     "editor.world.describe",
     "editor.play.validate",

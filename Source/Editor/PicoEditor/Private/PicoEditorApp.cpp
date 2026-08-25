@@ -343,6 +343,11 @@ FPicoEditorApp::FPicoEditorApp(
                     ? "Play Session stopped"
                     : "One or more Play processes could not be stopped"};
         },
+        [this](const FEditorWorldSnapshot& Snapshot,
+               EWorldSerializationError* Error)
+        {
+            return RestoreEditorSnapshot(Snapshot, Error);
+        },
         [this](const std::filesystem::path& ProjectFile)
         {
             const FEditorProjectResolution Resolution =

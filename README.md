@@ -45,8 +45,9 @@ The current implementation can:
 - Validate Agent tools through deterministic JSON schemas, permission and approval policy, existing
   World snapshot transactions, postcondition verification, rollback, persistent stage traces, and
   conflict-safe ToolCall IDs; Agent-created Actors enter the normal editor Undo history.
-- Discover Actor and Component `PProperty` metadata through generic Agent tools, then read or batch-edit
-  supported `Editable` values in one approved Undo transaction without per-property tool code.
+- Discover Actor and Component `PProperty` metadata through generic Agent tools, then atomically edit
+  supported `Editable` values across multiple exact objects in one approved Undo transaction without
+  per-property tool code. Batch-delete validated Actor paths through the same all-or-nothing boundary.
 - Keep provider-isolated multi-chat histories with create/delete/recovery, newest-message scrolling,
   per-bubble copy, and MD4C-backed Markdown with GFM tables plus formatted JSON code blocks whose
   expansion does not steal the transcript's mouse wheel; merge common Symbol/Dingbats glyphs for
@@ -54,8 +55,11 @@ The current implementation can:
 - Stream OpenAI-compatible text and Tool Call fragments over SSE while persisting only aggregate
   messages; ground turns through an audited project Knowledge Store and bounded cited RAG Lite, then
   narrow both advertised and executable tools with versioned Pico Skills.
-- Regression-test the production Intent Router and Skill manifests with 18 tracked Chinese/English
-  prompts, including negation and multi-Skill routing, before later GAS or PicoGraph tools extend them.
+- Correlate each Agent run through persistent Run/Turn/Span IDs for model, approval, tool, and validation
+  timing. Persist changed World runs as conflict-checked ChangeSets so the Agent can list and restore an
+  exact pre-run snapshot without overwriting later edits. Regression-test production routing with 37 tracked
+  Chinese/English prompts, then run ten offline Golden Tasks with required/forbidden tools and verifiers,
+  isolated sessions, and machine-readable reports before GAS or PicoGraph extends the suite.
 - Let the scene Agent search real AssetRegistry entries, create an undoable collision room, assemble a
   third-person Pawn from a Data-Only Actor Blueprint and Character Profile, validate/save the World,
   spawn or delete Blueprint Actors, create a content-only project from the proven template, and launch
@@ -681,6 +685,7 @@ See:
 - [Project Handoff and Agent Loop Control (Chinese)](Docs/AIPhase07_ProjectHandoffAndLoopControl.md)
 - [Streaming, Project Knowledge, RAG Lite, and Pico Skill v0 (Chinese)](Docs/AIPhase08_StreamingKnowledgeRagAndSkills.md)
 - [Durable Agent Operations and Crash Recovery (Chinese)](Docs/AIPhase09_DurableOperationsAndCrashRecovery.md)
+- [Unified Agent Tracing and Golden Task Baseline (Chinese)](Docs/AIPhase10_UnifiedTracingAndGoldenTasks.md)
 - [Remaining Development Roadmap (Chinese)](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
 - [Pre-Network Readiness (Chinese)](Docs/Month08_14_PreNetworkReadiness.md)
 - [Network Risk Register (Chinese)](Docs/NetworkRiskRegister.zh-CN.md)

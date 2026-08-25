@@ -60,6 +60,7 @@ std::string_view ToString(EAgentEventType Type)
     case EAgentEventType::Message: return "Message";
     case EAgentEventType::ToolCall: return "ToolCall";
     case EAgentEventType::ToolResult: return "ToolResult";
+    case EAgentEventType::TraceSpan: return "TraceSpan";
     case EAgentEventType::Checkpoint: return "Checkpoint";
     case EAgentEventType::Error: return "Error";
     }
@@ -86,6 +87,7 @@ bool TryParseAgentEventType(std::string_view Text, EAgentEventType& OutType)
     return ParseEnum(Text, {{"SessionCreated", EAgentEventType::SessionCreated},
         {"StatusChanged", EAgentEventType::StatusChanged}, {"Message", EAgentEventType::Message},
         {"ToolCall", EAgentEventType::ToolCall}, {"ToolResult", EAgentEventType::ToolResult},
+        {"TraceSpan", EAgentEventType::TraceSpan},
         {"Checkpoint", EAgentEventType::Checkpoint}, {"Error", EAgentEventType::Error}}, OutType);
 }
 

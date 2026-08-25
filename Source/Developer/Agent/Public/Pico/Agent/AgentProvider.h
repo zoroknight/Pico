@@ -44,6 +44,8 @@ class IAgentToolExecutor
 {
 public:
     virtual ~IAgentToolExecutor() = default;
+    virtual void BeginRun(std::string_view RunId);
+    virtual void EndRun(std::string_view RunId, EAgentStatus Status);
     virtual bool RequiresApproval(const FAgentToolCall& Call) const;
     virtual bool IsReadOnly(const FAgentToolCall& Call) const;
     virtual void PrepareApproval(const FAgentToolCall& Call);

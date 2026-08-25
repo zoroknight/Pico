@@ -1,0 +1,33 @@
+{
+  "format_version": 1,
+  "id": "scene-cleanup",
+  "version": "1.0.0",
+  "description": "Safely remove explicit groups of Actors or restore the World to the state before a recorded Agent Run.",
+  "triggers": ["删除", "移除", "清理", "恢复到原来", "恢复刚才", "恢复上一轮", "撤销刚才", "delete", "remove", "clean up", "revert"],
+  "allowed_tools": [
+    "editor.world.describe",
+    "editor.object.describe",
+    "editor.actor.delete",
+    "editor.actor.delete_many",
+    "editor.agent.list_changes",
+    "editor.agent.revert_run",
+    "editor.world.save"
+  ],
+  "preconditions": [
+    "An editable World is open.",
+    "Use exact object paths for explicit deletion; never infer unrelated objects from a broad name alone."
+  ],
+  "workflow": [
+    "Inspect the World once when exact target paths are not already known.",
+    "Use editor.actor.delete_many for an explicit group so validation and Undo cover the whole batch.",
+    "Use editor.agent.list_changes when the user asks to restore a prior Run. Revert only an entry whose matches_current_after is true.",
+    "If matches_current_before is true, report that Undo or an earlier restore already returned the World to the requested state; do not call revert_run.",
+    "Do not combine an exact Run revert with additional destructive cleanup in the same turn.",
+    "Save only when the user requests persistence."
+  ],
+  "completion_criteria": [
+    "Every requested Actor is absent, or the recorded pre-Run World fingerprint is restored.",
+    "No unrelated Actor was removed.",
+    "The complete operation remains one normal editor Undo step."
+  ]
+}

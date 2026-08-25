@@ -2,6 +2,14 @@
 
 namespace Pico
 {
+void IAgentToolExecutor::BeginRun(std::string_view)
+{
+}
+
+void IAgentToolExecutor::EndRun(std::string_view, EAgentStatus)
+{
+}
+
 bool IAgentToolExecutor::RequiresApproval(const FAgentToolCall&) const
 {
     return false;

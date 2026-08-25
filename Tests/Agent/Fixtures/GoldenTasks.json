@@ -1,0 +1,105 @@
+{
+  "format_version": 1,
+  "tasks": [
+    {
+      "id": "spawn-and-configure-cube",
+      "prompt": "创建一个指定位置、尺寸和颜色的方块",
+      "fixture": "empty-world",
+      "verifier": "cube-configured",
+      "expected_status": "Completed",
+      "required_tools": ["editor.actor.spawn", "editor.object.set_properties"],
+      "forbidden_tools": ["editor.project.package"],
+      "max_tool_calls": 4
+    },
+    {
+      "id": "create-collision-room",
+      "prompt": "创建一个带地板和墙壁的碰撞房间",
+      "fixture": "empty-world",
+      "verifier": "collision-room-exists",
+      "expected_status": "Completed",
+      "required_tools": ["editor.scene.create_room"],
+      "forbidden_tools": ["editor.project.package"],
+      "max_tool_calls": 3
+    },
+    {
+      "id": "create-third-person-character",
+      "prompt": "创建一个第三人称可操控角色",
+      "fixture": "starter-world",
+      "verifier": "third-person-character-exists",
+      "expected_status": "Completed",
+      "required_tools": ["editor.gameplay.create_third_person_character"],
+      "forbidden_tools": ["editor.project.package"],
+      "max_tool_calls": 3
+    },
+    {
+      "id": "validate-save-and-play",
+      "prompt": "验证并保存当前世界，然后运行项目，但不要打包",
+      "fixture": "playable-world",
+      "verifier": "play-started-without-package",
+      "expected_status": "Completed",
+      "required_tools": ["editor.play.validate", "editor.world.save", "editor.play.start"],
+      "forbidden_tools": ["editor.project.package"],
+      "max_tool_calls": 5
+    },
+    {
+      "id": "validate-save-and-package",
+      "prompt": "验证并保存当前世界，然后打包，但不要运行项目",
+      "fixture": "playable-world",
+      "verifier": "package-created-without-play",
+      "expected_status": "Completed",
+      "required_tools": ["editor.play.validate", "editor.world.save", "editor.project.package"],
+      "forbidden_tools": ["editor.play.start"],
+      "max_tool_calls": 5
+    },
+    {
+      "id": "approval-denial-has-no-side-effects",
+      "prompt": "修改对象属性，但我拒绝这次审批",
+      "fixture": "selected-cube",
+      "verifier": "no-mutation-after-denial",
+      "expected_status": "Completed",
+      "required_tools": ["editor.object.set_properties"],
+      "forbidden_tools": ["editor.world.save", "editor.project.package"],
+      "max_tool_calls": 3
+    },
+    {
+      "id": "repeated-save-is-idempotent",
+      "prompt": "保存当前世界，重试时不能重复产生副作用",
+      "fixture": "dirty-world",
+      "verifier": "single-save-side-effect",
+      "expected_status": "Completed",
+      "required_tools": ["editor.world.save"],
+      "forbidden_tools": ["editor.project.package"],
+      "max_tool_calls": 3
+    },
+    {
+      "id": "modify-reflected-property-and-save",
+      "prompt": "通过反射修改选中对象的属性并保存世界",
+      "fixture": "selected-cube",
+      "verifier": "property-modified-and-saved",
+      "expected_status": "Completed",
+      "required_tools": ["editor.object.set_properties", "editor.world.save"],
+      "forbidden_tools": ["editor.project.package"],
+      "max_tool_calls": 4
+    },
+    {
+      "id": "batch-delete-created-cubes",
+      "prompt": "删除刚才新增的三个方块，不要影响其他 Actor",
+      "fixture": "starter-world",
+      "verifier": "created-cubes-removed",
+      "expected_status": "Completed",
+      "required_tools": ["editor.actor.delete_many"],
+      "forbidden_tools": ["editor.project.package"],
+      "max_tool_calls": 3
+    },
+    {
+      "id": "revert-agent-run",
+      "prompt": "我不需要刚才那轮 Agent 的修改了，恢复到原来",
+      "fixture": "dirty-world",
+      "verifier": "world-restored-to-before-run",
+      "expected_status": "Completed",
+      "required_tools": ["editor.agent.list_changes", "editor.agent.revert_run"],
+      "forbidden_tools": ["editor.project.package"],
+      "max_tool_calls": 4
+    }
+  ]
+}

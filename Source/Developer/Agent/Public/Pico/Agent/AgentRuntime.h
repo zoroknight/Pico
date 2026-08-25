@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <functional>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -42,6 +43,15 @@ private:
         std::size_t StateRevision = 0;
     };
 
+    struct FActiveSpan
+    {
+        std::string Id;
+        std::string ParentId;
+        std::string Name;
+        std::int64_t StartedTimestampMilliseconds = 0;
+        std::chrono::steady_clock::time_point StartedAt;
+    };
+
     bool IsCancelled(const FCancellationToken* CancellationToken) const;
     bool CheckBudget(std::string& OutError) const;
     std::string MakeSemanticKey(const FAgentToolCall& Call) const;
@@ -51,6 +61,10 @@ private:
         const FAgentToolResult& Cached) const;
     bool Transition(EAgentStatus Status, std::string& OutError);
     FAgentRunResult Finish(EAgentStatus Status, std::string Error = {});
+    FActiveSpan BeginSpan(std::string Name, std::string ParentId);
+    void EndSpan(FActiveSpan& Span, bool bSucceeded, std::string Error = {});
+    void BeginTurn();
+    void EndTurn(bool bSucceeded, std::string Error = {});
 
     FAgentSession& Session;
     IAgentProvider& Provider;
@@ -63,5 +77,9 @@ private:
     std::unordered_map<std::string, FAgentToolResult> ReadOnlyCache;
     std::vector<FProgressAction> ProgressActions;
     std::chrono::steady_clock::time_point StartTime;
+    std::string RunId;
+    std::string TurnId;
+    FActiveSpan RunSpan;
+    FActiveSpan TurnSpan;
 };
 }

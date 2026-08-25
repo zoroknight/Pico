@@ -63,7 +63,7 @@ Preconditions / Workflow / CompletionCriteria
 Play/Package 的本地意图保护复用同一规则。
 
 阶段收尾时，意图分类从聊天窗口私有代码提取到 `PicoAgentCore`。项目跟踪
-`Tests/Agent/Fixtures/IntentRoutingCases.tsv`，以 18 条中英文真实提示同时验证 `General/Play/Package` 意图和生产
+`Tests/Agent/Fixtures/IntentRoutingCases.tsv`，现以 30 条中英文真实提示同时验证 `General/Play/Package` 意图和生产
 Skill 组合。“构建一个房间/build a room”不会被泛化为打包，“运行项目但不要打包”及其反向表达也有固定回归。
 以后增加 GAS、PicoGraph 或 ECS Skill 时，应先在该表追加正向、否定和多 Skill 用例。
 
@@ -93,12 +93,13 @@ Agent 核心。
 - Knowledge 快照可重启恢复，未变化刷新不增加 Audit。
 - 项目扫描跳过 `Saved/Agent/ApiKeys.ini`，证据遵守大小预算并保留 UTF-8 边界。
 - Skill 选择稳定，Provider Catalog 被限制，未知工具的 Skill 无法加载。
-- 18 条生产提示固定验证 Intent 与 Skill 路由，包括否定语义和多 Skill 组合。
-- 当前 Debug 基线：`PicoAgentTests` 71/71，`PicoEditorTests` 129/129。
+- 30 条生产提示固定验证 Intent 与 Skill 路由，包括否定语义和多 Skill 组合。
+- 当前 Debug 基线：`PicoAgentTests` 88/88，`PicoEditorTests` 129/129。
 
 ## 保留边界
 
 - 当前不是逐 Token 持久化，也不保存模型思考内容。
 - RAG Lite 没有 Embedding、向量数据库或自动联网检索。
 - Skill v0 是受控工作流，不执行任意脚本或 Shell。
+- 当前 Skill 路由以确定性关键词、否定词和意图规则为主。Skill 数量增加后按路线图加入“候选筛选 + 结构化模型路由”，但固定 Eval、AllowedTools、Tool Policy、审批和验证器仍是不可绕过的硬边界。
 - MCP Adapter、长期跨项目知识库和多 Agent 继续延期。

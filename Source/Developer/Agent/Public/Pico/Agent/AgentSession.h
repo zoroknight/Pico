@@ -21,6 +21,13 @@ struct FAgentEvent
     std::string ToolName;
     std::string PayloadJson = "{}";
     std::string TraceJson = "[]";
+    std::string RunId;
+    std::string TurnId;
+    std::string SpanId;
+    std::string ParentSpanId;
+    std::string SpanName;
+    std::int64_t StartedTimestampMilliseconds = 0;
+    std::uint64_t DurationMicroseconds = 0;
     bool bSucceeded = false;
     bool bReused = false;
     FAgentCounters Counters;
@@ -40,6 +47,10 @@ public:
         EAgentStatus Status,
         const FAgentCounters& Counters,
         std::string* OutError = nullptr);
+    void SetTraceContext(
+        std::string RunId,
+        std::string TurnId = {},
+        std::string SpanId = {});
 
     const std::string& GetId() const;
     const std::filesystem::path& GetEventLogPath() const;
@@ -60,5 +71,8 @@ private:
     std::vector<FAgentEvent> Events;
     EAgentStatus Status = EAgentStatus::Idle;
     FAgentCounters Counters;
+    std::string CurrentRunId;
+    std::string CurrentTurnId;
+    std::string CurrentSpanId;
 };
 }

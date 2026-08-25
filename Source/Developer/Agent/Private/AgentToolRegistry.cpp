@@ -279,6 +279,13 @@ FAgentToolResult FAgentToolRegistry::Execute(
         return Failure(Call, "Tool call was cancelled before execution");
     }
 
+    if (Definition->Preflight && !Definition->Preflight(Call, Error))
+    {
+        if (Error.empty()) Error = "Tool precondition was not satisfied";
+        Trace(EAgentToolStage::Execute, false, Error);
+        return Failure(Call, std::move(Error));
+    }
+
     const bool bTransactional =
         Definition->Permission == EAgentToolPermission::ModifyWorld;
     if (bTransactional)

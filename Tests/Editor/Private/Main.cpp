@@ -882,7 +882,7 @@ void TestEditorCommandService(FTestRunner& Runner)
     Pico::FEditorAgentToolExecutor AgentTools(
         &EngineLoop, &Selection, &Transactions, &AgentApproval);
     Runner.Expect(
-        AgentTools.IsInitialized() && AgentTools.GetToolNames().size() == 18,
+        AgentTools.IsInitialized() && AgentTools.GetToolNames().size() == 22,
         "Editor Agent adapter registers inspection, scene, gameplay, save, project, and package tools");
     Runner.Expect(
         AgentTools.IsReadOnly(
@@ -1053,6 +1053,85 @@ void TestEditorCommandService(FTestRunner& Runner)
             && Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), AgentCubePath) == nullptr,
         "Normal editor Undo removes an Agent-created Actor");
 
+    const auto SpawnBatchCube = [&AgentTools](std::string_view CallId,
+        std::string_view Name)
+    {
+        const Pico::FAgentToolCall Call {std::string(CallId), "editor.actor.spawn",
+            "{\"name\":\"" + std::string(Name) + "\",\"kind\":\"Cube\"}"};
+        AgentTools.PrepareApproval(Call);
+        return AgentTools.Execute(Call, nullptr);
+    };
+    const auto BatchSpawnA = SpawnBatchCube("agent-batch-spawn-a", "AgentBatchA");
+    Pico::PActor* BatchActorA = dynamic_cast<Pico::PActor*>(Selection.Resolve());
+    const std::string BatchActorAPath = BatchActorA ? BatchActorA->GetPathName() : "";
+    const std::string BatchComponentAPath = BatchActorA && BatchActorA->GetRootComponent()
+        ? BatchActorA->GetRootComponent()->GetPathName() : "";
+    const auto BatchSpawnB = SpawnBatchCube("agent-batch-spawn-b", "AgentBatchB");
+    Pico::PActor* BatchActorB = dynamic_cast<Pico::PActor*>(Selection.Resolve());
+    const std::string BatchActorBPath = BatchActorB ? BatchActorB->GetPathName() : "";
+    const std::string BatchComponentBPath = BatchActorB && BatchActorB->GetRootComponent()
+        ? BatchActorB->GetRootComponent()->GetPathName() : "";
+    const Pico::FAgentToolCall BatchProperties {
+        "agent-batch-properties", "editor.object.batch_set_properties",
+        "{\"edits\":[{\"object_path\":\"" + BatchComponentAPath
+            + "\",\"properties\":{\"Color\":{\"x\":1,\"y\":0,\"z\":0}}},"
+              "{\"object_path\":\"" + BatchComponentBPath
+            + "\",\"properties\":{\"Color\":{\"x\":0,\"y\":0,\"z\":1}}}]}"};
+    AgentTools.PrepareApproval(BatchProperties);
+    const auto BatchPropertyResult = AgentTools.Execute(BatchProperties, nullptr);
+    BatchActorA = dynamic_cast<Pico::PActor*>(Pico::FindEditorWorldObjectByPath(
+        EngineLoop.GetWorld(), BatchActorAPath));
+    BatchActorB = dynamic_cast<Pico::PActor*>(Pico::FindEditorWorldObjectByPath(
+        EngineLoop.GetWorld(), BatchActorBPath));
+    auto* BatchComponentA = BatchActorA
+        ? dynamic_cast<Pico::PCubeComponent*>(BatchActorA->GetRootComponent()) : nullptr;
+    auto* BatchComponentB = BatchActorB
+        ? dynamic_cast<Pico::PCubeComponent*>(BatchActorB->GetRootComponent()) : nullptr;
+    Runner.Expect(
+        BatchSpawnA.bSucceeded && BatchSpawnB.bSucceeded
+            && BatchPropertyResult.bSucceeded && BatchComponentA && BatchComponentB
+            && BatchComponentA->GetColor().Equals(Pico::FVector3(1.0f, 0.0f, 0.0f))
+            && BatchComponentB->GetColor().Equals(Pico::FVector3(0.0f, 0.0f, 1.0f)),
+        "Agent batch property tool changes multiple exact objects atomically: "
+            + BatchPropertyResult.Error);
+    Runner.Expect(Commands.Undo().bSucceeded,
+        "One editor Undo reverts the complete multi-object property batch");
+
+    const Pico::FAgentToolCall InvalidBatchDelete {
+        "agent-invalid-batch-delete", "editor.actor.delete_many",
+        "{\"object_paths\":[\"" + BatchActorAPath
+            + "\",\"GameWorld.PersistentLevel.DoesNotExist\"]}"};
+    AgentTools.PrepareApproval(InvalidBatchDelete);
+    const auto InvalidBatchDeleteResult = AgentTools.Execute(
+        InvalidBatchDelete, nullptr);
+    Runner.Expect(
+        !InvalidBatchDeleteResult.bSucceeded
+            && Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), BatchActorAPath) != nullptr
+            && Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), BatchActorBPath) != nullptr,
+        "Batch delete validates every target before removing any Actor: "
+            + InvalidBatchDeleteResult.Error);
+
+    const Pico::FAgentToolCall BatchDelete {
+        "agent-batch-delete", "editor.actor.delete_many",
+        "{\"object_paths\":[\"" + BatchActorAPath + "\",\""
+            + BatchActorBPath + "\"]}"};
+    AgentTools.PrepareApproval(BatchDelete);
+    const auto BatchDeleteResult = AgentTools.Execute(BatchDelete, nullptr);
+    Runner.Expect(
+        BatchDeleteResult.bSucceeded
+            && Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), BatchActorAPath) == nullptr
+            && Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), BatchActorBPath) == nullptr,
+        "Agent batch delete removes every validated Actor in one operation: "
+            + BatchDeleteResult.Error);
+    Runner.Expect(
+        Commands.Undo().bSucceeded
+            && Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), BatchActorAPath) != nullptr
+            && Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), BatchActorBPath) != nullptr,
+        "One editor Undo restores the complete Agent Actor deletion batch");
+    Runner.Expect(
+        Commands.Undo().bSucceeded && Commands.Undo().bSucceeded,
+        "Editor cleanup removes both batch test Actors through their spawn transactions");
+
     const std::size_t UndoBeforeInvalid = Transactions.GetUndoCount();
     const Pico::FAgentToolCall InvalidSpawn {
         "agent-invalid", "editor.actor.spawn",
@@ -1076,6 +1155,99 @@ void TestEditorCommandService(FTestRunner& Runner)
             && Transactions.GetUndoCount() == UndoBeforeRead
             && AgentApproval.RequestCount == ApprovalBeforeRead,
         "Read-only Editor Agent tool needs neither approval nor transaction");
+
+    Transactions.Clear();
+    const std::filesystem::path ChangeSetRoot =
+        std::filesystem::temp_directory_path() / "PicoEditorAgentChangeSets";
+    std::error_code ChangeSetError;
+    std::filesystem::remove_all(ChangeSetRoot, ChangeSetError);
+    Pico::FEditorAgentHostServices ChangeSetHost;
+    ChangeSetHost.ChangeSetDirectory = ChangeSetRoot;
+    int HostRestoreCount = 0;
+    ChangeSetHost.RestoreSnapshot =
+        [&](const Pico::FEditorWorldSnapshot& Snapshot,
+            Pico::EWorldSerializationError* Error)
+        {
+            ++HostRestoreCount;
+            if (!EngineLoop.ReplaceWorld(Snapshot.WorldData, Error)) return false;
+            Selection.Restore(EngineLoop.GetWorld(), Snapshot.SelectedObjectPaths,
+                Snapshot.PrimaryObjectPath);
+            return true;
+        };
+    Pico::FEditorAgentToolExecutor ChangeSetTools(
+        &EngineLoop, &Selection, &Transactions, &AgentApproval, {},
+        std::move(ChangeSetHost));
+    ChangeSetTools.BeginRun("run_batch_acceptance");
+    const Pico::FAgentToolCall ChangeSpawnA {
+        "changeset-spawn-a", "editor.actor.spawn",
+        R"({"name":"ChangeSetA","kind":"Cube"})"};
+    const Pico::FAgentToolCall ChangeSpawnB {
+        "changeset-spawn-b", "editor.actor.spawn",
+        R"({"name":"ChangeSetB","kind":"Cube"})"};
+    ChangeSetTools.PrepareApproval(ChangeSpawnA);
+    const auto ChangeSpawnAResult = ChangeSetTools.Execute(ChangeSpawnA, nullptr);
+    ChangeSetTools.PrepareApproval(ChangeSpawnB);
+    const auto ChangeSpawnBResult = ChangeSetTools.Execute(ChangeSpawnB, nullptr);
+    ChangeSetTools.EndRun("run_batch_acceptance", Pico::EAgentStatus::Completed);
+    const auto ListChangeSetsResult = ChangeSetTools.Execute(
+        {"changeset-list", "editor.agent.list_changes", "{}"}, nullptr);
+    const Pico::FAgentToolCall RevertChangeSet {
+        "changeset-revert", "editor.agent.revert_run",
+        R"({"run_id":"run_batch_acceptance"})"};
+    ChangeSetTools.PrepareApproval(RevertChangeSet);
+    const auto RevertChangeSetResult = ChangeSetTools.Execute(
+        RevertChangeSet, nullptr);
+    Runner.Expect(
+        ChangeSpawnAResult.bSucceeded && ChangeSpawnBResult.bSucceeded
+            && ListChangeSetsResult.bSucceeded
+            && ListChangeSetsResult.OutputJson.find("run_batch_acceptance")
+                != std::string::npos
+            && ListChangeSetsResult.OutputJson.find(
+                "\"matches_current_after\":true") != std::string::npos
+            && RevertChangeSetResult.bSucceeded
+            && HostRestoreCount == 1
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), "GameWorld.PersistentLevel.ChangeSetA") == nullptr
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), "GameWorld.PersistentLevel.ChangeSetB") == nullptr,
+        "Agent ChangeSet restores through the host's single safe World-replacement entry point");
+    const auto ListRestoredChangeSetResult = ChangeSetTools.Execute(
+        {"changeset-list-restored", "editor.agent.list_changes", "{}"}, nullptr);
+    Runner.Expect(ListRestoredChangeSetResult.bSucceeded
+            && ListRestoredChangeSetResult.OutputJson.find(
+                "\"matches_current_before\":true") != std::string::npos,
+        "Agent ChangeSet list identifies an already restored before-state without guessing from counts");
+    Runner.Expect(
+        Commands.Undo().bSucceeded
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), "GameWorld.PersistentLevel.ChangeSetA") != nullptr
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), "GameWorld.PersistentLevel.ChangeSetB") != nullptr,
+        "A reverted Agent Run remains one normal editor Undo step");
+    const Pico::FAgentToolCall ReapplyRevertChangeSet {
+        "changeset-revert-after-undo", "editor.agent.revert_run",
+        R"({"run_id":"run_batch_acceptance"})"};
+    ChangeSetTools.PrepareApproval(ReapplyRevertChangeSet);
+    const auto ReapplyRevertResult = ChangeSetTools.Execute(
+        ReapplyRevertChangeSet, nullptr);
+    Runner.Expect(ReapplyRevertResult.bSucceeded
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), "GameWorld.PersistentLevel.ChangeSetA") == nullptr
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), "GameWorld.PersistentLevel.ChangeSetB") == nullptr,
+        "Agent Run revert can be safely repeated after Undo restores its recorded after-state");
+    const std::size_t UndoBeforeRedundantRevert = Transactions.GetUndoCount();
+    const Pico::FAgentToolCall RedundantRevertChangeSet {
+        "changeset-revert-already-restored", "editor.agent.revert_run",
+        R"({"run_id":"run_batch_acceptance"})"};
+    ChangeSetTools.PrepareApproval(RedundantRevertChangeSet);
+    const auto RedundantRevertResult = ChangeSetTools.Execute(
+        RedundantRevertChangeSet, nullptr);
+    Runner.Expect(!RedundantRevertResult.bSucceeded
+            && RedundantRevertResult.Error.find("already matches") != std::string::npos
+            && Transactions.GetUndoCount() == UndoBeforeRedundantRevert,
+        "Redundant Agent Run recovery is explained and rejected before opening a World transaction");
+    std::filesystem::remove_all(ChangeSetRoot, ChangeSetError);
 
     Transactions.Clear();
     Selection.Set(EngineLoop.GetWorld());

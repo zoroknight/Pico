@@ -108,6 +108,9 @@ public:
 using FAgentToolHandler = std::function<FAgentToolResult(
     const FAgentToolCall&,
     const FCancellationToken*)>;
+using FAgentToolPreflight = std::function<bool(
+    const FAgentToolCall&,
+    std::string&)>;
 using FAgentToolVerifier = std::function<bool(
     const FAgentToolCall&,
     const FAgentToolResult&,
@@ -119,6 +122,7 @@ struct FAgentToolDefinition
     std::string Description;
     EAgentToolPermission Permission = EAgentToolPermission::ReadOnly;
     FAgentToolSchema Schema;
+    FAgentToolPreflight Preflight;
     FAgentToolHandler Handler;
     FAgentToolVerifier Verifier;
 };

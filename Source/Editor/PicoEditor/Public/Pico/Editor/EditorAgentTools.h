@@ -2,6 +2,7 @@
 
 #include "Pico/Agent/AgentToolRegistry.h"
 #include "Pico/Agent/AgentKnowledgeStore.h"
+#include "Pico/Editor/EditorTransactionManager.h"
 
 #include <functional>
 #include <filesystem>
@@ -26,6 +27,8 @@ struct FEditorAgentHostServices
         const std::filesystem::path&, const std::string&, bool)> StartPackage;
     std::function<std::pair<bool, std::string>()> StartPlay;
     std::function<std::pair<bool, std::string>()> StopPlay;
+    FEditorTransactionManager::FRestoreSnapshot RestoreSnapshot;
+    std::filesystem::path ChangeSetDirectory;
 };
 
 class FEditorAgentToolExecutor final : public IAgentToolExecutor
@@ -46,6 +49,8 @@ public:
     std::vector<FAgentKnowledgeRecord> CollectKnowledgeRecords() const;
     const std::vector<FAgentToolStageTrace>& GetLastTrace() const;
 
+    void BeginRun(std::string_view RunId) override;
+    void EndRun(std::string_view RunId, EAgentStatus Status) override;
     bool RequiresApproval(const FAgentToolCall& Call) const override;
     bool IsReadOnly(const FAgentToolCall& Call) const override;
     void PrepareApproval(const FAgentToolCall& Call) override;

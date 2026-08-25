@@ -2,6 +2,7 @@
 
 #include "Pico/Agent/AgentRuntime.h"
 #include "Pico/Agent/AgentCredentialStore.h"
+#include "Pico/Agent/AgentEvaluation.h"
 #include "Pico/Agent/AgentIntent.h"
 #include "Pico/Agent/AgentKnowledgeStore.h"
 #include "Pico/Agent/AgentOperationJournal.h"
@@ -12,6 +13,7 @@
 #include "Pico/Agent/OpenAICompatibleProvider.h"
 #include "Pico/Tasks/TaskSystem.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -19,6 +21,8 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 
 using namespace std::chrono_literals;
 
@@ -79,6 +83,65 @@ public:
     std::vector<Pico::FAgentProviderResponse> Responses;
     std::vector<Pico::FAgentProviderRequest> Requests;
     std::size_t NextResponse = 0;
+};
+
+class FGoldenToolExecutor final : public Pico::IAgentToolExecutor
+{
+public:
+    explicit FGoldenToolExecutor(std::string InTaskId)
+        : TaskId(std::move(InTaskId))
+    {
+    }
+
+    bool RequiresApproval(const Pico::FAgentToolCall& Call) const override
+    {
+        return Call.Name != "editor.play.validate";
+    }
+
+    bool IsReadOnly(const Pico::FAgentToolCall& Call) const override
+    {
+        return Call.Name == "editor.play.validate"
+            || Call.Name == "editor.agent.list_changes";
+    }
+
+    std::string GetLastExecutionTraceJson() const override
+    {
+        return R"([{"stage":"Validate","succeeded":true},{"stage":"Permission","succeeded":true},{"stage":"Execute","succeeded":true},{"stage":"Verify","succeeded":true}])";
+    }
+
+    Pico::FAgentToolResult Execute(
+        const Pico::FAgentToolCall& Call,
+        const Pico::FCancellationToken*) override
+    {
+        ++ExecutionCounts[Call.Name];
+        if (TaskId == "approval-denial-has-no-side-effects")
+            return {Call.Id, false, "{}", "User denied tool call", false};
+        if (Call.Name == "editor.actor.spawn") bCubeSpawned = true;
+        else if (Call.Name == "editor.object.set_properties") bPropertiesChanged = true;
+        else if (Call.Name == "editor.scene.create_room") bRoomCreated = true;
+        else if (Call.Name == "editor.gameplay.create_third_person_character")
+            bCharacterCreated = true;
+        else if (Call.Name == "editor.play.validate") bValidated = true;
+        else if (Call.Name == "editor.world.save") bSaved = true;
+        else if (Call.Name == "editor.play.start") bPlaying = true;
+        else if (Call.Name == "editor.project.package") bPackaged = true;
+        else if (Call.Name == "editor.actor.delete_many") bBatchDeleted = true;
+        else if (Call.Name == "editor.agent.revert_run") bRunReverted = true;
+        return {Call.Id, true, R"({"verified":true})", {}, false};
+    }
+
+    std::string TaskId;
+    std::unordered_map<std::string, int> ExecutionCounts;
+    bool bCubeSpawned = false;
+    bool bPropertiesChanged = false;
+    bool bRoomCreated = false;
+    bool bCharacterCreated = false;
+    bool bValidated = false;
+    bool bSaved = false;
+    bool bPlaying = false;
+    bool bPackaged = false;
+    bool bBatchDeleted = false;
+    bool bRunReverted = false;
 };
 
 class FTestApproval final : public Pico::IAgentToolApproval
@@ -182,6 +245,68 @@ Pico::FAgentProviderResponse Final(std::string Text)
     return Response;
 }
 
+Pico::FAgentProviderResponse ToolCalls(
+    std::initializer_list<Pico::FAgentToolCall> Calls)
+{
+    Pico::FAgentProviderResponse Response;
+    Response.ToolCalls.assign(Calls.begin(), Calls.end());
+    return Response;
+}
+
+std::unique_ptr<Pico::IAgentProvider> CreateGoldenProvider(
+    const Pico::FAgentGoldenTask& Task)
+{
+    std::vector<Pico::FFakeAgentStep> Steps;
+    if (Task.Id == "spawn-and-configure-cube")
+        Steps.push_back({ToolCalls({
+            {"spawn-cube", "editor.actor.spawn", R"({"kind":"Cube"})"},
+            {"configure-cube", "editor.object.set_properties", R"({"scale":[2,2,2]})"}}), {}});
+    else if (Task.Id == "create-collision-room")
+        Steps.push_back({ToolCalls({
+            {"create-room", "editor.scene.create_room", R"({"width":1000})"}}), {}});
+    else if (Task.Id == "create-third-person-character")
+        Steps.push_back({ToolCalls({{"create-character",
+            "editor.gameplay.create_third_person_character", "{}"}}), {}});
+    else if (Task.Id == "validate-save-and-play")
+        Steps.push_back({ToolCalls({
+            {"validate-play", "editor.play.validate", "{}"},
+            {"save-before-play", "editor.world.save", "{}"},
+            {"start-play", "editor.play.start", "{}"}}), {}});
+    else if (Task.Id == "validate-save-and-package")
+        Steps.push_back({ToolCalls({
+            {"validate-package", "editor.play.validate", "{}"},
+            {"save-before-package", "editor.world.save", "{}"},
+            {"package-project", "editor.project.package", R"({"name":"Golden"})"}}), {}});
+    else if (Task.Id == "approval-denial-has-no-side-effects")
+        Steps.push_back({ToolCalls({{"denied-mutation",
+            "editor.object.set_properties", R"({"visible":false})"}}), {}});
+    else if (Task.Id == "repeated-save-is-idempotent")
+    {
+        const Pico::FAgentProviderResponse Save = ToolCalls(
+            {{"stable-save", "editor.world.save", "{}"}});
+        Steps.push_back({Save, {}});
+        Steps.push_back({Save, {}});
+    }
+    else if (Task.Id == "modify-reflected-property-and-save")
+        Steps.push_back({ToolCalls({
+            {"set-reflected-property", "editor.object.set_properties",
+                R"({"Tint":[0.2,0.8,0.3]})"},
+            {"save-reflected-property", "editor.world.save", "{}"}}), {}});
+    else if (Task.Id == "batch-delete-created-cubes")
+        Steps.push_back({ToolCalls({{"delete-created-cubes",
+            "editor.actor.delete_many",
+            R"({"object_paths":["World.CubeA","World.CubeB","World.CubeC"]})"}}), {}});
+    else if (Task.Id == "revert-agent-run")
+        Steps.push_back({ToolCalls({
+            {"list-agent-runs", "editor.agent.list_changes", "{}"},
+            {"revert-agent-run", "editor.agent.revert_run",
+                R"({"run_id":"run_previous"})"}}), {}});
+    else
+        return nullptr;
+    Steps.push_back({Final("Golden Task finished"), {}});
+    return std::make_unique<Pico::FFakeAgentProvider>(std::move(Steps));
+}
+
 void TestDeterministicCompletionAndRecovery(FTestRunner& Runner)
 {
     const auto Path = MakeLogPath("completion");
@@ -210,6 +335,73 @@ void TestDeterministicCompletionAndRecovery(FTestRunner& Runner)
             && NextTurn.Counters.Steps == 1
             && Restored->BuildMessageHistory().size() == 4,
         "A completed chat starts a fresh per-turn budget while preserving session history");
+}
+
+void TestUnifiedTraceSpans(FTestRunner& Runner)
+{
+    const auto Path = MakeLogPath("unified-trace");
+    auto Session = Pico::FAgentSession::OpenOrCreate("unified-trace", Path);
+    Pico::FAgentProviderResponse ToolResponse;
+    ToolResponse.ToolCalls.push_back(
+        {"trace-tool-call", "scene.fake", R"({"x":1})"});
+    Pico::FFakeAgentProvider Provider(
+        {{ToolResponse, {}}, {Final("trace complete"), {}}});
+    FCountingToolExecutor Executor;
+    Executor.bRequiresApproval = true;
+    Pico::FAgentRuntime Runtime(*Session, Provider, Executor);
+    const Pico::FAgentRunResult Result = Runtime.Run("trace this run");
+
+    std::string RunSpanId;
+    std::unordered_set<std::string> TurnSpanIds;
+    std::unordered_set<std::string> ChildNames;
+    bool bAllCorrelated = !Result.RunId.empty();
+    for (const Pico::FAgentEvent& Event : Session->GetEvents())
+    {
+        if (Event.Type != Pico::EAgentEventType::TraceSpan) continue;
+        bAllCorrelated &= Event.RunId == Result.RunId && !Event.SpanId.empty()
+            && Event.StartedTimestampMilliseconds > 0;
+        if (Event.SpanName == "AgentRun")
+        {
+            RunSpanId = Event.SpanId;
+            bAllCorrelated &= Event.ParentSpanId.empty() && Event.TurnId.empty();
+        }
+        else if (Event.SpanName == "AgentTurn")
+        {
+            TurnSpanIds.insert(Event.SpanId);
+            bAllCorrelated &= !Event.TurnId.empty();
+        }
+        else
+        {
+            ChildNames.insert(Event.SpanName);
+            bAllCorrelated &= !Event.ParentSpanId.empty() && !Event.TurnId.empty();
+        }
+    }
+    bool bTurnParentsAreRun = !RunSpanId.empty() && TurnSpanIds.size() == 2;
+    bool bChildParentsAreTurns = true;
+    for (const Pico::FAgentEvent& Event : Session->GetEvents())
+    {
+        if (Event.Type != Pico::EAgentEventType::TraceSpan) continue;
+        if (Event.SpanName == "AgentTurn")
+            bTurnParentsAreRun &= Event.ParentSpanId == RunSpanId;
+        else if (Event.SpanName != "AgentRun")
+            bChildParentsAreTurns &= TurnSpanIds.contains(Event.ParentSpanId);
+    }
+    Runner.Expect(
+        Result.Status == Pico::EAgentStatus::Completed && bAllCorrelated
+            && bTurnParentsAreRun && bChildParentsAreTurns
+            && ChildNames.contains("Model.Generate")
+            && ChildNames.contains("Tool.Approval")
+            && ChildNames.contains("Tool.scene.fake")
+            && ChildNames.contains("Run.Validation"),
+        "Run, turn, model, approval, tool, and validation spans form one trace tree");
+
+    auto Restored = Pico::FAgentSession::OpenOrCreate("unified-trace", Path);
+    bool bRestoredTrace = false;
+    for (const Pico::FAgentEvent& Event : Restored->GetEvents())
+        bRestoredTrace |= Event.Type == Pico::EAgentEventType::TraceSpan
+            && Event.RunId == Result.RunId && Event.SpanName == "AgentRun";
+    Runner.Expect(bRestoredTrace,
+        "Trace identifiers and span timing survive JSONL session recovery");
 }
 
 void TestToolCallIdempotency(FTestRunner& Runner)
@@ -953,8 +1145,10 @@ void TestIntentAndSkillEvalSet(FTestRunner& Runner)
     const std::vector<std::string> Tools = {
         "editor.world.describe", "editor.selection.describe", "editor.asset.search",
         "editor.object.describe", "editor.object.get_property",
-        "editor.object.set_properties", "editor.actor.spawn",
-        "editor.actor.spawn_blueprint", "editor.actor.delete",
+        "editor.object.set_properties", "editor.object.batch_set_properties",
+        "editor.actor.spawn", "editor.actor.spawn_blueprint", "editor.actor.delete",
+        "editor.actor.delete_many", "editor.agent.list_changes",
+        "editor.agent.revert_run",
         "editor.scene.create_room", "editor.gameplay.create_third_person_character",
         "editor.actor.set_location", "editor.play.validate", "editor.play.start",
         "editor.play.stop", "editor.world.save",
@@ -997,7 +1191,108 @@ void TestIntentAndSkillEvalSet(FTestRunner& Runner)
                 && ActualSkills.str() == ExpectedSkills,
             "Agent intent and Skill routing eval case " + std::to_string(CaseIndex));
     }
-    Runner.Expect(CaseIndex >= 18, "Agent routing eval keeps at least 18 fixed prompts");
+    Runner.Expect(CaseIndex >= 37, "Agent routing eval keeps at least 37 fixed prompts");
+}
+
+void TestGoldenTaskRunner(FTestRunner& Runner)
+{
+    std::vector<Pico::FAgentGoldenTask> Tasks;
+    std::string Error;
+    const bool bLoaded = Pico::FAgentGoldenTaskRunner::LoadTasks(
+        "Tests/Agent/Fixtures/GoldenTasks.json", Tasks, &Error);
+    Runner.Expect(bLoaded && Tasks.size() == 10,
+        "Golden Task Runner loads ten versioned end-to-end task definitions");
+    if (!bLoaded) return;
+
+    Pico::FAgentGoldenTaskHooks Hooks;
+    Hooks.Prepare = [](const Pico::FAgentGoldenTask& Task, std::string& OutError)
+    {
+        const bool bKnownFixture = Task.FixtureId == "empty-world"
+            || Task.FixtureId == "starter-world"
+            || Task.FixtureId == "playable-world"
+            || Task.FixtureId == "selected-cube"
+            || Task.FixtureId == "dirty-world";
+        if (!bKnownFixture) OutError = "Unknown deterministic fixture";
+        return bKnownFixture;
+    };
+    Hooks.CreateProvider = [](const Pico::FAgentGoldenTask& Task)
+    {
+        return CreateGoldenProvider(Task);
+    };
+    Hooks.CreateToolExecutor = [](const Pico::FAgentGoldenTask& Task)
+    {
+        return std::make_unique<FGoldenToolExecutor>(Task.Id);
+    };
+    Hooks.Verify = [](const Pico::FAgentGoldenTask& Task,
+        const Pico::FAgentSession&, const Pico::FAgentRunResult&,
+        const Pico::IAgentToolExecutor& Executor, std::string& OutError)
+    {
+        const auto* Golden = dynamic_cast<const FGoldenToolExecutor*>(&Executor);
+        if (!Golden)
+        {
+            OutError = "Golden verifier received an incompatible executor";
+            return false;
+        }
+        bool bVerified = false;
+        if (Task.VerifierId == "cube-configured")
+            bVerified = Golden->bCubeSpawned && Golden->bPropertiesChanged;
+        else if (Task.VerifierId == "collision-room-exists")
+            bVerified = Golden->bRoomCreated;
+        else if (Task.VerifierId == "third-person-character-exists")
+            bVerified = Golden->bCharacterCreated;
+        else if (Task.VerifierId == "play-started-without-package")
+            bVerified = Golden->bValidated && Golden->bSaved
+                && Golden->bPlaying && !Golden->bPackaged;
+        else if (Task.VerifierId == "package-created-without-play")
+            bVerified = Golden->bValidated && Golden->bSaved
+                && Golden->bPackaged && !Golden->bPlaying;
+        else if (Task.VerifierId == "no-mutation-after-denial")
+            bVerified = !Golden->bPropertiesChanged && !Golden->bSaved
+                && !Golden->bPackaged;
+        else if (Task.VerifierId == "single-save-side-effect")
+        {
+            const auto It = Golden->ExecutionCounts.find("editor.world.save");
+            bVerified = Golden->bSaved && It != Golden->ExecutionCounts.end()
+                && It->second == 1;
+        }
+        else if (Task.VerifierId == "property-modified-and-saved")
+            bVerified = Golden->bPropertiesChanged && Golden->bSaved;
+        else if (Task.VerifierId == "created-cubes-removed")
+            bVerified = Golden->bBatchDeleted;
+        else if (Task.VerifierId == "world-restored-to-before-run")
+            bVerified = Golden->bRunReverted;
+        if (!bVerified) OutError = "Deterministic scene/process postcondition failed";
+        return bVerified;
+    };
+
+    const std::filesystem::path OutputRoot = std::filesystem::temp_directory_path()
+        / "PicoAgentTests/GoldenTasks";
+    std::error_code ErrorCode;
+    std::filesystem::remove_all(OutputRoot, ErrorCode);
+    const Pico::FAgentGoldenTaskRunner GoldenRunner;
+    const std::vector<Pico::FAgentGoldenTaskResult> Results =
+        GoldenRunner.Run(Tasks, OutputRoot, Hooks);
+    const bool bAllPassed = Results.size() == Tasks.size()
+        && std::all_of(Results.begin(), Results.end(),
+            [](const Pico::FAgentGoldenTaskResult& Result)
+            {
+                return Result.bSucceeded && !Result.RunId.empty()
+                    && std::filesystem::is_regular_file(Result.EventLogPath);
+            });
+    Runner.Expect(bAllPassed,
+        "Golden Tasks verify required tools, forbidden side effects, state, Play, Package, denial, and idempotency");
+
+    const std::filesystem::path ReportPath = OutputRoot / "GoldenTaskReport.json";
+    Error.clear();
+    const bool bReportWritten = Pico::FAgentGoldenTaskRunner::WriteReport(
+        ReportPath, Results, &Error);
+    std::ifstream ReportStream(ReportPath, std::ios::binary);
+    const std::string ReportText((std::istreambuf_iterator<char>(ReportStream)), {});
+    Runner.Expect(bReportWritten
+            && ReportText.find("\"passed\": 10") != std::string::npos
+            && ReportText.find("\"failed\": 0") != std::string::npos
+            && ReportText.find("run_") != std::string::npos,
+        "Golden Task report persists pass counts, metrics, RunIds, and event-log evidence");
 }
 
 void TestCredentialStoreRejectsInvalidInput(FTestRunner& Runner)
@@ -1070,6 +1365,7 @@ int main()
 {
     FTestRunner Runner;
     TestDeterministicCompletionAndRecovery(Runner);
+    TestUnifiedTraceSpans(Runner);
     TestToolCallIdempotency(Runner);
     TestBoundedRepairAndBudget(Runner);
     TestSemanticReadCacheAndNoProgressGuard(Runner);
@@ -1086,6 +1382,7 @@ int main()
     TestKnowledgeStoreAndRagLite(Runner);
     TestPicoSkillRegistry(Runner);
     TestIntentAndSkillEvalSet(Runner);
+    TestGoldenTaskRunner(Runner);
     TestCredentialStoreRejectsInvalidInput(Runner);
     TestDurableOperationJournal(Runner);
     return Runner.Finish();

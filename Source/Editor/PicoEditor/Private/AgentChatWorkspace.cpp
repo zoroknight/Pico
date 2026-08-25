@@ -68,9 +68,12 @@ const char* ApprovalPermissionDisplayName(EAgentToolPermission Permission)
 const char* ApprovalToolDisplayName(std::string_view ToolName)
 {
     if (ToolName == "editor.object.set_properties") return "修改对象属性";
+    if (ToolName == "editor.object.batch_set_properties") return "批量修改对象属性";
     if (ToolName == "editor.actor.spawn") return "创建场景 Actor";
     if (ToolName == "editor.actor.spawn_blueprint") return "创建 Actor Blueprint 实例";
     if (ToolName == "editor.actor.delete") return "删除场景 Actor";
+    if (ToolName == "editor.actor.delete_many") return "批量删除场景 Actor";
+    if (ToolName == "editor.agent.revert_run") return "恢复 Agent 操作前的场景";
     if (ToolName == "editor.scene.create_room") return "创建碰撞房间";
     if (ToolName == "editor.gameplay.create_third_person_character") return "创建第三人称角色";
     if (ToolName == "editor.actor.set_location") return "修改 Actor 位置";
@@ -85,9 +88,12 @@ const char* ApprovalToolDisplayName(std::string_view ToolName)
 const char* ApprovalToolDescription(std::string_view ToolName)
 {
     if (ToolName == "editor.object.set_properties") return "Agent 将修改对象的反射属性，可通过 Undo 撤销。";
+    if (ToolName == "editor.object.batch_set_properties") return "Agent 将在一次事务中修改多个对象的反射属性，可整体 Undo。";
     if (ToolName == "editor.actor.spawn") return "Agent 将在当前世界中创建一个新的 Actor。";
     if (ToolName == "editor.actor.spawn_blueprint") return "Agent 将使用指定 Actor Blueprint 在当前世界创建实例。";
     if (ToolName == "editor.actor.delete") return "Agent 将从当前世界删除指定 Actor，可通过 Undo 撤销。";
+    if (ToolName == "editor.actor.delete_many") return "Agent 将在一次事务中删除一组已验证的 Actor，可整体 Undo。";
+    if (ToolName == "editor.agent.revert_run") return "Agent 将恢复指定 Run 开始前的完整 World 快照；若场景之后又被修改，会拒绝覆盖。";
     if (ToolName == "editor.scene.create_room") return "Agent 将在一次事务中创建地板和碰撞墙壁。";
     if (ToolName == "editor.gameplay.create_third_person_character") return "Agent 将配置可操控角色、PlayerStart 和第三人称 Gameplay 链。";
     if (ToolName == "editor.actor.set_location") return "Agent 将修改指定 Actor 的世界坐标，可通过 Undo 撤销。";
@@ -370,6 +376,16 @@ public:
     {
     }
 
+    void BeginRun(std::string_view RunId) override
+    {
+        DispatchRunLifecycle(std::string(RunId), EAgentStatus::Planning, true);
+    }
+
+    void EndRun(std::string_view RunId, EAgentStatus Status) override
+    {
+        DispatchRunLifecycle(std::string(RunId), Status, false);
+    }
+
     bool RequiresApproval(const FAgentToolCall& Call) const override
     {
         if (!IntentError(Call).empty()) return false;
@@ -501,6 +517,37 @@ public:
     }
 
 private:
+    void DispatchRunLifecycle(
+        std::string RunId,
+        EAgentStatus Status,
+        bool bBegin)
+    {
+        struct FCompletion
+        {
+            std::mutex Mutex;
+            std::condition_variable Condition;
+            bool bDone = false;
+        };
+        auto Completion = std::make_shared<FCompletion>();
+        FEditorAgentToolExecutor* Tools = EditorTools;
+        if (!Tools || !Dispatcher || Dispatcher->Post(
+                bBegin ? "Begin Agent Run ChangeSet" : "End Agent Run ChangeSet",
+                [Completion, Tools, RunId = std::move(RunId), Status, bBegin]()
+                {
+                    if (bBegin) Tools->BeginRun(RunId);
+                    else Tools->EndRun(RunId, Status);
+                    {
+                        std::lock_guard Lock(Completion->Mutex);
+                        Completion->bDone = true;
+                    }
+                    Completion->Condition.notify_all();
+                }) == 0)
+            return;
+        std::unique_lock Lock(Completion->Mutex);
+        while (!Completion->bDone)
+            Completion->Condition.wait_for(Lock, std::chrono::milliseconds(10));
+    }
+
     static std::string FailureTrace(
         std::string_view Stage,
         std::string_view Message)
@@ -643,6 +690,7 @@ struct FAgentChatWorkspace::FImpl
             const std::filesystem::path&, const std::string&, bool)> StartPackage,
         std::function<std::pair<bool, std::string>()> StartPlay,
         std::function<std::pair<bool, std::string>()> StopPlay,
+        FEditorTransactionManager::FRestoreSnapshot RestoreSnapshot,
         std::function<void(const std::filesystem::path&)> InRequestProjectOpen)
         : EngineLoop(InEngineLoop)
         , TaskSystem(InTaskSystem)
@@ -651,7 +699,9 @@ struct FAgentChatWorkspace::FImpl
         , EditorTools(InEngineLoop, Selection, Transactions, &Approval,
             std::move(OnWorldChanged),
             {Commands, WorldDocument, std::move(StartPackage),
-                std::move(StartPlay), std::move(StopPlay)})
+                std::move(StartPlay), std::move(StopPlay),
+                std::move(RestoreSnapshot),
+                FPaths::GetProjectSavedDir() / "Agent/ChangeSets"})
         , GameThreadTools(&EditorTools, InDispatcher,
             FPaths::GetProjectSavedDir() / "Agent/Operations")
         , RequestProjectOpen(std::move(InRequestProjectOpen))
@@ -1459,11 +1509,13 @@ FAgentChatWorkspace::FAgentChatWorkspace(
         const std::filesystem::path&, const std::string&, bool)> StartPackage,
     std::function<std::pair<bool, std::string>()> StartPlay,
     std::function<std::pair<bool, std::string>()> StopPlay,
+    FEditorTransactionManager::FRestoreSnapshot RestoreSnapshot,
     std::function<void(const std::filesystem::path&)> RequestProjectOpen)
     : Impl(std::make_unique<FImpl>(EngineLoop, Selection, Transactions,
         TaskSystem, Dispatcher, std::move(OnWorldChanged), Commands,
         WorldDocument, std::move(StartPackage), std::move(StartPlay),
-        std::move(StopPlay), std::move(RequestProjectOpen)))
+        std::move(StopPlay), std::move(RestoreSnapshot),
+        std::move(RequestProjectOpen)))
 {
 }
 

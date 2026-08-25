@@ -36,6 +36,7 @@ enum class EAgentEventType
     Message,
     ToolCall,
     ToolResult,
+    TraceSpan,
     Checkpoint,
     Error
 };
@@ -93,6 +94,7 @@ struct FAgentRunResult
     std::string FinalText;
     std::string Error;
     FAgentCounters Counters;
+    std::string RunId;
 };
 
 std::string_view ToString(EAgentRole Role);
