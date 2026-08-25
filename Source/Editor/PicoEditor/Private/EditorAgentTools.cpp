@@ -62,6 +62,24 @@ bool IsSafeObjectName(std::string_view Name)
     return true;
 }
 
+std::string StableOperationSuffix(std::string_view Text)
+{
+    std::uint64_t Hash = 14695981039346656037ull;
+    for (const unsigned char Character : Text)
+    {
+        Hash ^= Character;
+        Hash *= 1099511628211ull;
+    }
+    constexpr char Digits[] = "0123456789abcdef";
+    std::string Result(16, '0');
+    for (int Index = 15; Index >= 0; --Index)
+    {
+        Result[static_cast<std::size_t>(Index)] = Digits[Hash & 0xfu];
+        Hash >>= 4u;
+    }
+    return Result;
+}
+
 const char* PropertyTypeName(EPropertyType Type)
 {
     switch (Type)
@@ -1274,15 +1292,44 @@ struct FEditorAgentToolExecutor::FImpl
                     ? MaintainedTemplate : FPaths::GetProjectRootDir();
             const std::filesystem::path DestinationRoot =
                 FPaths::GetEngineRootDir() / "Projects" / Name;
+            const std::filesystem::path StagingParent =
+                FPaths::GetEngineRootDir() / "Projects/.AgentStaging";
+            const std::filesystem::path StagingRoot =
+                StagingParent / (Name + "-" + StableOperationSuffix(Call.Id));
             std::error_code Error;
             if (std::filesystem::exists(DestinationRoot, Error))
+            {
+                FConfigFile Completion;
+                FConfigFile ExistingConfig;
+                const std::filesystem::path ExistingProjectFile =
+                    DestinationRoot / (Name + ".pico");
+                const bool bThisOperationAlreadyCommitted =
+                    Completion.Load(DestinationRoot / ".PicoProject.complete")
+                    && Completion.GetString("Operation", "Id", "") == Call.Id
+                    && Completion.GetString("Operation", "Tool", "") == Call.Name
+                    && Completion.GetString("Operation", "State", "") == "Complete"
+                    && std::filesystem::is_regular_file(ExistingProjectFile)
+                    && ExistingConfig.Load(DestinationRoot / "Config/Pico.ini");
+                if (bThisOperationAlreadyCommitted)
+                {
+                    return Success(Call, {{"project_name", Name},
+                        {"project_file", ExistingProjectFile.string()},
+                        {"startup_map", ExistingConfig.GetString(
+                            "Editor", "StartupMap", "")},
+                        {"template", "ThirdPerson"},
+                        {"editor_handoff", "scheduled_after_turn"},
+                        {"reconciled", true}});
+                }
                 return Failure(Call, "A project with that name already exists");
-            std::filesystem::create_directories(DestinationRoot, Error);
-            if (Error) return Failure(Call, "Could not create project directory: " + Error.message());
+            }
+            std::filesystem::remove_all(StagingRoot, Error);
+            Error.clear();
+            std::filesystem::create_directories(StagingRoot, Error);
+            if (Error) return Failure(Call, "Could not create project staging directory: " + Error.message());
             auto CopyTree = [&](const char* Folder)
             {
                 const std::filesystem::path Source = SourceRoot / Folder;
-                const std::filesystem::path Destination = DestinationRoot / Folder;
+                const std::filesystem::path Destination = StagingRoot / Folder;
                 if (!std::filesystem::is_directory(Source)) return false;
                 std::filesystem::copy(Source, Destination,
                     std::filesystem::copy_options::recursive, Error);
@@ -1291,32 +1338,56 @@ struct FEditorAgentToolExecutor::FImpl
             if ((CancellationToken && CancellationToken->IsCancellationRequested())
                 || !CopyTree("Content") || !CopyTree("Config"))
             {
-                std::filesystem::remove_all(DestinationRoot, Error);
+                std::filesystem::remove_all(StagingRoot, Error);
                 return Failure(Call, "Could not copy template Content and Config");
             }
             FConfigFile Descriptor;
             Descriptor.SetString("Project", "Name", Name);
             Descriptor.SetString("Project", "FileVersion", "1");
             Descriptor.SetString("Project", "EngineVersion", "0.1.0");
-            const std::filesystem::path ProjectFile = DestinationRoot / (Name + ".pico");
-            if (!Descriptor.Save(ProjectFile))
+            const std::filesystem::path StagedProjectFile =
+                StagingRoot / (Name + ".pico");
+            if (!Descriptor.Save(StagedProjectFile))
             {
-                std::filesystem::remove_all(DestinationRoot, Error);
+                std::filesystem::remove_all(StagingRoot, Error);
                 return Failure(Call, "Could not write project descriptor");
             }
             FConfigFile Config;
-            const std::filesystem::path ConfigFile = DestinationRoot / "Config/Pico.ini";
+            const std::filesystem::path ConfigFile = StagingRoot / "Config/Pico.ini";
             if (!Config.Load(ConfigFile))
             {
-                std::filesystem::remove_all(DestinationRoot, Error);
+                std::filesystem::remove_all(StagingRoot, Error);
                 return Failure(Call, "Copied project Config could not be loaded");
             }
             Config.SetString("Project", "Name", Name);
             if (!Config.Save(ConfigFile))
             {
-                std::filesystem::remove_all(DestinationRoot, Error);
+                std::filesystem::remove_all(StagingRoot, Error);
                 return Failure(Call, "Could not finalize project Config");
             }
+            FConfigFile Completion;
+            Completion.SetString("Operation", "Id", Call.Id);
+            Completion.SetString("Operation", "Tool", Call.Name);
+            Completion.SetString("Operation", "State", "Complete");
+            if (!Completion.Save(StagingRoot / ".PicoProject.complete"))
+            {
+                std::filesystem::remove_all(StagingRoot, Error);
+                return Failure(Call, "Could not write project completion marker");
+            }
+            if (CancellationToken && CancellationToken->IsCancellationRequested())
+            {
+                std::filesystem::remove_all(StagingRoot, Error);
+                return Failure(Call, "Project creation was cancelled before commit");
+            }
+            std::filesystem::rename(StagingRoot, DestinationRoot, Error);
+            if (Error)
+            {
+                const std::string RenameError = Error.message();
+                Error.clear();
+                std::filesystem::remove_all(StagingRoot, Error);
+                return Failure(Call, "Could not commit completed project: " + RenameError);
+            }
+            const std::filesystem::path ProjectFile = DestinationRoot / (Name + ".pico");
             return Success(Call, {{"project_name", Name},
                 {"project_file", ProjectFile.string()},
                 {"startup_map", Config.GetString("Editor", "StartupMap", "")},

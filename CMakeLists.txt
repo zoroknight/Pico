@@ -129,6 +129,7 @@ add_library(PicoAgentCore STATIC
     Source/Developer/Agent/Private/AgentCredentialStore.cpp
     Source/Developer/Agent/Private/AgentIntent.cpp
     Source/Developer/Agent/Private/AgentKnowledgeStore.cpp
+    Source/Developer/Agent/Private/AgentOperationJournal.cpp
     Source/Developer/Agent/Private/AgentProjectHandoff.cpp
     Source/Developer/Agent/Private/AgentProvider.cpp
     Source/Developer/Agent/Private/AgentRuntime.cpp

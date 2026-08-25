@@ -5,6 +5,7 @@
 #include "Pico/Agent/AgentCredentialStore.h"
 #include "Pico/Agent/AgentIntent.h"
 #include "Pico/Agent/AgentKnowledgeStore.h"
+#include "Pico/Agent/AgentOperationJournal.h"
 #include "Pico/Agent/AgentProjectHandoff.h"
 #include "Pico/Agent/AgentSkill.h"
 #include "Pico/Agent/FakeAgentProvider.h"
@@ -362,8 +363,10 @@ class FGameThreadToolExecutor final : public IAgentToolExecutor
 public:
     FGameThreadToolExecutor(
         FEditorAgentToolExecutor* InEditorTools,
-        FGameThreadDispatcher* InDispatcher)
+        FGameThreadDispatcher* InDispatcher,
+        std::filesystem::path OperationDirectory)
         : EditorTools(InEditorTools), Dispatcher(InDispatcher)
+        , Journal(std::move(OperationDirectory))
     {
     }
 
@@ -403,12 +406,33 @@ public:
         const FAgentToolCall& Call,
         const FCancellationToken* CancellationToken) override
     {
+        (void)CancellationToken;
         LastTraceJson = "[]";
         const std::string BlockedReason = IntentError(Call);
         if (!BlockedReason.empty())
         {
             LastTraceJson = FailureTrace("Intent", BlockedReason);
             return {Call.Id, false, "{}", BlockedReason, false};
+        }
+        const bool bDurable = !IsReadOnly(Call);
+        if (bDurable)
+        {
+            std::string JournalError;
+            if (const auto Recovered = Journal.FindApplied(Call, &JournalError))
+            {
+                LastTraceJson = FJson::array({{{"stage", "Recovery"},
+                    {"succeeded", true},
+                    {"message", "Recovered the previously applied tool result; handler was not called again"}}}).dump();
+                return *Recovered;
+            }
+            if (!JournalError.empty()
+                || !Journal.Prepare(Call, &JournalError)
+                || !Journal.MarkExecuting(Call, &JournalError))
+            {
+                LastTraceJson = FailureTrace("Journal", JournalError);
+                return {Call.Id, false, "{}",
+                    "Could not prepare durable operation: " + JournalError, false};
+            }
         }
         struct FSharedResult
         {
@@ -440,15 +464,35 @@ public:
         std::unique_lock Lock(Shared->Mutex);
         while (!Shared->bDone)
         {
-            if (CancellationToken && CancellationToken->IsCancellationRequested())
-            {
-                LastTraceJson = FailureTrace("Execute", "Cancelled");
-                return {Call.Id, false, "{}", "Cancelled", false};
-            }
             Shared->Condition.wait_for(Lock, std::chrono::milliseconds(10));
         }
         LastTraceJson = Tools->GetLastExecutionTraceJson();
-        return Shared->Result;
+        FAgentToolResult Result = Shared->Result;
+        if (bDurable)
+        {
+            std::string JournalError;
+            if (!Journal.MarkApplied(Call, Result, &JournalError))
+            {
+                LastTraceJson = FailureTrace("Journal", JournalError);
+                return {Call.Id, false, "{}",
+                    "Tool returned, but its durable result could not be recorded; outcome may be uncertain: "
+                        + JournalError,
+                    false};
+            }
+        }
+        return Result;
+    }
+
+    void CommitDurableResult(const FAgentToolCall& Call) override
+    {
+        if (IsReadOnly(Call)) return;
+        std::string Error;
+        Journal.MarkCommitted(Call, &Error);
+    }
+
+    std::vector<FAgentOperationRecord> ListIncompleteOperations() const
+    {
+        return Journal.ListIncomplete();
     }
 
     std::string GetLastExecutionTraceJson() const override
@@ -488,6 +532,7 @@ private:
 
     FEditorAgentToolExecutor* EditorTools = nullptr;
     FGameThreadDispatcher* Dispatcher = nullptr;
+    FAgentOperationJournal Journal;
     std::string LastTraceJson = "[]";
     std::atomic<EAgentTurnIntent> TurnIntent {EAgentTurnIntent::General};
     mutable std::mutex SkillMutex;
@@ -607,7 +652,8 @@ struct FAgentChatWorkspace::FImpl
             std::move(OnWorldChanged),
             {Commands, WorldDocument, std::move(StartPackage),
                 std::move(StartPlay), std::move(StopPlay)})
-        , GameThreadTools(&EditorTools, InDispatcher)
+        , GameThreadTools(&EditorTools, InDispatcher,
+            FPaths::GetProjectSavedDir() / "Agent/Operations")
         , RequestProjectOpen(std::move(InRequestProjectOpen))
     {
         std::snprintf(Model.data(), Model.size(), "%s", "offline-fake");
@@ -1240,6 +1286,23 @@ struct FAgentChatWorkspace::FImpl
             for (const FAgentKnowledgeHit& Hit : CurrentKnowledgeHits)
                 ImGui::BulletText("[K:%s] %.1f  %s",
                     Hit.Record.Id.c_str(), Hit.Score, Hit.Record.Title.c_str());
+        }
+        const std::vector<FAgentOperationRecord> IncompleteOperations =
+            GameThreadTools.ListIncompleteOperations();
+        if (!IncompleteOperations.empty()
+            && ImGui::CollapsingHeader(
+                "Agent Recovery", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.28f, 1.0f),
+                "检测到 %zu 个未完成提交的工具操作。", IncompleteOperations.size());
+            ImGui::TextWrapped(
+                "Applied 操作会在恢复会话时复用结果；Prepared/Executing 操作会由幂等工具边界安全重试。");
+            for (const FAgentOperationRecord& Record : IncompleteOperations)
+            {
+                ImGui::BulletText("%s | %s | %s",
+                    Record.ToolName.c_str(), ToString(Record.State).data(),
+                    Record.OperationId.c_str());
+            }
         }
         ImGui::Separator();
         ImGui::Text("Status: %s", CurrentStatus.c_str());

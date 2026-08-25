@@ -38,6 +38,10 @@ The current implementation can:
 - Run deterministic Agent workflows through UI-independent `PicoAgentCore`: injectable providers and
   tool executors, validated state transitions, bounded repair, cooperative cancellation, append-only
   JSONL sessions, checkpoints, restart recovery, and stable ToolCall idempotency.
+- Journal mutating Agent operations through `Prepared -> Executing -> Applied -> Committed`, reuse an
+  applied result after restart without repeating its handler, and expose incomplete records in AI Chat.
+  Create projects through a hidden staging directory; own Play/package children with Windows Job
+  Objects; require `PicoPackage.complete` before a staged package is considered complete.
 - Validate Agent tools through deterministic JSON schemas, permission and approval policy, existing
   World snapshot transactions, postcondition verification, rollback, persistent stage traces, and
   conflict-safe ToolCall IDs; Agent-created Actors enter the normal editor Undo history.
@@ -676,6 +680,7 @@ See:
 - [AI Game Assembly Vertical Slice (Chinese)](Docs/AIPhase06_GameAssemblyVerticalSlice.md)
 - [Project Handoff and Agent Loop Control (Chinese)](Docs/AIPhase07_ProjectHandoffAndLoopControl.md)
 - [Streaming, Project Knowledge, RAG Lite, and Pico Skill v0 (Chinese)](Docs/AIPhase08_StreamingKnowledgeRagAndSkills.md)
+- [Durable Agent Operations and Crash Recovery (Chinese)](Docs/AIPhase09_DurableOperationsAndCrashRecovery.md)
 - [Remaining Development Roadmap (Chinese)](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
 - [Pre-Network Readiness (Chinese)](Docs/Month08_14_PreNetworkReadiness.md)
 - [Network Risk Register (Chinese)](Docs/NetworkRiskRegister.zh-CN.md)

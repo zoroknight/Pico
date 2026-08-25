@@ -71,7 +71,8 @@ void TestDevelopmentPackage(FTestRunner& Runner)
             && std::filesystem::is_regular_file(Stage / "Binaries/Backend.dll")
             && std::filesystem::is_regular_file(Stage / "Engine/PicoEngine.root")
             && std::filesystem::is_regular_file(Stage / "PicoStage.manifest")
-            && std::filesystem::is_regular_file(Stage / "PackageReport.ini"),
+            && std::filesystem::is_regular_file(Stage / "PackageReport.ini")
+            && std::filesystem::is_regular_file(Stage / "PicoPackage.complete"),
         "Stage includes target, runtime dependency, identity manifests and report");
     Runner.Expect(
         std::filesystem::is_regular_file(

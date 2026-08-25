@@ -8,6 +8,26 @@
 
 namespace Pico
 {
+class FProcessGroup
+{
+public:
+    FProcessGroup() = default;
+    ~FProcessGroup();
+
+    FProcessGroup(const FProcessGroup&) = delete;
+    FProcessGroup& operator=(const FProcessGroup&) = delete;
+    FProcessGroup(FProcessGroup&& Other) noexcept;
+    FProcessGroup& operator=(FProcessGroup&& Other) noexcept;
+
+    bool InitializeKillOnClose(std::string* OutError = nullptr);
+    bool IsValid() const;
+    void Reset();
+
+private:
+    void* NativeHandle = nullptr;
+    friend class FPlatformProcess;
+};
+
 class FProcessHandle
 {
 public:
@@ -38,14 +58,15 @@ public:
         const std::vector<std::string>& Arguments = {},
         const std::filesystem::path& WorkingDirectory = {},
         const std::filesystem::path& OutputFile = {},
-        std::string* OutError = nullptr);
+        std::string* OutError = nullptr,
+        FProcessGroup* ProcessGroup = nullptr);
     static FProcessHandle CreateProcess(
         const std::filesystem::path& Executable,
         const std::vector<std::string>& Arguments,
         const std::filesystem::path& WorkingDirectory,
         std::string* OutError)
     {
-        return CreateProcess(Executable, Arguments, WorkingDirectory, {}, OutError);
+        return CreateProcess(Executable, Arguments, WorkingDirectory, {}, OutError, nullptr);
     }
     static bool IsRunning(const FProcessHandle& Process);
     static bool WaitForExit(

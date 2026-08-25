@@ -464,6 +464,20 @@ bool WriteReport(
     return Report.Save(StageRoot / "PackageReport.ini");
 }
 
+bool WriteCompletionMarker(
+    const FPackageContext& Context,
+    const std::filesystem::path& StageRoot,
+    std::size_t FileCount)
+{
+    FConfigFile Marker;
+    Marker.SetString("Package", "State", "Complete");
+    Marker.SetString("Package", "Project", Context.ProjectName);
+    Marker.SetString("Package", "Target", Context.Receipt.Name);
+    Marker.SetString("Package", "Profile", std::string(ToString(Context.Profile)));
+    Marker.SetString("Package", "FileCount", std::to_string(FileCount));
+    return Marker.Save(StageRoot / "PicoPackage.complete");
+}
+
 bool RunSmokeTest(
     const FPackageContext& Context,
     const std::filesystem::path& StageRoot,
@@ -728,7 +742,18 @@ FPackageResult FPackageBuilder::Build(const FPackageRequest& Request) const
         bCollected = ValidateStage(Context, TemporaryStage, Result.Errors);
     if (bCollected && Request.bRunSmokeTest)
         bCollected = RunSmokeTest(Context, TemporaryStage, Result.Errors);
-    WriteReport(Context, TemporaryStage, Result.Files, bCollected, Result.Errors);
+    if (!WriteReport(
+            Context, TemporaryStage, Result.Files, bCollected, Result.Errors))
+    {
+        Result.Errors.push_back("Could not write PackageReport.ini");
+        bCollected = false;
+    }
+    if (bCollected
+        && !WriteCompletionMarker(Context, TemporaryStage, Result.Files.size()))
+    {
+        Result.Errors.push_back("Could not write package completion marker");
+        bCollected = false;
+    }
     if (!bCollected)
     {
         std::filesystem::remove_all(TemporaryStage, Error);

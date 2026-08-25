@@ -4,6 +4,7 @@
 #include "Pico/Agent/AgentCredentialStore.h"
 #include "Pico/Agent/AgentIntent.h"
 #include "Pico/Agent/AgentKnowledgeStore.h"
+#include "Pico/Agent/AgentOperationJournal.h"
 #include "Pico/Agent/AgentProjectHandoff.h"
 #include "Pico/Agent/AgentSkill.h"
 #include "Pico/Agent/AgentToolRegistry.h"
@@ -1016,6 +1017,53 @@ void TestCredentialStoreRejectsInvalidInput(FTestRunner& Runner)
             && !Error.empty(),
         "Credential store rejects implausibly short API keys before local storage");
 }
+
+void TestDurableOperationJournal(FTestRunner& Runner)
+{
+    const std::filesystem::path Root = std::filesystem::temp_directory_path()
+        / "PicoAgentTests/Operations";
+    std::error_code ErrorCode;
+    std::filesystem::remove_all(Root, ErrorCode);
+
+    const Pico::FAgentToolCall Call {
+        "../../stable-call", "editor.world.save", R"({"asset":"/Game/Main"})"};
+    Pico::FAgentOperationJournal Journal(Root);
+    std::string Error;
+    const Pico::FAgentToolResult Applied {
+        Call.Id, true, R"({"saved":true})", {}, false};
+    Runner.Expect(
+        Journal.Prepare(Call, &Error)
+            && Journal.MarkExecuting(Call, &Error)
+            && Journal.MarkApplied(Call, Applied, &Error),
+        "Durable operation journal records Prepared, Executing, and Applied atomically");
+
+    Pico::FAgentOperationJournal Restored(Root);
+    const auto Recovered = Restored.FindApplied(Call, &Error);
+    const auto Incomplete = Restored.ListIncomplete();
+    Runner.Expect(
+        Recovered && Recovered->bSucceeded && Recovered->bReused
+            && Recovered->OutputJson.find("saved") != std::string::npos
+            && Incomplete.size() == 1
+            && Incomplete.front().State == Pico::EAgentOperationState::Applied,
+        "Applied tool result survives restart and is reusable without repeating the side effect");
+
+    const Pico::FAgentToolCall Changed {
+        Call.Id, Call.Name, R"({"asset":"/Game/Other"})"};
+    Runner.Expect(
+        !Restored.FindApplied(Changed).has_value()
+            && !Restored.Prepare(Changed, &Error) && !Error.empty(),
+        "Operation id reuse with different arguments fails closed");
+    Error.clear();
+    std::size_t RecordFileCount = 0;
+    for (const auto& Entry : std::filesystem::directory_iterator(Root))
+        if (Entry.is_regular_file()) ++RecordFileCount;
+    Runner.Expect(
+        Restored.MarkCommitted(Call, &Error)
+            && Restored.ListIncomplete().empty()
+            && RecordFileCount == 1,
+        "Committed operation leaves one hashed audit record and no path traversal output");
+    std::filesystem::remove_all(Root, ErrorCode);
+}
 }
 
 int main()
@@ -1039,5 +1087,6 @@ int main()
     TestPicoSkillRegistry(Runner);
     TestIntentAndSkillEvalSet(Runner);
     TestCredentialStoreRejectsInvalidInput(Runner);
+    TestDurableOperationJournal(Runner);
     return Runner.Finish();
 }

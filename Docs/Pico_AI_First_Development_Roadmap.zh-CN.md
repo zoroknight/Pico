@@ -364,6 +364,7 @@ PrimitiveComponent
 | Event Log 与幂等 | 第 7 月第 2 周 | 每个 Tool Call/Result 配对；重复 ID 零额外副作用 |
 | Tool Policy 与事务 | 第 7 月第 3 周 | 非法输入、拒绝、路径穿越和未知工具零副作用 |
 | Provider 隔离 | 第 7 月第 4 周 | 切换 DeepSeek/Kimi 不修改 Editor Tool 实现 |
+| 跨进程持久操作 | 第 7 月收尾 | Journal 区分 Applied/Committed；项目和 Package 使用 Staging；Play/Package 子进程归属 Job Object |
 | Graph 类型和执行预算 | 第 9 月第 3 周 | 非法图不可运行；超预算终止当前执行而不阻塞 World |
 | AI 完成判定 | 第 10 月第 3 周 | 编译、引用、Play、日志和 Package 由验证器判定 |
 

@@ -213,6 +213,7 @@ private:
     FGameThreadDispatcher GameThreadDispatcher;
     std::unique_ptr<FAgentChatWorkspace> AgentChatWorkspace;
     FProcessHandle PackageProcess;
+    FProcessGroup PackageProcessGroup;
     std::filesystem::path PendingProjectFile;
     std::filesystem::path PlaySettingsFile;
     std::filesystem::path PackageProcessLogFile;

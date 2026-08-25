@@ -31,6 +31,7 @@ MinSizeRel/
 Saved/
 **/ApiKeys.ini
 Projects/*/Packaged/
+Projects/.AgentStaging/
 imgui.ini
 *.log
 

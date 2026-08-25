@@ -294,6 +294,7 @@ FAgentRunResult FAgentRuntime::Run(
                 {
                     return Finish(EAgentStatus::Failed, std::move(Error));
                 }
+                ToolExecutor.CommitDurableResult(Call);
                 if (!Result.bSucceeded)
                 {
                     bToolFailed = true;

@@ -94,7 +94,7 @@ Agent 核心。
 - 项目扫描跳过 `Saved/Agent/ApiKeys.ini`，证据遵守大小预算并保留 UTF-8 边界。
 - Skill 选择稳定，Provider Catalog 被限制，未知工具的 Skill 无法加载。
 - 18 条生产提示固定验证 Intent 与 Skill 路由，包括否定语义和多 Skill 组合。
-- Debug 基线：`PicoAgentTests` 67/67，`PicoEditorTests` 129/129。
+- 当前 Debug 基线：`PicoAgentTests` 71/71，`PicoEditorTests` 129/129。
 
 ## 保留边界
 

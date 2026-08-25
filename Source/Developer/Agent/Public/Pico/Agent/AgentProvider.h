@@ -47,6 +47,7 @@ public:
     virtual bool RequiresApproval(const FAgentToolCall& Call) const;
     virtual bool IsReadOnly(const FAgentToolCall& Call) const;
     virtual void PrepareApproval(const FAgentToolCall& Call);
+    virtual void CommitDurableResult(const FAgentToolCall& Call);
     virtual std::string GetLastExecutionTraceJson() const;
     virtual FAgentToolResult Execute(
         const FAgentToolCall& Call,

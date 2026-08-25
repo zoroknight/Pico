@@ -371,6 +371,7 @@ FPicoEditorApp::~FPicoEditorApp()
     SaveEditorSession(true);
     StopGame(false);
     PackageProcess.Reset();
+    PackageProcessGroup.Reset();
 }
 
 void FPicoEditorApp::PumpGameThreadTasks()
@@ -1989,6 +1990,11 @@ void FPicoEditorApp::StartPackageProject()
     }
     PackageOutputDirectory = OutputRoot / PackageName;
     std::string Error;
+    if (!PackageProcessGroup.InitializeKillOnClose(&Error))
+    {
+        SetStatus("Could not create package process group: " + Error, true);
+        return;
+    }
     std::vector<std::string> Arguments {
         "-project=" + FPaths::GetProjectFile().string(),
         "-receipt=" + Receipt.string(),
@@ -2003,9 +2009,11 @@ void FPicoEditorApp::StartPackageProject()
         Arguments,
         FPaths::GetEngineRootDir(),
         PackageProcessLogFile,
-        &Error);
+        &Error,
+        &PackageProcessGroup);
     if (!PackageProcess.IsValid())
     {
+        PackageProcessGroup.Reset();
         SetStatus("Could not start PicoPackager: " + Error, true);
         return;
     }
@@ -2101,6 +2109,7 @@ void FPicoEditorApp::UpdatePackageProcess()
     int ExitCode = 0;
     FPlatformProcess::WaitForExit(PackageProcess, 0, &ExitCode);
     PackageProcess.Reset();
+    PackageProcessGroup.Reset();
     std::string Detail;
     if (ExitCode != 0 && std::filesystem::is_regular_file(PackageProcessLogFile))
     {

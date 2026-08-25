@@ -98,5 +98,6 @@ private:
 
     std::vector<FManagedProcess> Processes;
     std::filesystem::path LogDirectory;
+    FProcessGroup ProcessGroup;
 };
 }

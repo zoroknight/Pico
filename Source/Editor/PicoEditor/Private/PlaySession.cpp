@@ -221,6 +221,12 @@ bool FPlaySession::Start(
         return false;
     }
 
+    if (!ProcessGroup.InitializeKillOnClose(&OutError))
+    {
+        OutError = "could not create the Play Session process group: " + OutError;
+        return false;
+    }
+
     LogDirectory = Request.LogDirectory;
     for (const FPlayProcessSpec& Spec : Specs)
     {
@@ -232,7 +238,8 @@ bool FPlaySession::Start(
             Spec.Arguments,
             Request.WorkingDirectory,
             Spec.LogFile,
-            &OutError);
+            &OutError,
+            &ProcessGroup);
         if (!Managed.Handle.IsValid())
         {
             OutError = "could not start " + Spec.Label + ": " + OutError;
@@ -258,6 +265,7 @@ bool FPlaySession::Stop()
         Process.Handle.Reset();
     }
     Processes.clear();
+    ProcessGroup.Reset();
     return bStopped;
 }
 

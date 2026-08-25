@@ -131,6 +131,67 @@ std::string GetWindowsErrorMessage(unsigned long ErrorCode)
 #endif
 }
 
+FProcessGroup::~FProcessGroup()
+{
+    Reset();
+}
+
+FProcessGroup::FProcessGroup(FProcessGroup&& Other) noexcept
+    : NativeHandle(std::exchange(Other.NativeHandle, nullptr))
+{
+}
+
+FProcessGroup& FProcessGroup::operator=(FProcessGroup&& Other) noexcept
+{
+    if (this != &Other)
+    {
+        Reset();
+        NativeHandle = std::exchange(Other.NativeHandle, nullptr);
+    }
+    return *this;
+}
+
+bool FProcessGroup::InitializeKillOnClose(std::string* OutError)
+{
+    if (OutError) OutError->clear();
+    Reset();
+#if PICO_PLATFORM_WINDOWS
+    HANDLE Job = CreateJobObjectW(nullptr, nullptr);
+    if (Job == nullptr)
+    {
+        SetError(OutError, GetWindowsErrorMessage(GetLastError()));
+        return false;
+    }
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION Limits {};
+    Limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(
+            Job, JobObjectExtendedLimitInformation, &Limits, sizeof(Limits)))
+    {
+        SetError(OutError, GetWindowsErrorMessage(GetLastError()));
+        CloseHandle(Job);
+        return false;
+    }
+    NativeHandle = Job;
+    return true;
+#else
+    SetError(OutError, "Process groups are not implemented on this platform");
+    return false;
+#endif
+}
+
+bool FProcessGroup::IsValid() const
+{
+    return NativeHandle != nullptr;
+}
+
+void FProcessGroup::Reset()
+{
+#if PICO_PLATFORM_WINDOWS
+    if (NativeHandle != nullptr) CloseHandle(static_cast<HANDLE>(NativeHandle));
+#endif
+    NativeHandle = nullptr;
+}
+
 FProcessHandle::~FProcessHandle()
 {
     Reset();
@@ -180,7 +241,8 @@ FProcessHandle FPlatformProcess::CreateProcess(
     const std::vector<std::string>& Arguments,
     const std::filesystem::path& WorkingDirectory,
     const std::filesystem::path& OutputFile,
-    std::string* OutError)
+    std::string* OutError,
+    FProcessGroup* ProcessGroup)
 {
     if (OutError != nullptr)
     {
@@ -194,6 +256,11 @@ FProcessHandle FPlatformProcess::CreateProcess(
     }
 
 #if PICO_PLATFORM_WINDOWS
+    if (ProcessGroup != nullptr && !ProcessGroup->IsValid())
+    {
+        SetError(OutError, "Process group is not initialized");
+        return Result;
+    }
     const std::wstring ExecutablePath =
         std::filesystem::absolute(Executable).lexically_normal().wstring();
     std::wstring CommandLine;
@@ -249,13 +316,15 @@ FProcessHandle FPlatformProcess::CreateProcess(
         StartupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     }
     PROCESS_INFORMATION ProcessInformation {};
+    const DWORD CreationFlags = CREATE_NEW_PROCESS_GROUP
+        | (ProcessGroup != nullptr ? CREATE_SUSPENDED : 0);
     const BOOL bCreated = CreateProcessW(
         ExecutablePath.c_str(),
         CommandLine.data(),
         nullptr,
         nullptr,
         OutputHandle != INVALID_HANDLE_VALUE,
-        CREATE_NEW_PROCESS_GROUP,
+        CreationFlags,
         nullptr,
         WorkingDirectoryPath.empty() ? nullptr : WorkingDirectoryPath.c_str(),
         &StartupInfo,
@@ -267,6 +336,30 @@ FProcessHandle FPlatformProcess::CreateProcess(
         return Result;
     }
 
+    if (ProcessGroup != nullptr
+        && !AssignProcessToJobObject(
+            static_cast<HANDLE>(ProcessGroup->NativeHandle),
+            ProcessInformation.hProcess))
+    {
+        const DWORD ErrorCode = GetLastError();
+        TerminateProcess(ProcessInformation.hProcess, 1);
+        CloseHandle(ProcessInformation.hThread);
+        CloseHandle(ProcessInformation.hProcess);
+        SetError(OutError, "Could not assign child process to its owner group: "
+            + GetWindowsErrorMessage(ErrorCode));
+        return Result;
+    }
+    if (ProcessGroup != nullptr && ResumeThread(ProcessInformation.hThread) == static_cast<DWORD>(-1))
+    {
+        const DWORD ErrorCode = GetLastError();
+        TerminateProcess(ProcessInformation.hProcess, 1);
+        CloseHandle(ProcessInformation.hThread);
+        CloseHandle(ProcessInformation.hProcess);
+        SetError(OutError, "Could not resume managed child process: "
+            + GetWindowsErrorMessage(ErrorCode));
+        return Result;
+    }
+
     CloseHandle(ProcessInformation.hThread);
     Result.NativeHandle = ProcessInformation.hProcess;
     Result.ProcessId = static_cast<uint32>(ProcessInformation.dwProcessId);
@@ -274,6 +367,7 @@ FProcessHandle FPlatformProcess::CreateProcess(
     (void)Arguments;
     (void)WorkingDirectory;
     (void)OutputFile;
+    (void)ProcessGroup;
     SetError(OutError, "Process creation is not implemented on this platform");
 #endif
     return Result;

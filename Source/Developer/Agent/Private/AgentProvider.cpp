@@ -16,6 +16,10 @@ void IAgentToolExecutor::PrepareApproval(const FAgentToolCall&)
 {
 }
 
+void IAgentToolExecutor::CommitDurableResult(const FAgentToolCall&)
+{
+}
+
 std::string IAgentToolExecutor::GetLastExecutionTraceJson() const
 {
     return "[]";

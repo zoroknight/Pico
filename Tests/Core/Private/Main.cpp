@@ -21,6 +21,7 @@
 #include <iterator>
 #include <string>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -506,6 +507,29 @@ void TestPlatformProcess(FTestRunner& Runner)
     Child.Reset();
     Runner.Expect(!Child.IsValid(), "Process handle can be released explicitly");
 
+    Pico::FProcessGroup Group;
+    Pico::FProcessHandle OwnedChild;
+    const bool bGroupInitialized = Group.InitializeKillOnClose(&Error);
+    if (bGroupInitialized)
+    {
+        OwnedChild = Pico::FPlatformProcess::CreateProcess(
+            Pico::FPaths::GetExecutablePath(), {"-platform-process-wait-child"},
+            Pico::FPaths::GetEngineRootDir(), {}, &Error, &Group);
+    }
+    Runner.Expect(
+        bGroupInitialized && OwnedChild.IsValid(),
+        "Platform process starts a suspended child inside a kill-on-close owner group");
+    if (OwnedChild.IsValid())
+    {
+        Group.Reset();
+        int OwnedExitCode = 0;
+        Runner.Expect(
+            Pico::FPlatformProcess::WaitForExit(OwnedChild, 5000, &OwnedExitCode)
+                && !Pico::FPlatformProcess::IsRunning(OwnedChild),
+            "Closing the process owner group terminates its managed child");
+        OwnedChild.Reset();
+    }
+
     Pico::FProcessHandle Missing = Pico::FPlatformProcess::CreateProcess(
         Pico::FPaths::GetEngineRootDir() / "MissingPicoProgram.exe",
         {},
@@ -699,6 +723,12 @@ int main(int Argc, char** Argv)
         && std::string_view(Argv[1]) == "-platform-process-child")
     {
         return std::string_view(Argv[2]) == "argument with spaces" ? 0 : 7;
+    }
+    if (Argc == 2
+        && std::string_view(Argv[1]) == "-platform-process-wait-child")
+    {
+        std::this_thread::sleep_for(std::chrono::seconds(30));
+        return 0;
     }
 
     Pico::FPaths::Init(Argc > 0 ? Argv[0] : "PicoCoreTests");
