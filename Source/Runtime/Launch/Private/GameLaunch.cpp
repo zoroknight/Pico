@@ -77,6 +77,33 @@ struct FWindowInputContext
     bool bMouseCaptured = false;
 };
 
+void DrawGameplayStatusOverlay(Pico::FGameEngine& GameEngine)
+{
+    Pico::PGameInstance* GameInstance = GameEngine.GetGameInstance();
+    std::vector<std::string> Lines;
+    if (GameInstance != nullptr) GameInstance->AppendGameplayStatusLines(Lines);
+    if (Lines.empty()) return;
+    const ImGuiViewport* Viewport = ImGui::GetMainViewport();
+    const ImVec2 Position(
+        Viewport->WorkPos.x + Viewport->WorkSize.x - 14.0f,
+        Viewport->WorkPos.y + 14.0f);
+    ImGui::SetNextWindowPos(Position, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(390.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.88f);
+    constexpr ImGuiWindowFlags Flags = ImGuiWindowFlags_NoMove
+        | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse
+        | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
+    if (ImGui::Begin("Mini GAS Status", nullptr, Flags))
+    {
+        for (const std::string& Line : Lines)
+        {
+            if (Line == "---") ImGui::Separator();
+            else ImGui::TextUnformatted(Line.c_str());
+        }
+    }
+    ImGui::End();
+}
+
 void SetMouseCaptured(GLFWwindow* Window, FWindowInputContext& Context, bool bCaptured)
 {
     Context.bMouseCaptured = bCaptured;
@@ -849,6 +876,9 @@ Pico::EKey TranslateKey(int Key)
     }
     switch (Key)
     {
+    case GLFW_KEY_1: return Pico::EKey::One;
+    case GLFW_KEY_2: return Pico::EKey::Two;
+    case GLFW_KEY_3: return Pico::EKey::Three;
     case GLFW_KEY_SPACE: return Pico::EKey::Space;
     case GLFW_KEY_ESCAPE: return Pico::EKey::Escape;
     case GLFW_KEY_ENTER: return Pico::EKey::Enter;
@@ -1096,6 +1126,7 @@ int RunPicoGame(
                 ImGui_ImplGlfw_NewFrame();
                 ImGui::NewFrame();
                 GameplayDebug.Draw(GameEngine);
+                DrawGameplayStatusOverlay(GameEngine);
                 ImGui::Render();
                 ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
                 glfwSwapBuffers(Window);

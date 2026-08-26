@@ -27,6 +27,7 @@ public:
     virtual void OnWorldCleanup(PWorld* World);
     virtual void Shutdown();
     virtual void AppendGameplayDebugLines(std::vector<std::string>& OutLines) const;
+    virtual void AppendGameplayStatusLines(std::vector<std::string>& OutLines) const;
 
     FGameEngine* GetGameEngine() const;
     PWorld* GetWorld() const;

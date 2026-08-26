@@ -6,6 +6,8 @@
 
 namespace PicoSandbox
 {
+class PSandboxPawn;
+
 enum class ECharacterControlMode : Pico::uint8
 {
     FreeLook,
@@ -31,6 +33,9 @@ public:
     {
         return bLastInteractionAccepted;
     }
+    Pico::int32 GetGameplayAbilityResultCount() const { return GameplayAbilityResultCount; }
+    bool WasLastGameplayAbilityAccepted() const { return bLastGameplayAbilityAccepted; }
+    Pico::int32 GetLastGameplayAbilityId() const { return LastGameplayAbilityId; }
 
 protected:
     explicit PSandboxPlayerController(
@@ -40,6 +45,7 @@ protected:
 private:
     void ApplyControlMode();
     void DoMove(float Right, float Forward);
+    PSandboxPawn* FindNearestOtherSandboxPawn(float MaxDistance) const;
 
     PFUNCTION(Server, Reliable)
     void ServerTryInteract(Pico::PActor* Target);
@@ -47,8 +53,28 @@ private:
     PFUNCTION(Client, Reliable)
     void ClientInteractionResult(bool bAccepted);
 
+    PFUNCTION(Server, Reliable)
+    void ServerActivateGravityShot();
+
+    PFUNCTION(Server, Reliable)
+    void ServerActivateBurnShot();
+
+    PFUNCTION(Server, Reliable)
+    void ServerActivateFreezeShot();
+
+    PFUNCTION(Client, Reliable)
+    void ClientGameplayAbilityResult(
+        Pico::int32 AbilityId,
+        Pico::int32 PredictionKey,
+        bool bAccepted,
+        Pico::FVector3 AuthorityLocation,
+        float AuthorityMana);
+
     ECharacterControlMode ControlMode = ECharacterControlMode::FreeLook;
     Pico::int32 ClientInteractionResultCount = 0;
     bool bLastInteractionAccepted = false;
+    Pico::int32 GameplayAbilityResultCount = 0;
+    Pico::int32 LastGameplayAbilityId = 0;
+    bool bLastGameplayAbilityAccepted = false;
 };
 }

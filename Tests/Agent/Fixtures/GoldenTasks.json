@@ -100,6 +100,16 @@
       "required_tools": ["editor.agent.list_changes", "editor.agent.revert_run"],
       "forbidden_tools": ["editor.project.package"],
       "max_tool_calls": 4
+    },
+    {
+      "id": "configure-character-abilities",
+      "prompt": "给这个角色配置重力、灼烧和冻结投射物能力",
+      "fixture": "starter-world",
+      "verifier": "ability-loadout-configured",
+      "expected_status": "Completed",
+      "required_tools": ["editor.gameplay.asc.describe", "editor.gameplay.configure_ability_loadout"],
+      "forbidden_tools": ["editor.project.package"],
+      "max_tool_calls": 4
     }
   ]
 }

@@ -327,6 +327,9 @@ EKey FInputSystem::KeyFromName(std::string_view Name)
         return static_cast<EKey>(
             static_cast<int>(EKey::A) + (Lower[0] - 'a'));
     }
+    if (Lower == "1" || Lower == "one") return EKey::One;
+    if (Lower == "2" || Lower == "two") return EKey::Two;
+    if (Lower == "3" || Lower == "three") return EKey::Three;
     if (Lower == "space") return EKey::Space;
     if (Lower == "escape") return EKey::Escape;
     if (Lower == "enter") return EKey::Enter;
@@ -350,7 +353,7 @@ std::string_view FInputSystem::GetKeyName(EKey Key)
     static constexpr std::array<std::string_view, KeyCount> Names {
         "Unknown", "A", "B", "C", "D", "E", "F", "G", "H", "I",
         "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
-        "U", "V", "W", "X", "Y", "Z", "Space", "Escape", "Enter",
+        "U", "V", "W", "X", "Y", "Z", "1", "2", "3", "Space", "Escape", "Enter",
         "Tab", "LeftShift", "RightShift", "LeftControl", "RightControl",
         "Up", "Down", "Left", "Right", "MouseLeft", "MouseRight",
         "MouseMiddle"

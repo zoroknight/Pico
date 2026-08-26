@@ -20,9 +20,13 @@
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Engine/World.h"
+#include "Pico/GameplayAbilities/AbilitySystemComponent.h"
+#include "Pico/GameplayAbilities/GameplayAbility.h"
+#include "Pico/GameplayAbilities/GameplayEffect.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/Class.h"
+#include "Pico/Object/GarbageCollection.h"
 #include "Pico/Object/Property.h"
 #include "Pico/Tasks/TaskSystem.h"
 
@@ -65,6 +69,121 @@ bool IsSafeObjectName(std::string_view Name)
         if (!std::isalnum(Character) && Character != '_') return false;
     }
     return true;
+}
+
+PGameplayAbilitySystemComponent* FindAbilitySystem(PObject* Object)
+{
+    if (Object == nullptr) return nullptr;
+    if (Object->IsA(PGameplayAbilitySystemComponent::StaticClass()))
+        return static_cast<PGameplayAbilitySystemComponent*>(Object);
+    PActor* Actor = Object->IsA(PActor::StaticClass())
+        ? static_cast<PActor*>(Object) : nullptr;
+    if (Actor == nullptr && Object->IsA(PActorComponent::StaticClass()))
+        Actor = static_cast<PActorComponent*>(Object)->GetOwner();
+    if (Actor == nullptr) return nullptr;
+    for (PActorComponent* Component : Actor->GetComponents())
+        if (Component != nullptr
+            && Component->IsA(PGameplayAbilitySystemComponent::StaticClass()))
+            return static_cast<PGameplayAbilitySystemComponent*>(Component);
+    return nullptr;
+}
+
+std::string GetAbilitySemanticName(const PClass* AbilityClass)
+{
+    const std::string ClassName = AbilityClass != nullptr
+        ? AbilityClass->GetName().ToString() : std::string();
+    if (ClassName == "PSandboxDashAbility") return "GravityShot";
+    if (ClassName == "PSandboxFireballAbility") return "BurnShot";
+    if (ClassName == "PSandboxStunAbility") return "FreezeShot";
+    return ClassName;
+}
+
+FJson DescribeMiniGasProfile(PObject* Owner)
+{
+    if (Owner == nullptr || Owner->GetClass() == nullptr) return nullptr;
+    FJson Profile = FJson::object();
+    const std::vector<std::string> BooleanProperties = {
+        "bGravityShotEnabled", "bBurnShotEnabled", "bFreezeShotEnabled"};
+    const std::vector<std::string> NumberProperties = {
+        "InitialHealth", "InitialMana",
+        "GravityManaCost", "GravityCooldownSeconds", "GravityRange",
+        "GravityProjectileSpeed", "GravityEffectDuration", "GravityLaunchVelocity",
+        "BurnManaCost", "BurnCooldownSeconds", "BurnRange", "BurnProjectileSpeed",
+        "BurnEffectDuration", "BurnTickInterval", "BurnDamagePerTick",
+        "FreezeManaCost", "FreezeCooldownSeconds", "FreezeRange",
+        "FreezeProjectileSpeed", "FreezeEffectDuration"};
+    const std::vector<std::string> ColorProperties = {
+        "GravityProjectileColor", "BurnProjectileColor", "FreezeProjectileColor"};
+    for (const std::string& Name : BooleanProperties)
+    {
+        const PProperty* Property = Owner->GetClass()->FindProperty(FName(Name));
+        bool Value = false;
+        if (Property != nullptr && Property->GetValue(Owner, Value)) Profile[Name] = Value;
+    }
+    for (const std::string& Name : NumberProperties)
+    {
+        const PProperty* Property = Owner->GetClass()->FindProperty(FName(Name));
+        float Value = 0.0f;
+        if (Property != nullptr && Property->GetValue(Owner, Value)) Profile[Name] = Value;
+    }
+    for (const std::string& Name : ColorProperties)
+    {
+        const PProperty* Property = Owner->GetClass()->FindProperty(FName(Name));
+        FVector3 Value;
+        if (Property != nullptr && Property->GetValue(Owner, Value))
+            Profile[Name] = {{"x", Value.X}, {"y", Value.Y}, {"z", Value.Z}};
+    }
+    return Profile.empty() ? FJson(nullptr) : Profile;
+}
+
+FJson DescribeAbilitySystem(PGameplayAbilitySystemComponent* AbilitySystem)
+{
+    if (AbilitySystem == nullptr) return FJson::object();
+    FJson Abilities = FJson::array();
+    for (const FGameplayAbilitySpec& Spec : AbilitySystem->GetActivatableAbilities())
+    {
+        const auto* Ability = Spec.AbilityClass != nullptr
+            ? static_cast<const PGameplayAbility*>(Spec.AbilityClass->GetDefaultObject())
+            : nullptr;
+        Abilities.push_back({{"handle", Spec.Handle.Value},
+            {"semantic_name", GetAbilitySemanticName(Spec.AbilityClass)},
+            {"internal_class", Spec.AbilityClass
+                ? Spec.AbilityClass->GetName().ToString() : ""},
+            {"cost", Ability ? Spec.ResolveCost(Ability->GetDefaultCost()) : 0.0f},
+            {"cooldown", Ability
+                ? Spec.ResolveCooldown(Ability->GetDefaultCooldown()) : 0.0f},
+            {"level", Spec.Level}, {"input_id", Spec.InputId},
+            {"input_key", Spec.InputId >= 0 && Spec.InputId < 3
+                ? std::to_string(Spec.InputId + 1) : ""},
+            {"active", Spec.IsActive()}});
+    }
+    FJson Effects = FJson::array();
+    for (const FActiveGameplayEffect& Effect : AbilitySystem->GetActiveGameplayEffects())
+        Effects.push_back({{"handle", Effect.Handle.Value},
+            {"class", Effect.Spec.EffectClass
+                ? Effect.Spec.EffectClass->GetName().ToString() : ""},
+            {"stacking_key", Effect.Spec.StackingKey},
+            {"remaining", Effect.RemainingDuration},
+            {"stacks", Effect.StackCount}});
+    FJson Attributes = FJson::object();
+    if (const PAttributeSet* Set = AbilitySystem->GetAttributeSet())
+        for (const EGameplayAttribute Attribute : {EGameplayAttribute::Health,
+            EGameplayAttribute::MaxHealth, EGameplayAttribute::Mana,
+            EGameplayAttribute::MoveSpeed})
+            Attributes[std::string(ToString(Attribute))] =
+                Set->GetCurrentValue(Attribute);
+    return {{"schema_revision", 2},
+        {"naming_note", "internal_class names are compatibility identifiers; semantic_name is the current gameplay ability"},
+        {"object_path", AbilitySystem->GetPathName()},
+        {"owner", AbilitySystem->GetAbilityOwnerActor()
+            ? AbilitySystem->GetAbilityOwnerActor()->GetPathName() : ""},
+        {"avatar", AbilitySystem->GetAbilityAvatarActor()
+            ? AbilitySystem->GetAbilityAvatarActor()->GetPathName() : ""},
+        {"attributes", std::move(Attributes)},
+        {"mini_gas_profile", DescribeMiniGasProfile(
+            AbilitySystem->GetAbilityOwnerActor())},
+        {"owned_tags", AbilitySystem->GetOwnedGameplayTags().ExportText()},
+        {"abilities", std::move(Abilities)}, {"active_effects", std::move(Effects)}};
 }
 
 bool IsSafeRunId(std::string_view RunId)
@@ -263,6 +382,12 @@ FJson DescribeObject(PObject* Object, bool bIncludeComponents)
             Result["properties"][Property->GetName().ToString()] =
                 DescribeProperty(*Property, Object);
         }
+    }
+    if (Object->IsA(PActor::StaticClass()))
+    {
+        const FAssetPath BlueprintAsset = FindActorBlueprintAsset(Object->GetClass());
+        if (BlueprintAsset.IsValid())
+            Result["actor_blueprint_asset"] = BlueprintAsset.ToString();
     }
     if (bIncludeComponents && Object->IsA(PActor::StaticClass()))
     {
@@ -746,7 +871,56 @@ struct FEditorAgentToolExecutor::FImpl
                 Record.Tags = {"selection", "reflection", "property"};
                 Record.Provenance = "Live editor selection and PProperty metadata";
                 Result.push_back(std::move(Record));
+
+                if (PGameplayAbilitySystemComponent* AbilitySystem =
+                        FindAbilitySystem(Object))
+                {
+                    FAgentKnowledgeRecord GameplayRecord;
+                    GameplayRecord.SourceType = "gameplay-abilities";
+                    GameplayRecord.SourcePath = AbilitySystem->GetPathName();
+                    GameplayRecord.Title = "Selected Ability System state";
+                    GameplayRecord.Content = DescribeAbilitySystem(AbilitySystem).dump();
+                    GameplayRecord.Tags = {"gas", "ability", "attribute", "effect", "tag"};
+                    GameplayRecord.Provenance =
+                        "Live ASC, AttributeSet, AbilitySpec, GameplayTag and ActiveEffect state";
+                    Result.push_back(std::move(GameplayRecord));
+                }
             }
+        }
+
+        {
+            FAgentKnowledgeRecord Record;
+            Record.SourceType = "gameplay-schema";
+            Record.SourcePath = "PicoGameplayAbilities/MiniGAS";
+            Record.Title = "Pico Mini GAS safe configuration schema";
+            Record.Content = FJson({
+                {"schema_revision", 2},
+                {"profile_owner", "PSandboxPawn reflected Mini GAS Profile"},
+                {"abilities", FJson::array({
+                    {{"name", "GravityShot"}, {"input", "1"},
+                        {"enabled", "bGravityShotEnabled"},
+                        {"legacy_internal_class", "PSandboxDashAbility"}},
+                    {{"name", "BurnShot"}, {"input", "2"},
+                        {"enabled", "bBurnShotEnabled"},
+                        {"legacy_internal_class", "PSandboxFireballAbility"}},
+                    {{"name", "FreezeShot"}, {"input", "3"},
+                        {"enabled", "bFreezeShotEnabled"},
+                        {"legacy_internal_class", "PSandboxStunAbility"}}})},
+                {"configurable_groups", FJson::array({
+                    "initial health", "initial mana", "enabled", "mana cost", "cooldown", "range", "projectile speed",
+                    "projectile color", "effect duration", "effect strength"})},
+                {"persistence", FJson::array({
+                    "Placed World Pawn changes affect only that serialized instance",
+                    "GameMode-spawned players inherit Actor Blueprint generated defaults",
+                    "InitialHealth and InitialMana are persistent inputs; Replicated fields are read-only runtime mirrors"})},
+                {"constraints", FJson::array({
+                    "Only registered Ability classes may be granted",
+                    "All three projectiles and impact Effects are server authoritative",
+                    "The Agent may configure existing abilities but may not generate arbitrary C++"})}
+            }).dump();
+            Record.Tags = {"gas", "schema", "gravity", "burn", "freeze", "network"};
+            Record.Provenance = "PicoGameplayAbilities Runtime contract";
+            Result.push_back(std::move(Record));
         }
 
         const std::vector<FLogRecord> LogRecords = FLog::GetRecordsSince(0);
@@ -818,6 +992,10 @@ struct FEditorAgentToolExecutor::FImpl
                             ? Actor->GetRootComponent()->GetPathName() : ""},
                         {"component_classes", std::move(ComponentClasses)}
                     };
+                    const FAssetPath BlueprintAsset =
+                        FindActorBlueprintAsset(Actor->GetClass());
+                    if (BlueprintAsset.IsValid())
+                        ActorJson["actor_blueprint_asset"] = BlueprintAsset.ToString();
                     if (Actor->IsA(PPawn::StaticClass()))
                     {
                         ActorJson["auto_possess_player"] =
@@ -831,6 +1009,185 @@ struct FEditorAgentToolExecutor::FImpl
                 {"actors", std::move(Actors)}});
         };
         bInitialized = Registry.Register(std::move(DescribeWorld));
+
+        FAgentToolDefinition DescribeAsc;
+        DescribeAsc.Name = "editor.gameplay.asc.describe";
+        DescribeAsc.Description =
+            "Describe the existing AbilitySystemComponent, attributes, tags, granted Ability specs, and active Effects for an Actor or Component";
+        DescribeAsc.Schema.Fields = {
+            {"object_path", EAgentToolValueType::String, true, {}, {}, 512}};
+        DescribeAsc.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            PObject* Object = FindEditorWorldObjectByPath(
+                EngineLoop ? EngineLoop->GetWorld() : nullptr,
+                Arguments.at("object_path").get<std::string>());
+            PGameplayAbilitySystemComponent* AbilitySystem = FindAbilitySystem(Object);
+            return AbilitySystem != nullptr
+                ? Success(Call, DescribeAbilitySystem(AbilitySystem))
+                : Failure(Call, "Object has no AbilitySystemComponent");
+        };
+        bInitialized = Registry.Register(std::move(DescribeAsc)) && bInitialized;
+
+        FAgentToolDefinition ConfigureLoadout;
+        ConfigureLoadout.Name = "editor.gameplay.configure_ability_loadout";
+        ConfigureLoadout.Description =
+            "Configure Gravity, Burn, and Freeze on one placed World Pawn instance only; for GameMode-spawned players persist the same reflected flags through editor.actor_blueprint.set_defaults";
+        ConfigureLoadout.Permission = EAgentToolPermission::ModifyWorld;
+        ConfigureLoadout.Schema.Fields = {
+            {"object_path", EAgentToolValueType::String, true, {}, {}, 512},
+            {"gravity", EAgentToolValueType::Boolean, true},
+            {"burn", EAgentToolValueType::Boolean, true},
+            {"freeze", EAgentToolValueType::Boolean, true},
+            {"gravity_cost", EAgentToolValueType::Number, false, 0.0, 10000.0},
+            {"gravity_cooldown", EAgentToolValueType::Number, false, 0.0, 3600.0},
+            {"gravity_range", EAgentToolValueType::Number, false, 0.01, 100000.0},
+            {"gravity_projectile_speed", EAgentToolValueType::Number, false, 0.01, 100000.0},
+            {"gravity_duration", EAgentToolValueType::Number, false, 0.0, 3600.0},
+            {"gravity_launch_velocity", EAgentToolValueType::Number, false, 0.0, 100000.0},
+            {"burn_cost", EAgentToolValueType::Number, false, 0.0, 10000.0},
+            {"burn_cooldown", EAgentToolValueType::Number, false, 0.0, 3600.0},
+            {"burn_range", EAgentToolValueType::Number, false, 0.01, 100000.0},
+            {"burn_projectile_speed", EAgentToolValueType::Number, false, 0.01, 100000.0},
+            {"burn_duration", EAgentToolValueType::Number, false, 0.0, 3600.0},
+            {"burn_tick_interval", EAgentToolValueType::Number, false, 0.01, 3600.0},
+            {"burn_damage_per_tick", EAgentToolValueType::Number, false, 0.0, 10000.0},
+            {"freeze_cost", EAgentToolValueType::Number, false, 0.0, 10000.0},
+            {"freeze_cooldown", EAgentToolValueType::Number, false, 0.0, 3600.0},
+            {"freeze_range", EAgentToolValueType::Number, false, 0.01, 100000.0},
+            {"freeze_projectile_speed", EAgentToolValueType::Number, false, 0.01, 100000.0},
+            {"freeze_duration", EAgentToolValueType::Number, false, 0.0, 3600.0}};
+        ConfigureLoadout.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            PObject* Object = FindEditorWorldObjectByPath(
+                EngineLoop ? EngineLoop->GetWorld() : nullptr,
+                Arguments.at("object_path").get<std::string>());
+            PActor* Actor = Object != nullptr && Object->IsA(PActor::StaticClass())
+                ? static_cast<PActor*>(Object) : nullptr;
+            if (Actor == nullptr || Actor->GetClass() == nullptr)
+                return Failure(Call, "Actor was not found");
+            const int32 Bits = (Arguments.at("gravity").get<bool>() ? 1 : 0)
+                | (Arguments.at("burn").get<bool>() ? 2 : 0)
+                | (Arguments.at("freeze").get<bool>() ? 4 : 0);
+            const auto ApplyProperty = [this, Actor](
+                const char* PropertyName, FEditorPropertyValue Value,
+                std::string& Error)
+            {
+                const PProperty* Property = Actor->GetClass()->FindProperty(FName(PropertyName));
+                if (Property == nullptr)
+                {
+                    Error = std::string("Actor has no reflected property ") + PropertyName;
+                    return false;
+                }
+                const FEditorPropertyResult Applied = ApplyEditorPropertyValue(
+                    EngineLoop, Actor, Property, Value);
+                if (!Applied.bSucceeded) Error = Applied.Message;
+                return Applied.bSucceeded;
+            };
+            std::string ApplyError;
+            if (!ApplyProperty("bGravityShotEnabled",
+                    FEditorPropertyValue(Arguments.at("gravity").get<bool>()), ApplyError)
+                || !ApplyProperty("bBurnShotEnabled",
+                    FEditorPropertyValue(Arguments.at("burn").get<bool>()), ApplyError)
+                || !ApplyProperty("bFreezeShotEnabled",
+                    FEditorPropertyValue(Arguments.at("freeze").get<bool>()), ApplyError))
+                return Failure(Call, ApplyError);
+            const std::pair<const char*, const char*> NumberProperties[] = {
+                {"gravity_cost", "GravityManaCost"},
+                {"gravity_cooldown", "GravityCooldownSeconds"},
+                {"gravity_range", "GravityRange"},
+                {"gravity_projectile_speed", "GravityProjectileSpeed"},
+                {"gravity_duration", "GravityEffectDuration"},
+                {"gravity_launch_velocity", "GravityLaunchVelocity"},
+                {"burn_cost", "BurnManaCost"},
+                {"burn_cooldown", "BurnCooldownSeconds"},
+                {"burn_range", "BurnRange"},
+                {"burn_projectile_speed", "BurnProjectileSpeed"},
+                {"burn_duration", "BurnEffectDuration"},
+                {"burn_tick_interval", "BurnTickInterval"},
+                {"burn_damage_per_tick", "BurnDamagePerTick"},
+                {"freeze_cost", "FreezeManaCost"},
+                {"freeze_cooldown", "FreezeCooldownSeconds"},
+                {"freeze_range", "FreezeRange"},
+                {"freeze_projectile_speed", "FreezeProjectileSpeed"},
+                {"freeze_duration", "FreezeEffectDuration"}};
+            for (const auto& [ArgumentName, PropertyName] : NumberProperties)
+            {
+                if (!Arguments.contains(ArgumentName)) continue;
+                if (!ApplyProperty(PropertyName,
+                        FEditorPropertyValue(Arguments.at(ArgumentName).get<float>()),
+                        ApplyError))
+                    return Failure(Call, ApplyError);
+            }
+
+            PGameplayAbilitySystemComponent* AbilitySystem = FindAbilitySystem(Actor);
+            if (AbilitySystem != nullptr && Actor->HasBegunPlay())
+            {
+                struct FAbilityEntry
+                {
+                    int32 Bit;
+                    const char* ClassName;
+                    int32 InputId;
+                    const char* CostProperty;
+                    const char* CooldownProperty;
+                };
+                const FAbilityEntry Entries[] = {
+                    {1, "PSandboxDashAbility", 0,
+                        "GravityManaCost", "GravityCooldownSeconds"},
+                    {2, "PSandboxFireballAbility", 1,
+                        "BurnManaCost", "BurnCooldownSeconds"},
+                    {4, "PSandboxStunAbility", 2,
+                        "FreezeManaCost", "FreezeCooldownSeconds"}};
+                for (const FAbilityEntry& Entry : Entries)
+                {
+                    const PClass* Class = FClassRegistry::FindClass(FName(Entry.ClassName));
+                    FGameplayAbilitySpecHandle Existing;
+                    for (const FGameplayAbilitySpec& Spec : AbilitySystem->GetActivatableAbilities())
+                        if (Spec.AbilityClass == Class) { Existing = Spec.Handle; break; }
+                    if ((Bits & Entry.Bit) != 0 && !Existing.IsValid() && Class != nullptr)
+                        Existing = AbilitySystem->GiveAbility(Class, 1, Entry.InputId);
+                    else if ((Bits & Entry.Bit) == 0 && Existing.IsValid())
+                        AbilitySystem->ClearAbility(Existing);
+                    if ((Bits & Entry.Bit) != 0 && Existing.IsValid())
+                    {
+                        float Cost = 0.0f;
+                        float Cooldown = 0.0f;
+                        const PProperty* CostProperty = Actor->GetClass()->FindProperty(
+                            FName(Entry.CostProperty));
+                        const PProperty* CooldownProperty = Actor->GetClass()->FindProperty(
+                            FName(Entry.CooldownProperty));
+                        if (CostProperty != nullptr && CooldownProperty != nullptr
+                            && CostProperty->GetValue(Actor, Cost)
+                            && CooldownProperty->GetValue(Actor, Cooldown))
+                            AbilitySystem->ConfigureAbilitySpec(Existing, Cost, Cooldown);
+                    }
+                }
+            }
+            if (Selection) Selection->Set(Actor);
+            return Success(Call, {{"object_path", Actor->GetPathName()},
+                {"loadout_bits", Bits}, {"gravity", (Bits & 1) != 0},
+                {"burn", (Bits & 2) != 0}, {"freeze", (Bits & 4) != 0},
+                {"mini_gas_profile", DescribeMiniGasProfile(Actor)}});
+        };
+        ConfigureLoadout.Verifier = [this](const FAgentToolCall&,
+            const FAgentToolResult& Result, std::string& Error)
+        {
+            const FJson Output = FJson::parse(Result.OutputJson);
+            PObject* Object = FindEditorWorldObjectByPath(
+                EngineLoop ? EngineLoop->GetWorld() : nullptr,
+                Output.at("object_path").get<std::string>());
+            if (Object == nullptr
+                || DescribeMiniGasProfile(Object) != Output.at("mini_gas_profile"))
+            {
+                Error = "Mini GAS profile postcondition was not satisfied";
+                return false;
+            }
+            return true;
+        };
+        bInitialized = Registry.Register(std::move(ConfigureLoadout)) && bInitialized;
 
         FAgentToolDefinition ListChanges;
         ListChanges.Name = "editor.agent.list_changes";
@@ -1253,6 +1610,184 @@ struct FEditorAgentToolExecutor::FImpl
             return true;
         };
         bInitialized = Registry.Register(std::move(SetProperties)) && bInitialized;
+
+        FAgentToolDefinition DescribeBlueprintDefaults;
+        DescribeBlueprintDefaults.Name = "editor.actor_blueprint.describe_defaults";
+        DescribeBlueprintDefaults.Description =
+            "Describe the reflected class defaults that future instances of one Actor Blueprint will receive; use this instead of a placed World instance for GameMode-spawned Pawns";
+        DescribeBlueprintDefaults.Schema.Fields = {
+            {"blueprint_asset", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath}};
+        DescribeBlueprintDefaults.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            FAssetPath BlueprintPath;
+            if (!FAssetPath::TryParse(
+                    Arguments.at("blueprint_asset").get<std::string>(), BlueprintPath)
+                || BlueprintPath.GetExtension() != ".pblueprint")
+                return Failure(Call, "Actor Blueprint asset path is invalid");
+            const FAssetRecord* Record = EngineLoop
+                ? EngineLoop->GetAssetRegistry().Find(BlueprintPath) : nullptr;
+            const PClass* GeneratedClass = FindActorBlueprintGeneratedClass(BlueprintPath);
+            const PObject* Defaults = GeneratedClass != nullptr
+                ? GeneratedClass->GetDefaultObject() : nullptr;
+            if (Record == nullptr || Record->Type != EAssetType::ActorBlueprint
+                || Defaults == nullptr)
+                return Failure(Call, "Actor Blueprint is not compiled and registered");
+            return Success(Call, {{"blueprint_asset", BlueprintPath.ToString()},
+                {"generated_class", GeneratedClass->GetName().ToString()},
+                {"defaults", DescribeObject(const_cast<PObject*>(Defaults), false)}});
+        };
+        bInitialized = Registry.Register(std::move(DescribeBlueprintDefaults))
+            && bInitialized;
+
+        FAgentToolDefinition SetBlueprintDefaults;
+        SetBlueprintDefaults.Name = "editor.actor_blueprint.set_defaults";
+        SetBlueprintDefaults.Description =
+            "Persist up to 32 reflected Serializable defaults on an Actor Blueprint generated class so future GameMode-spawned and placed instances inherit them; never use runtime Replicated or Transient mirror properties";
+        SetBlueprintDefaults.Permission = EAgentToolPermission::WriteProject;
+        SetBlueprintDefaults.Schema.Fields = {
+            {"blueprint_asset", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath},
+            {"properties", EAgentToolValueType::Object, true}};
+        SetBlueprintDefaults.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            FAssetPath BlueprintPath;
+            if (!FAssetPath::TryParse(
+                    Arguments.at("blueprint_asset").get<std::string>(), BlueprintPath)
+                || BlueprintPath.GetExtension() != ".pblueprint")
+                return Failure(Call, "Actor Blueprint asset path is invalid");
+            const FAssetRecord* Record = EngineLoop
+                ? EngineLoop->GetAssetRegistry().Find(BlueprintPath) : nullptr;
+            const PClass* GeneratedClass = FindActorBlueprintGeneratedClass(BlueprintPath);
+            const FJson& PropertyValues = Arguments.at("properties");
+            if (Record == nullptr || Record->Type != EAssetType::ActorBlueprint
+                || GeneratedClass == nullptr || !GeneratedClass->IsChildOf(PActor::StaticClass())
+                || PropertyValues.empty() || PropertyValues.size() > 32)
+                return Failure(Call, "Actor Blueprint or properties are invalid");
+
+            struct FPendingValue
+            {
+                const PProperty* Property = nullptr;
+                FEditorPropertyValue Value;
+            };
+            std::vector<FPendingValue> Pending;
+            Pending.reserve(PropertyValues.size());
+            for (auto It = PropertyValues.begin(); It != PropertyValues.end(); ++It)
+            {
+                const PProperty* Property = GeneratedClass->FindProperty(FName(It.key()));
+                if (Property == nullptr
+                    || !Property->HasAnyFlags(EPropertyFlags::Editable)
+                    || !Property->HasAnyFlags(EPropertyFlags::Serializable)
+                    || Property->HasAnyFlags(
+                        EPropertyFlags::ReadOnly | EPropertyFlags::Transient))
+                    return Failure(Call,
+                        "Blueprint default is not persistently editable: " + It.key());
+                FEditorPropertyValue Value;
+                std::string Error;
+                if (!JsonToPropertyValue(*Property, It.value(), Value, Error))
+                    return Failure(Call, It.key() + ": " + Error);
+                Pending.push_back({Property, std::move(Value)});
+            }
+
+            PWorld* PreviewWorld = NewObject<PWorld>(
+                nullptr, "AgentBlueprintDefaultsWorld", EObjectFlags::Transient);
+            const auto Cleanup = [&PreviewWorld]()
+            {
+                if (PreviewWorld == nullptr) return;
+                RemoveFromRoot(PreviewWorld);
+                DestroyObjectTree(PreviewWorld);
+                PreviewWorld = nullptr;
+            };
+            if (PreviewWorld == nullptr || !AddToRoot(PreviewWorld)
+                || !PreviewWorld->Initialize())
+            {
+                Cleanup();
+                return Failure(Call, "Could not initialize Blueprint defaults workspace");
+            }
+            PreviewWorld->SetAssetServices(
+                &EngineLoop->GetAssetRegistry(), &EngineLoop->GetAssetManager());
+            FActorSpawnParameters Spawn;
+            Spawn.Name = FName("AgentBlueprintDefaultsActor");
+            Spawn.ObjectFlags = EObjectFlags::Transient;
+            PActor* PreviewActor = PreviewWorld->SpawnActor(GeneratedClass, Spawn);
+            if (PreviewActor == nullptr)
+            {
+                Cleanup();
+                return Failure(Call, "Could not construct Actor Blueprint defaults");
+            }
+            for (FPendingValue& Entry : Pending)
+            {
+                const FEditorPropertyResult Applied = ApplyEditorPropertyValue(
+                    EngineLoop, PreviewActor, Entry.Property, Entry.Value);
+                if (!Applied.bSucceeded)
+                {
+                    Cleanup();
+                    return Failure(Call, Applied.Message);
+                }
+            }
+            EActorBlueprintError BlueprintError = EActorBlueprintError::None;
+            if (!SaveActorBlueprintDefaults(
+                    Record->FilePath, BlueprintPath, PreviewActor, &BlueprintError))
+            {
+                Cleanup();
+                return Failure(Call, "Could not save Actor Blueprint defaults: "
+                    + std::string(ToString(BlueprintError)));
+            }
+            Cleanup();
+
+            const PObject* SavedDefaults = GeneratedClass->GetDefaultObject();
+            FJson Saved = FJson::object();
+            for (const FPendingValue& Entry : Pending)
+            {
+                FJson Value;
+                if (SavedDefaults == nullptr
+                    || !PropertyValueToJson(*Entry.Property, SavedDefaults, Value))
+                    return Failure(Call, "Could not read back saved Blueprint default");
+                Saved[Entry.Property->GetName().ToString()] = std::move(Value);
+            }
+            return Success(Call, {{"blueprint_asset", BlueprintPath.ToString()},
+                {"generated_class", GeneratedClass->GetName().ToString()},
+                {"properties", std::move(Saved)}});
+        };
+        SetBlueprintDefaults.Verifier = [this](const FAgentToolCall&,
+            const FAgentToolResult& Result, std::string& Error)
+        {
+            const FJson Output = FJson::parse(Result.OutputJson);
+            FAssetPath BlueprintPath;
+            if (!FAssetPath::TryParse(
+                    Output.at("blueprint_asset").get<std::string>(), BlueprintPath))
+            {
+                Error = "Saved Blueprint path is invalid";
+                return false;
+            }
+            const PClass* GeneratedClass = FindActorBlueprintGeneratedClass(BlueprintPath);
+            const PObject* Defaults = GeneratedClass != nullptr
+                ? GeneratedClass->GetDefaultObject() : nullptr;
+            for (auto It = Output.at("properties").begin();
+                Defaults != nullptr && It != Output.at("properties").end(); ++It)
+            {
+                const PProperty* Property = GeneratedClass->FindProperty(FName(It.key()));
+                FJson Actual;
+                if (Property == nullptr
+                    || !PropertyValueToJson(*Property, Defaults, Actual)
+                    || !JsonEquivalent(Actual, It.value()))
+                {
+                    Error = "Blueprint default postcondition failed: " + It.key();
+                    return false;
+                }
+            }
+            if (Defaults == nullptr)
+            {
+                Error = "Blueprint generated defaults disappeared";
+                return false;
+            }
+            return true;
+        };
+        bInitialized = Registry.Register(std::move(SetBlueprintDefaults)) && bInitialized;
 
         FAgentToolDefinition BatchSetProperties;
         BatchSetProperties.Name = "editor.object.batch_set_properties";

@@ -1,6 +1,10 @@
 #include "InspectorApp.h"
 
 #include "Pico/Object/ObjectSystem.h"
+#include "Pico/Engine/Actor.h"
+#include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/AnimInstance.h"
+#include "Pico/GameplayAbilities/GameplayAbilitiesModule.h"
 #include "Pico/Samples/DemoCharacter.h"
 
 #include <GLFW/glfw3.h>
@@ -109,6 +113,10 @@ int main(int Argc, char** Argv)
 
     int ExitCode = 0;
     if (!Pico::PObjectSystem::Init()
+        || !Pico::PActorComponent::RegisterClass()
+        || !Pico::PActor::RegisterClass()
+        || !Pico::PAnimInstance::RegisterClass()
+        || !Pico::RegisterGameplayAbilitiesClasses()
         || !Pico::PDemoCharacter::RegisterClass()
         || !Pico::PDemoHealthObserver::RegisterClass())
     {

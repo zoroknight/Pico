@@ -50,6 +50,10 @@ void PGameInstance::AppendGameplayDebugLines(std::vector<std::string>&) const
 {
 }
 
+void PGameInstance::AppendGameplayStatusLines(std::vector<std::string>&) const
+{
+}
+
 FGameEngine* PGameInstance::GetGameEngine() const
 {
     return OwningGameEngine;

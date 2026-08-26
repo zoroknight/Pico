@@ -1,0 +1,43 @@
+{
+  "format_version": 1,
+  "id": "configure-character-abilities",
+  "version": "1.2.0",
+  "description": "Inspect and configure a character's reflected Mini GAS Profile for the current GravityShot, BurnShot, and FreezeShot projectile abilities without generating arbitrary C++.",
+  "triggers": ["配置角色能力", "重力弹", "灼烧弹", "冻结弹", "重力、灼烧", "GAS", "character abilities", "configure gravity", "gravity burn freeze"],
+  "allowed_tools": [
+    "editor.world.describe",
+    "editor.asset.search",
+    "editor.object.describe",
+    "editor.object.get_property",
+    "editor.object.set_properties",
+    "editor.actor_blueprint.describe_defaults",
+    "editor.actor_blueprint.set_defaults",
+    "editor.gameplay.asc.describe",
+    "editor.gameplay.configure_ability_loadout",
+    "editor.play.validate",
+    "editor.world.save"
+  ],
+  "preconditions": [
+    "The target Actor has reflected bGravityShotEnabled, bBurnShotEnabled, and bFreezeShotEnabled properties plus an AbilitySystemComponent.",
+    "Only registered existing Ability classes may be selected.",
+    "Changes intended for Play or network-spawned players must target the configured DefaultPawnClass Actor Blueprint defaults, not only a placed editor World instance."
+  ],
+  "workflow": [
+    "Inspect the target Actor and its ASC before changing gameplay state.",
+    "Determine persistence scope: use a World instance only for that placed Pawn; for normal Play, separate server, or clients, find the matching Actor Blueprint asset and inspect its generated defaults.",
+    "Treat semantic_name as current gameplay truth; PSandboxDashAbility, PSandboxFireballAbility, and PSandboxStunAbility are legacy internal identifiers only.",
+    "Use configure_ability_loadout only for a placed live Pawn. Use actor_blueprint.set_defaults for bGravityShotEnabled, bBurnShotEnabled, bFreezeShotEnabled and other defaults that future GameMode-spawned Pawns must inherit.",
+    "Use InitialHealth and InitialMana for persistent starting attributes. Never edit ReplicatedHealth, ReplicatedMana, cooldown remaining, tag bits, or other Transient runtime mirrors.",
+    "Use generic reflected property tools for requested profile fields such as projectile colors; do not invent one tool per property.",
+    "Configure the requested cost, cooldown, range, projectile speed, duration, or effect-strength values.",
+    "Read back Actor Blueprint defaults after persistent changes; describe the live ASC only when validating an already-running or placed instance.",
+    "Validate gameplay. Save the World only when a placed instance changed; actor_blueprint.set_defaults saves the Blueprint asset itself."
+  ],
+  "completion_criteria": [
+    "The three reflected enabled flags exactly represent the requested abilities.",
+    "The Actor Blueprint generated defaults contain persistent Play settings; no completion claim is based on a Transient replicated mirror.",
+    "After Play starts, the live ASC reports GravityShot, BurnShot, and FreezeShot semantic names and the requested effective parameters.",
+    "No arbitrary source code or unknown Ability class was created.",
+    "Gameplay validation succeeds."
+  ]
+}

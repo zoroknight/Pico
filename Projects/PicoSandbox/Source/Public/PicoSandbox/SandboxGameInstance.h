@@ -20,6 +20,7 @@ public:
     void OnWorldCleanup(Pico::PWorld* World) override;
     void Shutdown() override;
     void AppendGameplayDebugLines(std::vector<std::string>& OutLines) const override;
+    void AppendGameplayStatusLines(std::vector<std::string>& OutLines) const override;
 
 private:
     explicit PSandboxGameInstance(const Pico::FObjectConstructionParams& Params);

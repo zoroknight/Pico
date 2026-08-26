@@ -24,11 +24,21 @@ pico_generate_reflection(
     "PicoSandbox_SandboxPlayerController_h"
 )
 
+pico_generate_reflection(
+    PICO_SANDBOX_PROJECTILE_GENERATED
+    "${CMAKE_CURRENT_SOURCE_DIR}/Source/Public/PicoSandbox/SandboxFireballActor.h"
+    "PicoSandbox/SandboxFireballActor.h"
+    "PicoSandbox/SandboxFireballActor.generated.h"
+    "PicoSandbox_SandboxFireballActor_h"
+)
+
 add_library(PicoSandboxModule STATIC
     Source/Private/SandboxCharacter.cpp
     Source/Private/SandboxEntity.cpp
     Source/Private/SandboxGameInstance.cpp
     Source/Private/SandboxGameMode.cpp
+    Source/Private/SandboxGameplayAbilities.cpp
+    Source/Private/SandboxFireballActor.cpp
     Source/Private/SandboxModule.cpp
     Source/Private/SandboxPawn.cpp
     Source/Private/SandboxPlayerController.cpp
@@ -37,6 +47,7 @@ add_library(PicoSandboxModule STATIC
     ${PICO_SANDBOX_PAWN_GENERATED}
     ${PICO_SANDBOX_REPLICATION_LAB_GENERATED}
     ${PICO_SANDBOX_PLAYER_CONTROLLER_GENERATED}
+    ${PICO_SANDBOX_PROJECTILE_GENERATED}
 )
 
 target_include_directories(PicoSandboxModule
@@ -53,6 +64,7 @@ target_compile_definitions(PicoSandboxModule
 target_link_libraries(PicoSandboxModule
     PUBLIC
         PicoEngine
+        PicoGameplayAbilities
 )
 
 if(TARGET PicoEditor)

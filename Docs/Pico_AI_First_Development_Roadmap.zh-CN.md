@@ -230,7 +230,7 @@ StateRevision 下缓存等价只读查询，并以分类预算和连续无进展
 v0。当前来源覆盖项目文本、World、AssetRegistry、选择对象反射、工具 Schema 与 Message Log；四个内置 Skill
 同时裁剪 Provider Schema 并在执行器侧限制工具。Embedding、MCP 与跨项目长期知识仍延期。详见
 [`AIPhase08_StreamingKnowledgeRagAndSkills.md`](AIPhase08_StreamingKnowledgeRagAndSkills.md)。
-Agent 阶段收尾已将 Intent Router 提取到 `PicoAgentCore`，并冻结 37 条中英文生产提示评测，覆盖 Play/Package
+Agent 阶段收尾已将 Intent Router 提取到 `PicoAgentCore`，当前已冻结 39 条中英文生产提示评测，覆盖 Play/Package
 否定语义、场景/角色 Skill 和多 Skill 组合。后续 Gameplay 模块必须通过扩展该评测集接入 Agent，不能在聊天
 窗口中增加另一套临时意图判断。
 
@@ -313,10 +313,10 @@ PAbilityTask / FGameplayEventData / FPredictionKey
 
 | 周次 | 任务 | 周末验收 | 月度累计 |
 | --- | --- | --- | --- |
-| 第 1 周 | GameplayTag、AttributeSet、ASC、Ability、Spec/Handle、反射与 GC 接入 | Inspector 可授予、激活、取消和移除 Ability；属性与引用生命周期正确 | 25% |
-| 第 2 周 | GameplayEffect、Cost、Cooldown、Duration、Infinite、Periodic、Stack 和 Tag 条件 | Damage、Regen、Stun 可组合；属性与 Effect 委托可观察 | 55% |
-| 第 3 周 | AbilityTask、WaitDelay、WaitGameplayEvent、PlayAnimationAndWait | Task 可完成、取消、清理弱委托并响应 Montage 事件 | 78% |
-| 第 4 周 | Dash、Fireball、Stun、服务端权威、Dash 预测与拒绝、GAS Agent 工具和评测 | 双客户端结果一致；AI 可配置已有能力；新增 Skill、Verifier、路由 Eval 和 Golden Task | 100% |
+| 第 1 周（已完成） | GameplayTag、AttributeSet、ASC、Ability、Spec/Handle、反射与 GC 接入 | Inspector 可授予、激活、取消和移除 Ability；属性与引用生命周期正确 | 25% |
+| 第 2 周（已完成） | GameplayEffect、Cost、Cooldown、Duration、Infinite、Periodic、Stack 和 Tag 条件 | Damage、Regen、Stun 可组合；属性与 Effect 委托可观察 | 55% |
+| 第 3 周（已完成） | AbilityTask、WaitDelay、WaitGameplayEvent、PlayAnimationAndWait | Task 可完成、取消、清理弱委托并响应 Montage 事件 | 78% |
+| 第 4 周（已完成） | Gravity、Burn、Freeze 三色权威投射物、状态面板、独立预测实验、GAS Agent 工具和评测 | 双客户端结果一致；三端可直接观察属性、Effect 和冷却；AI 可配置已有能力 | 100% |
 
 ### 第 1 周：Tag、Attribute 与 Ability 骨架
 
@@ -331,6 +331,12 @@ PAbilityTask / FGameplayEventData / FPredictionKey
 周末验收：Inspector 显示 Health=100、MoveSpeed=600；同一 Ability 可授予、激活、取消和移除；销毁 Owner 或
 切换 World 后 ASC、Spec 和委托不残留，GC 测试通过。
 
+完成记录：独立 `PicoGameplayAbilities` Runtime 模块已经落地。层级 Tag、确定性容器文本、Base/Current
+Attribute、统一变更委托、Ability CDO、Spec/Handle、ASC Owner/Avatar、强弱反射引用和销毁清理均由
+`PicoGameplayAbilitiesTests` 覆盖；PicoInspector 新增 `GAS Lab`，可以在无 3D 场景时完成授予、激活、取消、
+移除和属性广播验收。具体实现和可视化流程见
+[Mini GAS Foundation](GameplayAbilitiesPhase01_Foundation.zh-CN.md)。
+
 ### 第 2 周：GameplayEffect 与组合规则
 
 - Effect DurationPolicy 支持 Instant、Duration、Infinite；Modifier 首版支持 Add、Multiply、Override。
@@ -341,6 +347,12 @@ PAbilityTask / FGameplayEventData / FPredictionKey
 
 周末验收：Damage 立即扣血，Regen 周期恢复，Stun 在持续期内授予 `State.Stunned`；Mana 不足或 Cooldown
 存在时激活失败；Effect 到期、取消或目标销毁后属性和 Tag 恢复且无重复回调。
+
+完成记录：`PGameplayEffect` CDO、运行时 Spec、ActiveEffect Handle、三类 DurationPolicy、三种 Modifier、
+周期执行、Stack Key/上限、Tag 条件和统一移除已经接入 ASC。Cost/Cooldown 通过同一 Effect 管线提交；Effect
+Tick 对委托重入移除采用延迟队列保护。GAS Lab 可以直接组合 Damage、Regen 和 Stun，观察 Active Effects、
+属性、Tag 及生命周期广播。具体实现和验收流程见
+[GameplayEffect 与组合规则](GameplayAbilitiesPhase02_Effects.zh-CN.md)。
 
 ### 第 3 周：AbilityTask 异步生命周期
 
@@ -362,19 +374,43 @@ Ability 强引用活动 Task；Task 的事件绑定使用弱对象委托；Abili
 周末验收：Delay 到时只广播一次；GameplayEvent 可推进 Ability；Montage 完成、中断和取消进入正确分支；
 销毁 Actor、替换 World 或退出 Play 后 Active Task 数量归零。
 
+完成记录：`PAbilityTask`、稳定 TaskHandle、ASC 强引用与待清理队列已经落地；WaitDelay 使用 ASC/World
+DeltaSeconds，WaitGameplayEvent 支持父级和精确 Tag，PlayAnimationAndWait 复用 AnimInstance 的 Montage
+结束与 Notify 委托。Ability 结束、ASC 销毁和回调重入均有统一清理边界；GAS Lab 可在无项目资产时观察活动
+Task、推进时间、发送事件、完成、中断和取消。具体实现与验收流程见
+[AbilityTask 异步生命周期](GameplayAbilitiesPhase03_AbilityTasks.zh-CN.md)。
+
 ### 第 4 周：联网 Demo 与 Agent 适配
 
-- Dash：客户端创建 PredictionKey 并立即表现移动，服务端校验 Cost、Cooldown、Tag 和位置；接受后确认，拒绝后回滚/纠正。
-- Fireball：客户端只请求激活，投射物生成、命中和伤害由服务端权威执行；本月不预测伤害。
-- Stun：服务端应用持续 Effect，同步 Tag、剩余时间和必要属性；`State.Stunned` 阻止移动和相关 Ability。
-- 网络首版同步 Attribute、GameplayTag、Ability 激活结果和基础 ActiveEffect；只有 Dash 完成本地预测闭环。
+- Gravity、Burn、Freeze：客户端只请求激活，三色投射物生成、移动、命中和 Effect 结算均由服务端权威执行。
+- Gravity 产生一次受控上抛；Burn 在 8 秒内周期扣血；Freeze 在 6 秒内阻止移动、跳跃和 Ability。
+- 网络首版同步 Attribute、GameplayTag、Ability 激活结果和基础 ActiveEffect 摘要；右上角固定面板在三端显示关键状态。
+- PredictionKey、确认、拒绝和回滚保留在 PicoInspector 独立实验中，预测投射物与预测伤害延期。
 - Agent 增加 ASC 描述、授予/移除已有 Ability、应用已有 Effect、设置数据化默认值等受控工具。
 - 新增 GAS Knowledge Source、`configure-character-abilities.pskill`、确定性 Verifier、路由 Eval 和 Golden Task。
 - Agent 仍经过 Validate、Permission、Approval、Transaction、Execute、Verify；不允许模型直接生成任意 Ability C++。
 
-联网验收：一台服务器加两个客户端分别执行 Dash、Fireball 和 Stun；三端最终 Health、Tag、Cooldown 和位置一致；
-模拟拒绝 Dash 后客户端完成纠正。AI 验收指令为“给这个角色配置冲刺、火球和眩晕能力”，结果必须引用已有资产、
+联网验收：一台服务器加两个客户端分别发射 Gravity、Burn 和 Freeze；三端最终 Health、Tag、Effect 和 Cooldown 一致。
+AI 验收指令为“给这个角色配置重力、灼烧和冻结投射物能力”，结果必须引用已有资产、
 保存项目并通过 Gameplay 验证器，而不是仅由模型宣称成功。
+
+完成记录：`PSandboxPawn` 现在以默认子对象持有 ASC，并用可保存的反射 Mini GAS Profile 组合和配置三个现有
+Ability；启用开关、消耗、冷却、射程、弹速/颜色、持续时间与效果强度均可由 World 实例或 Actor Blueprint
+保存。`AbilityLoadoutBits` 仅作为旧数据兼容字段，Cost/Cooldown 通过每个 Pawn 的 AbilitySpec Override 生效，
+不污染 Ability CDO。
+收尾加固将持久化范围明确分成 World Instance 与 Actor Blueprint Defaults：GameMode 生成的玩家由后者提供配置；
+`InitialHealth/InitialMana` 是输入，Replicated Attribute/Tag/Remaining 字段统一为只读运行时输出。Agent 新增通用
+Blueprint Defaults 读写工具，并禁止用瞬时复制镜像宣称持久配置成功。
+
+迁移债务（必须在 PicoGraph Lite 完成后清偿）：Gravity/Burn/Freeze 的玩法实现可以继续属于 PicoSandbox，
+但当前 Editor/Agent 中针对 `PSandboxPawn`、固定属性名和历史 Ability 类名的识别只是第 8 月纵向切片适配。
+不得把这些项目名固化为 Pico 引擎 API；第 9 月完成 Graph Runtime 后，按下文“反射驱动迁移门槛”替换。
+`FGameplayPredictionLedger` 管理快照、PredictionKey、确认与拒绝，并由 Inspector 独立验收。联网 Demo 的通用投射物 Actor
+复制颜色类型，命中后由服务器应用 Gravity、Periodic Burn 或 Freeze Effect。Attribute、已知 Tag 和基础 Effect 摘要通过
+Pawn 反射属性、ActorChannel 和 RepNotify 收敛到客户端；Runtime Launch 固定绘制右上角 Mini GAS 面板。Agent 新增 ASC 描述、
+受控 Loadout 配置、Knowledge Source、Skill、Verifier、2 条路由用例
+和第 11 个 Golden Task。具体结构与验收流程见
+[联网 Demo、预测与 Agent](GameplayAbilitiesPhase04_NetworkedDemoAndAgent.zh-CN.md)。
 
 ### 月末质量门槛
 
@@ -406,7 +442,7 @@ Ability 强引用活动 Task；Task 的事件绑定使用弱对象委托；Abili
 | 第 1 周 | `.pgraph`、稳定 Node/Pin/Link ID、变量、Entry Event、版本、序列化、Undo/Redo 和基础节点编辑器 | 保存重开后图结构与布局恢复 |
 | 第 2 周 | Graph Schema、Pin 类型、控制流/数据流校验、Typed IR、字节码编译和诊断 | 非法图不能编译；合法图产生确定字节码 |
 | 第 3 周 | `FPicoScriptVM`、执行上下文、指令/循环/调用深度预算、`PScriptComponent`、PFunction/Property/Delegate 节点 | 原生 Actor 可运行图；错误图不能卡死 Game Thread |
-| 第 4 周 | Delay、WaitGameplayEvent、PlayMontageAndWait、ActivateAbility、Cook/Package、AI Graph Tools 和可视化状态 | AI 可生成受限图；仓库外 Runtime 执行 Cook 后字节码；新增 Graph Skill、Verifier、路由 Eval 和 Golden Task |
+| 第 4 周 | Delay、WaitGameplayEvent、PlayMontageAndWait、ActivateAbility、Cook/Package、AI Graph Tools、可视化状态；PicoGraph 验收后执行项目专用蓝图/GAS 适配的反射驱动迁移 | AI 可生成受限图；仓库外 Runtime 执行 Cook 后字节码；新增 Graph Skill、Verifier、路由 Eval 和 Golden Task；新反射 Gameplay 类无需修改 Editor 即可生成 Details、Graph 节点和 Agent Schema |
 
 固定管线：
 
@@ -423,6 +459,28 @@ Ability 强引用活动 Task；Task 的事件绑定使用弱对象委托；Abili
 AI 只能通过 `CreateGraph/AddNode/ConnectPins/SetDefaultValue/CompileGraph/ValidateGraph` 创建行为，不能直接
 写字节码。PicoGraph 复用 Data-Only Actor Blueprint 的 GeneratedClass、CDO、默认子对象和实例构造链，
 不得创建第二套对象系统。
+
+### 反射驱动迁移门槛（PicoGraph Lite 完成后执行）
+
+目标不是把 Gravity/Burn/Freeze 玩法搬进引擎，而是让项目只负责声明玩法类、属性、函数和元数据；引擎根据
+反射自动生成编辑与 Agent 接口。迁移完成前，第 9 月不能视为完全收尾。
+
+- 扩展 `PCLASS/PPROPERTY/PFUNCTION` 元数据，至少支持 DisplayName、Category、范围/步长、Gameplay 语义 Tag、
+  Graph 暴露策略和安全权限；PHT 将这些信息写入统一反射描述。
+- Actor Blueprint Details、PicoGraph Node Registry、Knowledge Source 和通用属性工具读取同一份反射描述；
+  不再各自维护项目属性列表或 Ability 名称映射。
+- 删除 PicoEditor 中针对 `PSandboxPawn`、`GravityManaCost`、`BurnEffectDuration`、`FreezeShot` 以及历史
+  `Dash/Fireball/Stun` 类名的硬编码描述和 Tool Schema；项目专用 Skill 可按 Gameplay Tag 组合通用工具，
+  但不能要求引擎认识具体项目类名。
+- 保持现有 `.pblueprint`、CDO、默认子对象和场景实例数据兼容；迁移只替换“如何发现并呈现能力”，不重写
+  对象构造、序列化或网络权威链路。
+- 建立独立 Fixture：新增一个仓库内此前不存在的反射 Gameplay Actor/Ability，不修改 PicoEditor 源码，仍能
+  自动出现在 Actor Blueprint Details、PicoGraph 可调用节点和 Agent 可审计 Schema 中，并可保存、Play、打包。
+- 为自动生成结果加入重复名称、非法类型、只读/Transient、权限越界和旧资产迁移测试；失败时拒绝暴露节点，
+  不能退回静默硬编码。
+
+验收定义：通用 Editor/Agent 模块不再引用 PicoSandbox 类名；增加新的项目反射属性或可调用函数时，只需重新
+运行 PHT/构建并配置元数据，不需要为该属性编写新的 Details 控件、Graph 节点类或 Agent Tool。
 
 ## 第 10 月：AI 游戏搭建闭环
 
@@ -464,7 +522,7 @@ Skill 数量增加后采用分层路由，而不是用模型替换现有规则�
 
 ### 端到端 Golden Tasks
 
-现有 37 条 `IntentRoutingCases.tsv` 和 10 个离线 Golden Tasks 继续负责快速验证 Harness；第 10 月在其上增加真实
+现有 39 条 `IntentRoutingCases.tsv` 和 11 个离线 Golden Tasks 继续负责快速验证 Harness；第 10 月在其上增加真实
 Editor Fixture，并扩展到至少 20 个固定端到端
 Golden Tasks，覆盖“自然语言需求 -> Agent 规划 -> Tool Pipeline -> 场景修改 -> 保存 -> Play/验证 -> Package”的真实链路。
 

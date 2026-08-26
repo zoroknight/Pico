@@ -1,5 +1,6 @@
 #include "InspectorApp.h"
 #include "DynamicDelegateExperiment.h"
+#include "GameplayAbilitiesExperiment.h"
 #include "GarbageCollectionExperiment.h"
 #include "NativeDelegateExperiment.h"
 #include "PropertyNotificationExperiment.h"
@@ -230,6 +231,7 @@ FInspectorApp::FInspectorApp()
     Experiments.push_back(std::make_unique<FDynamicDelegateExperiment>());
     Experiments.push_back(std::make_unique<FPropertyNotificationExperiment>());
     Experiments.push_back(std::make_unique<FGarbageCollectionExperiment>());
+    Experiments.push_back(std::make_unique<FGameplayAbilitiesExperiment>());
     for (const std::unique_ptr<IInspectorExperiment>& Experiment : Experiments)
     {
         if (!Experiment->SetUp())
@@ -743,6 +745,8 @@ void FInspectorApp::DrawPropertyEditor(PObject* Object, const PProperty* Propert
     ImGui::TableSetColumnIndex(1);
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::PushID(Property);
+    const bool bReadOnly = Property->HasAnyFlags(EPropertyFlags::ReadOnly);
+    if (bReadOnly) ImGui::BeginDisabled();
 
     switch (Property->GetType())
     {
@@ -841,6 +845,7 @@ void FInspectorApp::DrawPropertyEditor(PObject* Object, const PProperty* Propert
     }
     }
 
+    if (bReadOnly) ImGui::EndDisabled();
     ImGui::PopID();
 }
 

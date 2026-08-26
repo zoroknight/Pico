@@ -546,6 +546,31 @@ else()
     target_compile_options(PicoEngine PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_library(PicoGameplayAbilities STATIC
+    Source/Runtime/GameplayAbilities/Private/AbilityTask.cpp
+    Source/Runtime/GameplayAbilities/Private/AbilitySystemComponent.cpp
+    Source/Runtime/GameplayAbilities/Private/GameplayAbilityPrediction.cpp
+    Source/Runtime/GameplayAbilities/Private/AttributeSet.cpp
+    Source/Runtime/GameplayAbilities/Private/GameplayAbility.cpp
+    Source/Runtime/GameplayAbilities/Private/GameplayAbilitiesModule.cpp
+    Source/Runtime/GameplayAbilities/Private/GameplayEffect.cpp
+    Source/Runtime/GameplayAbilities/Private/GameplayTag.cpp
+)
+
+target_include_directories(PicoGameplayAbilities
+    PUBLIC
+        Source/Runtime/GameplayAbilities/Public
+)
+
+target_link_libraries(PicoGameplayAbilities PUBLIC PicoEngine)
+set_target_properties(PicoGameplayAbilities PROPERTIES FOLDER "Pico")
+
+if(MSVC)
+    target_compile_options(PicoGameplayAbilities PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoGameplayAbilities PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(PicoLaunch
     Source/Runtime/Launch/Private/Launch.cpp
 )
@@ -771,6 +796,7 @@ if(PICO_BUILD_INSPECTOR)
             PicoEngine
             PicoAssetImport
             PicoAgentCore
+            PicoGameplayAbilities
     )
 
     target_include_directories(PicoEditorCore PRIVATE ThirdParty/NlohmannJson/single_include)
@@ -789,6 +815,8 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoInspector/Private/InspectorExperiment.h
         Source/Editor/PicoInspector/Private/GarbageCollectionExperiment.cpp
         Source/Editor/PicoInspector/Private/GarbageCollectionExperiment.h
+        Source/Editor/PicoInspector/Private/GameplayAbilitiesExperiment.cpp
+        Source/Editor/PicoInspector/Private/GameplayAbilitiesExperiment.h
         Source/Editor/PicoInspector/Private/InspectorApp.cpp
         Source/Editor/PicoInspector/Private/InspectorApp.h
         Source/Editor/PicoInspector/Private/Main.cpp
@@ -803,6 +831,7 @@ if(PICO_BUILD_INSPECTOR)
             PicoImGui
             PicoReflectionTools
             PicoReflectionSample
+            PicoGameplayAbilities
     )
 
     set_target_properties(PicoInspector PROPERTIES FOLDER "Programs")
@@ -1112,6 +1141,20 @@ else()
     target_compile_options(PicoEngineTests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_executable(PicoGameplayAbilitiesTests
+    Tests/GameplayAbilities/Private/Main.cpp
+)
+
+target_include_directories(PicoGameplayAbilitiesTests PRIVATE Tests/Common)
+target_link_libraries(PicoGameplayAbilitiesTests PRIVATE PicoGameplayAbilities)
+set_target_properties(PicoGameplayAbilitiesTests PROPERTIES FOLDER "Tests/GameplayAbilities")
+
+if(MSVC)
+    target_compile_options(PicoGameplayAbilitiesTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoGameplayAbilitiesTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(PicoNetCoreTests
     Tests/NetCore/Private/Main.cpp
 )
@@ -1216,6 +1259,7 @@ if(BUILD_TESTING)
     add_test(NAME PicoGarbageCollectionTests COMMAND PicoGarbageCollectionTests)
     add_test(NAME PicoDynamicDelegateTests COMMAND PicoDynamicDelegateTests)
     add_test(NAME PicoEngineTests COMMAND PicoEngineTests)
+    add_test(NAME PicoGameplayAbilitiesTests COMMAND PicoGameplayAbilitiesTests)
     add_test(NAME PicoNetCoreTests COMMAND PicoNetCoreTests)
     add_test(NAME PicoReplicationTests COMMAND PicoReplicationTests)
     add_test(NAME PicoGameTests COMMAND PicoGameTests)
@@ -1258,6 +1302,9 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoEngineTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoGameplayAbilitiesTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoGameTests PROPERTIES

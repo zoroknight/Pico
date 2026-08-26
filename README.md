@@ -58,8 +58,8 @@ The current implementation can:
   narrow both advertised and executable tools with versioned Pico Skills.
 - Correlate each Agent run through persistent Run/Turn/Span IDs for model, approval, tool, and validation
   timing. Persist changed World runs as conflict-checked ChangeSets so the Agent can list and restore an
-  exact pre-run snapshot without overwriting later edits. Regression-test production routing with 37 tracked
-  Chinese/English prompts, then run ten offline Golden Tasks with required/forbidden tools and verifiers,
+  exact pre-run snapshot without overwriting later edits. Regression-test production routing with 39 tracked
+  Chinese/English prompts, then run eleven offline Golden Tasks with required/forbidden tools and verifiers,
   isolated sessions, and machine-readable reports before GAS or PicoGraph extends the suite.
 - Let the scene Agent search real AssetRegistry entries, create an undoable collision room, assemble a
   third-person Pawn from a Data-Only Actor Blueprint and Character Profile, validate/save the World,
@@ -158,7 +158,24 @@ The current implementation can:
 - Inspect and edit supported properties through generic metadata-driven UI.
 - Use PicoInspector as a project-free developer sandbox: invoke reflected functions with generated
   parameter controls and visualize Native Delegate lifetime, GC reachability, merged requests,
-  safe-point scheduling, and object-handle expiry.
+  safe-point scheduling, object-handle expiry, and Mini GAS Ability/Effect lifecycles.
+- Build gameplay abilities in the independent `PicoGameplayAbilities` Runtime module with hierarchical
+  GameplayTags, reflected Base/Current attributes, Ability CDO defaults, per-owner Spec handles, and
+  Instant/Duration/Infinite GameplayEffects with modifiers, periodic execution, stacks, Tag conditions,
+  Cost/Cooldown reuse, stable ActiveEffect handles, and observable lifecycle delegates. Run ASC-owned
+  AbilityTasks for World-time delays, hierarchical GameplayEvents, and Montage completion, interruption,
+  cancellation, and notify output with deferred, reentrancy-safe cleanup.
+- Run a networked Mini GAS slice in PicoSandbox with three server-authoritative projectiles: `1` fires a
+  purple Gravity shot with a restrained launch, `2` fires a red eight-second periodic Burn shot, and `3`
+  fires a blue six-second Freeze shot that blocks movement and abilities. A fixed top-right Mini GAS panel
+  shows each Pawn's HP, Mana, Effect durations, and ability cooldowns in both clients and the separate server.
+  The selected Sandbox Pawn or Actor Blueprint exposes a reflected Mini GAS Profile in Details: enabled flags,
+  costs, cooldowns, ranges, projectile speeds/colors, durations, and effect strength are saved with the object
+  and copied into per-owner AbilitySpecs without mutating global Ability CDOs. The Inspector keeps PredictionKey
+  confirmation and rejection rollback as a focused standalone experiment.
+  Agent edits now distinguish placed World instances from GameMode-spawned players: the latter persist through
+  generic Actor Blueprint default tools. `InitialHealth`/`InitialMana` are editable inputs, while replicated state
+  summaries are reflected read-only runtime outputs.
 - Serialize reflected objects to `.pobj` files and reconstruct them with `PostLoad`.
 - Save validated World scene graphs to deterministic `.pworld` files and transactionally reconstruct runtime Worlds without persisting runtime handles.
 - Transactionally replace the `FEngineLoop` active World while preserving the old World on load or `PostLoad` failure.
@@ -230,8 +247,8 @@ The current implementation can:
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-Debug and Release configurations build successfully, all nineteen CTest targets pass, and the focused animation
-suite passes 13/13 assertions.
+All twenty-two Debug CTest targets pass. The focused Mini GAS suite passes 73/73 assertions in Debug and Release,
+and the focused animation suite passes 13/13 assertions.
 
 ## Architecture
 
@@ -254,6 +271,10 @@ PicoReflectionTools -> PicoObject
 PicoHeaderTool      -> generated reflection C++
 PicoAssetImport     -> PicoAsset / TinyObjLoader
 PicoInspector       -> PicoReflectionTools
+                    -> PicoGameplayAbilities
+
+PicoGameplayAbilities
+  -> PicoEngine / PicoObject / PicoCore
 
 PicoSandboxGame
   -> PicoSandboxModule
@@ -576,7 +597,7 @@ Editor panel layout is separate from scene data and persists in
 | `PicoGameRuntime` | Reusable GLFW/input/render loop linked by game targets |
 | `PicoGame` | Generic standalone runtime without project-native code |
 | `PicoSandboxGame` | Project runtime with Sandbox module, GameInstance, and controllable Pawn |
-| `PicoInspector` | Project-free developer sandbox for reflected objects, functions, and subsystem experiments |
+| `PicoInspector` | Project-free developer sandbox for reflected objects, functions, delegates, GC, and Mini GAS experiments |
 | `PicoReflectionDemo` | Console reflection walkthrough |
 | `PicoAssetTool` | Developer command-line OBJ to `.pmesh` importer |
 | `PicoSandboxDemo` | Complete project-side create, edit, save, destroy and load workflow |
@@ -601,6 +622,10 @@ and the purpose of every step. In the Dynamic Multicast experiment, `Remove Sele
 delegate handle, `Remove Target Bindings` removes every binding owned by the selected target, and
 `Clear All` empties the delegate. Its default UI scale is `1.4`; override it with values such as
 `-uiscale=1.6` when needed.
+
+Select `Experiments -> GAS Lab` to inspect Health, Mana, and MoveSpeed, then grant, activate,
+cancel, and remove an Ability while observing Spec state, owned Tags, and lifecycle events. Its Dash Prediction
+panel demonstrates immediate local state, server confirmation, and rejection rollback without requiring a 3D project.
 
 ## Build and Test
 
@@ -649,7 +674,7 @@ Pico/
   Source/
     Developer/             Development-only reflection tools
     Editor/                PicoEditor and PicoInspector
-    Runtime/               Core, Object, Engine, Render and Launch
+    Runtime/               Core, Object, Engine, GameplayAbilities, Render and Launch
     Samples/               Reusable engine-side samples
   Tests/                   Core, Object, Engine and Sandbox tests
   ThirdParty/              GLAD, GLFW, Dear ImGui and ImGuizmo
@@ -702,6 +727,10 @@ See:
 - [Native Delegate Authoring Guide (Chinese)](Docs/DelegateAuthoringGuide.md)
 - [PicoInspector Developer Sandbox Plan (Chinese)](Docs/PicoInspector_DeveloperSandbox_Plan.zh-CN.md)
 - [PicoInspector Visual Verification Guide (Chinese)](Docs/PicoInspector_VisualVerificationGuide.zh-CN.md)
+- [Mini GAS Foundation and GAS Lab (Chinese)](Docs/GameplayAbilitiesPhase01_Foundation.zh-CN.md)
+- [GameplayEffect and Composition Rules (Chinese)](Docs/GameplayAbilitiesPhase02_Effects.zh-CN.md)
+- [AbilityTask Lifecycle (Chinese)](Docs/GameplayAbilitiesPhase03_AbilityTasks.zh-CN.md)
+- [Networked Mini GAS Demo, Prediction, and Agent (Chinese)](Docs/GameplayAbilitiesPhase04_NetworkedDemoAndAgent.zh-CN.md)
 - [PicoSandbox Guide](Projects/PicoSandbox/README.md)
 - [Month 3 Editor Viewport](Docs/Month03_10_Editor3DViewport.md)
 - [Month 3 Editor Docking](Docs/Month03_11_EditorDocking.md)
@@ -783,7 +812,7 @@ The remaining learning path is:
 
 - Dedicated-server/WAN validation, dependency-pruned Cook, Shipping, and clean-machine packaging
 - Expand deterministic AI tools for assets, materials, lights, save, Play, and Package
-- A compact Gameplay Ability System with AbilityTask, followed by PicoGraph and AI-authored workflows
+- Begin PicoGraph Lite on the completed networked Mini GAS foundation, then expose its validated behavior nodes to AI-authored workflows
 
 The maintained schedule and acceptance criteria are in the
 [AI-First Development Roadmap](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md). Detailed milestone

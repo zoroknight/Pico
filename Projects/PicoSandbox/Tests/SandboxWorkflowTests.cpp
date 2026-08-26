@@ -29,6 +29,7 @@
 #include "PicoSandbox/SandboxEntity.h"
 #include "PicoSandbox/SandboxGameInstance.h"
 #include "PicoSandbox/SandboxGameMode.h"
+#include "PicoSandbox/SandboxGameplayAbilities.h"
 #include "PicoSandbox/SandboxModule.h"
 #include "PicoSandbox/SandboxPawn.h"
 #include "PicoSandbox/SandboxPlayerController.h"
@@ -254,12 +255,27 @@ int main()
             KnightProfilePath);
         const Pico::PClass* KnightBlueprintClass =
             Pico::FindActorBlueprintGeneratedClass(KnightBlueprintPath);
+        const Pico::PProperty* InitialManaProperty =
+            PicoSandbox::PSandboxPawn::StaticClass()->FindProperty(
+                Pico::FName("InitialMana"));
+        const Pico::PProperty* ReplicatedManaProperty =
+            PicoSandbox::PSandboxPawn::StaticClass()->FindProperty(
+                Pico::FName("ReplicatedMana"));
         Runner.Expect(
             KnightBlueprintClass != nullptr
                 && KnightBlueprintClass->IsChildOf(
                     PicoSandbox::PSandboxPawn::StaticClass())
                 && KnightBlueprintClass->GetDefaultObject() != nullptr,
             "Actor Blueprint compiles a reflected generated class with its own CDO");
+        Runner.Expect(
+            InitialManaProperty != nullptr
+                && InitialManaProperty->HasAnyFlags(Pico::EPropertyFlags::Editable)
+                && InitialManaProperty->HasAnyFlags(Pico::EPropertyFlags::Serializable)
+                && !InitialManaProperty->HasAnyFlags(Pico::EPropertyFlags::Transient)
+                && ReplicatedManaProperty != nullptr
+                && ReplicatedManaProperty->HasAnyFlags(Pico::EPropertyFlags::ReadOnly)
+                && ReplicatedManaProperty->HasAnyFlags(Pico::EPropertyFlags::Transient),
+            "persistent initial attributes are editable Blueprint defaults while replicated runtime mirrors are read-only");
         const Pico::FDefaultSubobjectRecord* KnightMeshTemplate = nullptr;
         if (KnightBlueprintClass != nullptr)
         {
@@ -387,9 +403,11 @@ int main()
                 && FollowCameraObject->IsA(Pico::PCameraComponent::StaticClass())
             ? static_cast<Pico::PCameraComponent*>(FollowCameraObject) : nullptr;
         const bool bBaseDefaultsValid =
-            PicoSandbox::PSandboxPawn::StaticClass()->GetDefaultSubobjects().size() == 6
+            PicoSandbox::PSandboxPawn::StaticClass()->GetDefaultSubobjects().size() == 7
                 && Pawn != nullptr
-                && Pawn->GetComponents().size() == 6
+                && Pawn->GetComponents().size() == 7
+                && static_cast<PicoSandbox::PSandboxPawn*>(Pawn)
+                    ->GetAbilitySystemComponent() != nullptr
                 && Pawn->GetRootComponent() != nullptr
                 && Pawn->GetRootComponent()->IsA(Pico::PCapsuleComponent::StaticClass())
                 && Pawn->GetRootComponent()->GetName()
@@ -421,6 +439,12 @@ int main()
 
         if (Pawn != nullptr)
         {
+            Runner.Expect(
+                Pawn->GetAbilitySystemComponent() != nullptr
+                    && Pawn->GetAbilitySystemComponent()->GetAttributeSet() != nullptr
+                    && Pawn->GetAbilitySystemComponent()->GetAttributeSet()->GetCurrentValue(
+                        Pico::EGameplayAttribute::Mana) == Pawn->GetReplicatedMana(),
+                "runtime Mana is sourced from the AttributeSet and only summarized by ReplicatedMana");
             const Pico::FVector3 StartLocation = Pawn->GetActorLocation();
             Pico::FInputSystem& Input = GameEngine.GetInputSystem();
             Input.BeginFrame();
@@ -607,12 +631,12 @@ int main()
                     && !FirstNetPawn->GetActorLocation().Equals(
                         SecondNetPawn->GetActorLocation()),
                 "Sandbox network players use the same default Pawn class at separated spawn positions");
-            const auto* FirstSandboxPawn = FirstNetPawn != nullptr
+            auto* FirstSandboxPawn = FirstNetPawn != nullptr
                     && FirstNetPawn->IsA(PicoSandbox::PSandboxPawn::StaticClass())
-                ? static_cast<const PicoSandbox::PSandboxPawn*>(FirstNetPawn) : nullptr;
-            const auto* SecondSandboxPawn = SecondNetPawn != nullptr
+                ? static_cast<PicoSandbox::PSandboxPawn*>(FirstNetPawn) : nullptr;
+            auto* SecondSandboxPawn = SecondNetPawn != nullptr
                     && SecondNetPawn->IsA(PicoSandbox::PSandboxPawn::StaticClass())
-                ? static_cast<const PicoSandbox::PSandboxPawn*>(SecondNetPawn) : nullptr;
+                ? static_cast<PicoSandbox::PSandboxPawn*>(SecondNetPawn) : nullptr;
             Runner.Expect(
                 FirstSandboxPawn != nullptr && SecondSandboxPawn != nullptr
                     && FirstSandboxPawn->HasLoadedControlProfile()
@@ -622,6 +646,59 @@ int main()
                     && FirstSandboxPawn->GetActiveControlProfileHash()
                         == SecondSandboxPawn->GetActiveControlProfileHash(),
                 "Every network player spawns the same Pawn class with the same control policy");
+            if (FirstSandboxPawn != nullptr && SecondSandboxPawn != nullptr)
+            {
+                const Pico::PProperty* GravityEnabled =
+                    FirstSandboxPawn->GetClass()->FindProperty(
+                        Pico::FName("bGravityShotEnabled"));
+                const Pico::PProperty* BurnDuration =
+                    FirstSandboxPawn->GetClass()->FindProperty(
+                        Pico::FName("BurnEffectDuration"));
+                bool bGravityEnabled = false;
+                float BurnDurationSeconds = 0.0f;
+                Runner.Expect(
+                    GravityEnabled != nullptr && BurnDuration != nullptr
+                        && GravityEnabled->GetValue(FirstSandboxPawn, bGravityEnabled)
+                        && BurnDuration->GetValue(FirstSandboxPawn, BurnDurationSeconds)
+                        && bGravityEnabled && BurnDurationSeconds == 8.0f,
+                    "Sandbox Pawn exposes a reflected Mini GAS Profile for editor and Agent configuration");
+                FirstSandboxPawn->SetActorLocation({0.0f, 0.0f, 130.0f});
+                SecondSandboxPawn->SetActorLocation({320.0f, 0.0f, 130.0f});
+                Runner.Expect(
+                    FirstSandboxPawn->GetAbilitySystemComponent() != nullptr
+                        && FirstSandboxPawn->GetAbilitySystemComponent()
+                            ->GetActivatableAbilities().size() == 3,
+                    "Sandbox Pawn owns one ASC with reusable Gravity, Burn, and Freeze specs");
+                const float ManaBeforeAbilities = FirstSandboxPawn->GetReplicatedMana();
+                Runner.Expect(
+                    FirstSandboxPawn->TryAuthorityGravityShot(SecondSandboxPawn)
+                        && FirstSandboxPawn->TryAuthorityBurnShot(SecondSandboxPawn)
+                        && FirstSandboxPawn->TryAuthorityFreezeShot(SecondSandboxPawn)
+                        && FirstSandboxPawn->GetReplicatedMana() < ManaBeforeAbilities,
+                    "authority validates costs and spawns all three colored projectiles");
+                const float TargetHealth = SecondSandboxPawn->GetReplicatedHealth();
+                for (int Step = 0; Step < 120
+                    && (!SecondSandboxPawn->IsGravityAffected()
+                        || !SecondSandboxPawn->IsBurning()
+                        || !SecondSandboxPawn->IsFrozen()); ++Step)
+                {
+                    GameEngine.GetEngineLoop().GetWorld()->Tick(1.0f / 60.0f);
+                }
+                Runner.Expect(
+                    SecondSandboxPawn->IsGravityAffected()
+                        && SecondSandboxPawn->IsBurning()
+                        && SecondSandboxPawn->IsFrozen()
+                        && SecondSandboxPawn->GetReplicatedFreezeRemaining() > 5.0f,
+                    "projectile hits apply visible Gravity, Burning, and Frozen duration Tags");
+                Runner.Expect(
+                    SecondSandboxPawn->GetCharacterMovement()->GetVelocity().Z > 0.0f,
+                    "purple Gravity projectile launches the target with a restrained upward velocity");
+                for (int Step = 0; Step < 70; ++Step)
+                    GameEngine.GetEngineLoop().GetWorld()->Tick(1.0f / 60.0f);
+                Runner.Expect(
+                    SecondSandboxPawn->GetReplicatedHealth() <= TargetHealth - 5.0f,
+                    "red Burning projectile applies periodic authority damage after impact");
+            }
             if (FirstNetController != nullptr)
                 GameMode->Logout(FirstNetController);
             if (SecondNetController != nullptr)

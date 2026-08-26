@@ -136,6 +136,8 @@ void PSandboxGameInstance::AppendGameplayDebugLines(
         "Authority: T Spawn | Y Move | U Change State | I Destroy | Client: F Use Door");
     OutLines.emplace_back(
         "Movement networking: SavedMove prediction + authority replay + simulated proxy interpolation; the separate server has no local input.");
+    OutLines.emplace_back(
+        "Mini GAS: 1 Gravity (purple) | 2 Burn (red) | 3 Freeze (blue)");
 
     const Pico::PLocalPlayer* LocalPlayer = GetPrimaryLocalPlayer();
     const auto* Controller = LocalPlayer != nullptr
@@ -169,6 +171,23 @@ void PSandboxGameInstance::AppendGameplayDebugLines(
                 << Pawn->GetActiveControlProfileHash()
                 << " | loaded: " << (Pawn->HasLoadedControlProfile() ? "yes" : "no");
             OutLines.push_back(Policy.str());
+            std::ostringstream Gameplay;
+            Gameplay << std::fixed << std::setprecision(1)
+                << "GAS state: Health " << Pawn->GetReplicatedHealth()
+                << " | Mana " << Pawn->GetReplicatedMana()
+                << " | Burn " << Pawn->GetReplicatedBurnRemaining() << "s"
+                << " | Gravity " << Pawn->GetReplicatedGravityRemaining() << "s"
+                << " | Freeze " << Pawn->GetReplicatedFreezeRemaining() << "s"
+                << " | Loadout bits " << Pawn->GetAbilityLoadoutBits();
+            OutLines.push_back(Gameplay.str());
+            const char* AbilityName = Controller->GetLastGameplayAbilityId() == 1
+                ? "Gravity" : Controller->GetLastGameplayAbilityId() == 2
+                    ? "Burn" : Controller->GetLastGameplayAbilityId() == 3
+                        ? "Freeze" : "none";
+            OutLines.emplace_back(std::string("GAS RPC results: ")
+                + std::to_string(Controller->GetGameplayAbilityResultCount())
+                + " | last " + AbilityName + " | accepted "
+                + (Controller->WasLastGameplayAbilityAccepted() ? "yes" : "no"));
         }
     }
 
@@ -197,6 +216,55 @@ void PSandboxGameInstance::AppendGameplayDebugLines(
         + " | multicast pulses: "
         + std::to_string(Actor->GetMulticastPulseCount()));
     OutLines.emplace_back("Last action: " + ReplicationLabLastAction);
+}
+
+void PSandboxGameInstance::AppendGameplayStatusLines(
+    std::vector<std::string>& OutLines) const
+{
+    Pico::PWorld* World = GetWorld();
+    if (World == nullptr) return;
+    const Pico::PLocalPlayer* LocalPlayer = GetPrimaryLocalPlayer();
+    const Pico::PPawn* LocalPawn = LocalPlayer != nullptr
+            && LocalPlayer->GetPlayerController() != nullptr
+        ? LocalPlayer->GetPlayerController()->GetPawn() : nullptr;
+    OutLines.emplace_back("1 PURPLE Gravity  |  2 RED Burn  |  3 BLUE Freeze");
+    Pico::int32 PawnIndex = 0;
+    for (Pico::PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr) continue;
+        for (Pico::PActor* Actor : Level->GetActors())
+        {
+            if (Actor == nullptr || Actor->IsPendingDestroy()
+                || !Actor->IsA(PSandboxPawn::StaticClass())) continue;
+            const auto* Pawn = static_cast<const PSandboxPawn*>(Actor);
+            ++PawnIndex;
+            OutLines.emplace_back("---");
+            std::ostringstream Identity;
+            Identity << "P" << PawnIndex
+                << (Pawn == LocalPawn ? " [LOCAL]" : "")
+                << "  NetId " << Pawn->GetNetObjectId().Value
+                << "  " << Pico::ToString(Pawn->GetLocalRole());
+            OutLines.push_back(Identity.str());
+            std::ostringstream Attributes;
+            Attributes << std::fixed << std::setprecision(0)
+                << "HP " << Pawn->GetReplicatedHealth()
+                << "    Mana " << Pawn->GetReplicatedMana();
+            OutLines.push_back(Attributes.str());
+            std::ostringstream Effects;
+            Effects << std::fixed << std::setprecision(1)
+                << "Effects  Burn " << Pawn->GetReplicatedBurnRemaining() << "s"
+                << " | Gravity " << Pawn->GetReplicatedGravityRemaining() << "s"
+                << " | Freeze " << Pawn->GetReplicatedFreezeRemaining() << "s";
+            OutLines.push_back(Effects.str());
+            std::ostringstream Cooldowns;
+            Cooldowns << std::fixed << std::setprecision(1)
+                << "CD  [1] " << Pawn->GetReplicatedGravityCooldownRemaining() << "s"
+                << " | [2] " << Pawn->GetReplicatedBurnCooldownRemaining() << "s"
+                << " | [3] " << Pawn->GetReplicatedFreezeCooldownRemaining() << "s";
+            OutLines.push_back(Cooldowns.str());
+        }
+    }
+    if (PawnIndex == 0) OutLines.emplace_back("Waiting for replicated players...");
 }
 
 PSandboxReplicationLabActor* PSandboxGameInstance::ResolveReplicationLabActor() const

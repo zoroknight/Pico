@@ -1,8 +1,13 @@
 [ActorDefaults]
 AutoPossessPlayerIndex=0
+BurnCooldownSeconds=0.5
+FreezeCooldownSeconds=0.5
+InitialHealth=200
+InitialMana=400
+bGravityShotEnabled=false
 
 [Blueprint]
-Components=CollisionCapsule;CharacterMovement;SandboxPlayerMesh;SandboxAnimatedMesh;CameraBoom;FollowCamera
+Components=CollisionCapsule;CharacterMovement;SandboxPlayerMesh;SandboxAnimatedMesh;AbilitySystem;CameraBoom;FollowCamera
 GeneratedClass=PBG__Game_Characters_BP_Knight_pblueprint_C
 ParentClass=PSandboxPawn
 Version=1

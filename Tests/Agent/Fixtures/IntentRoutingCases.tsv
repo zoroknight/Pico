@@ -36,3 +36,5 @@ General	scene-cleanup	revert the last Agent run
 General	scene-cleanup	清理临时方块
 General		不要删除任何 Actor，只描述当前世界
 General	assemble-basic-scene,scene-cleanup	恢复刚才整轮 Agent 对场景的修改
+General	configure-character-abilities	给这个角色配置重力、灼烧和冻结投射物能力
+General	configure-character-abilities	configure gravity burn and freeze abilities for this character

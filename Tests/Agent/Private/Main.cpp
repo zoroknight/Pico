@@ -121,6 +121,9 @@ public:
         else if (Call.Name == "editor.scene.create_room") bRoomCreated = true;
         else if (Call.Name == "editor.gameplay.create_third_person_character")
             bCharacterCreated = true;
+        else if (Call.Name == "editor.gameplay.asc.describe") bAscDescribed = true;
+        else if (Call.Name == "editor.gameplay.configure_ability_loadout")
+            bAbilityLoadoutConfigured = true;
         else if (Call.Name == "editor.play.validate") bValidated = true;
         else if (Call.Name == "editor.world.save") bSaved = true;
         else if (Call.Name == "editor.play.start") bPlaying = true;
@@ -142,6 +145,8 @@ public:
     bool bPackaged = false;
     bool bBatchDeleted = false;
     bool bRunReverted = false;
+    bool bAscDescribed = false;
+    bool bAbilityLoadoutConfigured = false;
 };
 
 class FTestApproval final : public Pico::IAgentToolApproval
@@ -267,6 +272,12 @@ std::unique_ptr<Pico::IAgentProvider> CreateGoldenProvider(
     else if (Task.Id == "create-third-person-character")
         Steps.push_back({ToolCalls({{"create-character",
             "editor.gameplay.create_third_person_character", "{}"}}), {}});
+    else if (Task.Id == "configure-character-abilities")
+        Steps.push_back({ToolCalls({
+            {"describe-asc", "editor.gameplay.asc.describe",
+                R"({"object_path":"StarterWorld.PersistentLevel.Player"})"},
+            {"configure-loadout", "editor.gameplay.configure_ability_loadout",
+                R"({"object_path":"StarterWorld.PersistentLevel.Player","gravity":true,"burn":true,"freeze":true})"}}), {}});
     else if (Task.Id == "validate-save-and-play")
         Steps.push_back({ToolCalls({
             {"validate-play", "editor.play.validate", "{}"},
@@ -1146,10 +1157,13 @@ void TestIntentAndSkillEvalSet(FTestRunner& Runner)
         "editor.world.describe", "editor.selection.describe", "editor.asset.search",
         "editor.object.describe", "editor.object.get_property",
         "editor.object.set_properties", "editor.object.batch_set_properties",
+        "editor.actor_blueprint.describe_defaults",
+        "editor.actor_blueprint.set_defaults",
         "editor.actor.spawn", "editor.actor.spawn_blueprint", "editor.actor.delete",
         "editor.actor.delete_many", "editor.agent.list_changes",
         "editor.agent.revert_run",
         "editor.scene.create_room", "editor.gameplay.create_third_person_character",
+        "editor.gameplay.asc.describe", "editor.gameplay.configure_ability_loadout",
         "editor.actor.set_location", "editor.play.validate", "editor.play.start",
         "editor.play.stop", "editor.world.save",
         "editor.project.create_from_third_person_template", "editor.project.package"
@@ -1191,7 +1205,7 @@ void TestIntentAndSkillEvalSet(FTestRunner& Runner)
                 && ActualSkills.str() == ExpectedSkills,
             "Agent intent and Skill routing eval case " + std::to_string(CaseIndex));
     }
-    Runner.Expect(CaseIndex >= 37, "Agent routing eval keeps at least 37 fixed prompts");
+    Runner.Expect(CaseIndex >= 39, "Agent routing eval keeps at least 39 fixed prompts");
 }
 
 void TestGoldenTaskRunner(FTestRunner& Runner)
@@ -1200,8 +1214,8 @@ void TestGoldenTaskRunner(FTestRunner& Runner)
     std::string Error;
     const bool bLoaded = Pico::FAgentGoldenTaskRunner::LoadTasks(
         "Tests/Agent/Fixtures/GoldenTasks.json", Tasks, &Error);
-    Runner.Expect(bLoaded && Tasks.size() == 10,
-        "Golden Task Runner loads ten versioned end-to-end task definitions");
+    Runner.Expect(bLoaded && Tasks.size() == 11,
+        "Golden Task Runner loads eleven versioned end-to-end task definitions");
     if (!bLoaded) return;
 
     Pico::FAgentGoldenTaskHooks Hooks;
@@ -1261,6 +1275,8 @@ void TestGoldenTaskRunner(FTestRunner& Runner)
             bVerified = Golden->bBatchDeleted;
         else if (Task.VerifierId == "world-restored-to-before-run")
             bVerified = Golden->bRunReverted;
+        else if (Task.VerifierId == "ability-loadout-configured")
+            bVerified = Golden->bAscDescribed && Golden->bAbilityLoadoutConfigured;
         if (!bVerified) OutError = "Deterministic scene/process postcondition failed";
         return bVerified;
     };
@@ -1289,7 +1305,7 @@ void TestGoldenTaskRunner(FTestRunner& Runner)
     std::ifstream ReportStream(ReportPath, std::ios::binary);
     const std::string ReportText((std::istreambuf_iterator<char>(ReportStream)), {});
     Runner.Expect(bReportWritten
-            && ReportText.find("\"passed\": 10") != std::string::npos
+            && ReportText.find("\"passed\": 11") != std::string::npos
             && ReportText.find("\"failed\": 0") != std::string::npos
             && ReportText.find("run_") != std::string::npos,
         "Golden Task report persists pass counts, metrics, RunIds, and event-log evidence");

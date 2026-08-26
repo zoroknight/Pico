@@ -17,6 +17,8 @@
 #include "PicoSandbox/SandboxReplicationLabActor.h"
 
 #include <array>
+#include <cmath>
+#include <limits>
 
 namespace PicoSandbox
 {
@@ -121,6 +123,37 @@ void PSandboxPlayerController::DoMove(float Right, float Forward)
     ControlledPawn->AddMovementInput(Basis.ScreenRight, Right);
 }
 
+PSandboxPawn* PSandboxPlayerController::FindNearestOtherSandboxPawn(
+    float MaxDistance) const
+{
+    const Pico::PPawn* ControlledPawn = GetPawn();
+    Pico::PWorld* World = GetWorld();
+    if (ControlledPawn == nullptr || World == nullptr) return nullptr;
+    PSandboxPawn* Nearest = nullptr;
+    float NearestDistance = MaxDistance;
+    const bool bRequirePossessedTarget = GetPlayer() != nullptr
+        && !GetPlayer()->IsA(Pico::PLocalPlayer::StaticClass());
+    for (Pico::PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr) continue;
+        for (Pico::PActor* Actor : Level->GetActors())
+        {
+            if (Actor == nullptr || Actor == ControlledPawn || Actor->IsPendingDestroy()
+                || !Actor->IsA(PSandboxPawn::StaticClass())) continue;
+            auto* Candidate = static_cast<PSandboxPawn*>(Actor);
+            if (bRequirePossessedTarget && Candidate->GetController() == nullptr) continue;
+            const float Distance =
+                (Actor->GetActorLocation() - ControlledPawn->GetActorLocation()).Size();
+            if (Distance <= NearestDistance)
+            {
+                NearestDistance = Distance;
+                Nearest = Candidate;
+            }
+        }
+    }
+    return Nearest;
+}
+
 void PSandboxPlayerController::Tick(float DeltaSeconds)
 {
     PPlayerController::Tick(DeltaSeconds);
@@ -151,16 +184,13 @@ void PSandboxPlayerController::Tick(float DeltaSeconds)
         : nullptr;
     if (ControlledPawn != nullptr)
     {
-        DoMove(
-            Input.GetAxisValue("MoveRight"),
-            Input.GetAxisValue("MoveForward"));
-        if (Input.WasActionPressed("Jump"))
+        if (!ControlledPawn->IsStunned())
         {
-            ControlledPawn->Jump();
-        }
-        if (Input.WasActionReleased("Jump"))
-        {
-            ControlledPawn->StopJumping();
+            DoMove(
+                Input.GetAxisValue("MoveRight"),
+                Input.GetAxisValue("MoveForward"));
+            if (Input.WasActionPressed("Jump")) ControlledPawn->Jump();
+            if (Input.WasActionReleased("Jump")) ControlledPawn->StopJumping();
         }
     }
     if (Input.WasKeyPressed(Pico::EKey::R))
@@ -202,6 +232,21 @@ void PSandboxPlayerController::Tick(float DeltaSeconds)
                 this, Pico::FName("ServerTryInteract"), Arguments);
         }
     }
+    if (ControlledPawn != nullptr && Input.WasKeyPressed(Pico::EKey::One))
+    {
+        GameEngine->GetNetDriver().CallRemoteFunction(
+            this, Pico::FName("ServerActivateGravityShot"), {});
+    }
+    if (Input.WasKeyPressed(Pico::EKey::Two))
+    {
+        GameEngine->GetNetDriver().CallRemoteFunction(
+            this, Pico::FName("ServerActivateBurnShot"), {});
+    }
+    if (Input.WasKeyPressed(Pico::EKey::Three))
+    {
+        GameEngine->GetNetDriver().CallRemoteFunction(
+            this, Pico::FName("ServerActivateFreezeShot"), {});
+    }
 }
 
 void PSandboxPlayerController::ServerTryInteract(Pico::PActor* Target)
@@ -239,5 +284,85 @@ void PSandboxPlayerController::ClientInteractionResult(bool bAccepted)
 {
     bLastInteractionAccepted = bAccepted;
     ++ClientInteractionResultCount;
+}
+
+void PSandboxPlayerController::ServerActivateGravityShot()
+{
+    PSandboxPawn* ControlledPawn = GetPawn() != nullptr
+            && GetPawn()->IsA(PSandboxPawn::StaticClass())
+        ? static_cast<PSandboxPawn*>(GetPawn()) : nullptr;
+    const bool bAccepted = ControlledPawn != nullptr
+        && ControlledPawn->TryAuthorityGravityShot(
+            FindNearestOtherSandboxPawn(900.0f));
+    Pico::PGameInstance* GameInstance = GetPlayer() != nullptr
+        ? GetPlayer()->GetGameInstance() : nullptr;
+    Pico::FGameEngine* GameEngine = GameInstance != nullptr
+        ? GameInstance->GetGameEngine() : nullptr;
+    if (GameEngine == nullptr) return;
+    const Pico::FVector3 Location = ControlledPawn != nullptr
+        ? ControlledPawn->GetActorLocation() : Pico::FVector3::ZeroVector;
+    const float Mana = ControlledPawn != nullptr
+        ? ControlledPawn->GetReplicatedMana() : 0.0f;
+    const std::array<Pico::FFunctionValue, 5> Arguments = {
+        Pico::int32(1), Pico::int32(0), bAccepted, Location, Mana};
+    GameEngine->GetNetDriver().CallRemoteFunction(
+        this, Pico::FName("ClientGameplayAbilityResult"), Arguments);
+}
+
+void PSandboxPlayerController::ServerActivateBurnShot()
+{
+    PSandboxPawn* ControlledPawn = GetPawn() != nullptr
+            && GetPawn()->IsA(PSandboxPawn::StaticClass())
+        ? static_cast<PSandboxPawn*>(GetPawn()) : nullptr;
+    const bool bAccepted = ControlledPawn != nullptr
+        && ControlledPawn->TryAuthorityBurnShot(FindNearestOtherSandboxPawn(900.0f));
+    Pico::PGameInstance* GameInstance = GetPlayer() != nullptr
+        ? GetPlayer()->GetGameInstance() : nullptr;
+    Pico::FGameEngine* GameEngine = GameInstance != nullptr
+        ? GameInstance->GetGameEngine() : nullptr;
+    if (GameEngine == nullptr) return;
+    const std::array<Pico::FFunctionValue, 5> Arguments = {
+        Pico::int32(2), Pico::int32(0), bAccepted,
+        ControlledPawn != nullptr ? ControlledPawn->GetActorLocation()
+                                  : Pico::FVector3::ZeroVector,
+        ControlledPawn != nullptr ? ControlledPawn->GetReplicatedMana() : 0.0f};
+    GameEngine->GetNetDriver().CallRemoteFunction(
+        this, Pico::FName("ClientGameplayAbilityResult"), Arguments);
+}
+
+void PSandboxPlayerController::ServerActivateFreezeShot()
+{
+    PSandboxPawn* ControlledPawn = GetPawn() != nullptr
+            && GetPawn()->IsA(PSandboxPawn::StaticClass())
+        ? static_cast<PSandboxPawn*>(GetPawn()) : nullptr;
+    const bool bAccepted = ControlledPawn != nullptr
+        && ControlledPawn->TryAuthorityFreezeShot(FindNearestOtherSandboxPawn(900.0f));
+    Pico::PGameInstance* GameInstance = GetPlayer() != nullptr
+        ? GetPlayer()->GetGameInstance() : nullptr;
+    Pico::FGameEngine* GameEngine = GameInstance != nullptr
+        ? GameInstance->GetGameEngine() : nullptr;
+    if (GameEngine == nullptr) return;
+    const std::array<Pico::FFunctionValue, 5> Arguments = {
+        Pico::int32(3), Pico::int32(0), bAccepted,
+        ControlledPawn != nullptr ? ControlledPawn->GetActorLocation()
+                                  : Pico::FVector3::ZeroVector,
+        ControlledPawn != nullptr ? ControlledPawn->GetReplicatedMana() : 0.0f};
+    GameEngine->GetNetDriver().CallRemoteFunction(
+        this, Pico::FName("ClientGameplayAbilityResult"), Arguments);
+}
+
+void PSandboxPlayerController::ClientGameplayAbilityResult(
+    Pico::int32 AbilityId,
+    Pico::int32 PredictionKey,
+    bool bAccepted,
+    Pico::FVector3 AuthorityLocation,
+    float AuthorityMana)
+{
+    ++GameplayAbilityResultCount;
+    LastGameplayAbilityId = AbilityId;
+    bLastGameplayAbilityAccepted = bAccepted;
+    (void)PredictionKey;
+    (void)AuthorityLocation;
+    (void)AuthorityMana;
 }
 }

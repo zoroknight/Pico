@@ -6,7 +6,10 @@
 #include "Pico/Core/Paths.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerController.h"
+#include "Pico/GameplayAbilities/GameplayAbilitiesModule.h"
 #include "PicoSandbox/SandboxGameInstance.h"
+#include "PicoSandbox/SandboxGameplayAbilities.h"
+#include "PicoSandbox/SandboxFireballActor.h"
 #include "PicoSandbox/SandboxGameMode.h"
 #include "PicoSandbox/SandboxCharacter.h"
 #include "PicoSandbox/SandboxEntity.h"
@@ -79,7 +82,13 @@ bool RegisterSandboxClasses()
 
 bool RegisterSandboxGameplayClasses()
 {
-    return RegisterSandboxClasses()
+    return Pico::RegisterGameplayAbilitiesClasses()
+        && RegisterSandboxClasses()
+        && PSandboxDashAbility::RegisterClass()
+        && PSandboxFireballAbility::RegisterClass()
+        && PSandboxStunAbility::RegisterClass()
+        && ConfigureSandboxGameplayAbilityDefaults()
+        && PSandboxFireballActor::RegisterClass()
         && PSandboxPawn::RegisterClass()
         && PSandboxReplicationLabActor::RegisterClass()
         && PSandboxPlayerController::RegisterClass()
