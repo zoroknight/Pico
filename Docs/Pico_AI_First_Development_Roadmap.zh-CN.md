@@ -439,7 +439,7 @@ Pawn 反射属性、ActorChannel 和 RepNotify 收敛到客户端；Runtime Laun
 
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |
-| 第 1 周 | `.pgraph`、稳定 Node/Pin/Link ID、变量、Entry Event、版本、序列化、Undo/Redo 和基础节点编辑器 | 保存重开后图结构与布局恢复 |
+| 第 1 周（已完成） | `.pgraph`、稳定 Node/Pin/Link ID、变量、Entry Event、版本、序列化、Undo/Redo 和基础节点编辑器 | 保存重开后图结构与布局恢复 |
 | 第 2 周 | Graph Schema、Pin 类型、控制流/数据流校验、Typed IR、字节码编译和诊断 | 非法图不能编译；合法图产生确定字节码 |
 | 第 3 周 | `FPicoScriptVM`、执行上下文、指令/循环/调用深度预算、`PScriptComponent`、PFunction/Property/Delegate 节点 | 原生 Actor 可运行图；错误图不能卡死 Game Thread |
 | 第 4 周 | Delay、WaitGameplayEvent、PlayMontageAndWait、ActivateAbility、Cook/Package、AI Graph Tools、可视化状态；PicoGraph 验收后执行项目专用蓝图/GAS 适配的反射驱动迁移 | AI 可生成受限图；仓库外 Runtime 执行 Cook 后字节码；新增 Graph Skill、Verifier、路由 Eval 和 Golden Task；新反射 Gameplay 类无需修改 Editor 即可生成 Details、Graph 节点和 Agent Schema |
@@ -459,6 +459,14 @@ Pawn 反射属性、ActorChannel 和 RepNotify 收敛到客户端；Runtime Laun
 AI 只能通过 `CreateGraph/AddNode/ConnectPins/SetDefaultValue/CompileGraph/ValidateGraph` 创建行为，不能直接
 写字节码。PicoGraph 复用 Data-Only Actor Blueprint 的 GeneratedClass、CDO、默认子对象和实例构造链，
 不得创建第二套对象系统。
+
+第 1 周完成记录：新增独立 `PicoGraph` Runtime 数据模块和 `.pgraph` AssetRegistry 类型。Graph、Node、Pin、
+Link、Variable 均拥有保存后不变的稳定 ID；版本 1 资产采用确定性 JSON，加载时拒绝重复 ID、缺失 Pin、方向/
+类型不兼容和一个输入多连接。PicoEditor 的 Content Browser 可创建或双击打开 Graph；独立节点窗口支持 Entry
+Event、Sequence、变量、拖动、平移、连线、断线、节点删除、64 步 Graph 专用 Undo/Redo 和保存重开。当前只
+表达并保存图结构，不提前承诺 Schema、编译或运行语义。自动化覆盖确定性 round-trip、稳定身份、结构拒绝、
+级联 Link 清理、事务恢复和 Registry 扫描。详见
+[PicoGraph 第 1 周](PicoGraphPhase01_AssetsAndEditor.zh-CN.md)。
 
 ### 反射驱动迁移门槛（PicoGraph Lite 完成后执行）
 

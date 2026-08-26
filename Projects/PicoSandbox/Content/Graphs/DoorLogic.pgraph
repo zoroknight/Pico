@@ -1,0 +1,65 @@
+{
+  "format": "PicoGraph",
+  "version": 1,
+  "graph_id": "0001cdcd29d7e98c0000000000000001",
+  "variables": [
+    {
+      "id": "0001cde05f4f6fb40000000000000007",
+      "name": "OpenSpeed",
+      "type": "Float",
+      "default": "120.0"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "0001cdcd29d8a1240000000000000002",
+      "type": "EntryEvent",
+      "title": "BeginPlay",
+      "position": [
+        80.0,
+        120.0
+      ],
+      "pins": [
+        {
+          "id": "0001cdcd29d8bda80000000000000003",
+          "name": "Then",
+          "direction": "Output",
+          "type": "Exec",
+          "default": ""
+        }
+      ]
+    },
+    {
+      "id": "0001cdd5500355440000000000000004",
+      "type": "Sequence",
+      "title": "Sequence",
+      "position": [
+        380.0,
+        180.0
+      ],
+      "pins": [
+        {
+          "id": "0001cdd550038d200000000000000005",
+          "name": "In",
+          "direction": "Input",
+          "type": "Exec",
+          "default": ""
+        },
+        {
+          "id": "0001cdd55003a9400000000000000006",
+          "name": "Then",
+          "direction": "Output",
+          "type": "Exec",
+          "default": ""
+        }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "id": "0001d0772b1e9dfc0000000000000002",
+      "output": "0001cdcd29d8bda80000000000000003",
+      "input": "0001cdd550038d200000000000000005"
+    }
+  ]
+}

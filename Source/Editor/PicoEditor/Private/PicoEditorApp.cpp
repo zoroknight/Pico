@@ -204,6 +204,18 @@ FPicoEditorApp::FPicoEditorApp(
             ContentBrowserPanel.FocusAsset(
                 EngineLoop->GetAssetRegistry(), AssetSelection, AssetPath);
         })
+    , PicoGraphEditor(
+        InEngineLoop,
+        [this](std::string Message, bool bError)
+        {
+            SetStatus(std::move(Message), bError);
+        },
+        [this](const FAssetPath& AssetPath)
+        {
+            AssetSelection.Select(AssetPath);
+            ContentBrowserPanel.FocusAsset(
+                EngineLoop->GetAssetRegistry(), AssetSelection, AssetPath);
+        })
     , AssetWorkflow(
         InEngineLoop,
         &AssetService,
@@ -633,6 +645,7 @@ void FPicoEditorApp::Draw()
             [this]() { AssetWorkflow.OpenTextureImport(); },
             [this]() { AssetWorkflow.OpenCreateMaterial(); },
             [this]() { ActorBlueprintEditor.OpenCreate(); },
+            [this]() { PicoGraphEditor.OpenCreate(); },
             [this]() { AssetWorkflow.RefreshRegistry(); },
             [this](const FAssetPath& AssetPath)
             {
@@ -666,6 +679,10 @@ void FPicoEditorApp::Draw()
             },
             [this](const FAssetPath& AssetPath)
             {
+                PicoGraphEditor.OpenAsset(AssetPath);
+            },
+            [this](const FAssetPath& AssetPath)
+            {
                 const FAssetPath StablePath = AssetPath;
                 CommandQueue.Enqueue(
                     [this, StablePath]()
@@ -687,6 +704,7 @@ void FPicoEditorApp::Draw()
     AssetWorkflow.Draw();
     SkeletalAssetEditor.Draw();
     ActorBlueprintEditor.Draw();
+    PicoGraphEditor.Draw();
     if (AgentChatWorkspace && bAgentChatOpen)
     {
         AgentChatWorkspace->Draw(&bAgentChatOpen);
@@ -1056,6 +1074,10 @@ void FPicoEditorApp::DrawToolbar()
 void FPicoEditorApp::HandleShortcuts()
 {
     const ImGuiIO& IO = ImGui::GetIO();
+    if (PicoGraphEditor.IsKeyboardFocused())
+    {
+        return;
+    }
     if (IO.WantTextInput)
     {
         return;

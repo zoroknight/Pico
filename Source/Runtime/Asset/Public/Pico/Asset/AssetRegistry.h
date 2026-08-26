@@ -25,7 +25,8 @@ enum class EAssetType
     AnimationMontage,
     CharacterProfile,
     ThirdPersonControlProfile,
-    ActorBlueprint
+    ActorBlueprint,
+    PicoGraph
 };
 
 enum class EAssetScanError

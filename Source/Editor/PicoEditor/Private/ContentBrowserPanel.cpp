@@ -72,6 +72,7 @@ void FContentBrowserPanel::Draw(
     FAction ImportTexture,
     FAction CreateMaterial,
     FAction CreateActorBlueprint,
+    FAction CreatePicoGraph,
     FAction Refresh,
     FAssetAction Reimport,
     FAssetAction ReimportWithOptions,
@@ -80,6 +81,7 @@ void FContentBrowserPanel::Draw(
     FAssetAction EditMaterial,
     FAssetAction OpenSkeletal,
     FAssetAction OpenActorBlueprint,
+    FAssetAction OpenPicoGraph,
     FAssetAction OpenWorld,
     FAssetAction Create,
     FAssetAction Assign,
@@ -109,6 +111,11 @@ void FContentBrowserPanel::Draw(
     if (ImGui::Button("Create Actor Blueprint"))
     {
         CreateActorBlueprint();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Create Graph"))
+    {
+        CreatePicoGraph();
     }
     ImGui::SameLine();
     const FAssetRecord* Selected = Selection.Resolve(Registry);
@@ -158,7 +165,7 @@ void FContentBrowserPanel::Draw(
     constexpr const char* Types[] = {
         "All Types", "World", "Static Mesh", "Texture", "Material",
         "Skeleton", "Skeletal Mesh", "Animation", "Character Profile",
-        "Control Profile", "Actor Blueprint"};
+        "Control Profile", "Actor Blueprint", "PicoGraph"};
     ImGui::Combo("##AssetType", &TypeFilter, Types, static_cast<int>(std::size(Types)));
 
     if (ImGui::BeginTable("ContentBrowserLayout", 2, ImGuiTableFlags_Resizable))
@@ -178,6 +185,7 @@ void FContentBrowserPanel::Draw(
             EditMaterial,
             OpenSkeletal,
             OpenActorBlueprint,
+            OpenPicoGraph,
             OpenWorld,
             Create,
             Assign,
@@ -241,6 +249,7 @@ bool FContentBrowserPanel::PassesFilter(const FAssetRecord& Record) const
     case 8: bMatchesType = Record.Type == EAssetType::CharacterProfile; break;
     case 9: bMatchesType = Record.Type == EAssetType::ThirdPersonControlProfile; break;
     case 10: bMatchesType = Record.Type == EAssetType::ActorBlueprint; break;
+    case 11: bMatchesType = Record.Type == EAssetType::PicoGraph; break;
     default: break;
     }
     if (!bMatchesType) return false;
@@ -292,6 +301,7 @@ void FContentBrowserPanel::DrawAssetTable(
     const FAssetAction& EditMaterial,
     const FAssetAction& OpenSkeletal,
     const FAssetAction& OpenActorBlueprint,
+    const FAssetAction& OpenPicoGraph,
     const FAssetAction& OpenWorld,
     const FAssetAction& Create,
     const FAssetAction& Assign,
@@ -378,6 +388,12 @@ void FContentBrowserPanel::DrawAssetTable(
         {
             OpenActorBlueprint(Record.AssetPath);
         }
+        else if (ImGui::IsItemHovered()
+            && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
+            && Record.Type == EAssetType::PicoGraph)
+        {
+            OpenPicoGraph(Record.AssetPath);
+        }
         if (ImGui::BeginDragDropSource())
         {
             const std::string Path(Record.AssetPath.ToString());
@@ -391,6 +407,11 @@ void FContentBrowserPanel::DrawAssetTable(
                 && ImGui::MenuItem("Open Actor Blueprint"))
             {
                 OpenActorBlueprint(Record.AssetPath);
+            }
+            if (Record.Type == EAssetType::PicoGraph
+                && ImGui::MenuItem("Open PicoGraph"))
+            {
+                OpenPicoGraph(Record.AssetPath);
             }
             if (Record.Type == EAssetType::World
                 && ImGui::MenuItem("Open World"))

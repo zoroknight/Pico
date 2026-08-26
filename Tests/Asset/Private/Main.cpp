@@ -185,22 +185,25 @@ void TestAssetRegistry(FTestRunner& Runner, const char* Argv0)
     Pico::SaveStaticMeshToFile(RobotPath, MakeTriangleMesh());
     WriteFixture(Content / "Textures" / "Grid.ptex", "texture");
     WriteFixture(Content / "Materials" / "Metal.pmat", "material");
+    WriteFixture(Content / "Graphs" / "Door.pgraph", "graph");
     WriteFixture(Content / "Source" / "Robot.obj", "source");
 
     Runner.Expect(
         Registry.ScanProjectContent(&Report)
-            && Report.ScannedFileCount == 5
-            && Report.RegisteredAssetCount == 4
+            && Report.ScannedFileCount == 6
+            && Report.RegisteredAssetCount == 5
             && Report.IgnoredFileCount == 1
             && Report.Issues.empty(),
         "Registry scans native assets and ignores import source files");
     const std::span<const Pico::FAssetRecord> Assets = Registry.GetAssets();
     Runner.Expect(
-        Assets.size() == 4
-            && Assets[0].AssetPath.ToString() == "/Game/Maps/Main.pworld"
-            && Assets[1].AssetPath.ToString() == "/Game/Materials/Metal.pmat"
-            && Assets[2].AssetPath.ToString() == "/Game/Meshes/Robot.pmesh"
-            && Assets[3].AssetPath.ToString() == "/Game/Textures/Grid.ptex",
+        Assets.size() == 5
+            && Assets[0].AssetPath.ToString() == "/Game/Graphs/Door.pgraph"
+            && Assets[0].Type == Pico::EAssetType::PicoGraph
+            && Assets[1].AssetPath.ToString() == "/Game/Maps/Main.pworld"
+            && Assets[2].AssetPath.ToString() == "/Game/Materials/Metal.pmat"
+            && Assets[3].AssetPath.ToString() == "/Game/Meshes/Robot.pmesh"
+            && Assets[4].AssetPath.ToString() == "/Game/Textures/Grid.ptex",
         "Registry results use deterministic virtual-path ordering");
 
     Pico::FAssetPath LowerCaseQuery;
@@ -243,7 +246,7 @@ void TestAssetRegistry(FTestRunner& Runner, const char* Argv0)
     Runner.Expect(
         Registry.ScanProjectContent(&Report)
             && Registry.Find(LowerCaseQuery) == nullptr
-            && Registry.GetAssets().size() == 3,
+            && Registry.GetAssets().size() == 4,
         "A refresh atomically removes stale asset records");
 
     Runner.Expect(

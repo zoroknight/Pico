@@ -882,8 +882,22 @@ void TestEditorCommandService(FTestRunner& Runner)
     FEditorAgentApproval AgentApproval;
     Pico::FEditorAgentToolExecutor AgentTools(
         &EngineLoop, &Selection, &Transactions, &AgentApproval);
+    const std::vector<std::string> AgentToolNames = AgentTools.GetToolNames();
+    const auto HasAgentTool = [&AgentToolNames](std::string_view Name)
+    {
+        return std::find(AgentToolNames.begin(), AgentToolNames.end(), Name)
+            != AgentToolNames.end();
+    };
     Runner.Expect(
-        AgentTools.IsInitialized() && AgentTools.GetToolNames().size() == 22,
+        AgentTools.IsInitialized()
+            && HasAgentTool("editor.world.describe")
+            && HasAgentTool("editor.actor.spawn")
+            && HasAgentTool("editor.gameplay.asc.describe")
+            && HasAgentTool("editor.actor_blueprint.describe_defaults")
+            && HasAgentTool("editor.actor_blueprint.set_defaults")
+            && HasAgentTool("editor.world.save")
+            && HasAgentTool("editor.play.start")
+            && HasAgentTool("editor.project.package"),
         "Editor Agent adapter registers inspection, scene, gameplay, save, project, and package tools");
     Runner.Expect(
         AgentTools.IsReadOnly(

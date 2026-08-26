@@ -239,6 +239,26 @@ add_library(PicoAsset STATIC
     Source/Runtime/Asset/Private/Texture.cpp
 )
 
+add_library(PicoGraph STATIC
+    Source/Runtime/Graph/Private/GraphAsset.cpp
+)
+
+target_include_directories(PicoGraph
+    PUBLIC
+        Source/Runtime/Graph/Public
+    PRIVATE
+        ThirdParty/NlohmannJson/single_include
+)
+
+target_link_libraries(PicoGraph PUBLIC PicoCore)
+set_target_properties(PicoGraph PROPERTIES FOLDER "Pico")
+
+if(MSVC)
+    target_compile_options(PicoGraph PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoGraph PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 target_include_directories(PicoAsset
     PUBLIC
         Source/Runtime/Asset/Public
@@ -857,6 +877,8 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Private/EditorViewportPanel.h
         Source/Editor/PicoEditor/Private/MaterialDialog.cpp
         Source/Editor/PicoEditor/Private/MaterialDialog.h
+        Source/Editor/PicoEditor/Private/PicoGraphEditor.cpp
+        Source/Editor/PicoEditor/Private/PicoGraphEditor.h
         Source/Editor/PicoEditor/Private/DetailsPanel.cpp
         Source/Editor/PicoEditor/Private/DetailsPanel.h
         Source/Editor/PicoEditor/Private/SceneOutlinerPanel.cpp
@@ -887,6 +909,7 @@ if(PICO_BUILD_INSPECTOR)
             PicoTasks
             PicoReflectionTools
             PicoAssetImport
+            PicoGraph
     )
 
     if(WIN32)
@@ -1005,6 +1028,20 @@ endif()
 add_executable(PicoAssetTests
     Tests/Asset/Private/Main.cpp
 )
+
+add_executable(PicoGraphTests
+    Tests/Graph/Private/Main.cpp
+)
+
+target_include_directories(PicoGraphTests PRIVATE Tests/Common)
+target_link_libraries(PicoGraphTests PRIVATE PicoGraph)
+set_target_properties(PicoGraphTests PROPERTIES FOLDER "Tests/Graph")
+
+if(MSVC)
+    target_compile_options(PicoGraphTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoGraphTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 target_include_directories(PicoAssetTests PRIVATE Tests/Common)
 
@@ -1254,6 +1291,7 @@ if(BUILD_TESTING)
     add_test(NAME PicoAgentTests COMMAND PicoAgentTests)
     add_test(NAME PicoPackagingTests COMMAND PicoPackagingTests)
     add_test(NAME PicoAssetTests COMMAND PicoAssetTests)
+    add_test(NAME PicoGraphTests COMMAND PicoGraphTests)
     add_test(NAME PicoAssetImportTests COMMAND PicoAssetImportTests)
     add_test(NAME PicoObjectTests COMMAND PicoObjectTests)
     add_test(NAME PicoGarbageCollectionTests COMMAND PicoGarbageCollectionTests)
@@ -1284,6 +1322,9 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoAssetTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoGraphTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoReplicationTests PROPERTIES

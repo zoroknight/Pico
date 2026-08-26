@@ -354,6 +354,7 @@ int main(int Argc, char** Argv)
         IO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard
             | ImGuiConfigFlags_DockingEnable
             | ImGuiConfigFlags_ViewportsEnable;
+        IO.ConfigWindowsMoveFromTitleBarOnly = true;
         IO.IniFilename = nullptr;
         const float UiScale = FindUiScale(Argc, Argv);
         const float FontSize = 16.0f * UiScale;

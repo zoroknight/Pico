@@ -176,6 +176,13 @@ The current implementation can:
   Agent edits now distinguish placed World instances from GameMode-spawned players: the latter persist through
   generic Actor Blueprint default tools. `InitialHealth`/`InitialMana` are editable inputs, while replicated state
   summaries are reflected read-only runtime outputs.
+- Author versioned `.pgraph` assets in a separate PicoGraph window. Graphs preserve stable Graph, Node,
+  Pin, Link, and Variable identities through deterministic JSON serialization; the first editor slice
+  supports Entry/Sequence nodes, typed variables, node dragging, compatible Pin connections,
+  disconnection, independent Undo/Redo history, save, and Content Browser reopen. Node bodies provide a
+  stable drag target without stealing Pin clicks, and independent editor windows move only from their
+  title bars. This milestone stores graph structure only; Schema validation, bytecode compilation, and
+  runtime execution follow later.
 - Serialize reflected objects to `.pobj` files and reconstruct them with `PostLoad`.
 - Save validated World scene graphs to deterministic `.pworld` files and transactionally reconstruct runtime Worlds without persisting runtime handles.
 - Transactionally replace the `FEngineLoop` active World while preserving the old World on load or `PostLoad` failure.
@@ -247,7 +254,7 @@ The current implementation can:
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-All twenty-two Debug CTest targets pass. The focused Mini GAS suite passes 73/73 assertions in Debug and Release,
+All twenty-three Debug CTest targets pass. The focused Mini GAS suite passes 73/73 assertions in Debug and Release,
 and the focused animation suite passes 13/13 assertions.
 
 ## Architecture
@@ -290,6 +297,7 @@ PicoSandboxGame
 | `PicoInput` | Frame-based key and pointer state plus configurable Action/Axis mappings |
 | `PicoNetCore` | Network addresses and IDs, packet codec, deterministic loopback, non-blocking UDP, handshake, Ack, bounded reliable delivery, heartbeat, and timeout |
 | `PicoAsset` | Validated virtual asset discovery, deterministic project registry, and file metadata |
+| `PicoGraph` | Versioned graph assets, stable identities, deterministic `.pgraph` serialization, structural validation, and graph transactions |
 | `PicoAssetImport` | Developer-only OBJ conversion into validated native static-mesh assets |
 | `PicoObject` | Object model, reflection, delegates, strong/weak references, Root Set, mark-sweep GC, registry, handles, Outer graph, serialization |
 | `PicoPhysicsCore` | Backend-neutral shapes, body handles, queries, hit results, and PhysicsScene contracts |
@@ -731,6 +739,7 @@ See:
 - [GameplayEffect and Composition Rules (Chinese)](Docs/GameplayAbilitiesPhase02_Effects.zh-CN.md)
 - [AbilityTask Lifecycle (Chinese)](Docs/GameplayAbilitiesPhase03_AbilityTasks.zh-CN.md)
 - [Networked Mini GAS Demo, Prediction, and Agent (Chinese)](Docs/GameplayAbilitiesPhase04_NetworkedDemoAndAgent.zh-CN.md)
+- [PicoGraph Week 1: Assets and Editor (Chinese)](Docs/PicoGraphPhase01_AssetsAndEditor.zh-CN.md)
 - [PicoSandbox Guide](Projects/PicoSandbox/README.md)
 - [Month 3 Editor Viewport](Docs/Month03_10_Editor3DViewport.md)
 - [Month 3 Editor Docking](Docs/Month03_11_EditorDocking.md)

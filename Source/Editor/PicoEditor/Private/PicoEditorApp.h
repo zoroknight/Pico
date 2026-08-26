@@ -7,6 +7,7 @@
 #include "SceneOutlinerPanel.h"
 #include "SkeletalAssetEditor.h"
 #include "ActorBlueprintEditor.h"
+#include "PicoGraphEditor.h"
 
 #include "Pico/Core/Math/Vector3.h"
 #include "Pico/Core/PlatformProcess.h"
@@ -207,6 +208,7 @@ private:
     FContentBrowserPanel ContentBrowserPanel;
     FSkeletalAssetEditor SkeletalAssetEditor;
     FActorBlueprintEditor ActorBlueprintEditor;
+    FPicoGraphEditor PicoGraphEditor;
     FEditorAssetWorkflowController AssetWorkflow;
     FPlaySession PlaySession;
     FPlaySessionSettings PlaySettings;

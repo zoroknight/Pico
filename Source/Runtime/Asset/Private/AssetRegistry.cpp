@@ -42,6 +42,7 @@ std::optional<EAssetType> GetAssetType(const std::filesystem::path& FilePath)
     if (Extension == ".pcharprofile") return EAssetType::CharacterProfile;
     if (Extension == ".pcontrolprofile") return EAssetType::ThirdPersonControlProfile;
     if (Extension == ".pblueprint") return EAssetType::ActorBlueprint;
+    if (Extension == ".pgraph") return EAssetType::PicoGraph;
     return std::nullopt;
 }
 
@@ -296,6 +297,7 @@ std::string_view ToString(EAssetType Type)
     case EAssetType::CharacterProfile: return "CharacterProfile";
     case EAssetType::ThirdPersonControlProfile: return "ThirdPersonControlProfile";
     case EAssetType::ActorBlueprint: return "ActorBlueprint";
+    case EAssetType::PicoGraph: return "PicoGraph";
     }
     return "Unknown";
 }

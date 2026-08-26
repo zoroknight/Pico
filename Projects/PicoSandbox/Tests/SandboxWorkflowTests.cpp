@@ -648,6 +648,10 @@ int main()
                 "Every network player spawns the same Pawn class with the same control policy");
             if (FirstSandboxPawn != nullptr && SecondSandboxPawn != nullptr)
             {
+                // The maintained Blueprint is user-editable and may intentionally disable
+                // abilities. Establish an explicit runtime fixture before testing all three.
+                FirstSandboxPawn->SetAbilityLoadoutBits(7);
+                SecondSandboxPawn->SetAbilityLoadoutBits(7);
                 const Pico::PProperty* GravityEnabled =
                     FirstSandboxPawn->GetClass()->FindProperty(
                         Pico::FName("bGravityShotEnabled"));
