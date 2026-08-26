@@ -16,12 +16,14 @@ public:
     using FStatus = std::function<void(std::string, bool)>;
     using FSpawnInLevel = std::function<void(const FAssetPath&)>;
     using FAssetCreated = std::function<void(const FAssetPath&)>;
+    using FWorldChanged = std::function<void()>;
 
     FActorBlueprintEditor(
         FEngineLoop* EngineLoop,
         FStatus SetStatus,
         FSpawnInLevel SpawnInLevel,
-        FAssetCreated AssetCreated);
+        FAssetCreated AssetCreated,
+        FWorldChanged WorldChanged);
     ~FActorBlueprintEditor();
 
     FActorBlueprintEditor(const FActorBlueprintEditor&) = delete;

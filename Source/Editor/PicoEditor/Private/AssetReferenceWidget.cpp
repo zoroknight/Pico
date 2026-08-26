@@ -32,6 +32,8 @@ bool MatchesType(EAssetType AssetType, EAssetReferenceType ReferenceType)
         return AssetType == EAssetType::Texture;
     case EAssetReferenceType::Material:
         return AssetType == EAssetType::Material;
+    case EAssetReferenceType::Graph:
+        return AssetType == EAssetType::PicoGraph;
     case EAssetReferenceType::None:
         return false;
     }

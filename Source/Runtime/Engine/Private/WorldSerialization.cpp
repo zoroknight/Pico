@@ -950,6 +950,12 @@ bool ValidateWorldAssetData(
         const PClass* RecordClass = FindRecordClass(Record);
         if (RecordClass == nullptr)
         {
+            PICO_LOG(
+                LogEngine,
+                Error,
+                "World load could not resolve class '{}' for object '{}'",
+                Record.ClassName,
+                Record.ObjectName);
             ReportError(OutError, EWorldSerializationError::ClassNotFound);
             return false;
         }

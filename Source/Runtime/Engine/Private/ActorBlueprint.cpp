@@ -4,10 +4,15 @@
 #include "Pico/Core/Config.h"
 #include "Pico/Core/Math/Rotator.h"
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/Level.h"
+#include "Pico/Engine/World.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ClassRegistry.h"
 #include "Pico/Object/Object.h"
+#include "Pico/Object/ObjectInitializer.h"
 #include "Pico/Object/Property.h"
+#include "Pico/Object/SerializedProperty.h"
 
 #include <algorithm>
 #include <cctype>
@@ -27,6 +32,83 @@ struct FCompiledActorBlueprint
     FAssetPath AssetPath;
     std::unique_ptr<PClass> GeneratedClass;
 };
+
+struct FBlueprintTemplateSnapshot
+{
+    FName ObjectName;
+    const PClass* ObjectClass = nullptr;
+    std::vector<FSerializedPropertyRecord> Properties;
+};
+
+bool SerializedValuesEqual(
+    const FSerializedPropertyRecord& Left,
+    const FSerializedPropertyRecord& Right)
+{
+    if (Left.Name != Right.Name || Left.Type != Right.Type) return false;
+    switch (Left.Type)
+    {
+    case EPropertyType::Int32: return Left.Int32Value == Right.Int32Value;
+    case EPropertyType::Float: return Left.FloatValue == Right.FloatValue;
+    case EPropertyType::Bool: return Left.BoolValue == Right.BoolValue;
+    case EPropertyType::Vector3:
+        return Left.Vector3Value.Equals(Right.Vector3Value);
+    case EPropertyType::Rotator:
+        return Left.RotatorValue.Equals(Right.RotatorValue);
+    case EPropertyType::Transform:
+        return Left.TransformValue.Equals(Right.TransformValue);
+    case EPropertyType::AssetPath:
+        return Left.AssetPathValue == Right.AssetPathValue;
+    default:
+        return false;
+    }
+}
+
+const FSerializedPropertyRecord* FindSerializedProperty(
+    const std::vector<FSerializedPropertyRecord>& Properties,
+    const FSerializedPropertyRecord& Match)
+{
+    const auto Found = std::find_if(
+        Properties.begin(), Properties.end(),
+        [&Match](const FSerializedPropertyRecord& Candidate)
+        { return Candidate.Name == Match.Name && Candidate.Type == Match.Type; });
+    return Found != Properties.end() ? &*Found : nullptr;
+}
+
+bool PropagateUnmodifiedProperties(
+    PObject* Instance,
+    const FBlueprintTemplateSnapshot& OldTemplate,
+    const PObject* NewTemplate,
+    std::size_t& OutPropagatedCount)
+{
+    if (Instance == nullptr || NewTemplate == nullptr
+        || Instance->GetClass() != OldTemplate.ObjectClass
+        || NewTemplate->GetClass() != OldTemplate.ObjectClass)
+        return false;
+
+    std::vector<FSerializedPropertyRecord> InstanceProperties;
+    std::vector<FSerializedPropertyRecord> NewProperties;
+    if (!CaptureSerializedProperties(Instance, InstanceProperties)
+        || !CaptureSerializedProperties(NewTemplate, NewProperties))
+        return false;
+
+    for (const FSerializedPropertyRecord& OldProperty : OldTemplate.Properties)
+    {
+        const FSerializedPropertyRecord* InstanceProperty =
+            FindSerializedProperty(InstanceProperties, OldProperty);
+        const FSerializedPropertyRecord* NewProperty =
+            FindSerializedProperty(NewProperties, OldProperty);
+        if (InstanceProperty == nullptr || NewProperty == nullptr
+            || !SerializedValuesEqual(*InstanceProperty, OldProperty)
+            || SerializedValuesEqual(*NewProperty, OldProperty))
+            continue;
+        if (ApplySerializedProperty(
+                Instance, *NewProperty, EPropertyChangeType::ValueSet)
+            != ESerializedPropertyApplyResult::None)
+            return false;
+        ++OutPropagatedCount;
+    }
+    return true;
+}
 
 std::vector<FCompiledActorBlueprint>& GetCompiledBlueprints()
 {
@@ -291,12 +373,47 @@ bool ApplyDataToClass(const FActorBlueprintData& Data, PClass* GeneratedClass)
         || !ApplyOverrides(Data.ActorDefaults, GeneratedDefault))
         return false;
 
+    FObjectInitializer Initializer(GeneratedDefault, ParentDefault);
+    std::vector<FName> RemovedComponentNames;
+    for (const FDefaultSubobjectRecord& Record :
+        GeneratedClass->GetDefaultSubobjects())
+    {
+        if (FindDefaultSubobject(
+                GeneratedClass->GetSuperClass(), Record.Name) != nullptr)
+            continue;
+        const bool bStillDeclared = std::any_of(
+            Data.ComponentDefaults.begin(), Data.ComponentDefaults.end(),
+            [&Record](const FActorBlueprintObjectDefaults& Defaults)
+            { return Defaults.ObjectName == Record.Name; });
+        if (!bStillDeclared) RemovedComponentNames.push_back(Record.Name);
+    }
+    for (FName Name : RemovedComponentNames)
+    {
+        if (!Initializer.RemoveDefaultSubobject(Name)) return false;
+    }
+    for (const FActorBlueprintObjectDefaults& Defaults : Data.ComponentDefaults)
+    {
+        if (FindDefaultSubobject(GeneratedClass, Defaults.ObjectName) != nullptr)
+            continue;
+        const PClass* ComponentClass = Defaults.ComponentClassName.IsNone()
+            ? nullptr : FClassRegistry::FindClass(Defaults.ComponentClassName);
+        if (ComponentClass == nullptr
+            || !ComponentClass->IsChildOf(PActorComponent::StaticClass())
+            || Initializer.CreateDefaultSubobject(ComponentClass, Defaults.ObjectName) == nullptr)
+            return false;
+    }
+
     for (const FDefaultSubobjectRecord& GeneratedRecord : GeneratedClass->GetDefaultSubobjects())
     {
         const FDefaultSubobjectRecord* ParentRecord = FindDefaultSubobject(
             GeneratedClass->GetSuperClass(), GeneratedRecord.Name);
-        if (ParentRecord == nullptr
-            || !CopyProperties(ParentRecord->Template.get(), GeneratedRecord.Template.get()))
+        const PObject* BaseTemplate = ParentRecord != nullptr
+            ? ParentRecord->Template.get()
+            : (GeneratedRecord.Class != nullptr
+                ? GeneratedRecord.Class->GetDefaultObject()
+                : nullptr);
+        if (BaseTemplate == nullptr
+            || !CopyProperties(BaseTemplate, GeneratedRecord.Template.get()))
             return false;
         const auto Defaults = std::find_if(
             Data.ComponentDefaults.begin(), Data.ComponentDefaults.end(),
@@ -350,6 +467,129 @@ std::string MakeGeneratedClassName(const FAssetPath& AssetPath)
 }
 }
 
+struct FActorBlueprintReinstancer::FImpl
+{
+    const PClass* GeneratedClass = nullptr;
+    FBlueprintTemplateSnapshot ActorTemplate;
+    std::vector<FBlueprintTemplateSnapshot> ComponentTemplates;
+    bool bValid = false;
+};
+
+FActorBlueprintReinstancer::FActorBlueprintReinstancer(
+    const PClass* GeneratedClass)
+    : Impl(std::make_unique<FImpl>())
+{
+    Impl->GeneratedClass = GeneratedClass;
+    const PObject* DefaultActor = GeneratedClass != nullptr
+        ? GeneratedClass->GetDefaultObject() : nullptr;
+    if (DefaultActor == nullptr
+        || !GeneratedClass->IsChildOf(PActor::StaticClass()))
+        return;
+
+    Impl->ActorTemplate.ObjectName = FName("Actor");
+    Impl->ActorTemplate.ObjectClass = GeneratedClass;
+    if (!CaptureSerializedProperties(
+            DefaultActor, Impl->ActorTemplate.Properties))
+        return;
+
+    for (const FDefaultSubobjectRecord& Record :
+        GeneratedClass->GetDefaultSubobjects())
+    {
+        FBlueprintTemplateSnapshot Snapshot;
+        Snapshot.ObjectName = Record.Name;
+        Snapshot.ObjectClass = Record.Class;
+        if (Record.Template == nullptr
+            || !CaptureSerializedProperties(
+                Record.Template.get(), Snapshot.Properties))
+            return;
+        Impl->ComponentTemplates.push_back(std::move(Snapshot));
+    }
+    Impl->bValid = true;
+}
+
+FActorBlueprintReinstancer::~FActorBlueprintReinstancer() = default;
+FActorBlueprintReinstancer::FActorBlueprintReinstancer(
+    FActorBlueprintReinstancer&&) noexcept = default;
+FActorBlueprintReinstancer& FActorBlueprintReinstancer::operator=(
+    FActorBlueprintReinstancer&&) noexcept = default;
+
+bool FActorBlueprintReinstancer::IsValid() const
+{
+    return Impl != nullptr && Impl->bValid;
+}
+
+bool FActorBlueprintReinstancer::RefreshWorld(
+    PWorld* World,
+    FActorBlueprintReinstanceReport* OutReport) const
+{
+    FActorBlueprintReinstanceReport Report;
+    if (OutReport != nullptr) *OutReport = Report;
+    if (!IsValid() || World == nullptr
+        || World->GetState() != EWorldState::Initialized
+        || Impl->GeneratedClass->GetDefaultObject() == nullptr)
+        return false;
+
+    for (PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr) return false;
+        for (PActor* Actor : Level->GetActors())
+        {
+            if (Actor == nullptr || Actor->GetClass() != Impl->GeneratedClass)
+                continue;
+            ++Report.MatchedActorCount;
+            std::size_t ActorPropagated = 0;
+            if (!PropagateUnmodifiedProperties(
+                    Actor,
+                    Impl->ActorTemplate,
+                    Impl->GeneratedClass->GetDefaultObject(),
+                    ActorPropagated))
+                return false;
+
+            std::size_t AddedComponents = 0;
+            if (!Actor->SynchronizeDefaultSubobjects(&AddedComponents))
+                return false;
+
+            std::size_t ComponentPropagated = 0;
+            std::size_t RemovedComponents = 0;
+            for (const FBlueprintTemplateSnapshot& OldTemplate :
+                Impl->ComponentTemplates)
+            {
+                PObject* Instance = FindObject(Actor, OldTemplate.ObjectName);
+                const FDefaultSubobjectRecord* NewRecord = FindDefaultSubobject(
+                    Impl->GeneratedClass, OldTemplate.ObjectName);
+                if (NewRecord == nullptr)
+                {
+                    if (Instance == nullptr
+                        || !Instance->IsA(PActorComponent::StaticClass())
+                        || !Actor->DestroyBlueprintComponent(
+                            static_cast<PActorComponent*>(Instance)))
+                        return false;
+                    ++RemovedComponents;
+                    continue;
+                }
+                if (Instance == nullptr
+                    || !PropagateUnmodifiedProperties(
+                        Instance,
+                        OldTemplate,
+                        NewRecord->Template.get(),
+                        ComponentPropagated))
+                    return false;
+            }
+
+            Report.AddedComponentCount += AddedComponents;
+            Report.RemovedComponentCount += RemovedComponents;
+            Report.PropagatedPropertyCount +=
+                ActorPropagated + ComponentPropagated;
+            if (AddedComponents > 0
+                || RemovedComponents > 0
+                || ActorPropagated + ComponentPropagated > 0)
+                ++Report.RefreshedActorCount;
+        }
+    }
+    if (OutReport != nullptr) *OutReport = Report;
+    return true;
+}
+
 bool LoadActorBlueprintFromFile(
     const std::filesystem::path& FilePath,
     FActorBlueprintData& OutData,
@@ -381,8 +621,14 @@ bool LoadActorBlueprintFromFile(
         if (Name.empty()) continue;
         FActorBlueprintObjectDefaults Defaults;
         Defaults.ObjectName = FName(Name);
-        for (const auto& [Key, Value] : Config.GetSectionEntries("Component." + Name))
+        const std::string Section = "Component." + Name;
+        Defaults.ComponentClassName = FName(
+            Config.GetString(Section, "ComponentClass", ""));
+        for (const auto& [Key, Value] : Config.GetSectionEntries(Section))
+        {
+            if (Key == "ComponentClass") continue;
             Defaults.Properties.emplace_back(FName(Key), Value);
+        }
         Data.ComponentDefaults.push_back(std::move(Defaults));
     }
     OutData = std::move(Data);
@@ -411,6 +657,9 @@ bool SaveActorBlueprintToFile(
     for (const FActorBlueprintObjectDefaults& Defaults : Data.ComponentDefaults)
     {
         const std::string Section = "Component." + Defaults.ObjectName.ToString();
+        if (!Defaults.ComponentClassName.IsNone())
+            Config.SetString(
+                Section, "ComponentClass", Defaults.ComponentClassName.ToString());
         for (const auto& [Name, Value] : Defaults.Properties)
             Config.SetString(Section, Name.ToString(), Value);
     }
@@ -439,7 +688,7 @@ bool CreateActorBlueprintAsset(
     Data.GeneratedClassName = FName(MakeGeneratedClassName(AssetPath));
     Data.ActorDefaults.ObjectName = FName("Actor");
     for (const FDefaultSubobjectRecord& Record : ParentClass->GetDefaultSubobjects())
-        Data.ComponentDefaults.push_back({Record.Name, {}});
+        Data.ComponentDefaults.push_back({Record.Name, {}, {}});
     return SaveActorBlueprintToFile(FilePath, Data, OutError);
 }
 
@@ -469,10 +718,39 @@ bool SaveActorBlueprintDefaults(
             const_cast<PActor*>(SourceActor), Record.Name);
         const FDefaultSubobjectRecord* ParentRecord =
             FindDefaultSubobject(ParentClass, Record.Name);
-        Data.ComponentDefaults.push_back(CaptureOverrides(
+        if (Source == nullptr)
+        {
+            if (ParentRecord != nullptr)
+            {
+                SetError(OutError, EActorBlueprintError::PropertyOverrideFailed);
+                return false;
+            }
+            continue;
+        }
+        const PObject* BaseTemplate = ParentRecord != nullptr
+            ? ParentRecord->Template.get()
+            : (Record.Class != nullptr ? Record.Class->GetDefaultObject() : nullptr);
+        FActorBlueprintObjectDefaults Defaults = CaptureOverrides(
             Record.Name,
             Source,
-            ParentRecord != nullptr ? ParentRecord->Template.get() : nullptr));
+            BaseTemplate);
+        if (ParentRecord == nullptr && Record.Class != nullptr)
+            Defaults.ComponentClassName = Record.Class->GetName();
+        Data.ComponentDefaults.push_back(std::move(Defaults));
+    }
+    for (PActorComponent* Component : SourceActor->GetComponents())
+    {
+        if (Component == nullptr
+            || FindDefaultSubobject(GeneratedClass, Component->GetName()) != nullptr)
+            continue;
+        const PClass* ComponentClass = Component->GetClass();
+        const PObject* ComponentDefault = ComponentClass != nullptr
+            ? ComponentClass->GetDefaultObject() : nullptr;
+        FActorBlueprintObjectDefaults Defaults = CaptureOverrides(
+            Component->GetName(), Component, ComponentDefault);
+        Defaults.ComponentClassName = ComponentClass != nullptr
+            ? ComponentClass->GetName() : FName {};
+        Data.ComponentDefaults.push_back(std::move(Defaults));
     }
     if (!SaveActorBlueprintToFile(FilePath, Data, OutError)
         || !ApplyDataToClass(Data, const_cast<PClass*>(GeneratedClass)))

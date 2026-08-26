@@ -9,6 +9,7 @@
 #include "Pico/Object/ReflectionMacros.h"
 
 #include <string_view>
+#include <cstddef>
 #include <type_traits>
 #include <vector>
 
@@ -44,10 +45,14 @@ public:
     bool IsPendingDestroy() const;
     bool Destroy();
     FOnActorDestroyed& OnDestroyed();
+    void RegisterAllComponents();
+    void UnregisterAllComponents();
 
     PActorComponent* CreateComponent(const PClass* ComponentClass, FName Name);
     PActorComponent* CreateComponent(const PClass* ComponentClass, std::string_view Name);
     bool DestroyComponent(PActorComponent* Component);
+    bool CanDestroyBlueprintComponent(const PActorComponent* Component) const;
+    bool DestroyBlueprintComponent(PActorComponent* Component);
 
     template <typename TComponent>
     TComponent* CreateComponent(FName Name)
@@ -65,6 +70,7 @@ public:
     }
 
     std::vector<PActorComponent*> GetComponents() const;
+    bool SynchronizeDefaultSubobjects(std::size_t* OutAddedCount = nullptr);
     PSceneComponent* GetRootComponent() const;
     bool SetRootComponent(PSceneComponent* Component);
 
@@ -103,9 +109,6 @@ private:
     void SetNetRoles(ENetRole InLocalRole, ENetRole InRemoteRole);
     PActorComponent* ResolveComponent(FObjectHandle Handle) const;
     bool OwnsComponent(const PActorComponent* Component) const;
-    void RegisterAllComponents();
-    void UnregisterAllComponents();
-
     friend class PWorld;
     friend class FWorldAssetLoader;
     friend class FActorTickFunction;

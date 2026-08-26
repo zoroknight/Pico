@@ -241,6 +241,8 @@ add_library(PicoAsset STATIC
 
 add_library(PicoGraph STATIC
     Source/Runtime/Graph/Private/GraphAsset.cpp
+    Source/Runtime/Graph/Private/GraphCompiler.cpp
+    Source/Runtime/Graph/Private/ScriptVM.cpp
 )
 
 target_include_directories(PicoGraph
@@ -250,7 +252,7 @@ target_include_directories(PicoGraph
         ThirdParty/NlohmannJson/single_include
 )
 
-target_link_libraries(PicoGraph PUBLIC PicoCore)
+target_link_libraries(PicoGraph PUBLIC PicoCore PicoObject)
 set_target_properties(PicoGraph PROPERTIES FOLDER "Pico")
 
 if(MSVC)
@@ -535,6 +537,7 @@ add_library(PicoEngine STATIC
     Source/Runtime/Engine/Private/PlayerStart.cpp
     Source/Runtime/Engine/Private/PlayerState.cpp
     Source/Runtime/Engine/Private/SceneComponent.cpp
+    Source/Runtime/Engine/Private/ScriptComponent.cpp
     Source/Runtime/Engine/Private/SkeletalMeshComponent.cpp
     Source/Runtime/Engine/Private/StaticMeshComponent.cpp
     Source/Runtime/Engine/Private/TickFunction.cpp
@@ -552,6 +555,7 @@ target_link_libraries(PicoEngine
     PUBLIC
         PicoAsset
         PicoInput
+        PicoGraph
         PicoNetCore
         PicoObject
         PicoPhysicsCore

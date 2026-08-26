@@ -11,9 +11,11 @@
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
+#include "Pico/Engine/Level.h"
 #include "Pico/Engine/Controller.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/ScriptComponent.h"
 #include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/World.h"
@@ -123,6 +125,7 @@ struct FActorBlueprintEditor::FImpl
     FStatus SetStatus;
     FSpawnInLevel SpawnInLevel;
     FAssetCreated AssetCreated;
+    FWorldChanged WorldChanged;
     std::unique_ptr<FSceneViewportRenderer> Renderer;
     PWorld* PreviewWorld = nullptr;
     PActor* PreviewActor = nullptr;
@@ -211,7 +214,14 @@ struct FActorBlueprintEditor::FImpl
         BuildAxisArrow(
             PreviewWorld, "ActorUpZ", FVector3::UpVector,
             FVector3::ForwardVector, {0.15f, 0.35f, 0.95f});
-        PreviewWorld->Tick(0.0001f);
+        for (PLevel* Level : PreviewWorld->GetLevels())
+        {
+            if (Level == nullptr) continue;
+            for (PActor* Actor : Level->GetActors())
+            {
+                if (Actor != nullptr) Actor->RegisterAllComponents();
+            }
+        }
         Selection.Set(PreviewActor);
         return true;
     }
@@ -240,6 +250,9 @@ struct FActorBlueprintEditor::FImpl
     {
         std::filesystem::path File;
         EActorBlueprintError Error = EActorBlueprintError::None;
+        const PClass* GeneratedClass =
+            FindActorBlueprintGeneratedClass(OpenedAsset);
+        FActorBlueprintReinstancer Reinstancer(GeneratedClass);
         if (PreviewActor == nullptr || !ResolveAssetFile(OpenedAsset, File)
             || !SaveActorBlueprintDefaults(
                 File, OpenedAsset, PreviewActor, &Error))
@@ -250,8 +263,54 @@ struct FActorBlueprintEditor::FImpl
                 true);
             return;
         }
+
+        FActorBlueprintReinstanceReport RefreshReport;
+        PWorld* EditorWorld = EngineLoop != nullptr
+            ? EngineLoop->GetWorld() : nullptr;
+        if (Reinstancer.IsValid() && EditorWorld != nullptr
+            && !Reinstancer.RefreshWorld(EditorWorld, &RefreshReport))
+        {
+            Report(
+                "Actor Blueprint saved, but open World instances could not be refreshed; reload the map",
+                true);
+        }
+        else if (RefreshReport.RefreshedActorCount > 0 && WorldChanged)
+        {
+            WorldChanged();
+        }
+        if (!BuildPreview())
+        {
+            Report("Actor Blueprint saved, but its preview could not be rebuilt", true);
+            return;
+        }
         bDirty = false;
-        Report("Compiled and saved " + std::string(OpenedAsset.ToString()));
+        Report(
+            "Compiled and saved " + std::string(OpenedAsset.ToString())
+                + "; refreshed "
+                + std::to_string(RefreshReport.RefreshedActorCount)
+                + " of " + std::to_string(RefreshReport.MatchedActorCount)
+                + " placed instance(s)");
+    }
+
+    void AddScriptComponent()
+    {
+        if (PreviewActor == nullptr) return;
+        unsigned int Number = 1;
+        PScriptComponent* Component = nullptr;
+        do
+        {
+            Component = PreviewActor->CreateComponent<PScriptComponent>(
+                "ScriptComponent_" + std::to_string(Number++));
+        }
+        while (Component == nullptr && Number < 10000);
+        if (Component == nullptr)
+        {
+            Report("Could not add Script Component", true);
+            return;
+        }
+        Selection.Set(Component);
+        bDirty = true;
+        Report("Added Script Component; configure GraphAsset, then Compile & Save");
     }
 
     void DrawCreatePopup()
@@ -338,11 +397,31 @@ struct FActorBlueprintEditor::FImpl
     void DrawComponentTree()
     {
         if (PreviewActor == nullptr) return;
+        PActorComponent* ComponentToDelete = nullptr;
+        const auto DrawComponentContextMenu =
+            [this, &ComponentToDelete](PActorComponent* Component)
+            {
+                if (!ImGui::BeginPopupContextItem()) return;
+                Selection.Set(Component);
+                const bool bCanDelete =
+                    PreviewActor->CanDestroyBlueprintComponent(Component);
+                ImGui::BeginDisabled(!bCanDelete);
+                if (ImGui::MenuItem("Delete Component", "Delete"))
+                    ComponentToDelete = Component;
+                ImGui::EndDisabled();
+                if (!bCanDelete)
+                {
+                    ImGui::Separator();
+                    ImGui::TextDisabled(
+                        "Inherited, root, or parent components cannot be deleted");
+                }
+                ImGui::EndPopup();
+            };
         if (ImGui::Selectable(
                 (PreviewActor->GetClass()->GetName().ToString() + " (Self)").c_str(),
                 Selection.Resolve() == PreviewActor))
             Selection.Set(PreviewActor);
-        const auto DrawSceneNode = [this](
+        const auto DrawSceneNode = [this, &DrawComponentContextMenu](
             auto&& Self,
             PSceneComponent* Component) -> void
         {
@@ -357,6 +436,7 @@ struct FActorBlueprintEditor::FImpl
             const bool bOpenNode = ImGui::TreeNodeEx(Component, Flags, "%s", Label.c_str());
             if (ImGui::IsItemClicked())
                 Selection.Set(Component);
+            DrawComponentContextMenu(Component);
             if (bOpenNode)
             {
                 for (PSceneComponent* Child : Children) Self(Self, Child);
@@ -379,6 +459,24 @@ struct FActorBlueprintEditor::FImpl
                 + "  [" + Component->GetClass()->GetName().ToString() + "]";
             if (ImGui::Selectable(Label.c_str(), Selection.Resolve() == Component))
                 Selection.Set(Component);
+            DrawComponentContextMenu(Component);
+        }
+        if (ComponentToDelete != nullptr)
+        {
+            const std::string DeletedName =
+                ComponentToDelete->GetName().ToString();
+            if (!PreviewActor->DestroyBlueprintComponent(ComponentToDelete))
+            {
+                Report("Could not delete Blueprint component", true);
+            }
+            else
+            {
+                Selection.Set(PreviewActor);
+                bDirty = true;
+                Report(
+                    "Deleted " + DeletedName
+                        + "; Compile & Save to refresh placed instances");
+            }
         }
         ImGui::Separator();
         ImGui::TextDisabled("Red: Actor +X Forward");
@@ -537,6 +635,7 @@ struct FActorBlueprintEditor::FImpl
         {
             if (ImGui::MenuItem("Compile & Save", "Ctrl+S")) Save();
             if (ImGui::MenuItem("Reset Preview")) BuildPreview();
+            if (ImGui::MenuItem("Add Script Component")) AddScriptComponent();
             ImGui::BeginDisabled(PreviewActor == nullptr);
             if (ImGui::MenuItem("Spawn In Level") && SpawnInLevel)
                 SpawnInLevel(OpenedAsset);
@@ -572,13 +671,15 @@ FActorBlueprintEditor::FActorBlueprintEditor(
     FEngineLoop* EngineLoop,
     FStatus SetStatus,
     FSpawnInLevel SpawnInLevel,
-    FAssetCreated AssetCreated)
+    FAssetCreated AssetCreated,
+    FWorldChanged WorldChanged)
     : Impl(std::make_unique<FImpl>())
 {
     Impl->EngineLoop = EngineLoop;
     Impl->SetStatus = std::move(SetStatus);
     Impl->SpawnInLevel = std::move(SpawnInLevel);
     Impl->AssetCreated = std::move(AssetCreated);
+    Impl->WorldChanged = std::move(WorldChanged);
     CopyToBuffer("/Game/Characters", Impl->CreateFolder);
     CopyToBuffer("BP_NewCharacter", Impl->CreateName);
 }

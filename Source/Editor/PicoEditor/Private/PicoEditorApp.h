@@ -129,6 +129,7 @@ private:
     void AddComponentToSelection(EEditorSceneComponentType Type);
     void AddSceneComponentToSelection();
     void AddCubeComponentToSelection();
+    void AddScriptComponentToSelection();
     void AddStaticMeshComponentToSelection();
     const FAssetPath* GetSelectedStaticMeshAsset() const;
     const FAssetPath* GetSelectedMaterialAsset() const;

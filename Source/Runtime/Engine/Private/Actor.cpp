@@ -168,6 +168,40 @@ bool PActor::DestroyComponent(PActorComponent* Component)
     return true;
 }
 
+bool PActor::CanDestroyBlueprintComponent(
+    const PActorComponent* Component) const
+{
+    if (!OwnsComponent(Component) || Component == GetRootComponent())
+        return false;
+    if (Component->IsA(PSceneComponent::StaticClass())
+        && !static_cast<const PSceneComponent*>(Component)
+            ->GetAttachChildren().empty())
+        return false;
+    if (!HasAnyFlags(Component->GetFlags(), EObjectFlags::DefaultSubobject))
+        return true;
+
+    const PClass* ParentClass = GetClass() != nullptr
+        ? GetClass()->GetSuperClass() : nullptr;
+    if (ParentClass == nullptr) return false;
+    const auto& ParentRecords = ParentClass->GetDefaultSubobjects();
+    return std::none_of(
+        ParentRecords.begin(), ParentRecords.end(),
+        [Component](const FDefaultSubobjectRecord& Record)
+        { return Record.Name == Component->GetName(); });
+}
+
+bool PActor::DestroyBlueprintComponent(PActorComponent* Component)
+{
+    if (!CanDestroyBlueprintComponent(Component)) return false;
+    if (!HasAnyFlags(Component->GetFlags(), EObjectFlags::DefaultSubobject))
+        return DestroyComponent(Component);
+
+    const FObjectHandle Handle = Component->GetHandle();
+    if (!DestroyObject(Component)) return false;
+    std::erase(ComponentHandles, Handle);
+    return true;
+}
+
 std::vector<PActorComponent*> PActor::GetComponents() const
 {
     std::vector<PActorComponent*> Components;
@@ -180,6 +214,86 @@ std::vector<PActorComponent*> PActor::GetComponents() const
         }
     }
     return Components;
+}
+
+bool PActor::SynchronizeDefaultSubobjects(std::size_t* OutAddedCount)
+{
+    if (OutAddedCount != nullptr) *OutAddedCount = 0;
+    if (IsBeginningDestroy() || IsPendingDestroy() || GetClass() == nullptr)
+        return false;
+
+    struct FCreatedSubobject
+    {
+        const FDefaultSubobjectRecord* Record = nullptr;
+        PActorComponent* Component = nullptr;
+    };
+    std::vector<FCreatedSubobject> Created;
+    const auto Rollback =
+        [this, &Created]()
+        {
+            for (auto It = Created.rbegin(); It != Created.rend(); ++It)
+            {
+                const FObjectHandle Handle = It->Component->GetHandle();
+                DestroyObject(It->Component);
+                std::erase(ComponentHandles, Handle);
+                if (RootComponentHandle == Handle) RootComponentHandle = {};
+            }
+        };
+
+    for (const FDefaultSubobjectRecord& Record : GetClass()->GetDefaultSubobjects())
+    {
+        PObject* Existing = FindObject(this, Record.Name);
+        if (Existing != nullptr)
+        {
+            if (Existing->GetClass() != Record.Class
+                || !Existing->IsA(PActorComponent::StaticClass()))
+            {
+                Rollback();
+                return false;
+            }
+            continue;
+        }
+
+        const FObjectConstructionParams Params {
+            Record.Class,
+            this,
+            Record.Name,
+            EObjectFlags::DefaultSubobject,
+            Record.Template.get()
+        };
+        PObject* CreatedObject = NewObject(Params);
+        if (CreatedObject == nullptr || !OnDefaultSubobjectCreated(CreatedObject))
+        {
+            if (CreatedObject != nullptr) DestroyObject(CreatedObject);
+            Rollback();
+            return false;
+        }
+        Created.push_back({&Record, static_cast<PActorComponent*>(CreatedObject)});
+    }
+
+    for (const FCreatedSubobject& Entry : Created)
+    {
+        PObject* AttachParent = Entry.Record->AttachParentName.IsNone()
+            ? nullptr : FindObject(this, Entry.Record->AttachParentName);
+        if ((!Entry.Record->AttachParentName.IsNone() && AttachParent == nullptr)
+            || !OnDefaultSubobjectRelation(
+                Entry.Component,
+                AttachParent,
+                Entry.Record->AttachSocketName,
+                Entry.Record->bIsRoot))
+        {
+            Rollback();
+            return false;
+        }
+    }
+
+    if (HasBegunPlay())
+    {
+        for (const FCreatedSubobject& Entry : Created)
+            Entry.Component->RegisterComponent();
+    }
+    if (OutAddedCount != nullptr) *OutAddedCount = Created.size();
+    return true;
 }
 
 PSceneComponent* PActor::GetRootComponent() const

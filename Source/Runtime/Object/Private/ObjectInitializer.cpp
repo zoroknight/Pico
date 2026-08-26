@@ -175,6 +175,41 @@ PObject* FObjectInitializer::CreateDefaultSubobject(const PClass* Class, FName N
     return Result;
 }
 
+bool FObjectInitializer::RemoveDefaultSubobject(FName Name)
+{
+    if (Object == nullptr || Name.IsNone()
+        || !HasAnyFlags(Object->GetFlags(), EObjectFlags::ClassDefaultObject)
+        || Object->GetClass() == nullptr
+        || Object->GetClass()->GetDefaultObject() != Object)
+        return false;
+
+    PClass* OwnerClass = const_cast<PClass*>(Object->GetClass());
+    if (const PClass* ParentClass = OwnerClass->GetSuperClass())
+    {
+        const auto& ParentRecords = ParentClass->GetDefaultSubobjects();
+        if (std::any_of(
+                ParentRecords.begin(), ParentRecords.end(),
+                [Name](const FDefaultSubobjectRecord& Record)
+                { return Record.Name == Name; }))
+            return false;
+    }
+    if (std::any_of(
+            OwnerClass->DefaultSubobjects.begin(),
+            OwnerClass->DefaultSubobjects.end(),
+            [Name](const FDefaultSubobjectRecord& Record)
+            { return Record.AttachParentName == Name; }))
+        return false;
+
+    const auto Found = std::find_if(
+        OwnerClass->DefaultSubobjects.begin(),
+        OwnerClass->DefaultSubobjects.end(),
+        [Name](const FDefaultSubobjectRecord& Record)
+        { return Record.Name == Name; });
+    if (Found == OwnerClass->DefaultSubobjects.end()) return false;
+    OwnerClass->DefaultSubobjects.erase(Found);
+    return true;
+}
+
 bool FObjectInitializer::SetRootSubobject(PObject* Subobject)
 {
     if (Object == nullptr || Object->GetClass() == nullptr || Subobject == nullptr)

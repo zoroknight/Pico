@@ -1,13 +1,14 @@
 [ActorDefaults]
+AbilityLoadoutBits=6
 AutoPossessPlayerIndex=0
 BurnCooldownSeconds=0.5
 FreezeCooldownSeconds=0.5
-InitialHealth=200
+InitialHealth=400
 InitialMana=400
 bGravityShotEnabled=false
 
 [Blueprint]
-Components=CollisionCapsule;CharacterMovement;SandboxPlayerMesh;SandboxAnimatedMesh;AbilitySystem;CameraBoom;FollowCamera
+Components=CollisionCapsule;CharacterMovement;SandboxPlayerMesh;SandboxAnimatedMesh;AbilitySystem;CameraBoom;FollowCamera;ScriptComponent_1
 GeneratedClass=PBG__Game_Characters_BP_Knight_pblueprint_C
 ParentClass=PSandboxPawn
 Version=1
@@ -16,11 +17,16 @@ Version=1
 RelativeTransform=0,0,0,0,0,0,1,1,1
 
 [Component.CollisionCapsule]
-RelativeTransform=0,0,-7.83999931e-05,0,0,0,1,1,1
+RelativeTransform=0,0,-0.000166600003,0,0,0,1,1,1
 
 [Component.SandboxAnimatedMesh]
 AnimationSetAsset=/Game/Characters/Knight_Male/Knight_Male.panimset
 CharacterProfileAsset=/Game/Characters/Knight_Male/Knight_Male.pcharprofile
 RelativeTransform=0,0,30,0,-179.999893,-5.34263442e-08,1,1,1
 SkeletalMeshAsset=/Game/Characters/Knight_Male/Knight_Male.pskeletalmesh
+
+[Component.ScriptComponent_1]
+ComponentClass=PScriptComponent
+GraphAsset=/Game/Graphs/VMVisualTest.pgraph
+bExecuteOnBeginPlay=false
 

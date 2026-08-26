@@ -3,6 +3,7 @@
 #include "Pico/Core/App.h"
 #include "Pico/Core/GameThread.h"
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/ActorBlueprint.h"
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/CameraComponent.h"
 #include "Pico/Engine/CameraActor.h"
@@ -22,12 +23,16 @@
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/ScriptComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/TickTaskManager.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Engine/WorldSerialization.h"
+#include "Pico/Graph/GraphAsset.h"
+#include "Pico/Graph/GraphCompiler.h"
 #include "Pico/PhysicsCore/WorldCollisionQuery.h"
 #include "Pico/Object/GarbageCollection.h"
+#include "Pico/Object/ClassRegistry.h"
 #include "Pico/Object/DynamicMulticastDelegate.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectInitializer.h"
@@ -3503,6 +3508,275 @@ void TestInvalidFrameLimit(FTestRunner& Runner)
     Runner.Expect(Result != 0, "An invalid frame limit fails during PreInit");
     Runner.Expect(Pico::FApp::GetFrameCounter() == 0, "An invalid frame limit never ticks");
 }
+
+void TestScriptComponentRunsGraphOnNativeActor(FTestRunner& Runner)
+{
+    if (!InitializeWorldTypes(Runner)) return;
+    const bool bScriptClassRegistered = Pico::PScriptComponent::RegisterClass();
+    PStageHActor* Actor = Pico::NewObject<PStageHActor>(nullptr, "ScriptActor");
+    Pico::PScriptComponent* Script = Actor != nullptr
+        ? Actor->CreateComponent<Pico::PScriptComponent>("Script") : nullptr;
+
+    Pico::FPicoGraphAsset Graph;
+    Graph.GraphId = Pico::CreateGraphStableId();
+    Pico::FGraphNode Entry;
+    Pico::FGraphNode Set;
+    Pico::MakeSchemaGraphNode("EntryEvent", 0.0f, 0.0f, Entry);
+    Entry.DisplayName = "BeginPlay";
+    Pico::MakeSchemaGraphNode("SetProperty", 200.0f, 0.0f, Set);
+    const auto FindPin = [](Pico::FGraphNode& Node, std::string_view Name)
+    {
+        return std::find_if(Node.Pins.begin(), Node.Pins.end(),
+            [Name](const Pico::FGraphPin& Pin) { return Pin.Name == Name; });
+    };
+    FindPin(Set, "PropertyName")->DefaultValue = "Value";
+    FindPin(Set, "Value")->DefaultValue = "77";
+    Graph.Nodes = {Entry, Set};
+    Pico::EGraphAssetError LinkError = Pico::EGraphAssetError::None;
+    Pico::AddGraphLink(Graph, FindPin(Graph.Nodes[0], "Then")->Id,
+        FindPin(Graph.Nodes[1], "In")->Id, &LinkError);
+    const Pico::FGraphCompileResult Compile = Pico::CompileGraph(Graph);
+    const Pico::FScriptExecutionReport Report = Script != nullptr
+        ? Script->ExecuteBytecode(Compile.Bytecode)
+        : Pico::FScriptExecutionReport {};
+    Runner.Expect(
+        bScriptClassRegistered && Actor != nullptr && Script != nullptr
+            && Compile.bSucceeded && Report.Succeeded() && Actor->GetValue() == 77,
+        "PScriptComponent executes a compiled graph against its native Actor owner");
+    Pico::DestroyObjectTree(Actor);
+    Pico::PObjectSystem::Shutdown();
+}
+
+void TestEditorPreviewRegistrationDoesNotBeginGameplay(FTestRunner& Runner)
+{
+    if (!InitializeWorldTypes(Runner)) return;
+    const bool bScriptRegistered = Pico::PScriptComponent::RegisterClass();
+    Pico::PWorld* World = Pico::NewObject<Pico::PWorld>(
+        nullptr, "EditorPreviewWorld");
+    const bool bWorldInitialized = World != nullptr && World->Initialize();
+    PStageHActor* Actor = bWorldInitialized
+        ? World->SpawnActor<PStageHActor>("PreviewActor") : nullptr;
+    Pico::PScriptComponent* Script = Actor != nullptr
+        ? Actor->CreateComponent<Pico::PScriptComponent>("Script") : nullptr;
+    Pico::FAssetPath GraphAsset;
+    const bool bGraphPathValid = Pico::FAssetPath::TryParse(
+        "/Game/Graphs/VMVisualTest.pgraph", GraphAsset);
+    if (Script != nullptr && bGraphPathValid)
+        Script->SetGraphAsset(GraphAsset);
+    if (Actor != nullptr) Actor->RegisterAllComponents();
+
+    Runner.Expect(
+        bScriptRegistered && bWorldInitialized && Actor != nullptr
+            && Script != nullptr && Script->IsRegistered()
+            && !Actor->HasBegunPlay()
+            && Actor->GetValue() == 10
+            && Script->GetLastExecutionReport().InstructionsExecuted == 0,
+        "Editor preview registration exposes components without executing BeginPlay gameplay");
+
+    if (World != nullptr) Pico::DestroyObjectTree(World);
+    Pico::PObjectSystem::Shutdown();
+}
+
+void TestActorBlueprintDynamicComponentRoundTrip(FTestRunner& Runner)
+{
+    const std::filesystem::path FilePath =
+        std::filesystem::temp_directory_path() / "PicoActorBlueprintDynamicComponentTest.pblueprint";
+    Pico::FActorBlueprintData Source;
+    Source.ParentClassName = Pico::FName("PActor");
+    Source.GeneratedClassName = Pico::FName("PBG_Game_Tests_BP_DynamicComponent_C");
+    Source.ActorDefaults.ObjectName = Pico::FName("Actor");
+
+    Pico::FActorBlueprintObjectDefaults ScriptDefaults;
+    ScriptDefaults.ObjectName = Pico::FName("ScriptComponent_1");
+    ScriptDefaults.ComponentClassName = Pico::FName("PScriptComponent");
+    ScriptDefaults.Properties.emplace_back(
+        Pico::FName("GraphAsset"), "/Game/Graphs/VMVisualTest.pgraph");
+    Source.ComponentDefaults.push_back(std::move(ScriptDefaults));
+
+    Pico::EActorBlueprintError SaveError = Pico::EActorBlueprintError::None;
+    Pico::EActorBlueprintError LoadError = Pico::EActorBlueprintError::None;
+    Pico::FActorBlueprintData Loaded;
+    const bool bSaved = Pico::SaveActorBlueprintToFile(FilePath, Source, &SaveError);
+    const bool bLoaded = bSaved
+        && Pico::LoadActorBlueprintFromFile(FilePath, Loaded, &LoadError);
+    std::error_code RemoveError;
+    std::filesystem::remove(FilePath, RemoveError);
+
+    const bool bPreserved = bLoaded
+        && Loaded.ComponentDefaults.size() == 1
+        && Loaded.ComponentDefaults[0].ObjectName == Pico::FName("ScriptComponent_1")
+        && Loaded.ComponentDefaults[0].ComponentClassName == Pico::FName("PScriptComponent")
+        && Loaded.ComponentDefaults[0].Properties.size() == 1
+        && Loaded.ComponentDefaults[0].Properties[0].first == Pico::FName("GraphAsset")
+        && Loaded.ComponentDefaults[0].Properties[0].second
+            == "/Game/Graphs/VMVisualTest.pgraph";
+    Runner.Expect(
+        bPreserved,
+        "Actor Blueprint persistence preserves dynamic component class metadata and overrides");
+}
+
+void TestDynamicClassDefaultSubobjectInstantiation(FTestRunner& Runner)
+{
+    const bool bInitialized = Pico::PObjectSystem::Init()
+        && Pico::PActorComponent::RegisterClass()
+        && Pico::PActor::RegisterClass()
+        && Pico::PScriptComponent::RegisterClass();
+    std::unique_ptr<Pico::PClass> Generated = bInitialized
+        ? Pico::PClass::CreateDynamicDerived(
+            Pico::FName("PBG_Test_DynamicScriptComponent_C"),
+            Pico::PActor::StaticClass())
+        : nullptr;
+    const bool bRegistered = Generated != nullptr
+        && Pico::FClassRegistry::RegisterClass(Generated.get());
+    Pico::PObject* TemplateObject = bRegistered
+        ? Pico::FObjectInitializer(
+            Generated->GetMutableDefaultObject(),
+            Pico::PActor::StaticClass()->GetDefaultObject())
+            .CreateDefaultSubobject(
+                Pico::PScriptComponent::StaticClass(),
+                Pico::FName("ScriptComponent_1"))
+        : nullptr;
+    auto* ScriptTemplate = TemplateObject != nullptr
+        && TemplateObject->IsA(Pico::PScriptComponent::StaticClass())
+        ? static_cast<Pico::PScriptComponent*>(TemplateObject)
+        : nullptr;
+    Pico::FAssetPath GraphAsset;
+    const bool bGraphPathValid = Pico::FAssetPath::TryParse(
+        "/Game/Graphs/VMVisualTest.pgraph", GraphAsset);
+    if (ScriptTemplate != nullptr && bGraphPathValid)
+        ScriptTemplate->SetGraphAsset(GraphAsset);
+
+    Pico::PObject* InstanceObject = bRegistered
+        ? Pico::NewObject(Generated.get(), nullptr, "DynamicActor")
+        : nullptr;
+    auto* Instance = InstanceObject != nullptr
+        && InstanceObject->IsA(Pico::PActor::StaticClass())
+        ? static_cast<Pico::PActor*>(InstanceObject)
+        : nullptr;
+    Pico::PScriptComponent* ScriptInstance = nullptr;
+    if (Instance != nullptr)
+    {
+        for (Pico::PActorComponent* Component : Instance->GetComponents())
+        {
+            if (Component != nullptr
+                && Component->GetName() == Pico::FName("ScriptComponent_1")
+                && Component->IsA(Pico::PScriptComponent::StaticClass()))
+            {
+                ScriptInstance = static_cast<Pico::PScriptComponent*>(Component);
+                break;
+            }
+        }
+    }
+    Runner.Expect(
+        ScriptInstance != nullptr
+            && ScriptInstance->GetGraphAsset() == GraphAsset,
+        "A dynamic Actor Blueprint class instantiates its saved ScriptComponent template");
+
+    if (Instance != nullptr) Pico::DestroyObjectTree(Instance);
+    Pico::PObjectSystem::Shutdown();
+}
+
+void TestActorBlueprintReinstancerRefreshesPlacedInstances(FTestRunner& Runner)
+{
+    if (!InitializeWorldTypes(Runner)) return;
+    const bool bScriptRegistered = Pico::PScriptComponent::RegisterClass();
+    std::unique_ptr<Pico::PClass> Generated = Pico::PClass::CreateDynamicDerived(
+        Pico::FName("PBG_Test_Reinstance_C"), PStageHActor::StaticClass());
+    const bool bGeneratedRegistered = Generated != nullptr
+        && Pico::FClassRegistry::RegisterClass(Generated.get());
+    Pico::PWorld* World = bGeneratedRegistered
+        ? Pico::NewObject<Pico::PWorld>(nullptr, "ReinstanceWorld") : nullptr;
+    const bool bWorldInitialized = World != nullptr && World->Initialize();
+    PStageHActor* FollowsDefault = bWorldInitialized
+        ? static_cast<PStageHActor*>(World->SpawnActor(
+            Generated.get(), "FollowsDefault"))
+        : nullptr;
+    PStageHActor* HasOverride = bWorldInitialized
+        ? static_cast<PStageHActor*>(World->SpawnActor(
+            Generated.get(), "HasOverride"))
+        : nullptr;
+    const Pico::PProperty* ValueProperty = Generated != nullptr
+        ? Generated->FindProperty(Pico::FName("Value")) : nullptr;
+    const bool bOverrideSet = ValueProperty != nullptr && HasOverride != nullptr
+        && ValueProperty->SetValue(HasOverride, Pico::int32 {42});
+    const Pico::FObjectHandle FollowHandle = FollowsDefault != nullptr
+        ? FollowsDefault->GetHandle() : Pico::FObjectHandle {};
+    const Pico::FObjectHandle OverrideHandle = HasOverride != nullptr
+        ? HasOverride->GetHandle() : Pico::FObjectHandle {};
+
+    Pico::FActorBlueprintReinstancer Reinstancer(Generated.get());
+    Pico::FAssetPath GraphAsset;
+    const bool bGraphPathValid = Pico::FAssetPath::TryParse(
+        "/Game/Graphs/VMVisualTest.pgraph", GraphAsset);
+    auto* ScriptTemplate = Reinstancer.IsValid() && bGraphPathValid
+        ? static_cast<Pico::PScriptComponent*>(Pico::FObjectInitializer(
+            Generated->GetMutableDefaultObject(),
+            PStageHActor::StaticClass()->GetDefaultObject())
+            .CreateDefaultSubobject(
+                Pico::PScriptComponent::StaticClass(),
+                Pico::FName("ScriptComponent_1")))
+        : nullptr;
+    if (ScriptTemplate != nullptr) ScriptTemplate->SetGraphAsset(GraphAsset);
+    const bool bNewDefaultSet = ValueProperty != nullptr
+        && ValueProperty->SetValue(
+            Generated->GetMutableDefaultObject(), Pico::int32 {25});
+
+    Pico::FActorBlueprintReinstanceReport Report;
+    const bool bRefreshed = bOverrideSet && ScriptTemplate != nullptr
+        && bNewDefaultSet && Reinstancer.RefreshWorld(World, &Report);
+    const auto FindScript = [](Pico::PActor* Actor) -> Pico::PScriptComponent*
+    {
+        if (Actor == nullptr) return nullptr;
+        for (Pico::PActorComponent* Component : Actor->GetComponents())
+        {
+            if (Component != nullptr
+                && Component->GetName() == Pico::FName("ScriptComponent_1")
+                && Component->IsA(Pico::PScriptComponent::StaticClass()))
+                return static_cast<Pico::PScriptComponent*>(Component);
+        }
+        return nullptr;
+    };
+    Pico::PScriptComponent* FollowScript = FindScript(FollowsDefault);
+    Pico::PScriptComponent* OverrideScript = FindScript(HasOverride);
+    Runner.Expect(
+        bScriptRegistered && bGeneratedRegistered && bRefreshed
+            && Pico::ResolveObject(FollowHandle) == FollowsDefault
+            && Pico::ResolveObject(OverrideHandle) == HasOverride,
+        "Actor Blueprint refresh preserves placed Actor identity and references");
+    Runner.Expect(
+        FollowsDefault != nullptr && FollowsDefault->GetValue() == 25
+            && HasOverride != nullptr && HasOverride->GetValue() == 42,
+        "Actor Blueprint refresh propagates new defaults without replacing instance overrides");
+    Runner.Expect(
+        FollowScript != nullptr && OverrideScript != nullptr
+            && FollowScript->GetGraphAsset() == GraphAsset
+            && OverrideScript->GetGraphAsset() == GraphAsset
+            && Report.MatchedActorCount == 2
+            && Report.RefreshedActorCount == 2
+            && Report.AddedComponentCount == 2
+            && Report.PropagatedPropertyCount == 1,
+        "Actor Blueprint refresh adds new default ScriptComponents to existing instances");
+
+    Pico::FActorBlueprintReinstancer RemovalReinstancer(Generated.get());
+    const bool bTemplateRemoved = Pico::FObjectInitializer(
+        Generated->GetMutableDefaultObject(),
+        PStageHActor::StaticClass()->GetDefaultObject())
+        .RemoveDefaultSubobject(Pico::FName("ScriptComponent_1"));
+    Pico::FActorBlueprintReinstanceReport RemovalReport;
+    const bool bRemovalRefreshed = bTemplateRemoved
+        && RemovalReinstancer.RefreshWorld(World, &RemovalReport);
+    Runner.Expect(
+        bRemovalRefreshed
+            && FindScript(FollowsDefault) == nullptr
+            && FindScript(HasOverride) == nullptr
+            && RemovalReport.MatchedActorCount == 2
+            && RemovalReport.RefreshedActorCount == 2
+            && RemovalReport.RemovedComponentCount == 2,
+        "Actor Blueprint refresh removes deleted Blueprint-owned components from placed instances");
+
+    if (World != nullptr) Pico::DestroyObjectTree(World);
+    Pico::PObjectSystem::Shutdown();
+}
 }
 
 int main()
@@ -3530,5 +3804,10 @@ int main()
     TestTwoFrameLifecycle(Runner);
     TestZeroFrameLifecycle(Runner);
     TestInvalidFrameLimit(Runner);
+    TestScriptComponentRunsGraphOnNativeActor(Runner);
+    TestEditorPreviewRegistrationDoesNotBeginGameplay(Runner);
+    TestActorBlueprintDynamicComponentRoundTrip(Runner);
+    TestDynamicClassDefaultSubobjectInstantiation(Runner);
+    TestActorBlueprintReinstancerRefreshesPlacedInstances(Runner);
     return Runner.Finish();
 }

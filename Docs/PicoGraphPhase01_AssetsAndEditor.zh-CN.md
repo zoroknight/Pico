@@ -5,6 +5,9 @@
 本周只建立 PicoGraph 的持久化编辑数据层：用户可以创建图、摆放节点、连接 Pin、定义变量、撤销修改并保存。
 图还不会执行，也不会生成字节码；Schema、编译器和 VM 分别属于后续阶段。
 
+> 阶段更新：Schema、Typed IR、确定性字节码和编译诊断已在
+> [第 2 周](PicoGraphPhase02_SchemaCompiler.zh-CN.md)完成；本文保留第 1 周数据层的原始验收边界。
+
 ```text
 Content Browser .pgraph
  -> FPicoGraphAsset
@@ -52,9 +55,10 @@ Content Browser 增加 `Create Graph`，`.pgraph` 会显示为 `PicoGraph` 类�
 - 创建 Bool、Int、Float、String、Vector、Object 变量；
 - 左键拖动节点标题或中央区域，中键拖动画布；节点两侧 Pin 保留独立点击区域；
 - 独立窗口只能从标题栏移动，在节点或画布上按住左键不会误拖整个窗口；
+- 重叠节点按可见 Z 顺序拾取，点击节点会提升到前景，点击画布空白处清除选择；
 - 依次点击两个兼容 Pin 建立连接；
 - 右键 Pin 删除与它关联的连接；
-- 删除非 Entry 节点并级联清理连接；
+- 使用 Details 的 `Delete Node` 或键盘 `Delete` 删除任意节点并级联清理连接；
 - `Ctrl+Z/Ctrl+Y` 使用 64 步 Graph 专用事务历史；
 - `Ctrl+S` 保存节点位置、变量、Pin 和 Link。
 

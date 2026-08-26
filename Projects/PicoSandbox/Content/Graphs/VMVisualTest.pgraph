@@ -1,0 +1,72 @@
+{
+  "format": "PicoGraph",
+  "version": 1,
+  "graph_id": "000018941d438a400000000000000001",
+  "variables": [],
+  "nodes": [
+    {
+      "id": "000018941d43a2140000000000000002",
+      "type": "EntryEvent",
+      "title": "BeginPlay",
+      "position": [
+        95.0,
+        163.0
+      ],
+      "pins": [
+        {
+          "id": "000018941d43a5980000000000000003",
+          "name": "Then",
+          "direction": "Output",
+          "type": "Exec",
+          "default": ""
+        }
+      ]
+    },
+    {
+      "id": "00001897b72456280000000000000004",
+      "type": "SetProperty",
+      "title": "Set Property",
+      "position": [
+        439.0,
+        163.0
+      ],
+      "pins": [
+        {
+          "id": "00001897b7245e5c0000000000000005",
+          "name": "In",
+          "direction": "Input",
+          "type": "Exec",
+          "default": ""
+        },
+        {
+          "id": "00001897b72492b40000000000000006",
+          "name": "PropertyName",
+          "direction": "Input",
+          "type": "String",
+          "default": "InitialHealth"
+        },
+        {
+          "id": "00001897b724969c0000000000000007",
+          "name": "Value",
+          "direction": "Input",
+          "type": "String",
+          "default": "55"
+        },
+        {
+          "id": "00001897b72499580000000000000008",
+          "name": "Then",
+          "direction": "Output",
+          "type": "Exec",
+          "default": ""
+        }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "id": "0000189d2be51fec0000000000000009",
+      "output": "000018941d43a5980000000000000003",
+      "input": "00001897b7245e5c0000000000000005"
+    }
+  ]
+}

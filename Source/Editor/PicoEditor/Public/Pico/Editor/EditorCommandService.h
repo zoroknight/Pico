@@ -54,6 +54,7 @@ public:
     FEditorCommandResult AddSceneRoot();
     FEditorCommandResult AddComponent(bool bCubeComponent);
     FEditorCommandResult AddComponent(EEditorSceneComponentType Type);
+    FEditorCommandResult AddScriptComponent();
     FEditorCommandResult AddStaticMeshComponent(const FAssetPath& AssetPath);
     FEditorCommandResult AssignStaticMeshAsset(const FAssetPath& AssetPath);
     FEditorCommandResult ClearStaticMeshAsset();
@@ -127,5 +128,6 @@ private:
     unsigned int NextDirectionalLightComponentNumber = 1;
     unsigned int NextPointLightComponentNumber = 1;
     unsigned int NextSkeletalMeshComponentNumber = 1;
+    unsigned int NextScriptComponentNumber = 1;
 };
 }

@@ -66,7 +66,8 @@ enum class EAssetReferenceType : uint8
     CharacterProfile,
     ThirdPersonControlProfile,
     Texture,
-    Material
+    Material,
+    Graph
 };
 
 enum class EObjectReferenceKind : uint8

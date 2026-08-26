@@ -12,6 +12,7 @@
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerStart.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/ScriptComponent.h"
 #include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
@@ -741,6 +742,40 @@ FEditorCommandResult FEditorCommandService::AddComponent(
     Selection->Set(Component);
     return CommitTransaction(Error) ? Success("Added " + Path)
                                     : Failure("Could not commit add-component transaction");
+}
+
+FEditorCommandResult FEditorCommandService::AddScriptComponent()
+{
+    PObject* Object = Selection != nullptr ? Selection->Resolve() : nullptr;
+    PActor* Actor = Object != nullptr && Object->IsA(PActor::StaticClass())
+        ? static_cast<PActor*>(Object) : nullptr;
+    if (Actor == nullptr && Object != nullptr
+        && Object->IsA(PActorComponent::StaticClass()))
+    {
+        Actor = static_cast<PActorComponent*>(Object)->GetOwner();
+    }
+    if (Actor == nullptr)
+        return Failure("Select an Actor or one of its Components before adding a Script Component");
+
+    EWorldSerializationError Error = EWorldSerializationError::None;
+    if (!BeginTransaction("Add Script Component", Error))
+        return Failure("Could not begin Script Component transaction");
+    PScriptComponent* Component = nullptr;
+    do
+    {
+        Component = Actor->CreateComponent<PScriptComponent>(
+            "ScriptComponent_" + std::to_string(NextScriptComponentNumber++));
+    }
+    while (Component == nullptr && NextScriptComponentNumber < 10000);
+    if (Component == nullptr)
+    {
+        RollbackTransaction(Error);
+        return Failure("Could not add a Script Component");
+    }
+    const std::string Path = Component->GetPathName();
+    Selection->Set(Component);
+    return CommitTransaction(Error) ? Success("Added " + Path)
+                                    : Failure("Could not commit Script Component transaction");
 }
 
 FEditorCommandResult FEditorCommandService::AddStaticMeshComponent(

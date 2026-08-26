@@ -19,6 +19,9 @@ public:
     const PObject* GetTemplate() const;
     bool InitializeProperties() const;
 
+    PObject* CreateDefaultSubobject(const PClass* Class, FName Name);
+    bool RemoveDefaultSubobject(FName Name);
+
     template <typename TObject>
     TObject* CreateDefaultSubobject(FName Name)
     {
@@ -41,7 +44,6 @@ public:
         FName SocketName = {});
 
 private:
-    PObject* CreateDefaultSubobject(const PClass* Class, FName Name);
     bool InitializeClassDefaultObject(PClass& Class) const;
     bool InitializeDefaultSubobjectInstances() const;
 

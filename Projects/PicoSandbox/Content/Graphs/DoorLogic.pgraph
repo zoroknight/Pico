@@ -16,8 +16,8 @@
       "type": "EntryEvent",
       "title": "BeginPlay",
       "position": [
-        80.0,
-        120.0
+        71.0,
+        192.0
       ],
       "pins": [
         {
@@ -30,36 +30,103 @@
       ]
     },
     {
-      "id": "0001cdd5500355440000000000000004",
+      "id": "0000079ef49e290c0000000000000011",
       "type": "Sequence",
       "title": "Sequence",
       "position": [
-        380.0,
-        180.0
+        349.0,
+        251.0
       ],
       "pins": [
         {
-          "id": "0001cdd550038d200000000000000005",
+          "id": "0000079ef49e72e00000000000000012",
           "name": "In",
           "direction": "Input",
           "type": "Exec",
           "default": ""
         },
         {
-          "id": "0001cdd55003a9400000000000000006",
+          "id": "0000079ef49e91bc0000000000000013",
           "name": "Then",
           "direction": "Output",
           "type": "Exec",
           "default": ""
         }
       ]
+    },
+    {
+      "id": "000007a20e6284ac0000000000000015",
+      "type": "Branch",
+      "title": "Branch",
+      "position": [
+        695.0,
+        256.0
+      ],
+      "pins": [
+        {
+          "id": "000007a20e62d1a00000000000000016",
+          "name": "In",
+          "direction": "Input",
+          "type": "Exec",
+          "default": ""
+        },
+        {
+          "id": "000007a20e62efb40000000000000017",
+          "name": "Condition",
+          "direction": "Input",
+          "type": "Bool",
+          "default": "false"
+        },
+        {
+          "id": "000007a20e6308b40000000000000018",
+          "name": "True",
+          "direction": "Output",
+          "type": "Exec",
+          "default": ""
+        },
+        {
+          "id": "000007a20e6321b40000000000000019",
+          "name": "False",
+          "direction": "Output",
+          "type": "Exec",
+          "default": ""
+        }
+      ]
+    },
+    {
+      "id": "000007a5c02412fc000000000000001b",
+      "type": "BoolLiteral",
+      "title": "Bool Literal",
+      "position": [
+        346.0,
+        454.0
+      ],
+      "pins": [
+        {
+          "id": "000007a5c0246ba8000000000000001c",
+          "name": "Value",
+          "direction": "Output",
+          "type": "Bool",
+          "default": "false"
+        }
+      ]
     }
   ],
   "links": [
     {
-      "id": "0001d0772b1e9dfc0000000000000002",
+      "id": "0000079f8b9f9b4c0000000000000014",
       "output": "0001cdcd29d8bda80000000000000003",
-      "input": "0001cdd550038d200000000000000005"
+      "input": "0000079ef49e72e00000000000000012"
+    },
+    {
+      "id": "000007a44f9b2954000000000000001a",
+      "output": "0000079ef49e91bc0000000000000013",
+      "input": "000007a20e62d1a00000000000000016"
+    },
+    {
+      "id": "000007a968fa51f4000000000000001d",
+      "output": "000007a5c0246ba8000000000000001c",
+      "input": "000007a20e62efb40000000000000017"
     }
   ]
 }

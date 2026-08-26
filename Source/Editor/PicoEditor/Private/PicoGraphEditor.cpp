@@ -4,6 +4,7 @@
 #include "Pico/Core/Paths.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Graph/GraphAsset.h"
+#include "Pico/Graph/GraphCompiler.h"
 
 #include <imgui.h>
 
@@ -53,6 +54,15 @@ ImU32 PinColor(EGraphValueType Type)
     }
     return IM_COL32_WHITE;
 }
+
+bool HasCompileErrors(const std::vector<FGraphDiagnostic>& Diagnostics)
+{
+    return std::any_of(Diagnostics.begin(), Diagnostics.end(),
+        [](const FGraphDiagnostic& Diagnostic)
+        {
+            return Diagnostic.Severity == EGraphDiagnosticSeverity::Error;
+        });
+}
 }
 
 struct FPicoGraphEditor::FImpl
@@ -71,8 +81,15 @@ struct FPicoGraphEditor::FImpl
     ImVec2 Pan {40.0f, 40.0f};
     std::string SelectedNodeId;
     std::string PendingPinId;
+    std::string DraggedNodeId;
+    std::vector<std::string> NodeZOrder;
     FPicoGraphAsset DragSnapshot;
+    FPicoGraphAsset PinEditSnapshot;
+    FGraphCompileResult CompileResult;
     bool bDraggingNode = false;
+    bool bEditingPin = false;
+    bool bHasCompileResult = false;
+    bool bLastActionCompiled = false;
     bool bOpen = false;
     bool bCreateOpen = false;
     bool bVariablePopupOpen = false;
@@ -88,6 +105,7 @@ struct FPicoGraphEditor::FImpl
     {
         Transactions.Record(std::move(Before));
         bDirty = true;
+        bHasCompileResult = false;
     }
 
     void Undo()
@@ -96,6 +114,8 @@ struct FPicoGraphEditor::FImpl
         SelectedNodeId.clear();
         PendingPinId.clear();
         bDirty = true;
+        bHasCompileResult = false;
+        SyncNodeZOrder();
     }
 
     void Redo()
@@ -104,6 +124,8 @@ struct FPicoGraphEditor::FImpl
         SelectedNodeId.clear();
         PendingPinId.clear();
         bDirty = true;
+        bHasCompileResult = false;
+        SyncNodeZOrder();
     }
 
     void Open(const FAssetPath& AssetPath)
@@ -123,10 +145,119 @@ struct FPicoGraphEditor::FImpl
         Transactions.Clear();
         SelectedNodeId.clear();
         PendingPinId.clear();
+        DraggedNodeId.clear();
         Pan = ImVec2(40.0f, 40.0f);
         bDirty = false;
+        bHasCompileResult = false;
         bOpen = true;
+        NodeZOrder.clear();
+        SyncNodeZOrder();
         Report("Opened " + std::string(AssetPath.ToString()));
+    }
+
+    void Validate()
+    {
+        CompileResult = {};
+        CompileResult.Diagnostics = ValidateGraphSemantics(Graph);
+        CompileResult.bSucceeded = !HasCompileErrors(CompileResult.Diagnostics);
+        bHasCompileResult = true;
+        bLastActionCompiled = false;
+        const std::size_t ErrorCount = static_cast<std::size_t>(std::count_if(
+            CompileResult.Diagnostics.begin(), CompileResult.Diagnostics.end(),
+            [](const FGraphDiagnostic& Diagnostic)
+            {
+                return Diagnostic.Severity == EGraphDiagnosticSeverity::Error;
+            }));
+        Report(CompileResult.bSucceeded
+            ? "PicoGraph validation passed"
+            : "PicoGraph validation failed with " + std::to_string(ErrorCount) + " error(s)",
+            !CompileResult.bSucceeded);
+    }
+
+    void Compile()
+    {
+        CompileResult = CompileGraph(Graph);
+        bHasCompileResult = true;
+        bLastActionCompiled = true;
+        if (CompileResult.bSucceeded)
+        {
+            Report("Compiled PicoGraph: "
+                + std::to_string(CompileResult.IR.Instructions.size()) + " IR instruction(s), "
+                + std::to_string(CompileResult.Bytecode.Bytes.size()) + " byte(s)");
+        }
+        else
+        {
+            const std::size_t ErrorCount = static_cast<std::size_t>(std::count_if(
+                CompileResult.Diagnostics.begin(), CompileResult.Diagnostics.end(),
+                [](const FGraphDiagnostic& Diagnostic)
+                {
+                    return Diagnostic.Severity == EGraphDiagnosticSeverity::Error;
+                }));
+            Report("PicoGraph compile failed with " + std::to_string(ErrorCount) + " error(s)", true);
+        }
+    }
+
+    void AddSchemaNode(std::string_view TypeName)
+    {
+        FGraphNode Node;
+        if (!MakeSchemaGraphNode(TypeName, 380.0f, 180.0f, Node))
+        {
+            Report("No PicoGraph Schema for node type " + std::string(TypeName), true);
+            return;
+        }
+        const FPicoGraphAsset Before = Graph;
+        SelectedNodeId = Node.Id;
+        Graph.Nodes.push_back(std::move(Node));
+        PushUndo(Before);
+        SyncNodeZOrder();
+    }
+
+    FGraphNode* FindNode(std::string_view NodeId)
+    {
+        const auto Found = std::find_if(Graph.Nodes.begin(), Graph.Nodes.end(),
+            [NodeId](const FGraphNode& Node) { return Node.Id == NodeId; });
+        return Found == Graph.Nodes.end() ? nullptr : &*Found;
+    }
+
+    const FGraphNode* FindNode(std::string_view NodeId) const
+    {
+        const auto Found = std::find_if(Graph.Nodes.begin(), Graph.Nodes.end(),
+            [NodeId](const FGraphNode& Node) { return Node.Id == NodeId; });
+        return Found == Graph.Nodes.end() ? nullptr : &*Found;
+    }
+
+    void SyncNodeZOrder()
+    {
+        NodeZOrder.erase(
+            std::remove_if(NodeZOrder.begin(), NodeZOrder.end(),
+                [this](const std::string& NodeId) { return FindNode(NodeId) == nullptr; }),
+            NodeZOrder.end());
+        for (const FGraphNode& Node : Graph.Nodes)
+            if (std::find(NodeZOrder.begin(), NodeZOrder.end(), Node.Id) == NodeZOrder.end())
+                NodeZOrder.push_back(Node.Id);
+    }
+
+    void BringNodeToFront(std::string_view NodeId)
+    {
+        const auto Found = std::find(NodeZOrder.begin(), NodeZOrder.end(), NodeId);
+        if (Found == NodeZOrder.end() || std::next(Found) == NodeZOrder.end()) return;
+        std::string StableId = std::move(*Found);
+        NodeZOrder.erase(Found);
+        NodeZOrder.push_back(std::move(StableId));
+    }
+
+    bool DeleteSelectedNode()
+    {
+        if (SelectedNodeId.empty()) return false;
+        const FPicoGraphAsset Before = Graph;
+        if (!RemoveGraphNode(Graph, SelectedNodeId)) return false;
+        SelectedNodeId.clear();
+        PendingPinId.clear();
+        DraggedNodeId.clear();
+        bDraggingNode = false;
+        PushUndo(Before);
+        SyncNodeZOrder();
+        return true;
     }
 
     void Save()
@@ -270,6 +401,128 @@ struct FPicoGraphEditor::FImpl
             Pan.y += ImGui::GetIO().MouseDelta.y;
         }
 
+        SyncNodeZOrder();
+        std::string HitNodeId;
+        std::string HitPinId;
+        bool bHitNodeBody = false;
+        if (bCanvasHovered)
+        {
+            const ImVec2 Mouse = ImGui::GetIO().MousePos;
+            for (auto It = NodeZOrder.rbegin(); It != NodeZOrder.rend(); ++It)
+            {
+                const FGraphNode* Node = FindNode(*It);
+                if (Node == nullptr) continue;
+                for (std::size_t PinIndex = 0; PinIndex < Node->Pins.size(); ++PinIndex)
+                {
+                    const ImVec2 Position = PinPosition(*Node, PinIndex, Origin);
+                    const float DeltaX = Mouse.x - Position.x;
+                    const float DeltaY = Mouse.y - Position.y;
+                    if (DeltaX * DeltaX + DeltaY * DeltaY <= 100.0f)
+                    {
+                        HitNodeId = Node->Id;
+                        HitPinId = Node->Pins[PinIndex].Id;
+                        break;
+                    }
+                }
+                if (!HitPinId.empty()) break;
+                const ImVec2 NodeMin(
+                    Origin.x + Pan.x + Node->PositionX,
+                    Origin.y + Pan.y + Node->PositionY);
+                const float Height = 64.0f + static_cast<float>(Node->Pins.size()) * 24.0f;
+                if (Mouse.x >= NodeMin.x && Mouse.x <= NodeMin.x + 220.0f
+                    && Mouse.y >= NodeMin.y && Mouse.y <= NodeMin.y + Height)
+                {
+                    HitNodeId = Node->Id;
+                    bHitNodeBody = true;
+                    break;
+                }
+            }
+
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+                if (!HitPinId.empty())
+                {
+                    SelectedNodeId = HitNodeId;
+                    BringNodeToFront(HitNodeId);
+                    if (PendingPinId.empty()) PendingPinId = HitPinId;
+                    else
+                    {
+                        const FPicoGraphAsset Before = Graph;
+                        EGraphAssetError Error = EGraphAssetError::None;
+                        if (AddGraphLink(Graph, PendingPinId, HitPinId, &Error))
+                            PushUndo(Before);
+                        else Report("Could not connect pins: "
+                            + std::string(ToString(Error)), true);
+                        PendingPinId.clear();
+                    }
+                }
+                else if (bHitNodeBody)
+                {
+                    SelectedNodeId = HitNodeId;
+                    BringNodeToFront(HitNodeId);
+                    DragSnapshot = Graph;
+                    DraggedNodeId = HitNodeId;
+                    bDraggingNode = true;
+                }
+                else
+                {
+                    SelectedNodeId.clear();
+                    PendingPinId.clear();
+                }
+            }
+            if (!HitPinId.empty()
+                && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+            {
+                const FPicoGraphAsset Before = Graph;
+                const auto NewEnd = std::remove_if(
+                    Graph.Links.begin(), Graph.Links.end(),
+                    [&HitPinId](const FGraphLink& Link)
+                    {
+                        return Link.OutputPinId == HitPinId
+                            || Link.InputPinId == HitPinId;
+                    });
+                if (NewEnd != Graph.Links.end())
+                {
+                    Graph.Links.erase(NewEnd, Graph.Links.end());
+                    PushUndo(Before);
+                }
+                PendingPinId.clear();
+            }
+            else if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+            {
+                PendingPinId.clear();
+            }
+        }
+
+        if (bDraggingNode)
+        {
+            FGraphNode* Dragged = FindNode(DraggedNodeId);
+            if (Dragged != nullptr && ImGui::IsMouseDown(ImGuiMouseButton_Left)
+                && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+            {
+                Dragged->PositionX += ImGui::GetIO().MouseDelta.x;
+                Dragged->PositionY += ImGui::GetIO().MouseDelta.y;
+            }
+            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) || Dragged == nullptr)
+            {
+                bDraggingNode = false;
+                const FGraphNode* BeforeNode = Dragged != nullptr
+                    ? [&]() -> const FGraphNode*
+                    {
+                        const auto Found = std::find_if(
+                            DragSnapshot.Nodes.begin(), DragSnapshot.Nodes.end(),
+                            [this](const FGraphNode& Node) { return Node.Id == DraggedNodeId; });
+                        return Found == DragSnapshot.Nodes.end() ? nullptr : &*Found;
+                    }()
+                    : nullptr;
+                if (Dragged != nullptr && BeforeNode != nullptr
+                    && (Dragged->PositionX != BeforeNode->PositionX
+                        || Dragged->PositionY != BeforeNode->PositionY))
+                    PushUndo(std::move(DragSnapshot));
+                DraggedNodeId.clear();
+            }
+        }
+
         for (const FGraphLink& Link : Graph.Links)
         {
             std::size_t OutputIndex = 0;
@@ -284,94 +537,37 @@ struct FPicoGraphEditor::FImpl
                 ImVec2(B.x - Bend, B.y), B, IM_COL32(210, 210, 210, 255), 3.0f);
         }
 
-        for (FGraphNode& Node : Graph.Nodes)
+        for (const std::string& NodeId : NodeZOrder)
         {
-            ImGui::PushID(Node.Id.c_str());
+            const FGraphNode* Node = FindNode(NodeId);
+            if (Node == nullptr) continue;
             const ImVec2 NodeMin(
-                Origin.x + Pan.x + Node.PositionX,
-                Origin.y + Pan.y + Node.PositionY);
-            const float Height = 64.0f + static_cast<float>(Node.Pins.size()) * 24.0f;
+                Origin.x + Pan.x + Node->PositionX,
+                Origin.y + Pan.y + Node->PositionY);
+            const float Height = 64.0f + static_cast<float>(Node->Pins.size()) * 24.0f;
             const ImVec2 NodeMax(NodeMin.x + 220.0f, NodeMin.y + Height);
-            const bool bSelected = SelectedNodeId == Node.Id;
+            const bool bSelected = SelectedNodeId == Node->Id;
             DrawList->AddRectFilled(NodeMin, NodeMax, IM_COL32(37, 41, 46, 255), 5.0f);
             DrawList->AddRectFilled(NodeMin, ImVec2(NodeMax.x, NodeMin.y + 32.0f),
-                Node.TypeName == "EntryEvent"
+                Node->TypeName == "EntryEvent"
                     ? IM_COL32(132, 45, 55, 255) : IM_COL32(45, 92, 128, 255), 5.0f);
             DrawList->AddRect(NodeMin, NodeMax,
                 bSelected ? IM_COL32(245, 178, 62, 255) : IM_COL32(95, 102, 110, 255),
                 5.0f, 0, bSelected ? 2.5f : 1.0f);
             DrawList->AddText(ImVec2(NodeMin.x + 10.0f, NodeMin.y + 8.0f),
-                IM_COL32_WHITE, Node.DisplayName.c_str());
+                IM_COL32_WHITE, Node->DisplayName.c_str());
 
-            // Keep a narrow gutter free on both sides so Pin hit targets stay
-            // independent while the rest of the node remains easy to drag.
-            ImGui::SetCursorScreenPos(ImVec2(NodeMin.x + 12.0f, NodeMin.y));
-            ImGui::InvisibleButton("NodeBody", ImVec2(196.0f, Height));
-            if (ImGui::IsItemClicked()) SelectedNodeId = Node.Id;
-            if (ImGui::IsItemActivated())
+            for (std::size_t Index = 0; Index < Node->Pins.size(); ++Index)
             {
-                DragSnapshot = Graph;
-                bDraggingNode = true;
-            }
-            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
-            {
-                Node.PositionX += ImGui::GetIO().MouseDelta.x;
-                Node.PositionY += ImGui::GetIO().MouseDelta.y;
-            }
-            if (bDraggingNode && ImGui::IsItemDeactivated())
-            {
-                bDraggingNode = false;
-                if (Node.PositionX != DragSnapshot.Nodes[&Node - Graph.Nodes.data()].PositionX
-                    || Node.PositionY != DragSnapshot.Nodes[&Node - Graph.Nodes.data()].PositionY)
-                    PushUndo(std::move(DragSnapshot));
-            }
-
-            for (std::size_t Index = 0; Index < Node.Pins.size(); ++Index)
-            {
-                const FGraphPin& Pin = Node.Pins[Index];
-                const ImVec2 Position = PinPosition(Node, Index, Origin);
+                const FGraphPin& Pin = Node->Pins[Index];
+                const ImVec2 Position = PinPosition(*Node, Index, Origin);
                 DrawList->AddCircleFilled(Position, 6.0f, PinColor(Pin.Type));
                 const float TextX = Pin.Direction == EGraphPinDirection::Input
                     ? Position.x + 11.0f
                     : Position.x - 11.0f - ImGui::CalcTextSize(Pin.Name.c_str()).x;
                 DrawList->AddText(ImVec2(TextX, Position.y - 7.0f), IM_COL32(225, 225, 225, 255),
                     Pin.Name.c_str());
-                ImGui::SetCursorScreenPos(ImVec2(Position.x - 9.0f, Position.y - 9.0f));
-                ImGui::PushID(Pin.Id.c_str());
-                ImGui::InvisibleButton("Pin", ImVec2(18.0f, 18.0f));
-                if (ImGui::IsItemClicked())
-                {
-                    if (PendingPinId.empty()) PendingPinId = Pin.Id;
-                    else
-                    {
-                        const FPicoGraphAsset Before = Graph;
-                        EGraphAssetError Error = EGraphAssetError::None;
-                        if (AddGraphLink(Graph, PendingPinId, Pin.Id, &Error))
-                            PushUndo(Before);
-                        else Report("Could not connect pins: " + std::string(ToString(Error)), true);
-                        PendingPinId.clear();
-                    }
-                }
-                if (ImGui::IsItemHovered()
-                    && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
-                {
-                    const FPicoGraphAsset Before = Graph;
-                    const auto NewEnd = std::remove_if(
-                        Graph.Links.begin(), Graph.Links.end(),
-                        [&Pin](const FGraphLink& Link)
-                        {
-                            return Link.OutputPinId == Pin.Id || Link.InputPinId == Pin.Id;
-                        });
-                    if (NewEnd != Graph.Links.end())
-                    {
-                        Graph.Links.erase(NewEnd, Graph.Links.end());
-                        PushUndo(Before);
-                    }
-                    PendingPinId.clear();
-                }
-                ImGui::PopID();
             }
-            ImGui::PopID();
         }
         if (!PendingPinId.empty())
         {
@@ -380,7 +576,6 @@ struct FPicoGraphEditor::FImpl
             if (Node != nullptr)
                 DrawList->AddLine(PinPosition(*Node, Index, Origin), ImGui::GetIO().MousePos,
                     IM_COL32(245, 178, 62, 255), 2.0f);
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) PendingPinId.clear();
         }
         DrawList->PopClipRect();
     }
@@ -415,6 +610,58 @@ struct FPicoGraphEditor::FImpl
         }
     }
 
+    void DrawDiagnostics()
+    {
+        ImGui::Separator();
+        ImGui::TextUnformatted("Compile Diagnostics");
+        if (!bHasCompileResult)
+        {
+            ImGui::TextDisabled("Graph changed or has not been validated.");
+            return;
+        }
+        if (CompileResult.bSucceeded)
+        {
+            const ImVec4 SuccessColor(0.35f, 0.82f, 0.55f, 1.0f);
+            ImGui::TextColored(SuccessColor, "%s passed",
+                bLastActionCompiled ? "Compile" : "Validation");
+            if (bLastActionCompiled)
+            {
+                ImGui::Text("Typed IR: %zu instruction(s)",
+                    CompileResult.IR.Instructions.size());
+                ImGui::Text("Bytecode: PGRB v%u, %zu byte(s)",
+                    CompileResult.Bytecode.Version,
+                    CompileResult.Bytecode.Bytes.size());
+            }
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f),
+                "%s failed", bLastActionCompiled ? "Compile" : "Validation");
+        }
+        if (CompileResult.Diagnostics.empty())
+        {
+            ImGui::TextDisabled("No diagnostics.");
+            return;
+        }
+        for (std::size_t Index = 0; Index < CompileResult.Diagnostics.size(); ++Index)
+        {
+            const FGraphDiagnostic& Diagnostic = CompileResult.Diagnostics[Index];
+            ImGui::PushID(static_cast<int>(Index));
+            const ImVec4 Color = Diagnostic.Severity == EGraphDiagnosticSeverity::Error
+                ? ImVec4(0.95f, 0.35f, 0.30f, 1.0f)
+                : ImVec4(0.95f, 0.70f, 0.25f, 1.0f);
+            const std::string Label = "[" + std::string(ToString(Diagnostic.Severity))
+                + "] " + std::string(ToString(Diagnostic.Code));
+            ImGui::PushStyleColor(ImGuiCol_Text, Color);
+            if (ImGui::Selectable(Label.c_str(), false)
+                && !Diagnostic.NodeId.empty())
+                SelectedNodeId = Diagnostic.NodeId;
+            ImGui::PopStyleColor();
+            ImGui::TextWrapped("%s", Diagnostic.Message.c_str());
+            ImGui::PopID();
+        }
+    }
+
     void DrawDetails()
     {
         auto Found = std::find_if(Graph.Nodes.begin(), Graph.Nodes.end(),
@@ -425,6 +672,7 @@ struct FPicoGraphEditor::FImpl
             ImGui::Separator();
             ImGui::Text("Graph Version: %d", Graph.Version);
             ImGui::TextWrapped("Graph ID: %s", Graph.GraphId.c_str());
+            DrawDiagnostics();
             return;
         }
         ImGui::TextUnformatted(Found->DisplayName.c_str());
@@ -434,19 +682,67 @@ struct FPicoGraphEditor::FImpl
         ImGui::Separator();
         ImGui::Text("Position: %.0f, %.0f", Found->PositionX, Found->PositionY);
         ImGui::Text("Pins: %zu", Found->Pins.size());
-        for (const FGraphPin& Pin : Found->Pins)
+        const FGraphNodeSchema* NodeSchema =
+            GetDefaultGraphSchemaRegistry().Find(Found->TypeName);
+        for (FGraphPin& Pin : Found->Pins)
+        {
+            ImGui::PushID(Pin.Id.c_str());
             ImGui::BulletText("%s %s (%s)", ToString(Pin.Direction).data(),
                 Pin.Name.c_str(), ToString(Pin.Type).data());
-        ImGui::Separator();
-        ImGui::BeginDisabled(Found->TypeName == "EntryEvent");
-        if (ImGui::Button("Delete Node"))
-        {
-            const FPicoGraphAsset Before = Graph;
-            RemoveGraphNode(Graph, Found->Id);
-            PushUndo(Before);
-            SelectedNodeId.clear();
+            if (Pin.Type != EGraphValueType::Exec)
+            {
+                const FGraphPinSchema* PinSchema = nullptr;
+                if (NodeSchema != nullptr)
+                {
+                    const auto Schema = std::find_if(
+                        NodeSchema->Pins.begin(), NodeSchema->Pins.end(),
+                        [&Pin](const FGraphPinSchema& Value)
+                        {
+                            return Value.Name == Pin.Name
+                                && Value.Direction == Pin.Direction;
+                        });
+                    if (Schema != NodeSchema->Pins.end()) PinSchema = &*Schema;
+                }
+                const bool bComputedOutput = Pin.Direction == EGraphPinDirection::Output
+                    && PinSchema != nullptr && PinSchema->DefaultValue.empty();
+                if (bComputedOutput)
+                {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("computed");
+                }
+                else
+                {
+                    std::array<char, 192> Buffer {};
+                    CopyToBuffer(Pin.DefaultValue, Buffer);
+                    ImGui::SetNextItemWidth(-1.0f);
+                    const bool bChanged = ImGui::InputText(
+                        "##PinDefault", Buffer.data(), Buffer.size());
+                    if (ImGui::IsItemActivated())
+                    {
+                        PinEditSnapshot = Graph;
+                        bEditingPin = true;
+                    }
+                    if (bChanged)
+                    {
+                        Pin.DefaultValue = Buffer.data();
+                        bDirty = true;
+                        bHasCompileResult = false;
+                    }
+                    if (bEditingPin && ImGui::IsItemDeactivated())
+                    {
+                        bEditingPin = false;
+                        const FGraphPin* BeforePin = FindGraphPin(PinEditSnapshot, Pin.Id);
+                        if (BeforePin != nullptr && BeforePin->DefaultValue != Pin.DefaultValue)
+                            Transactions.Record(std::move(PinEditSnapshot));
+                    }
+                }
+            }
+            ImGui::PopID();
         }
-        ImGui::EndDisabled();
+        ImGui::Separator();
+        if (ImGui::Button("Delete Node"))
+            DeleteSelectedNode();
+        DrawDiagnostics();
     }
 
     void DrawEditor()
@@ -476,6 +772,8 @@ struct FPicoGraphEditor::FImpl
             if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) Save();
             if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) Undo();
             if (IO.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) Redo();
+            if (!IO.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+                DeleteSelectedNode();
         }
         if (ImGui::BeginMenuBar())
         {
@@ -493,16 +791,25 @@ struct FPicoGraphEditor::FImpl
             const FPicoGraphAsset Before = Graph;
             Graph.Nodes.push_back(MakeEntryEventNode("CustomEvent", 100.0f, 300.0f));
             PushUndo(Before);
+            SyncNodeZOrder();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Add Sequence Node"))
+        if (ImGui::Button("Add Node")) ImGui::OpenPopup("AddGraphNode");
+        if (ImGui::BeginPopup("AddGraphNode"))
         {
-            const FPicoGraphAsset Before = Graph;
-            Graph.Nodes.push_back(MakeGraphNode("Sequence", "Sequence", 380.0f, 180.0f));
-            PushUndo(Before);
+            for (const FGraphNodeSchema& Schema : GetDefaultGraphSchemaRegistry().GetSchemas())
+            {
+                if (Schema.Opcode == EGraphIROpcode::EntryEvent) continue;
+                if (ImGui::MenuItem(Schema.DisplayName.c_str())) AddSchemaNode(Schema.TypeName);
+            }
+            ImGui::EndPopup();
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("Middle-drag pans | click two compatible pins to connect | right-click a pin disconnects it");
+        if (ImGui::Button("Validate")) Validate();
+        ImGui::SameLine();
+        if (ImGui::Button("Compile")) Compile();
+        ImGui::SameLine();
+        ImGui::TextDisabled("Middle-drag pans | click two compatible pins to connect");
         if (ImGui::BeginTable("PicoGraphLayout", 3, ImGuiTableFlags_Resizable))
         {
             ImGui::TableSetupColumn("Variables", ImGuiTableColumnFlags_WidthFixed, 230.0f);

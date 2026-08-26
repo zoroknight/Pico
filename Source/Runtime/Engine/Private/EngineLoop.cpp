@@ -39,6 +39,7 @@
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/SceneComponent.h"
+#include "Pico/Engine/ScriptComponent.h"
 #include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/World.h"
@@ -316,6 +317,7 @@ int FEngineLoop::Init()
         || !PGameInstance::RegisterClass()
         || !PAnimInstance::RegisterClass()
         || !PActorComponent::RegisterClass()
+        || !PScriptComponent::RegisterClass()
         || !PSceneComponent::RegisterClass()
         || !PMovementComponent::RegisterClass()
         || !PPawnMovementComponent::RegisterClass()

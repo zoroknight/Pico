@@ -181,8 +181,20 @@ The current implementation can:
   supports Entry/Sequence nodes, typed variables, node dragging, compatible Pin connections,
   disconnection, independent Undo/Redo history, save, and Content Browser reopen. Node bodies provide a
   stable drag target without stealing Pin clicks, and independent editor windows move only from their
-  title bars. This milestone stores graph structure only; Schema validation, bytecode compilation, and
-  runtime execution follow later.
+  title bars. A shared Graph Schema Registry now drives Branch, literal, and typed arithmetic node creation;
+  semantic validation reports stable Node/Pin diagnostics for invalid defaults, Schema drift, unreachable
+  control flow, and cycles. Valid graphs compile through typed IR into deterministic `PGRB v2` bytecode
+  whose contents ignore editor-only layout. `FPicoScriptVM` decodes and executes that bytecode with total
+  instruction, per-instruction loop, and data-call-depth budgets. `PScriptComponent` runs a Graph against
+  its Actor owner at BeginPlay; the first reflection nodes call zero-argument PFunctions, read/write basic
+  PProperties, and broadcast zero-argument dynamic delegates through the existing object system. Actor Blueprint
+  saves persist dynamically added ScriptComponents as reflected default-subobject templates. A focused
+  `FActorBlueprintReinstancer` refreshes matching placed Actors in place after Compile & Save, adding new default
+  components and propagating changed defaults only when the instance still matches the old CDO. The component-tree
+  context menu can remove Blueprint-owned components and synchronizes that removal to the asset, CDO, and placed
+  instances while protecting inherited, root, and attachment-parent components. Actor Blueprint preview Worlds now
+  register components for rendering without ticking or dispatching BeginPlay, so runtime Graph results cannot leak
+  into authored defaults or the GeneratedClass CDO during Compile & Save.
 - Serialize reflected objects to `.pobj` files and reconstruct them with `PostLoad`.
 - Save validated World scene graphs to deterministic `.pworld` files and transactionally reconstruct runtime Worlds without persisting runtime handles.
 - Transactionally replace the `FEngineLoop` active World while preserving the old World on load or `PostLoad` failure.
@@ -254,8 +266,10 @@ The current implementation can:
 - Rearrange dockable editor panels and persist each project's layout under `Saved/Editor`.
 - Load modern OpenGL entry points through a dedicated GLAD target owned by `PicoRender`.
 
-All twenty-three Debug CTest targets pass. The focused Mini GAS suite passes 73/73 assertions in Debug and Release,
-and the focused animation suite passes 13/13 assertions.
+All twenty-two non-Core CTest targets pass in Debug and Release. `PicoCoreTests` currently completes its
+delegate, input, path, config, and project-descriptor assertions but has a pre-existing PlatformProcess test
+exit issue (Debug timeout; Release `0xc0000409`) that is tracked separately from PicoGraph. The focused Mini
+GAS suite passes 73/73 assertions in Debug and Release, and the focused animation suite passes 13/13 assertions.
 
 ## Architecture
 
@@ -297,7 +311,7 @@ PicoSandboxGame
 | `PicoInput` | Frame-based key and pointer state plus configurable Action/Axis mappings |
 | `PicoNetCore` | Network addresses and IDs, packet codec, deterministic loopback, non-blocking UDP, handshake, Ack, bounded reliable delivery, heartbeat, and timeout |
 | `PicoAsset` | Validated virtual asset discovery, deterministic project registry, and file metadata |
-| `PicoGraph` | Versioned graph assets, stable identities, deterministic `.pgraph` serialization, structural validation, and graph transactions |
+| `PicoGraph` | Versioned graph assets, stable identities, Schema validation, typed IR, deterministic `PGRB v2` bytecode, graph transactions, and a budgeted script VM |
 | `PicoAssetImport` | Developer-only OBJ conversion into validated native static-mesh assets |
 | `PicoObject` | Object model, reflection, delegates, strong/weak references, Root Set, mark-sweep GC, registry, handles, Outer graph, serialization |
 | `PicoPhysicsCore` | Backend-neutral shapes, body handles, queries, hit results, and PhysicsScene contracts |
@@ -740,6 +754,8 @@ See:
 - [AbilityTask Lifecycle (Chinese)](Docs/GameplayAbilitiesPhase03_AbilityTasks.zh-CN.md)
 - [Networked Mini GAS Demo, Prediction, and Agent (Chinese)](Docs/GameplayAbilitiesPhase04_NetworkedDemoAndAgent.zh-CN.md)
 - [PicoGraph Week 1: Assets and Editor (Chinese)](Docs/PicoGraphPhase01_AssetsAndEditor.zh-CN.md)
+- [PicoGraph Week 2: Schema and Compiler (Chinese)](Docs/PicoGraphPhase02_SchemaCompiler.zh-CN.md)
+- [PicoGraph Week 3: VM and ScriptComponent (Chinese)](Docs/PicoGraphPhase03_VMAndScriptComponent.zh-CN.md)
 - [PicoSandbox Guide](Projects/PicoSandbox/README.md)
 - [Month 3 Editor Viewport](Docs/Month03_10_Editor3DViewport.md)
 - [Month 3 Editor Docking](Docs/Month03_11_EditorDocking.md)
@@ -821,7 +837,7 @@ The remaining learning path is:
 
 - Dedicated-server/WAN validation, dependency-pruned Cook, Shipping, and clean-machine packaging
 - Expand deterministic AI tools for assets, materials, lights, save, Play, and Package
-- Begin PicoGraph Lite on the completed networked Mini GAS foundation, then expose its validated behavior nodes to AI-authored workflows
+- Finish PicoGraph Lite with async Gameplay nodes, cooked scripts, AI Graph tools, runtime visualization, and the reflection-driven migration
 
 The maintained schedule and acceptance criteria are in the
 [AI-First Development Roadmap](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md). Detailed milestone

@@ -440,8 +440,8 @@ Pawn 反射属性、ActorChannel 和 RepNotify 收敛到客户端；Runtime Laun
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |
 | 第 1 周（已完成） | `.pgraph`、稳定 Node/Pin/Link ID、变量、Entry Event、版本、序列化、Undo/Redo 和基础节点编辑器 | 保存重开后图结构与布局恢复 |
-| 第 2 周 | Graph Schema、Pin 类型、控制流/数据流校验、Typed IR、字节码编译和诊断 | 非法图不能编译；合法图产生确定字节码 |
-| 第 3 周 | `FPicoScriptVM`、执行上下文、指令/循环/调用深度预算、`PScriptComponent`、PFunction/Property/Delegate 节点 | 原生 Actor 可运行图；错误图不能卡死 Game Thread |
+| 第 2 周（已完成） | Graph Schema、Pin 类型、控制流/数据流校验、Typed IR、字节码编译和诊断 | 非法图不能编译；合法图产生确定字节码 |
+| 第 3 周（已完成） | `FPicoScriptVM`、执行上下文、指令/循环/调用深度预算、`PScriptComponent`、PFunction/Property/Delegate 节点 | 原生 Actor 可运行图；错误图不能卡死 Game Thread |
 | 第 4 周 | Delay、WaitGameplayEvent、PlayMontageAndWait、ActivateAbility、Cook/Package、AI Graph Tools、可视化状态；PicoGraph 验收后执行项目专用蓝图/GAS 适配的反射驱动迁移 | AI 可生成受限图；仓库外 Runtime 执行 Cook 后字节码；新增 Graph Skill、Verifier、路由 Eval 和 Golden Task；新反射 Gameplay 类无需修改 Editor 即可生成 Details、Graph 节点和 Agent Schema |
 
 固定管线：
@@ -467,6 +467,27 @@ Event、Sequence、变量、拖动、平移、连线、断线、节点删除、6
 表达并保存图结构，不提前承诺 Schema、编译或运行语义。自动化覆盖确定性 round-trip、稳定身份、结构拒绝、
 级联 Link 清理、事务恢复和 Registry 扫描。详见
 [PicoGraph 第 1 周](PicoGraphPhase01_AssetsAndEditor.zh-CN.md)。
+
+第 2 周完成记录：新增独立 Graph Schema Registry，并让编辑器 Add Node 与编译器共用 Entry、Sequence、Branch、
+Bool/Float Literal 和 Add Float 契约。语义校验覆盖节点/Pin Schema、变量和 Pin 默认值、Entry、Exec 扇出、
+不可达节点与控制流环；错误诊断携带稳定 NodeId/PinId。合法 Graph 转换为包含变量、Entry、控制目标和类型化
+Operand 的 `FPicoGraphIR`，再确定性编码为内存 `PGRB v1` 字节码；语义值变化会改变产物，节点布局变化不会。
+编辑器提供 Validate/Compile、默认值编辑、诊断定位和编译摘要。VM、派生 Cook 资产和运行时执行仍属于后续阶段。
+详见 [PicoGraph 第 2 周](PicoGraphPhase02_SchemaCompiler.zh-CN.md)。
+
+第 3 周完成记录：`PGRB` 升级到 v2，为控制边保留输出 Pin 名并为数据 Operand 保留稳定 Pin ID；
+`DecodeGraphBytecode` 在执行前检查 Magic、版本、记录边界、枚举和跳转。`FPicoScriptVM` 通过显式 Context
+运行 Entry/Sequence/Branch 和按需数据节点，并以总指令、单指令重复次数和数据求值深度三类预算阻止损坏图
+占住 Game Thread。首批反射节点以 Actor Owner 为 `Self`，通过 `ProcessEvent`、`PProperty::SetValue` 和
+`FDynamicMulticastDelegate::Broadcast` 调用既有对象系统。`PScriptComponent` 接入 Actor BeginPlay，保存 Graph
+资产和预算，并返回结构化执行报告。Actor Blueprint 新增的 ScriptComponent 会保存反射类元数据；简化版
+`FActorBlueprintReinstancer` 在 `Compile & Save` 后向当前地图实例同步新增默认组件和未被覆盖的新默认值，且不
+替换 Actor 身份。组件树右键菜单可删除蓝图自有组件，并从资产、CDO 和已放置实例同步移除；继承、Root 和
+仍承载子节点的组件受保护。蓝图预览 World 只注册渲染所需组件，不 Tick 且不派发 BeginPlay，避免 Graph
+运行结果在 `Compile & Save` 时污染资产默认值和 GeneratedClass CDO。当前 Release 验收为 21 项 Graph 测试与
+669 项 Engine 测试。
+当前节点有意限制为无参 Callable、基础属性类型和零参动态委托；参数化、异步节点与 Cook 资产属于第 4 周。
+详见 [PicoGraph 第 3 周](PicoGraphPhase03_VMAndScriptComponent.zh-CN.md)。
 
 ### 反射驱动迁移门槛（PicoGraph Lite 完成后执行）
 
