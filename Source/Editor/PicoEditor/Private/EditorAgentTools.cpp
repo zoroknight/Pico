@@ -23,9 +23,12 @@
 #include "Pico/GameplayAbilities/AbilitySystemComponent.h"
 #include "Pico/GameplayAbilities/GameplayAbility.h"
 #include "Pico/GameplayAbilities/GameplayEffect.h"
+#include "Pico/Graph/GraphAsset.h"
+#include "Pico/Graph/GraphCompiler.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/Class.h"
+#include "Pico/Object/ClassRegistry.h"
 #include "Pico/Object/GarbageCollection.h"
 #include "Pico/Object/Property.h"
 #include "Pico/Tasks/TaskSystem.h"
@@ -889,6 +892,71 @@ struct FEditorAgentToolExecutor::FImpl
         }
 
         {
+            FJson Schema = FJson::array();
+            for (const FGraphNodeSchema& Node :
+                GetDefaultGraphSchemaRegistry().GetSchemas())
+            {
+                FJson Pins = FJson::array();
+                for (const FGraphPinSchema& Pin : Node.Pins)
+                    Pins.push_back({{"name", Pin.Name},
+                        {"direction", ToString(Pin.Direction)},
+                        {"type", ToString(Pin.Type)},
+                        {"default", Pin.DefaultValue}});
+                Schema.push_back({{"type", Node.TypeName},
+                    {"display_name", Node.DisplayName},
+                    {"opcode", ToString(Node.Opcode)}, {"pins", std::move(Pins)}});
+            }
+            FAgentKnowledgeRecord Record;
+            Record.SourceType = "picograph-schema";
+            Record.SourcePath = "PicoGraph/SchemaRegistry";
+            Record.Title = "PicoGraph registered node schema";
+            Record.Content = Schema.dump();
+            Record.SourceRevision = PicoGraphBytecodeVersion;
+            Record.Tags = {"graph", "schema", "node", "pin", "bytecode"};
+            Record.Provenance = "Live FGraphSchemaRegistry";
+            Result.push_back(std::move(Record));
+        }
+
+        {
+            FJson Classes = FJson::array();
+            for (const PClass* Class : FClassRegistry::GetClasses())
+            {
+                if (Class == nullptr) continue;
+                FJson Properties = FJson::array();
+                for (const PProperty& Property : Class->GetProperties())
+                {
+                    const FPropertyMetadata& Metadata = Property.GetMetadata();
+                    Properties.push_back({{"name", Property.GetName().ToString()},
+                        {"type_id", static_cast<int>(Property.GetType())},
+                        {"editable", Property.HasAnyFlags(EPropertyFlags::Editable)
+                            && !Property.HasAnyFlags(EPropertyFlags::ReadOnly)},
+                        {"display_name", Metadata.DisplayName},
+                        {"description", Metadata.Description},
+                        {"semantic", Metadata.Semantic}});
+                }
+                FJson Functions = FJson::array();
+                for (const PFunction& Function : Class->GetFunctions())
+                    if (Function.HasAnyFlags(EFunctionFlags::Callable))
+                        Functions.push_back({{"name", Function.GetName().ToString()},
+                            {"parameter_count", Function.GetParameters().size()},
+                            {"pure", Function.HasAnyFlags(EFunctionFlags::Pure)}});
+                if (!Properties.empty() || !Functions.empty())
+                    Classes.push_back({{"class", Class->GetName().ToString()},
+                        {"properties", std::move(Properties)},
+                        {"functions", std::move(Functions)}});
+            }
+            FAgentKnowledgeRecord Record;
+            Record.SourceType = "reflection-schema";
+            Record.SourcePath = "PicoObject/ClassRegistry";
+            Record.Title = "Live reflected Gameplay and object schema";
+            Record.Content = Classes.dump();
+            Record.SourceRevision = Classes.size();
+            Record.Tags = {"reflection", "class", "property", "function", "graph"};
+            Record.Provenance = "Live PClass/PProperty/PFunction metadata";
+            Result.push_back(std::move(Record));
+        }
+
+        {
             FAgentKnowledgeRecord Record;
             Record.SourceType = "gameplay-schema";
             Record.SourcePath = "PicoGameplayAbilities/MiniGAS";
@@ -1472,6 +1540,281 @@ struct FEditorAgentToolExecutor::FImpl
             return Success(Call, {{"assets", std::move(Assets)}});
         };
         bInitialized = Registry.Register(std::move(SearchAssets)) && bInitialized;
+
+        const auto ResolveGraphFile = [](std::string_view Text,
+                                         FAssetPath& OutPath,
+                                         std::filesystem::path& OutFile,
+                                         std::string& OutError)
+        {
+            if (!FAssetPath::TryParse(Text, OutPath)
+                || OutPath.GetExtension() != ".pgraph")
+            {
+                OutError = "Graph path must be a valid /Game/*.pgraph asset path";
+                return false;
+            }
+            OutFile = FPaths::GetProjectContentDir()
+                / std::filesystem::path(std::string(OutPath.GetGameRelativePath()));
+            const std::filesystem::path Content = FPaths::GetProjectContentDir();
+            const std::filesystem::path Relative = OutFile.lexically_relative(Content);
+            if (Relative.empty()
+                || (Relative.begin() != Relative.end() && *Relative.begin() == ".."))
+            {
+                OutError = "Graph path escapes project Content";
+                return false;
+            }
+            return true;
+        };
+        const auto LoadGraph = [ResolveGraphFile](
+            const FAgentToolCall& Call,
+            FPicoGraphAsset& OutGraph,
+            FAssetPath& OutPath,
+            std::filesystem::path& OutFile,
+            std::string& OutError)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            if (!ResolveGraphFile(Arguments.at("graph_path").get<std::string>(),
+                    OutPath, OutFile, OutError)) return false;
+            EGraphAssetError Error = EGraphAssetError::None;
+            if (!LoadGraphAssetFromFile(OutFile, OutGraph, &Error))
+            {
+                OutError = "Could not load Graph: " + std::string(ToString(Error));
+                return false;
+            }
+            return true;
+        };
+        const auto SaveGraph = [](const std::filesystem::path& File,
+                                  const FPicoGraphAsset& Graph,
+                                  std::string& OutError)
+        {
+            EGraphAssetError Error = EGraphAssetError::None;
+            if (SaveGraphAssetToFile(File, Graph, &Error)) return true;
+            OutError = "Could not save Graph: " + std::string(ToString(Error));
+            return false;
+        };
+
+        FAgentToolDefinition CreateGraph;
+        CreateGraph.Name = "editor.graph.create";
+        CreateGraph.Description =
+            "Create a new editable PicoGraph asset under /Game; never writes bytecode directly";
+        CreateGraph.Permission = EAgentToolPermission::WriteProject;
+        CreateGraph.Schema.Fields = {
+            {"graph_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath},
+            {"entry_event", EAgentToolValueType::String, false, {}, {}, 64}
+        };
+        CreateGraph.Handler = [ResolveGraphFile](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            FAssetPath Path;
+            std::filesystem::path File;
+            std::string Error;
+            if (!ResolveGraphFile(Arguments.at("graph_path").get<std::string>(),
+                    Path, File, Error)) return Failure(Call, Error);
+            if (std::filesystem::exists(File))
+                return Failure(Call, "Graph asset already exists");
+            FPicoGraphAsset Graph;
+            Graph.GraphId = CreateGraphStableId();
+            FGraphNode Entry;
+            if (!MakeSchemaGraphNode("EntryEvent", 80.0f, 120.0f, Entry))
+                return Failure(Call, "Entry Event Schema is unavailable");
+            Entry.DisplayName = Arguments.value("entry_event", std::string("BeginPlay"));
+            if (Entry.DisplayName.empty()) Entry.DisplayName = "BeginPlay";
+            Graph.Nodes.push_back(std::move(Entry));
+            EGraphAssetError AssetError = EGraphAssetError::None;
+            if (!SaveGraphAssetToFile(File, Graph, &AssetError))
+                return Failure(Call, "Could not create Graph: "
+                    + std::string(ToString(AssetError)));
+            FJson Pins = FJson::array();
+            for (const FGraphPin& Pin : Graph.Nodes[0].Pins)
+                Pins.push_back({{"id", Pin.Id}, {"name", Pin.Name},
+                    {"direction", ToString(Pin.Direction)}, {"type", ToString(Pin.Type)}});
+            return Success(Call, {{"graph_path", Path.ToString()},
+                {"graph_id", Graph.GraphId}, {"entry_event", Graph.Nodes[0].DisplayName},
+                {"entry_node_id", Graph.Nodes[0].Id}, {"entry_pins", std::move(Pins)}});
+        };
+        CreateGraph.Verifier = [LoadGraph](const FAgentToolCall& Call,
+            const FAgentToolResult&, std::string& Error)
+        {
+            FPicoGraphAsset Graph; FAssetPath Path; std::filesystem::path File;
+            return LoadGraph(Call, Graph, Path, File, Error);
+        };
+        bInitialized = Registry.Register(std::move(CreateGraph)) && bInitialized;
+
+        FAgentToolDefinition DescribeGraph;
+        DescribeGraph.Name = "editor.graph.describe";
+        DescribeGraph.Description =
+            "Read a PicoGraph's nodes, pins, links, variables, and stable identifiers before editing";
+        DescribeGraph.Permission = EAgentToolPermission::ReadOnly;
+        DescribeGraph.Schema.Fields = {
+            {"graph_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath}
+        };
+        DescribeGraph.Handler = [LoadGraph](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            FPicoGraphAsset Graph; FAssetPath Path; std::filesystem::path File;
+            std::string Error;
+            if (!LoadGraph(Call, Graph, Path, File, Error)) return Failure(Call, Error);
+            FJson Nodes = FJson::array();
+            for (const FGraphNode& Node : Graph.Nodes)
+            {
+                FJson Pins = FJson::array();
+                for (const FGraphPin& Pin : Node.Pins)
+                    Pins.push_back({{"id", Pin.Id}, {"name", Pin.Name},
+                        {"direction", ToString(Pin.Direction)}, {"type", ToString(Pin.Type)},
+                        {"default", Pin.DefaultValue}});
+                Nodes.push_back({{"id", Node.Id}, {"type", Node.TypeName},
+                    {"display_name", Node.DisplayName}, {"pins", std::move(Pins)}});
+            }
+            FJson Links = FJson::array();
+            for (const FGraphLink& Link : Graph.Links)
+                Links.push_back({{"id", Link.Id}, {"output_pin_id", Link.OutputPinId},
+                    {"input_pin_id", Link.InputPinId}});
+            FJson Variables = FJson::array();
+            for (const FGraphVariable& Variable : Graph.Variables)
+                Variables.push_back({{"id", Variable.Id}, {"name", Variable.Name},
+                    {"type", ToString(Variable.Type)}, {"default", Variable.DefaultValue}});
+            return Success(Call, {{"graph_path", Path.ToString()}, {"graph_id", Graph.GraphId},
+                {"nodes", std::move(Nodes)}, {"links", std::move(Links)},
+                {"variables", std::move(Variables)}});
+        };
+        bInitialized = Registry.Register(std::move(DescribeGraph)) && bInitialized;
+
+        FAgentToolDefinition AddGraphNode;
+        AddGraphNode.Name = "editor.graph.add_node";
+        AddGraphNode.Description =
+            "Add one node from the registered PicoGraph Schema to an existing Graph";
+        AddGraphNode.Permission = EAgentToolPermission::WriteProject;
+        AddGraphNode.Schema.Fields = {
+            {"graph_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath},
+            {"node_type", EAgentToolValueType::String, true, {}, {}, 64},
+            {"x", EAgentToolValueType::Number, true, -100000.0, 100000.0},
+            {"y", EAgentToolValueType::Number, true, -100000.0, 100000.0}
+        };
+        AddGraphNode.Handler = [LoadGraph, SaveGraph](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            FPicoGraphAsset Graph; FAssetPath Path; std::filesystem::path File;
+            std::string Error;
+            if (!LoadGraph(Call, Graph, Path, File, Error)) return Failure(Call, Error);
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            FGraphNode Node;
+            if (!MakeSchemaGraphNode(Arguments.at("node_type").get<std::string>(),
+                    Arguments.at("x").get<float>(), Arguments.at("y").get<float>(), Node))
+                return Failure(Call, "Unknown or unavailable Graph node type");
+            const std::string NodeId = Node.Id;
+            FJson Pins = FJson::array();
+            for (const FGraphPin& Pin : Node.Pins)
+                Pins.push_back({{"id", Pin.Id}, {"name", Pin.Name},
+                    {"direction", ToString(Pin.Direction)}, {"type", ToString(Pin.Type)}});
+            Graph.Nodes.push_back(std::move(Node));
+            if (!SaveGraph(File, Graph, Error)) return Failure(Call, Error);
+            return Success(Call, {{"graph_path", Path.ToString()},
+                {"node_id", NodeId}, {"pins", std::move(Pins)}});
+        };
+        bInitialized = Registry.Register(std::move(AddGraphNode)) && bInitialized;
+
+        FAgentToolDefinition ConnectGraphPins;
+        ConnectGraphPins.Name = "editor.graph.connect_pins";
+        ConnectGraphPins.Description = "Connect two compatible PicoGraph pins by stable ID";
+        ConnectGraphPins.Permission = EAgentToolPermission::WriteProject;
+        ConnectGraphPins.Schema.Fields = {
+            {"graph_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath},
+            {"output_pin_id", EAgentToolValueType::String, true, {}, {}, 96},
+            {"input_pin_id", EAgentToolValueType::String, true, {}, {}, 96}
+        };
+        ConnectGraphPins.Handler = [LoadGraph, SaveGraph](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            FPicoGraphAsset Graph; FAssetPath Path; std::filesystem::path File;
+            std::string Error;
+            if (!LoadGraph(Call, Graph, Path, File, Error)) return Failure(Call, Error);
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            EGraphAssetError AssetError = EGraphAssetError::None;
+            if (!AddGraphLink(Graph,
+                    Arguments.at("output_pin_id").get<std::string>(),
+                    Arguments.at("input_pin_id").get<std::string>(), &AssetError))
+                return Failure(Call, "Could not connect Graph pins: "
+                    + std::string(ToString(AssetError)));
+            if (!SaveGraph(File, Graph, Error)) return Failure(Call, Error);
+            return Success(Call, {{"graph_path", Path.ToString()},
+                {"link_count", Graph.Links.size()}});
+        };
+        bInitialized = Registry.Register(std::move(ConnectGraphPins)) && bInitialized;
+
+        FAgentToolDefinition SetGraphDefault;
+        SetGraphDefault.Name = "editor.graph.set_default";
+        SetGraphDefault.Description =
+            "Set a non-Exec PicoGraph pin default by stable ID; compilation performs semantic validation";
+        SetGraphDefault.Permission = EAgentToolPermission::WriteProject;
+        SetGraphDefault.Schema.Fields = {
+            {"graph_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath},
+            {"pin_id", EAgentToolValueType::String, true, {}, {}, 96},
+            {"value", EAgentToolValueType::String, true, {}, {}, 1024}
+        };
+        SetGraphDefault.Handler = [LoadGraph, SaveGraph](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            FPicoGraphAsset Graph; FAssetPath Path; std::filesystem::path File;
+            std::string Error;
+            if (!LoadGraph(Call, Graph, Path, File, Error)) return Failure(Call, Error);
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            FGraphPin* Pin = FindGraphPin(Graph, Arguments.at("pin_id").get<std::string>());
+            if (Pin == nullptr || Pin->Type == EGraphValueType::Exec)
+                return Failure(Call, "Graph pin is missing or cannot have a default value");
+            Pin->DefaultValue = Arguments.at("value").get<std::string>();
+            if (!SaveGraph(File, Graph, Error)) return Failure(Call, Error);
+            return Success(Call, {{"graph_path", Path.ToString()},
+                {"pin_id", Pin->Id}, {"value", Pin->DefaultValue}});
+        };
+        bInitialized = Registry.Register(std::move(SetGraphDefault)) && bInitialized;
+
+        const auto MakeGraphAnalysisTool = [LoadGraph](bool bCompile)
+        {
+            FAgentToolDefinition Tool;
+            Tool.Name = bCompile ? "editor.graph.compile" : "editor.graph.validate";
+            Tool.Description = bCompile
+                ? "Compile a PicoGraph through validated Typed IR into transient bytecode; does not write bytecode"
+                : "Validate PicoGraph structure and semantics without modifying project files";
+            Tool.Permission = EAgentToolPermission::ReadOnly;
+            Tool.Schema.Fields = {{"graph_path", EAgentToolValueType::String, true,
+                {}, {}, 512, EAgentToolStringFormat::AssetPath}};
+            Tool.Handler = [LoadGraph, bCompile](
+                const FAgentToolCall& Call, const FCancellationToken*)
+            {
+                FPicoGraphAsset Graph; FAssetPath Path; std::filesystem::path File;
+                std::string Error;
+                if (!LoadGraph(Call, Graph, Path, File, Error)) return Failure(Call, Error);
+                const FGraphCompileResult Result = CompileGraph(Graph);
+                FJson Diagnostics = FJson::array();
+                bool bHasErrors = false;
+                for (const FGraphDiagnostic& Diagnostic : Result.Diagnostics)
+                {
+                    bHasErrors = bHasErrors
+                        || Diagnostic.Severity == EGraphDiagnosticSeverity::Error;
+                    Diagnostics.push_back({{"severity", ToString(Diagnostic.Severity)},
+                        {"code", ToString(Diagnostic.Code)}, {"message", Diagnostic.Message},
+                        {"node_id", Diagnostic.NodeId}, {"pin_id", Diagnostic.PinId}});
+                }
+                FJson Output{{"graph_path", Path.ToString()},
+                    {"valid", !bHasErrors}, {"diagnostics", std::move(Diagnostics)}};
+                if (bCompile)
+                {
+                    Output["compiled"] = Result.bSucceeded;
+                    Output["bytecode_version"] = Result.Bytecode.Version;
+                    Output["bytecode_bytes"] = Result.Bytecode.Bytes.size();
+                    Output["instruction_count"] = Result.IR.Instructions.size();
+                }
+                return Success(Call, std::move(Output));
+            };
+            return Tool;
+        };
+        bInitialized = Registry.Register(MakeGraphAnalysisTool(false)) && bInitialized;
+        bInitialized = Registry.Register(MakeGraphAnalysisTool(true)) && bInitialized;
 
         FAgentToolDefinition DescribeObjectTool;
         DescribeObjectTool.Name = "editor.object.describe";

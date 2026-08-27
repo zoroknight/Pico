@@ -928,7 +928,7 @@ Actor 可以挂载并执行可保存、可 Cook、可由 AI 安全生成的 Even
 | 第 1 周 | `.pgraph` 资产、稳定 Node/Pin/Link ID、变量、Entry Event、图版本、序列化与基础节点编辑器 | 创建、连线、断线、Undo/Redo、保存、重开后图结构和布局完全恢复 |
 | 第 2 周 | Graph Schema、Pin 类型系统、控制流/数据流校验、Typed IR、Pico Bytecode Compiler 和编译诊断 | 非法类型、缺失输入、执行环和失效函数给出定位到节点/Pin 的错误；合法图产生确定字节码 |
 | 第 3 周 | `FPicoScriptVM`、Execution Context、指令/循环预算、`PScriptComponent`、BeginPlay/Custom Event、PFunction/Property/Delegate 节点 | 原生 Actor 可执行 Graph；函数和属性经反射访问；错误图不会卡死 Game Thread |
-| 第 4 周 | Latent Continuation、Delay、WaitGameplayEvent、PlayMontageAndWait、Cook/Package、AI Graph Tools 和可视化调试状态 | 开门/拾取/延迟/Montage 等待 Demo 可运行；AI 可生成受限图并经校验保存；Stage 外 Runtime 可执行 Cook 后字节码 |
+| 第 4 周（已完成） | Latent Continuation、Delay、WaitGameplayEvent、PlayMontageAndWait、ActivateAbility、Cook/Package、AI Graph Tools 和可视化运行状态 | PGRB v3 可跨帧恢复；AI 通过稳定 ID 生成受限图；Stage 仅执行 Cooked Graph；自动化与真实 Sandbox Package Smoke 通过 |
 
 ### PicoGraph 固定边界
 
@@ -983,6 +983,15 @@ Editor Utility 权限。可视化调试只显示当前节点、最近错误、�
 保存并重开后行为恢复；AI 用中文生成同类受限 Graph；编译错误可定位；Cook 后在仓库外 Runtime 中运行，
 且网络权威操作仍由 Server RPC/Replication 规则约束。
 
+第 4 周实现与验收细节见 [PicoGraph 第 4 周](PicoGraphPhase04_LatentCookAgent.zh-CN.md)。当前首版将
+Delay、GameplayEvent/Montage 等待、Ability 激活、Cook、Agent Graph Tools 和状态可视化闭合；更完整的
+Trigger/拾取节点库可以在第 10 月 AI 游戏搭建任务中通过同一 Schema/Extension 机制增量加入。
+
+第 10 月已根据现有 Agent、GAS、PicoGraph 和网络基础重构为六周“Agent 游戏制作链路”阶段。该阶段先完成
+Capability Catalog、Gameplay Recipe、PicoGameSpec、Build Plan、通用玩法积木、三进程 Scenario Runner 和
+Package Evidence，再进入 ECS。详细范围与验收以
+[Agent 游戏制作链路规划](AgentGameCreationPipeline.zh-CN.md) 为准；本文件不再重复维护旧的四周 AI 游戏搭建计划。
+
 ## MVP 后任务
 
 以下内容不进入当前主线，只有主计划提前完成时才开始：
@@ -1004,3 +1013,4 @@ Editor Utility 权限。可视化调试只显示当前节点、最近错误、�
 - 新计划不得重新列入已经验收完成的任务。
 - 改变系统边界、网络范围或最终 Demo 时，必须同步修改“固定架构决策”。
 - 后续对话和实施均以本文档为优先依据。
+- AI 游戏制作阶段的具体范围、周计划和完成门槛以 `AgentGameCreationPipeline.zh-CN.md` 为优先依据；若与本文旧描述冲突，以该专项文档为准。

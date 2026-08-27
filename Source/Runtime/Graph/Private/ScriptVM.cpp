@@ -159,7 +159,8 @@ struct FVMState
 
 void Fail(FVMState& State, EScriptExecutionResult Result, std::string Message)
 {
-    if (State.Report.Result == EScriptExecutionResult::Success)
+    if (State.Report.Result == EScriptExecutionResult::Success
+        || State.Report.Result == EScriptExecutionResult::Suspended)
     {
         State.Report.Result = Result;
         State.Report.Message = std::move(Message);
@@ -284,6 +285,31 @@ bool EvaluateOutput(
         OutValue = PropertyToString(*Property, State.Context.Self);
         return true;
     }
+    case EGraphIROpcode::GetBoolProperty:
+    case EGraphIROpcode::GetFloatProperty:
+    {
+        if (State.Context.Self == nullptr) return false;
+        const FGraphIROperand* Name = FindOperand(Instruction, "PropertyName");
+        FFunctionValue NameValue;
+        if (Name == nullptr || !EvaluateOperand(State, *Name, Depth + 1, NameValue)
+            || !std::holds_alternative<std::string>(NameValue)) return false;
+        const PProperty* Property = State.Context.Self->GetClass()->FindProperty(
+            FName(std::get<std::string>(NameValue)));
+        if (Property == nullptr) return false;
+        if (Instruction.Opcode == EGraphIROpcode::GetBoolProperty)
+        {
+            bool Value = false;
+            if (Property->GetType() != EPropertyType::Bool
+                || !Property->GetValue(State.Context.Self, Value)) return false;
+            OutValue = Value;
+            return true;
+        }
+        float Value = 0.0f;
+        if (Property->GetType() != EPropertyType::Float
+            || !Property->GetValue(State.Context.Self, Value)) return false;
+        OutValue = Value;
+        return true;
+    }
     default:
         return false;
     }
@@ -345,7 +371,7 @@ bool DecodeGraphBytecode(
         std::uint8_t Opcode = 0;
         if (!Reader.ReadU8(Opcode) || !Reader.ReadString(Instruction.NodeId)
             || !Reader.ReadString(Instruction.DisplayName)) return Error("Invalid instruction record");
-        if (Opcode > static_cast<std::uint8_t>(EGraphIROpcode::BroadcastDelegate))
+        if (Opcode > static_cast<std::uint8_t>(EGraphIROpcode::PrintString))
             return Error("Invalid instruction opcode");
         Instruction.Opcode = static_cast<EGraphIROpcode>(Opcode);
         std::uint32_t TargetCount = 0;
@@ -410,9 +436,17 @@ FScriptExecutionReport FPicoScriptVM::Execute(
         State.NodeIndices.emplace(Program.Instructions[Index].NodeId, Index);
 
     std::vector<std::uint32_t> Work;
+    if (Context.StartInstruction.has_value())
+    {
+        if (*Context.StartInstruction >= Program.Instructions.size())
+            return {EScriptExecutionResult::InvalidInstruction,
+                "Continuation instruction is out of range"};
+        Work.push_back(*Context.StartInstruction);
+    }
     for (std::uint32_t Entry : Program.EntryInstructions)
     {
-        if (Entry < Program.Instructions.size()
+        if (!Context.StartInstruction.has_value()
+            && Entry < Program.Instructions.size()
             && Program.Instructions[Entry].DisplayName == Context.EntryEvent)
             Work.push_back(Entry);
     }
@@ -504,10 +538,137 @@ FScriptExecutionReport FPicoScriptVM::Execute(
                 Fail(State, EScriptExecutionResult::ReflectionError, "Dynamic delegate broadcast failed");
             break;
         }
+        case EGraphIROpcode::ActivateAbility:
+        {
+            const FGraphIROperand* Handle = FindOperand(Instruction, "AbilityHandle");
+            FFunctionValue Value;
+            if (Handle == nullptr || !EvaluateOperand(State, *Handle, 1, Value)
+                || !std::holds_alternative<int32>(Value))
+            {
+                Fail(State, EScriptExecutionResult::TypeError,
+                    "ActivateAbility handle is not Int");
+                continue;
+            }
+            const bool bActivated = Context.ActivateAbility
+                && Context.ActivateAbility(std::get<int32>(Value));
+            NextPin = bActivated ? "Succeeded" : "Failed";
+            break;
+        }
+        case EGraphIROpcode::PrintString:
+        {
+            const FGraphIROperand* Message = FindOperand(Instruction, "Message");
+            const FGraphIROperand* Duration = FindOperand(Instruction, "Duration");
+            FFunctionValue MessageValue;
+            FFunctionValue DurationValue;
+            if (Message == nullptr || Duration == nullptr
+                || !EvaluateOperand(State, *Message, 1, MessageValue)
+                || !EvaluateOperand(State, *Duration, 1, DurationValue)
+                || !std::holds_alternative<std::string>(MessageValue)
+                || !std::holds_alternative<float>(DurationValue)
+                || !std::isfinite(std::get<float>(DurationValue))
+                || std::get<float>(DurationValue) < 0.0f)
+            {
+                Fail(State, EScriptExecutionResult::TypeError,
+                    "PrintString arguments are invalid");
+                continue;
+            }
+            if (Context.PrintString)
+                Context.PrintString(
+                    std::get<std::string>(MessageValue),
+                    std::get<float>(DurationValue));
+            break;
+        }
+        case EGraphIROpcode::Delay:
+        case EGraphIROpcode::WaitGameplayEvent:
+        case EGraphIROpcode::PlayMontageAndWait:
+        {
+            State.Report.Result = EScriptExecutionResult::Suspended;
+            State.Report.Message = "Graph execution suspended at " + Instruction.DisplayName;
+            const char* ResumePin = Instruction.Opcode == EGraphIROpcode::WaitGameplayEvent
+                ? "Received" : "Completed";
+            if (const FGraphIRExecTarget* Resume = FindExecTarget(Instruction, ResumePin))
+                State.Report.ContinuationInstruction = Resume->InstructionIndex;
+            if (const FGraphIRExecTarget* Alternate = FindExecTarget(Instruction, "Interrupted"))
+                State.Report.AlternateContinuationInstruction = Alternate->InstructionIndex;
+            if (Instruction.Opcode == EGraphIROpcode::Delay)
+            {
+                State.Report.LatentAction = EScriptLatentAction::Delay;
+                const FGraphIROperand* Seconds = FindOperand(Instruction, "Seconds");
+                FFunctionValue Value;
+                if (Seconds == nullptr || !EvaluateOperand(State, *Seconds, 1, Value)
+                    || !std::holds_alternative<float>(Value)
+                    || !std::isfinite(std::get<float>(Value))
+                    || std::get<float>(Value) < 0.0f)
+                {
+                    Fail(State, EScriptExecutionResult::TypeError,
+                        "Delay duration is invalid");
+                    continue;
+                }
+                State.Report.LatentSeconds = std::get<float>(Value);
+            }
+            else
+            {
+                const FGraphIROperand* Handle = FindOperand(Instruction, "AbilityHandle");
+                FFunctionValue HandleValue;
+                if (Handle == nullptr || !EvaluateOperand(State, *Handle, 1, HandleValue)
+                    || !std::holds_alternative<int32>(HandleValue))
+                {
+                    Fail(State, EScriptExecutionResult::TypeError,
+                        "Latent Ability handle is invalid");
+                    continue;
+                }
+                State.Report.AbilityHandle = std::get<int32>(HandleValue);
+                const char* PayloadPin = Instruction.Opcode == EGraphIROpcode::WaitGameplayEvent
+                    ? "EventTag" : "MontageAsset";
+                const FGraphIROperand* Payload = FindOperand(Instruction, PayloadPin);
+                FFunctionValue PayloadValue;
+                if (Payload == nullptr || !EvaluateOperand(State, *Payload, 1, PayloadValue)
+                    || !std::holds_alternative<std::string>(PayloadValue)
+                    || std::get<std::string>(PayloadValue).empty())
+                {
+                    Fail(State, EScriptExecutionResult::TypeError,
+                        "Latent action payload is invalid");
+                    continue;
+                }
+                State.Report.LatentPayload = std::get<std::string>(PayloadValue);
+                if (Instruction.Opcode == EGraphIROpcode::WaitGameplayEvent)
+                {
+                    State.Report.LatentAction = EScriptLatentAction::WaitGameplayEvent;
+                    const FGraphIROperand* Exact = FindOperand(Instruction, "ExactMatch");
+                    FFunctionValue ExactValue;
+                    if (Exact == nullptr || !EvaluateOperand(State, *Exact, 1, ExactValue)
+                        || !std::holds_alternative<bool>(ExactValue))
+                    {
+                        Fail(State, EScriptExecutionResult::TypeError,
+                            "WaitGameplayEvent ExactMatch is invalid");
+                        continue;
+                    }
+                    State.Report.bExactMatch = std::get<bool>(ExactValue);
+                }
+                else
+                {
+                    State.Report.LatentAction = EScriptLatentAction::PlayMontageAndWait;
+                    const FGraphIROperand* Rate = FindOperand(Instruction, "PlayRate");
+                    FFunctionValue RateValue;
+                    if (Rate == nullptr || !EvaluateOperand(State, *Rate, 1, RateValue)
+                        || !std::holds_alternative<float>(RateValue)
+                        || std::get<float>(RateValue) <= 0.0f)
+                    {
+                        Fail(State, EScriptExecutionResult::TypeError,
+                            "Montage play rate is invalid");
+                        continue;
+                    }
+                    State.Report.LatentPlayRate = std::get<float>(RateValue);
+                }
+            }
+            continue;
+        }
         case EGraphIROpcode::BoolLiteral:
         case EGraphIROpcode::FloatLiteral:
         case EGraphIROpcode::AddFloat:
         case EGraphIROpcode::GetProperty:
+        case EGraphIROpcode::GetBoolProperty:
+        case EGraphIROpcode::GetFloatProperty:
             Fail(State, EScriptExecutionResult::InvalidInstruction, "Pure node appeared in control flow");
             continue;
         }
@@ -531,6 +692,19 @@ std::string_view ToString(EScriptExecutionResult Result)
     case EScriptExecutionResult::CallDepthExceeded: return "CallDepthExceeded";
     case EScriptExecutionResult::ReflectionError: return "ReflectionError";
     case EScriptExecutionResult::TypeError: return "TypeError";
+    case EScriptExecutionResult::Suspended: return "Suspended";
+    }
+    return "Unknown";
+}
+
+std::string_view ToString(EScriptLatentAction Action)
+{
+    switch (Action)
+    {
+    case EScriptLatentAction::None: return "None";
+    case EScriptLatentAction::Delay: return "Delay";
+    case EScriptLatentAction::WaitGameplayEvent: return "WaitGameplayEvent";
+    case EScriptLatentAction::PlayMontageAndWait: return "PlayMontageAndWait";
     }
     return "Unknown";
 }

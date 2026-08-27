@@ -3547,6 +3547,70 @@ void TestScriptComponentRunsGraphOnNativeActor(FTestRunner& Runner)
     Pico::PObjectSystem::Shutdown();
 }
 
+void TestScriptComponentResumesDelayAcrossTicks(FTestRunner& Runner)
+{
+    if (!InitializeWorldTypes(Runner)) return;
+    const bool bScriptClassRegistered = Pico::PScriptComponent::RegisterClass();
+    PStageHActor* Actor = Pico::NewObject<PStageHActor>(nullptr, "LatentScriptActor");
+    Pico::PScriptComponent* Script = Actor != nullptr
+        ? Actor->CreateComponent<Pico::PScriptComponent>("Script") : nullptr;
+
+    Pico::FPicoGraphAsset Graph;
+    Graph.GraphId = Pico::CreateGraphStableId();
+    Pico::FGraphNode Entry;
+    Pico::FGraphNode Delay;
+    Pico::FGraphNode Set;
+    Pico::FGraphNode Print;
+    Pico::MakeSchemaGraphNode("EntryEvent", 0.0f, 0.0f, Entry);
+    Entry.DisplayName = "BeginPlay";
+    Pico::MakeSchemaGraphNode("Delay", 200.0f, 0.0f, Delay);
+    Pico::MakeSchemaGraphNode("SetProperty", 400.0f, 0.0f, Set);
+    Pico::MakeSchemaGraphNode("PrintString", 600.0f, 0.0f, Print);
+    const auto FindPin = [](Pico::FGraphNode& Node, std::string_view Name)
+    {
+        return std::find_if(Node.Pins.begin(), Node.Pins.end(),
+            [Name](const Pico::FGraphPin& Pin) { return Pin.Name == Name; });
+    };
+    FindPin(Delay, "Seconds")->DefaultValue = "1.0";
+    FindPin(Set, "PropertyName")->DefaultValue = "Value";
+    FindPin(Set, "Value")->DefaultValue = "88";
+    FindPin(Print, "Message")->DefaultValue = "delay completed";
+    FindPin(Print, "Duration")->DefaultValue = "3.0";
+    Graph.Nodes = {Entry, Delay, Set, Print};
+    Pico::EGraphAssetError LinkError = Pico::EGraphAssetError::None;
+    Pico::AddGraphLink(Graph, FindPin(Graph.Nodes[0], "Then")->Id,
+        FindPin(Graph.Nodes[1], "In")->Id, &LinkError);
+    Pico::AddGraphLink(Graph, FindPin(Graph.Nodes[1], "Completed")->Id,
+        FindPin(Graph.Nodes[2], "In")->Id, &LinkError);
+    Pico::AddGraphLink(Graph, FindPin(Graph.Nodes[2], "Then")->Id,
+        FindPin(Graph.Nodes[3], "In")->Id, &LinkError);
+
+    const Pico::FGraphCompileResult Compile = Pico::CompileGraph(Graph);
+    const Pico::FScriptExecutionReport StartReport = Script != nullptr
+        ? Script->ExecuteBytecode(Compile.Bytecode)
+        : Pico::FScriptExecutionReport {};
+    const bool bSuspendedBeforeTick = Script != nullptr
+        && StartReport.IsSuspended()
+        && Script->GetExecutionState()
+            == Pico::EScriptComponentExecutionState::Suspended
+        && Actor->GetValue() == 10;
+    if (Script != nullptr) Script->TickComponent(0.5f);
+    const bool bStillWaiting = Actor != nullptr && Actor->GetValue() == 10
+        && Script->GetExecutionState()
+            == Pico::EScriptComponentExecutionState::Suspended;
+    if (Script != nullptr) Script->TickComponent(0.6f);
+    Runner.Expect(
+        bScriptClassRegistered && Compile.bSucceeded && bSuspendedBeforeTick
+            && bStillWaiting && Actor != nullptr && Actor->GetValue() == 88
+            && Script->GetExecutionState()
+                == Pico::EScriptComponentExecutionState::Succeeded
+            && Script->GetScreenMessages().size() == 1
+            && Script->GetScreenMessages()[0].Text == "delay completed",
+        "PScriptComponent resumes Delay and retains a visible PrintString message");
+    Pico::DestroyObjectTree(Actor);
+    Pico::PObjectSystem::Shutdown();
+}
+
 void TestEditorPreviewRegistrationDoesNotBeginGameplay(FTestRunner& Runner)
 {
     if (!InitializeWorldTypes(Runner)) return;
@@ -3805,6 +3869,7 @@ int main()
     TestZeroFrameLifecycle(Runner);
     TestInvalidFrameLimit(Runner);
     TestScriptComponentRunsGraphOnNativeActor(Runner);
+    TestScriptComponentResumesDelayAcrossTicks(Runner);
     TestEditorPreviewRegistrationDoesNotBeginGameplay(Runner);
     TestActorBlueprintDynamicComponentRoundTrip(Runner);
     TestDynamicClassDefaultSubobjectInstantiation(Runner);

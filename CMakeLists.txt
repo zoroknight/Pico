@@ -242,6 +242,7 @@ add_library(PicoAsset STATIC
 add_library(PicoGraph STATIC
     Source/Runtime/Graph/Private/GraphAsset.cpp
     Source/Runtime/Graph/Private/GraphCompiler.cpp
+    Source/Runtime/Graph/Private/ScriptRuntimeExtensions.cpp
     Source/Runtime/Graph/Private/ScriptVM.cpp
 )
 
@@ -253,6 +254,7 @@ target_include_directories(PicoGraph
 )
 
 target_link_libraries(PicoGraph PUBLIC PicoCore PicoObject)
+target_link_libraries(PicoPackaging PUBLIC PicoGraph)
 set_target_properties(PicoGraph PROPERTIES FOLDER "Pico")
 
 if(MSVC)

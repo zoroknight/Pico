@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "id": "edit-picograph",
+  "version": "1.0.0",
+  "description": "Create and edit controlled PicoGraph assets through stable node and pin identifiers, then validate and compile them without generating arbitrary C++ or writing cooked bytecode.",
+  "triggers": ["创建图表", "编辑图表", "创建PicoGraph", "编辑PicoGraph", "可视化脚本", "graph asset", "create graph", "edit graph", "PicoGraph"],
+  "allowed_tools": [
+    "editor.graph.create",
+    "editor.graph.describe",
+    "editor.graph.add_node",
+    "editor.graph.connect_pins",
+    "editor.graph.set_default",
+    "editor.graph.validate",
+    "editor.graph.compile"
+  ],
+  "preconditions": [
+    "The asset path is under /Game and ends with .pgraph.",
+    "Use only node types returned by the registered PicoGraph schemas.",
+    "Use node_id and pin_id values returned by earlier tool results; never invent identifiers.",
+    "Reflected property and function names must come from the live reflection schema."
+  ],
+  "workflow": [
+    "Create the graph asset only when it does not already exist; otherwise describe it first.",
+    "Use the Entry identifiers returned by create, or describe the Graph to recover all existing stable identifiers.",
+    "Add the required entry, data, gameplay, or latent nodes and retain every returned stable identifier.",
+    "Set input defaults before connecting execution and data pins.",
+    "Connect only compatible input and output pins by their returned identifiers.",
+    "Validate the graph and repair every reported structural or type error.",
+    "Compile only after validation succeeds. Compilation verifies deterministic bytecode but does not replace the editable source asset with cooked data."
+  ],
+  "completion_criteria": [
+    "The .pgraph source asset exists under /Game.",
+    "Graph validation reports success.",
+    "Compilation reports deterministic bytecode and a nonzero instruction count.",
+    "No arbitrary source code, cooked bytecode, or file outside the project Content directory was written."
+  ]
+}

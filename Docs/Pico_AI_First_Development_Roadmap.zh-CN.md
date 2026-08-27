@@ -442,7 +442,7 @@ Pawn 反射属性、ActorChannel 和 RepNotify 收敛到客户端；Runtime Laun
 | 第 1 周（已完成） | `.pgraph`、稳定 Node/Pin/Link ID、变量、Entry Event、版本、序列化、Undo/Redo 和基础节点编辑器 | 保存重开后图结构与布局恢复 |
 | 第 2 周（已完成） | Graph Schema、Pin 类型、控制流/数据流校验、Typed IR、字节码编译和诊断 | 非法图不能编译；合法图产生确定字节码 |
 | 第 3 周（已完成） | `FPicoScriptVM`、执行上下文、指令/循环/调用深度预算、`PScriptComponent`、PFunction/Property/Delegate 节点 | 原生 Actor 可运行图；错误图不能卡死 Game Thread |
-| 第 4 周 | Delay、WaitGameplayEvent、PlayMontageAndWait、ActivateAbility、Cook/Package、AI Graph Tools、可视化状态；PicoGraph 验收后执行项目专用蓝图/GAS 适配的反射驱动迁移 | AI 可生成受限图；仓库外 Runtime 执行 Cook 后字节码；新增 Graph Skill、Verifier、路由 Eval 和 Golden Task；新反射 Gameplay 类无需修改 Editor 即可生成 Details、Graph 节点和 Agent Schema |
+| 第 4 周（已完成） | Delay、WaitGameplayEvent、PlayMontageAndWait、ActivateAbility、Cook/Package、AI Graph Tools、可视化状态与反射驱动入口 | AI 可生成受限图；仓库外 Runtime 执行 Cook 后字节码；新增 Graph Skill、Verifier、42 条路由 Eval 和第 12 个 Golden Task；反射属性/函数自动进入 Details、Graph 菜单和 Agent Schema |
 
 固定管线：
 
@@ -486,13 +486,25 @@ Operand 的 `FPicoGraphIR`，再确定性编码为内存 `PGRB v1` 字节码；�
 仍承载子节点的组件受保护。蓝图预览 World 只注册渲染所需组件，不 Tick 且不派发 BeginPlay，避免 Graph
 运行结果在 `Compile & Save` 时污染资产默认值和 GeneratedClass CDO。当前 Release 验收为 21 项 Graph 测试与
 669 项 Engine 测试。
-当前节点有意限制为无参 Callable、基础属性类型和零参动态委托；参数化、异步节点与 Cook 资产属于第 4 周。
+第 3 周同步节点有意限制为无参 Callable、基础属性类型和零参动态委托；第 4 周已补齐受限异步节点与 Cook
+资产，参数化 PFunction 和更完整的节点库仍留在后续增量。
 详见 [PicoGraph 第 3 周](PicoGraphPhase03_VMAndScriptComponent.zh-CN.md)。
+
+第 4 周完成记录：`PGRB` 升级到 v3，VM 可返回带成功/失败续点的 `Suspended` 报告；`PScriptComponent`
+保存执行代次并在组件注销或新执行开始时取消旧等待。Delay 使用 World Tick，GameplayEvent 和 Montage 等待复用
+现有 AbilityTask，ActivateAbility 通过 ASC SpecHandle 分支。Package 会校验并将 `.pgraph` Cook 为
+`.pgraph.pgrb`，Stage 不保留编辑 JSON。Agent 新增 create/describe/add/connect/set/validate/compile 七个受控
+Graph 工具和 `edit-picograph` Skill；Knowledge Store 同步 Graph Schema 与实时反射 Schema。Graph 编辑器从
+PClass 注册表生成 Callable 和基础 Property 节点，只读/Transient 属性不会暴露 Set。Release 验收为 Graph
+24/24、Engine 691/691、GameplayAbilities 73/73、Packaging 13/13、Agent 100/100；Sandbox 真实 Development
+打包 Smoke 通过，2 个 Graph 均只以 PGRB 进入 Stage。详见
+[PicoGraph 第 4 周](PicoGraphPhase04_LatentCookAgent.zh-CN.md)。
 
 ### 反射驱动迁移门槛（PicoGraph Lite 完成后执行）
 
 目标不是把 Gravity/Burn/Freeze 玩法搬进引擎，而是让项目只负责声明玩法类、属性、函数和元数据；引擎根据
-反射自动生成编辑与 Agent 接口。迁移完成前，第 9 月不能视为完全收尾。
+反射自动生成编辑与 Agent 接口。第 9 月已完成通用 Details、基础 Graph 节点和 Agent Schema 的纵向切片；
+以下更丰富的元数据与旧项目适配清理作为兼容性加固继续维护，不阻塞 PicoGraph Lite 验收。
 
 - 扩展 `PCLASS/PPROPERTY/PFUNCTION` 元数据，至少支持 DisplayName、Category、范围/步长、Gameplay 语义 Tag、
   Graph 暴露策略和安全权限；PHT 将这些信息写入统一反射描述。
@@ -508,19 +520,25 @@ Operand 的 `FPicoGraphIR`，再确定性编码为内存 `PGRB v1` 字节码；�
 - 为自动生成结果加入重复名称、非法类型、只读/Transient、权限越界和旧资产迁移测试；失败时拒绝暴露节点，
   不能退回静默硬编码。
 
-验收定义：通用 Editor/Agent 模块不再引用 PicoSandbox 类名；增加新的项目反射属性或可调用函数时，只需重新
-运行 PHT/构建并配置元数据，不需要为该属性编写新的 Details 控件、Graph 节点类或 Agent Tool。
+当前验收：增加基础类型反射属性或零参数 Callable 时，只需重新运行 PHT/构建，不需要新增 Details 控件、
+Graph 节点类或 Agent 属性 Tool。PicoSandbox 早期 Mini GAS 语义工具暂作为旧 Skill 兼容适配器保留；后续扩展
+DisplayName、Category、范围和权限元数据后，再将该适配器完全移出通用 Editor 模块。
 
-## 第 10 月：AI 游戏搭建闭环
+## 第 10 月（六周阶段）：AI 游戏搭建闭环
 
 目标：让 AI 在受控工具、Skill、上下文检索和验证器的约束下完成一个简单可玩、可联网、可打包的 3D 游戏。
+本阶段不是开放任意代码生成，而是补齐“自然语言需求 -> 结构化规格 -> 可复用玩法积木 -> 自动运行验收 -> 打包证据”的
+可靠链路。详细架构、数据契约、边界和验收以
+[Agent 游戏制作链路规划](AgentGameCreationPipeline.zh-CN.md) 为准。
 
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |
-| 第 1 周 | 在已完成 Skill v0 上增加拾取、触发门、GAS 和 PicoGraph Skills，并做版本迁移/禁用 UI；加入“候选筛选 + 结构化模型路由” | 明确输入继续走确定性规则；歧义输入只返回通过 Schema 校验的候选 Skill ID；Gameplay Skill 可审核、禁用和固定版本，不提升权限 |
-| 第 2 周 | 扩展已完成 RAG Lite：加入 GAS/PicoGraph Schema、验证结果和固定检索评测；按真实数据决定是否做 Embedding 对照 | 回答和工具规划引用新增 Gameplay 真实数据 |
-| 第 3 周 | 自动验证、Graph 编译、资产引用检查、Play、日志读取和最多两轮修复 | 失败保留现场并报告，不无限循环或掩盖错误 |
-| 第 4 周 | AI 完整游戏 Demo、Windows Package、端到端 Golden Tasks 和回归评测；可选本地 MCP Adapter | 从中文需求到场景修改、保存、Play、验证和可运行 Stage 形成可审计闭环；已有能力无回归 |
+| 第 1 周 | Capability Descriptor/Catalog、Gameplay Recipe 格式、`PicoGameSpec` Schema 和支持度诊断 | 同一需求稳定生成 Spec，并清楚列出已支持、缺失和不支持项；能力可追溯到来源和 Verifier |
+| 第 2 周 | Build Plan、Dry Run、PlanHash 审批、项目级事务、幂等批处理工具和 Artifact Handle | 执行前可预览完整修改；批准后原子执行；故障可回滚且不污染已有项目 |
+| 第 3 周 | PicoGraph 补齐 Input/Overlap/RepNotify/Custom Event、事件参数、Int/比较/布尔、参数化 PFunction 和 Authority Policy | 不新增项目专用 C++ 也能表达收集、条件判断、交互和服务器权威调用 |
+| 第 4 周 | Agent Game Starter Template、收集/交互/Owned Door/目标/比赛状态/HUD 组件和首批 Recipes | 人工只用现有积木即可组装并运行双人收集开门 Demo |
+| 第 5 周 | Development/Test Runtime Probe、Input Action 注入、Server + Client 1 + Client 2 Scenario Runner 和网络断言 | 自动验证拾取、错误门拒绝、正确开门、双门胜利和双端 UI，并输出结构化证据 |
+| 第 6 周 | 端到端 Game Assembly Skill、最多两轮定向修复、Package Validator、真实 Editor Golden Tasks 和第二玩法复用验收 | 从中文需求到可审计、可运行、可联网的 Windows Stage 形成闭环；“钥匙 + 双人压力板”等第二玩法证明没有写死 Demo |
 
 最终指令示例：
 
@@ -530,6 +548,10 @@ Operand 的 `FPicoGraphIR`，再确定性编码为内存 `PGRB v1` 字节码；�
 ```
 
 AI 可以分步规划和申请审批，但完成定义必须由确定性验证器判定，不能由模型自行宣布成功。
+
+本阶段统一使用以下产物生产边界：`ExistingAssetProducer`、`ActorBlueprintProducer`、
+`PicoGraphProducer` 和 `WorldProducer`。未来代码 Harness 以禁用状态的 `CodeModuleProducer` 接入同一 Build Plan；
+它不能绕过 Tool Policy、Diff 审批、事务、构建测试或验证器。ECS 推迟到本阶段六周验收和第二玩法复用通过后。
 
 ### Skill 路由演进原则
 
@@ -552,7 +574,7 @@ Skill 数量增加后采用分层路由，而不是用模型替换现有规则�
 ### 端到端 Golden Tasks
 
 现有 39 条 `IntentRoutingCases.tsv` 和 11 个离线 Golden Tasks 继续负责快速验证 Harness；第 10 月在其上增加真实
-Editor Fixture，并扩展到至少 20 个固定端到端
+Editor Fixture、三进程 Scenario Runner，并扩展到至少 20 个固定端到端
 Golden Tasks，覆盖“自然语言需求 -> Agent 规划 -> Tool Pipeline -> 场景修改 -> 保存 -> Play/验证 -> Package”的真实链路。
 
 - 每个任务固定输入需求、初始项目/World、允许副作用、禁止副作用和确定性验收条件。
@@ -566,6 +588,9 @@ Golden Tasks，覆盖“自然语言需求 -> Agent 规划 -> Tool Pipeline -> �
 
 ECS 不替换 `PObject/Actor/Component`。Actor 继续管理身份、生命周期、Gameplay、网络和编辑器对象；ECS
 用于大量同构、数据导向的运行时实体。
+
+进入门槛：第 10 月六周链路和第二个非同构玩法复用验收均通过。若未通过，继续修正 Catalog、Recipe、Graph
+表达力或 Scenario Runner，不以 ECS 新功能掩盖 Agent 游戏搭建链路的缺口。
 
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |

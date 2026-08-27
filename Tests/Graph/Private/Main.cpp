@@ -23,6 +23,8 @@ class PGraphVMFixture final : public Pico::PObject
 
 public:
     Pico::int32 Value = 0;
+    bool bDelayAction = true;
+    float DelaySeconds = 2.5f;
     Pico::int32 FunctionCalls = 0;
     Pico::int32 DelegateCalls = 0;
     Pico::TDynamicMulticastDelegate<void()> OnExecuted;
@@ -43,6 +45,8 @@ bool PGraphVMFixture::RegisterProperties(Pico::PClass& Class)
 {
     std::vector<Pico::PProperty> Properties;
     PICO_ADD_PROPERTY(Properties, Value);
+    PICO_ADD_PROPERTY(Properties, bDelayAction);
+    PICO_ADD_PROPERTY(Properties, DelaySeconds);
     PICO_ADD_PROPERTY(Properties, OnExecuted);
     std::vector<Pico::PFunction> Functions;
     PICO_ADD_FUNCTION(Functions, IncrementFunctionCalls, Pico::EFunctionFlags::Callable);
@@ -377,9 +381,183 @@ int main()
             == Pico::EScriptExecutionResult::InvalidProgram,
         "Malformed PGRB bytecode is rejected before execution");
 
+    Pico::FPicoGraphAsset LatentGraph;
+    LatentGraph.GraphId = Pico::CreateGraphStableId();
+    Pico::FGraphNode LatentEntry;
+    Pico::FGraphNode Delay;
+    Pico::FGraphNode LatentSet;
+    Pico::MakeSchemaGraphNode("EntryEvent", 0.0f, 0.0f, LatentEntry);
+    LatentEntry.DisplayName = "BeginPlay";
+    Pico::MakeSchemaGraphNode("Delay", 200.0f, 0.0f, Delay);
+    Pico::MakeSchemaGraphNode("SetProperty", 400.0f, 0.0f, LatentSet);
+    Pin(Delay, "Seconds")->DefaultValue = "0.25";
+    Pin(LatentSet, "PropertyName")->DefaultValue = "Value";
+    Pin(LatentSet, "Value")->DefaultValue = "88";
+    LatentGraph.Nodes = {LatentEntry, Delay, LatentSet};
+    Pico::AddGraphLink(LatentGraph, Pin(LatentGraph.Nodes[0], "Then")->Id,
+        Pin(LatentGraph.Nodes[1], "In")->Id, &Error);
+    Pico::AddGraphLink(LatentGraph, Pin(LatentGraph.Nodes[1], "Completed")->Id,
+        Pin(LatentGraph.Nodes[2], "In")->Id, &Error);
+    const Pico::FGraphCompileResult LatentCompile = Pico::CompileGraph(LatentGraph);
+    Fixture->Value = 0;
+    const Pico::FScriptExecutionReport Suspended =
+        Pico::FPicoScriptVM().Execute(LatentCompile.Bytecode, RuntimeContext);
+    Pico::FScriptExecutionContext ResumeContext = RuntimeContext;
+    ResumeContext.StartInstruction = Suspended.ContinuationInstruction;
+    const Pico::FScriptExecutionReport Resumed =
+        Pico::FPicoScriptVM().Execute(LatentCompile.Bytecode, ResumeContext);
+    Runner.Expect(
+        LatentCompile.bSucceeded && Suspended.IsSuspended()
+            && Suspended.LatentAction == Pico::EScriptLatentAction::Delay
+            && Suspended.LatentSeconds == 0.25f && Fixture->Value == 88
+            && Resumed.Succeeded(),
+        "PGRB v3 suspends at Delay and resumes from an explicit continuation");
+
+    Pico::FPicoGraphAsset ParameterGraph;
+    ParameterGraph.GraphId = Pico::CreateGraphStableId();
+    Pico::FGraphNode ParameterEntry;
+    Pico::FGraphNode ParameterBranch;
+    Pico::FGraphNode GetDelayEnabled;
+    Pico::FGraphNode ParameterDelay;
+    Pico::FGraphNode GetDelaySeconds;
+    Pico::FGraphNode ImmediatePrint;
+    Pico::FGraphNode DelayedPrint;
+    Pico::MakeSchemaGraphNode("EntryEvent", 0.0f, 0.0f, ParameterEntry);
+    ParameterEntry.DisplayName = "BeginPlay";
+    Pico::MakeSchemaGraphNode("Branch", 200.0f, 0.0f, ParameterBranch);
+    Pico::MakeSchemaGraphNode("GetBoolProperty", 0.0f, 180.0f, GetDelayEnabled);
+    Pico::MakeSchemaGraphNode("Delay", 400.0f, 0.0f, ParameterDelay);
+    Pico::MakeSchemaGraphNode("GetFloatProperty", 200.0f, 260.0f, GetDelaySeconds);
+    Pico::MakeSchemaGraphNode("PrintString", 400.0f, 220.0f, ImmediatePrint);
+    Pico::MakeSchemaGraphNode("PrintString", 620.0f, 0.0f, DelayedPrint);
+    Pin(GetDelayEnabled, "PropertyName")->DefaultValue = "bDelayAction";
+    Pin(GetDelaySeconds, "PropertyName")->DefaultValue = "DelaySeconds";
+    Pin(ImmediatePrint, "Message")->DefaultValue = "immediate";
+    Pin(DelayedPrint, "Message")->DefaultValue = "delayed";
+    ParameterGraph.Nodes = {ParameterEntry, ParameterBranch, GetDelayEnabled,
+        ParameterDelay, GetDelaySeconds, ImmediatePrint, DelayedPrint};
+    Pico::AddGraphLink(ParameterGraph, Pin(ParameterGraph.Nodes[0], "Then")->Id,
+        Pin(ParameterGraph.Nodes[1], "In")->Id, &Error);
+    Pico::AddGraphLink(ParameterGraph, Pin(ParameterGraph.Nodes[2], "Value")->Id,
+        Pin(ParameterGraph.Nodes[1], "Condition")->Id, &Error);
+    Pico::AddGraphLink(ParameterGraph, Pin(ParameterGraph.Nodes[1], "True")->Id,
+        Pin(ParameterGraph.Nodes[3], "In")->Id, &Error);
+    Pico::AddGraphLink(ParameterGraph, Pin(ParameterGraph.Nodes[4], "Value")->Id,
+        Pin(ParameterGraph.Nodes[3], "Seconds")->Id, &Error);
+    Pico::AddGraphLink(ParameterGraph, Pin(ParameterGraph.Nodes[3], "Completed")->Id,
+        Pin(ParameterGraph.Nodes[6], "In")->Id, &Error);
+    Pico::AddGraphLink(ParameterGraph, Pin(ParameterGraph.Nodes[1], "False")->Id,
+        Pin(ParameterGraph.Nodes[5], "In")->Id, &Error);
+    const Pico::FGraphCompileResult ParameterCompile = Pico::CompileGraph(ParameterGraph);
+    std::string PrintedMessage;
+    Pico::FScriptExecutionContext ParameterContext = RuntimeContext;
+    ParameterContext.PrintString = [&PrintedMessage](std::string Message, float)
+    {
+        PrintedMessage = std::move(Message);
+    };
+    Fixture->bDelayAction = true;
+    Fixture->DelaySeconds = 2.5f;
+    const Pico::FScriptExecutionReport ParameterSuspended =
+        Pico::FPicoScriptVM().Execute(ParameterCompile.Bytecode, ParameterContext);
+    ParameterContext.StartInstruction = ParameterSuspended.ContinuationInstruction;
+    const Pico::FScriptExecutionReport ParameterResumed =
+        Pico::FPicoScriptVM().Execute(ParameterCompile.Bytecode, ParameterContext);
+    const bool bDelayedPathWorked = ParameterSuspended.IsSuspended()
+        && ParameterSuspended.LatentSeconds == 2.5f
+        && ParameterResumed.Succeeded() && PrintedMessage == "delayed";
+    PrintedMessage.clear();
+    Fixture->bDelayAction = false;
+    ParameterContext.StartInstruction.reset();
+    const Pico::FScriptExecutionReport ImmediateReport =
+        Pico::FPicoScriptVM().Execute(ParameterCompile.Bytecode, ParameterContext);
+    Runner.Expect(
+        ParameterCompile.bSucceeded && bDelayedPathWorked
+            && ImmediateReport.Succeeded() && PrintedMessage == "immediate",
+        "Typed reflected Bool and Float inputs drive immediate and delayed PrintString paths");
+
+    Pico::FPicoGraphAsset EventGraph;
+    EventGraph.GraphId = Pico::CreateGraphStableId();
+    Pico::FGraphNode EventEntry;
+    Pico::FGraphNode WaitEvent;
+    Pico::MakeSchemaGraphNode("EntryEvent", 0.0f, 0.0f, EventEntry);
+    EventEntry.DisplayName = "BeginPlay";
+    Pico::MakeSchemaGraphNode("WaitGameplayEvent", 200.0f, 0.0f, WaitEvent);
+    Pin(WaitEvent, "AbilityHandle")->DefaultValue = "7";
+    Pin(WaitEvent, "EventTag")->DefaultValue = "Event.Graph.Test";
+    Pin(WaitEvent, "ExactMatch")->DefaultValue = "true";
+    EventGraph.Nodes = {EventEntry, WaitEvent};
+    Pico::AddGraphLink(EventGraph, Pin(EventGraph.Nodes[0], "Then")->Id,
+        Pin(EventGraph.Nodes[1], "In")->Id, &Error);
+    const Pico::FScriptExecutionReport EventReport = Pico::FPicoScriptVM().Execute(
+        Pico::CompileGraph(EventGraph).Bytecode, RuntimeContext);
+
+    Pico::FPicoGraphAsset MontageGraph;
+    MontageGraph.GraphId = Pico::CreateGraphStableId();
+    Pico::FGraphNode MontageEntry;
+    Pico::FGraphNode Montage;
+    Pico::MakeSchemaGraphNode("EntryEvent", 0.0f, 0.0f, MontageEntry);
+    MontageEntry.DisplayName = "BeginPlay";
+    Pico::MakeSchemaGraphNode("PlayMontageAndWait", 200.0f, 0.0f, Montage);
+    Pin(Montage, "AbilityHandle")->DefaultValue = "8";
+    Pin(Montage, "MontageAsset")->DefaultValue = "/Game/Animations/Test.pmontage";
+    Pin(Montage, "PlayRate")->DefaultValue = "1.5";
+    MontageGraph.Nodes = {MontageEntry, Montage};
+    Pico::AddGraphLink(MontageGraph, Pin(MontageGraph.Nodes[0], "Then")->Id,
+        Pin(MontageGraph.Nodes[1], "In")->Id, &Error);
+    const Pico::FScriptExecutionReport MontageReport = Pico::FPicoScriptVM().Execute(
+        Pico::CompileGraph(MontageGraph).Bytecode, RuntimeContext);
+
+    Pico::FPicoGraphAsset AbilityGraph;
+    AbilityGraph.GraphId = Pico::CreateGraphStableId();
+    Pico::FGraphNode AbilityEntry;
+    Pico::FGraphNode Activate;
+    Pico::MakeSchemaGraphNode("EntryEvent", 0.0f, 0.0f, AbilityEntry);
+    AbilityEntry.DisplayName = "BeginPlay";
+    Pico::MakeSchemaGraphNode("ActivateAbility", 200.0f, 0.0f, Activate);
+    Pin(Activate, "AbilityHandle")->DefaultValue = "9";
+    AbilityGraph.Nodes = {AbilityEntry, Activate};
+    Pico::AddGraphLink(AbilityGraph, Pin(AbilityGraph.Nodes[0], "Then")->Id,
+        Pin(AbilityGraph.Nodes[1], "In")->Id, &Error);
+    Pico::int32 ActivatedHandle = 0;
+    Pico::FScriptExecutionContext AbilityContext = RuntimeContext;
+    AbilityContext.ActivateAbility = [&ActivatedHandle](Pico::int32 Handle)
+    {
+        ActivatedHandle = Handle;
+        return true;
+    };
+    const Pico::FScriptExecutionReport AbilityReport = Pico::FPicoScriptVM().Execute(
+        Pico::CompileGraph(AbilityGraph).Bytecode, AbilityContext);
+    Runner.Expect(
+        EventReport.IsSuspended()
+            && EventReport.LatentAction == Pico::EScriptLatentAction::WaitGameplayEvent
+            && EventReport.AbilityHandle == 7 && EventReport.bExactMatch
+            && EventReport.LatentPayload == "Event.Graph.Test"
+            && MontageReport.IsSuspended()
+            && MontageReport.LatentAction == Pico::EScriptLatentAction::PlayMontageAndWait
+            && MontageReport.AbilityHandle == 8
+            && MontageReport.LatentPayload == "/Game/Animations/Test.pmontage"
+            && MontageReport.LatentPlayRate == 1.5f
+            && AbilityReport.Succeeded() && ActivatedHandle == 9,
+        "Gameplay Graph nodes preserve event, Montage, and Ability activation contracts");
+
+    const std::filesystem::path LatentSource =
+        std::filesystem::temp_directory_path() / "PicoGraphCookSource.pgraph";
+    const std::filesystem::path LatentCooked =
+        std::filesystem::temp_directory_path() / "PicoGraphCookSource.pgraph.pgrb";
+    std::string CookError;
+    Pico::FPicoGraphBytecode LoadedCooked;
+    Runner.Expect(
+        Pico::SaveGraphAssetToFile(LatentSource, LatentGraph, &Error)
+            && Pico::CookGraphAsset(LatentSource, LatentCooked, &CookError)
+            && Pico::LoadGraphBytecodeFromFile(LatentCooked, LoadedCooked, &CookError)
+            && LoadedCooked.Bytes == LatentCompile.Bytecode.Bytes,
+        "Graph Cook produces validated deterministic PGRB v3 for Runtime loading");
+
     std::error_code FileError;
     std::filesystem::remove(First, FileError);
     std::filesystem::remove(Second, FileError);
+    std::filesystem::remove(LatentSource, FileError);
+    std::filesystem::remove(LatentCooked, FileError);
     const int Result = Runner.Finish();
     Pico::PObjectSystem::Shutdown();
     return Result;

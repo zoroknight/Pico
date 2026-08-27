@@ -2,6 +2,7 @@
 
 #include "Pico/Core/Config.h"
 #include "Pico/Core/PlatformProcess.h"
+#include "Pico/Graph/GraphCompiler.h"
 
 #include <algorithm>
 #include <array>
@@ -202,7 +203,7 @@ public:
         static const std::set<std::string> NativeExtensions {
             ".pworld", ".pmesh", ".ptex", ".pmat", ".pskeleton",
             ".pskeletalmesh", ".panimation", ".panimset", ".pmontage",
-            ".pcharprofile", ".pcontrolprofile", ".pblueprint"
+            ".pcharprofile", ".pcontrolprofile", ".pblueprint", ".pgraph"
         };
         static const std::set<std::string> ExcludedDirectories {
             "source", "saved", "intermediate"
@@ -343,6 +344,68 @@ bool WriteGeneratedFiles(
     }
     OutRecords.push_back({"Engine/PicoEngine.root", "GeneratedEngineMarker", 0});
     OutRecords.push_back({"PicoStage.manifest", "GeneratedStageManifest", 0});
+    return true;
+}
+
+bool CookStageGraphs(
+    const FPackageContext& Context,
+    const std::filesystem::path& StageRoot,
+    std::vector<FPackageFileRecord>& InOutRecords,
+    std::vector<std::string>& OutErrors)
+{
+    const std::filesystem::path ContentRoot =
+        StageRoot / Context.ProjectName / "Content";
+    std::error_code Error;
+    if (!std::filesystem::is_directory(ContentRoot, Error)) return true;
+    std::vector<std::filesystem::path> Sources;
+    for (std::filesystem::recursive_directory_iterator It(ContentRoot, Error), End;
+         !Error && It != End; It.increment(Error))
+    {
+        if (It->is_regular_file(Error)
+            && ToLower(It->path().extension().string()) == ".pgraph")
+            Sources.push_back(It->path());
+    }
+    if (Error)
+    {
+        OutErrors.push_back("Could not scan staged Graph assets: " + Error.message());
+        return false;
+    }
+    std::sort(Sources.begin(), Sources.end());
+    for (const std::filesystem::path& Source : Sources)
+    {
+        const std::filesystem::path Cooked = Source.string() + ".pgrb";
+        std::string CookError;
+        if (!CookGraphAsset(Source, Cooked, &CookError))
+        {
+            OutErrors.push_back("Graph Cook failed for " + Source.string() + ": " + CookError);
+            return false;
+        }
+        std::filesystem::remove(Source, Error);
+        if (Error)
+        {
+            OutErrors.push_back("Could not remove editor Graph source from Stage: " + Error.message());
+            return false;
+        }
+        const std::filesystem::path Relative = std::filesystem::relative(Cooked, StageRoot, Error);
+        if (Error)
+        {
+            OutErrors.push_back("Could not record cooked Graph output");
+            return false;
+        }
+        InOutRecords.erase(std::remove_if(InOutRecords.begin(), InOutRecords.end(),
+            [&Source, &StageRoot](const FPackageFileRecord& Record)
+            {
+                return (StageRoot / Record.Destination).lexically_normal()
+                    == Source.lexically_normal();
+            }), InOutRecords.end());
+        InOutRecords.push_back({Relative, "CookedPicoGraph",
+            std::filesystem::file_size(Cooked, Error)});
+        if (Error)
+        {
+            OutErrors.push_back("Could not inspect cooked Graph output");
+            return false;
+        }
+    }
     return true;
 }
 
@@ -737,6 +800,9 @@ FPackageResult FPackageBuilder::Build(const FPackageRequest& Request) const
     }
     if (bCollected)
         bCollected = WriteGeneratedFiles(
+            Context, TemporaryStage, Result.Files, Result.Errors);
+    if (bCollected)
+        bCollected = CookStageGraphs(
             Context, TemporaryStage, Result.Files, Result.Errors);
     if (bCollected)
         bCollected = ValidateStage(Context, TemporaryStage, Result.Errors);

@@ -4,6 +4,7 @@
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/NetDriver.h"
 #include "Pico/Engine/LocalPlayer.h"
+#include "Pico/Engine/ScriptComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Input/InputSystem.h"
 #include "Pico/Object/ObjectGlobals.h"
@@ -245,6 +246,34 @@ void PSandboxGameInstance::AppendGameplayStatusLines(
                 << "  NetId " << Pawn->GetNetObjectId().Value
                 << "  " << Pico::ToString(Pawn->GetLocalRole());
             OutLines.push_back(Identity.str());
+            std::ostringstream BeginPlayMode;
+            BeginPlayMode << std::fixed << std::setprecision(1)
+                << "bDelayBeginPlayAction="
+                << (Pawn->GetDelayBeginPlayAction() ? "true" : "false")
+                << " | delayed path=10.0s";
+            OutLines.push_back(BeginPlayMode.str());
+            for (Pico::PActorComponent* Component : Pawn->GetComponents())
+            {
+                if (Component == nullptr
+                    || !Component->IsA(Pico::PScriptComponent::StaticClass()))
+                    continue;
+                const auto* Script = static_cast<const Pico::PScriptComponent*>(Component);
+                OutLines.emplace_back("Graph  " + Component->GetName().ToString());
+                std::ostringstream ScriptState;
+                ScriptState << "State "
+                    << Pico::ToString(Script->GetLastExecutionReport().Result)
+                    << " | latent " << Pico::ToString(Script->GetActiveLatentAction());
+                if (Script->GetActiveLatentAction() == Pico::EScriptLatentAction::Delay)
+                    ScriptState << " | remaining " << std::fixed << std::setprecision(1)
+                        << Script->GetLatentRemainingSeconds() << "s";
+                ScriptState << " | instructions "
+                    << Script->GetLastExecutionReport().InstructionsExecuted;
+                OutLines.push_back(ScriptState.str());
+                for (const Pico::FScriptScreenMessage& Message : Script->GetScreenMessages())
+                {
+                    OutLines.emplace_back("Message  " + Message.Text);
+                }
+            }
             std::ostringstream Attributes;
             Attributes << std::fixed << std::setprecision(0)
                 << "HP " << Pawn->GetReplicatedHealth()

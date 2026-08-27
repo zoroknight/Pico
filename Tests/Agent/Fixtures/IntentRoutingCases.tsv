@@ -38,3 +38,6 @@ General		不要删除任何 Actor，只描述当前世界
 General	assemble-basic-scene,scene-cleanup	恢复刚才整轮 Agent 对场景的修改
 General	configure-character-abilities	给这个角色配置重力、灼烧和冻结投射物能力
 General	configure-character-abilities	configure gravity burn and freeze abilities for this character
+General	edit-picograph	创建一个开始运行后等待一秒的 PicoGraph
+General	edit-picograph	编辑可视化脚本并编译图表
+General	edit-picograph	create and compile a graph asset

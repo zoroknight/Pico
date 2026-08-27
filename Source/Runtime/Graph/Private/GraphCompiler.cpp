@@ -1,10 +1,12 @@
 #include "Pico/Graph/GraphCompiler.h"
+#include "Pico/Graph/ScriptVM.h"
 
 #include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
 #include <functional>
+#include <fstream>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -222,6 +224,12 @@ const FGraphSchemaRegistry& GetDefaultGraphSchemaRegistry()
             {"GetProperty", "Get Property", EGraphIROpcode::GetProperty,
                 {{"PropertyName", EGraphPinDirection::Input, EGraphValueType::String, {}},
                  {"Value", EGraphPinDirection::Output, EGraphValueType::String, {}}}},
+            {"GetBoolProperty", "Get Bool Property", EGraphIROpcode::GetBoolProperty,
+                {{"PropertyName", EGraphPinDirection::Input, EGraphValueType::String, {}},
+                 {"Value", EGraphPinDirection::Output, EGraphValueType::Bool, {}}}},
+            {"GetFloatProperty", "Get Float Property", EGraphIROpcode::GetFloatProperty,
+                {{"PropertyName", EGraphPinDirection::Input, EGraphValueType::String, {}},
+                 {"Value", EGraphPinDirection::Output, EGraphValueType::Float, {}}}},
             {"SetProperty", "Set Property", EGraphIROpcode::SetProperty,
                 {{"In", EGraphPinDirection::Input, EGraphValueType::Exec, {}},
                  {"PropertyName", EGraphPinDirection::Input, EGraphValueType::String, {}},
@@ -230,6 +238,34 @@ const FGraphSchemaRegistry& GetDefaultGraphSchemaRegistry()
             {"BroadcastDelegate", "Broadcast Delegate", EGraphIROpcode::BroadcastDelegate,
                 {{"In", EGraphPinDirection::Input, EGraphValueType::Exec, {}},
                  {"DelegateName", EGraphPinDirection::Input, EGraphValueType::String, {}},
+                 {"Then", EGraphPinDirection::Output, EGraphValueType::Exec, {}}}},
+            {"Delay", "Delay", EGraphIROpcode::Delay,
+                {{"In", EGraphPinDirection::Input, EGraphValueType::Exec, {}},
+                 {"Seconds", EGraphPinDirection::Input, EGraphValueType::Float, "1.0"},
+                 {"Completed", EGraphPinDirection::Output, EGraphValueType::Exec, {}}}},
+            {"WaitGameplayEvent", "Wait Gameplay Event", EGraphIROpcode::WaitGameplayEvent,
+                {{"In", EGraphPinDirection::Input, EGraphValueType::Exec, {}},
+                 {"AbilityHandle", EGraphPinDirection::Input, EGraphValueType::Int, "0"},
+                 {"EventTag", EGraphPinDirection::Input, EGraphValueType::String, "Event.Graph.Resume"},
+                 {"ExactMatch", EGraphPinDirection::Input, EGraphValueType::Bool, "false"},
+                 {"Received", EGraphPinDirection::Output, EGraphValueType::Exec, {}}}},
+            {"PlayMontageAndWait", "Play Montage And Wait", EGraphIROpcode::PlayMontageAndWait,
+                {{"In", EGraphPinDirection::Input, EGraphValueType::Exec, {}},
+                 {"AbilityHandle", EGraphPinDirection::Input, EGraphValueType::Int, "0"},
+                 {"MontageAsset", EGraphPinDirection::Input, EGraphValueType::String, {}},
+                 {"PlayRate", EGraphPinDirection::Input, EGraphValueType::Float, "1.0"},
+                 {"Completed", EGraphPinDirection::Output, EGraphValueType::Exec, {}},
+                 {"Interrupted", EGraphPinDirection::Output, EGraphValueType::Exec, {}}}},
+            {"ActivateAbility", "Activate Ability", EGraphIROpcode::ActivateAbility,
+                {{"In", EGraphPinDirection::Input, EGraphValueType::Exec, {}},
+                 {"AbilityHandle", EGraphPinDirection::Input, EGraphValueType::Int, "0"},
+                 {"Succeeded", EGraphPinDirection::Output, EGraphValueType::Exec, {}},
+                 {"Failed", EGraphPinDirection::Output, EGraphValueType::Exec, {}}}},
+            {"PrintString", "Print String", EGraphIROpcode::PrintString,
+                {{"In", EGraphPinDirection::Input, EGraphValueType::Exec, {}},
+                 {"Message", EGraphPinDirection::Input, EGraphValueType::String,
+                    "Graph action executed"},
+                 {"Duration", EGraphPinDirection::Input, EGraphValueType::Float, "5.0"},
                  {"Then", EGraphPinDirection::Output, EGraphValueType::Exec, {}}}}
         };
         return Value;
@@ -497,6 +533,97 @@ FGraphCompileResult CompileGraph(
     return Result;
 }
 
+bool SaveGraphBytecodeToFile(
+    const std::filesystem::path& FilePath,
+    const FPicoGraphBytecode& Bytecode,
+    std::string* OutError)
+{
+    if (Bytecode.Version != PicoGraphBytecodeVersion || Bytecode.Bytes.empty())
+    {
+        if (OutError) *OutError = "Bytecode is empty or has an unsupported version";
+        return false;
+    }
+    std::error_code Error;
+    std::filesystem::create_directories(FilePath.parent_path(), Error);
+    const std::filesystem::path Temp = FilePath.string() + ".tmp";
+    std::ofstream Stream(Temp, std::ios::binary | std::ios::trunc);
+    if (!Stream)
+    {
+        if (OutError) *OutError = "Could not open cooked script for writing";
+        return false;
+    }
+    Stream.write(reinterpret_cast<const char*>(Bytecode.Bytes.data()),
+        static_cast<std::streamsize>(Bytecode.Bytes.size()));
+    Stream.close();
+    if (!Stream)
+    {
+        std::filesystem::remove(Temp, Error);
+        if (OutError) *OutError = "Could not write cooked script";
+        return false;
+    }
+    std::filesystem::remove(FilePath, Error);
+    Error.clear();
+    std::filesystem::rename(Temp, FilePath, Error);
+    if (Error)
+    {
+        std::filesystem::remove(Temp, Error);
+        if (OutError) *OutError = "Could not commit cooked script";
+        return false;
+    }
+    return true;
+}
+
+bool LoadGraphBytecodeFromFile(
+    const std::filesystem::path& FilePath,
+    FPicoGraphBytecode& OutBytecode,
+    std::string* OutError)
+{
+    std::ifstream Stream(FilePath, std::ios::binary);
+    if (!Stream)
+    {
+        if (OutError) *OutError = "Could not open cooked script";
+        return false;
+    }
+    std::istreambuf_iterator<char> Begin(Stream);
+    std::istreambuf_iterator<char> End;
+    std::vector<std::uint8_t> Bytes(Begin, End);
+    FPicoGraphBytecode Bytecode;
+    Bytecode.Version = PicoGraphBytecodeVersion;
+    Bytecode.Bytes = std::move(Bytes);
+    FPicoGraphIR Program;
+    if (!DecodeGraphBytecode(Bytecode, Program, OutError)) return false;
+    Bytecode.SourceGraphId = Program.GraphId;
+    OutBytecode = std::move(Bytecode);
+    return true;
+}
+
+bool CookGraphAsset(
+    const std::filesystem::path& SourceFile,
+    const std::filesystem::path& OutputFile,
+    std::string* OutError)
+{
+    FPicoGraphAsset Graph;
+    EGraphAssetError AssetError = EGraphAssetError::None;
+    if (!LoadGraphAssetFromFile(SourceFile, Graph, &AssetError))
+    {
+        if (OutError) *OutError = "Could not load Graph: " + std::string(ToString(AssetError));
+        return false;
+    }
+    const FGraphCompileResult Compile = CompileGraph(Graph);
+    if (!Compile.bSucceeded)
+    {
+        if (OutError)
+        {
+            *OutError = "Graph compilation failed";
+            for (const FGraphDiagnostic& Diagnostic : Compile.Diagnostics)
+                if (Diagnostic.Severity == EGraphDiagnosticSeverity::Error)
+                    *OutError += ": " + Diagnostic.Message;
+        }
+        return false;
+    }
+    return SaveGraphBytecodeToFile(OutputFile, Compile.Bytecode, OutError);
+}
+
 std::string_view ToString(EGraphDiagnosticSeverity Severity)
 {
     switch (Severity)
@@ -538,6 +665,13 @@ std::string_view ToString(EGraphIROpcode Opcode)
     case EGraphIROpcode::GetProperty: return "GetProperty";
     case EGraphIROpcode::SetProperty: return "SetProperty";
     case EGraphIROpcode::BroadcastDelegate: return "BroadcastDelegate";
+    case EGraphIROpcode::Delay: return "Delay";
+    case EGraphIROpcode::WaitGameplayEvent: return "WaitGameplayEvent";
+    case EGraphIROpcode::PlayMontageAndWait: return "PlayMontageAndWait";
+    case EGraphIROpcode::ActivateAbility: return "ActivateAbility";
+    case EGraphIROpcode::GetBoolProperty: return "GetBoolProperty";
+    case EGraphIROpcode::GetFloatProperty: return "GetFloatProperty";
+    case EGraphIROpcode::PrintString: return "PrintString";
     }
     return "Unknown";
 }

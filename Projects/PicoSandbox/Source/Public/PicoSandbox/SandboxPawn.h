@@ -34,6 +34,7 @@ public:
     const Pico::FThirdPersonControlProfileData& GetActiveControlProfile() const;
     Pico::uint64 GetActiveControlProfileHash() const;
     bool HasLoadedControlProfile() const;
+    bool GetDelayBeginPlayAction() const { return bDelayBeginPlayAction; }
     Pico::PGameplayAbilitySystemComponent* GetAbilitySystemComponent() const;
     bool IsStunned() const;
     bool IsFrozen() const;
@@ -91,6 +92,10 @@ private:
 
     PPROPERTY(ReadOnly)
     Pico::int32 AbilityLoadoutBits = 7;
+
+    // PicoGraph instance-input demo. These are normal reflected Actor properties.
+    PPROPERTY()
+    bool bDelayBeginPlayAction = true;
 
     // Mini GAS Profile: reflected instance defaults that are copied into runtime specs.
     PPROPERTY()

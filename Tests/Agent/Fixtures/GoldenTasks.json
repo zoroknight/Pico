@@ -110,6 +110,16 @@
       "required_tools": ["editor.gameplay.asc.describe", "editor.gameplay.configure_ability_loadout"],
       "forbidden_tools": ["editor.project.package"],
       "max_tool_calls": 4
+    },
+    {
+      "id": "create-validate-compile-graph",
+      "prompt": "创建一个开始运行后等待一秒的 PicoGraph，验证并编译它",
+      "fixture": "starter-world",
+      "verifier": "graph-validated-and-compiled",
+      "expected_status": "Completed",
+      "required_tools": ["editor.graph.create", "editor.graph.describe", "editor.graph.add_node", "editor.graph.connect_pins", "editor.graph.set_default", "editor.graph.validate", "editor.graph.compile"],
+      "forbidden_tools": ["editor.project.package", "editor.play.start"],
+      "max_tool_calls": 9
     }
   ]
 }

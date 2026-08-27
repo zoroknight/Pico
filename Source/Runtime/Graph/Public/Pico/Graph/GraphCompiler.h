@@ -3,13 +3,14 @@
 #include "Pico/Graph/GraphAsset.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace Pico
 {
-inline constexpr std::uint32_t PicoGraphBytecodeVersion = 2;
+inline constexpr std::uint32_t PicoGraphBytecodeVersion = 3;
 
 enum class EGraphDiagnosticSeverity
 {
@@ -58,7 +59,14 @@ enum class EGraphIROpcode : std::uint8_t
     CallFunction,
     GetProperty,
     SetProperty,
-    BroadcastDelegate
+    BroadcastDelegate,
+    Delay,
+    WaitGameplayEvent,
+    PlayMontageAndWait,
+    ActivateAbility,
+    GetBoolProperty,
+    GetFloatProperty,
+    PrintString
 };
 
 struct FGraphNodeSchema
@@ -157,6 +165,18 @@ std::vector<FGraphDiagnostic> ValidateGraphSemantics(
 FGraphCompileResult CompileGraph(
     const FPicoGraphAsset& Graph,
     const FGraphSchemaRegistry& Registry = GetDefaultGraphSchemaRegistry());
+bool SaveGraphBytecodeToFile(
+    const std::filesystem::path& FilePath,
+    const FPicoGraphBytecode& Bytecode,
+    std::string* OutError = nullptr);
+bool LoadGraphBytecodeFromFile(
+    const std::filesystem::path& FilePath,
+    FPicoGraphBytecode& OutBytecode,
+    std::string* OutError = nullptr);
+bool CookGraphAsset(
+    const std::filesystem::path& SourceFile,
+    const std::filesystem::path& OutputFile,
+    std::string* OutError = nullptr);
 
 std::string_view ToString(EGraphDiagnosticSeverity Severity);
 std::string_view ToString(EGraphDiagnosticCode Code);

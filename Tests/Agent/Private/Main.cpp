@@ -124,6 +124,13 @@ public:
         else if (Call.Name == "editor.gameplay.asc.describe") bAscDescribed = true;
         else if (Call.Name == "editor.gameplay.configure_ability_loadout")
             bAbilityLoadoutConfigured = true;
+        else if (Call.Name == "editor.graph.create") bGraphCreated = true;
+        else if (Call.Name == "editor.graph.describe") bGraphDescribed = true;
+        else if (Call.Name == "editor.graph.add_node") ++GraphNodesAdded;
+        else if (Call.Name == "editor.graph.connect_pins") bGraphConnected = true;
+        else if (Call.Name == "editor.graph.set_default") bGraphDefaultSet = true;
+        else if (Call.Name == "editor.graph.validate") bGraphValidated = true;
+        else if (Call.Name == "editor.graph.compile") bGraphCompiled = true;
         else if (Call.Name == "editor.play.validate") bValidated = true;
         else if (Call.Name == "editor.world.save") bSaved = true;
         else if (Call.Name == "editor.play.start") bPlaying = true;
@@ -147,6 +154,13 @@ public:
     bool bRunReverted = false;
     bool bAscDescribed = false;
     bool bAbilityLoadoutConfigured = false;
+    bool bGraphCreated = false;
+    bool bGraphDescribed = false;
+    int GraphNodesAdded = 0;
+    bool bGraphConnected = false;
+    bool bGraphDefaultSet = false;
+    bool bGraphValidated = false;
+    bool bGraphCompiled = false;
 };
 
 class FTestApproval final : public Pico::IAgentToolApproval
@@ -278,6 +292,22 @@ std::unique_ptr<Pico::IAgentProvider> CreateGoldenProvider(
                 R"({"object_path":"StarterWorld.PersistentLevel.Player"})"},
             {"configure-loadout", "editor.gameplay.configure_ability_loadout",
                 R"({"object_path":"StarterWorld.PersistentLevel.Player","gravity":true,"burn":true,"freeze":true})"}}), {}});
+    else if (Task.Id == "create-validate-compile-graph")
+        Steps.push_back({ToolCalls({
+            {"create-graph", "editor.graph.create",
+                R"({"graph_path":"/Game/Graphs/GoldenDelay.pgraph"})"},
+            {"describe-graph", "editor.graph.describe",
+                R"({"graph_path":"/Game/Graphs/GoldenDelay.pgraph"})"},
+            {"add-delay", "editor.graph.add_node",
+                R"({"graph_path":"/Game/Graphs/GoldenDelay.pgraph","node_type":"Delay","x":300,"y":120})"},
+            {"set-delay", "editor.graph.set_default",
+                R"({"graph_path":"/Game/Graphs/GoldenDelay.pgraph","pin_id":"delay-seconds","value":"1.0"})"},
+            {"connect-delay", "editor.graph.connect_pins",
+                R"({"graph_path":"/Game/Graphs/GoldenDelay.pgraph","output_pin_id":"entry-then","input_pin_id":"delay-in"})"},
+            {"validate-graph", "editor.graph.validate",
+                R"({"graph_path":"/Game/Graphs/GoldenDelay.pgraph"})"},
+            {"compile-graph", "editor.graph.compile",
+                R"({"graph_path":"/Game/Graphs/GoldenDelay.pgraph"})"}}), {}});
     else if (Task.Id == "validate-save-and-play")
         Steps.push_back({ToolCalls({
             {"validate-play", "editor.play.validate", "{}"},
@@ -1166,7 +1196,10 @@ void TestIntentAndSkillEvalSet(FTestRunner& Runner)
         "editor.gameplay.asc.describe", "editor.gameplay.configure_ability_loadout",
         "editor.actor.set_location", "editor.play.validate", "editor.play.start",
         "editor.play.stop", "editor.world.save",
-        "editor.project.create_from_third_person_template", "editor.project.package"
+        "editor.project.create_from_third_person_template", "editor.project.package",
+        "editor.graph.create", "editor.graph.describe", "editor.graph.add_node",
+        "editor.graph.connect_pins", "editor.graph.set_default",
+        "editor.graph.validate", "editor.graph.compile"
     };
     Pico::FAgentSkillRegistry Registry;
     std::string Error;
@@ -1205,7 +1238,7 @@ void TestIntentAndSkillEvalSet(FTestRunner& Runner)
                 && ActualSkills.str() == ExpectedSkills,
             "Agent intent and Skill routing eval case " + std::to_string(CaseIndex));
     }
-    Runner.Expect(CaseIndex >= 39, "Agent routing eval keeps at least 39 fixed prompts");
+    Runner.Expect(CaseIndex >= 42, "Agent routing eval keeps at least 42 fixed prompts");
 }
 
 void TestGoldenTaskRunner(FTestRunner& Runner)
@@ -1214,8 +1247,8 @@ void TestGoldenTaskRunner(FTestRunner& Runner)
     std::string Error;
     const bool bLoaded = Pico::FAgentGoldenTaskRunner::LoadTasks(
         "Tests/Agent/Fixtures/GoldenTasks.json", Tasks, &Error);
-    Runner.Expect(bLoaded && Tasks.size() == 11,
-        "Golden Task Runner loads eleven versioned end-to-end task definitions");
+    Runner.Expect(bLoaded && Tasks.size() == 12,
+        "Golden Task Runner loads twelve versioned end-to-end task definitions");
     if (!bLoaded) return;
 
     Pico::FAgentGoldenTaskHooks Hooks;
@@ -1277,6 +1310,10 @@ void TestGoldenTaskRunner(FTestRunner& Runner)
             bVerified = Golden->bRunReverted;
         else if (Task.VerifierId == "ability-loadout-configured")
             bVerified = Golden->bAscDescribed && Golden->bAbilityLoadoutConfigured;
+        else if (Task.VerifierId == "graph-validated-and-compiled")
+            bVerified = Golden->bGraphCreated && Golden->GraphNodesAdded == 1
+                && Golden->bGraphDescribed && Golden->bGraphConnected && Golden->bGraphDefaultSet
+                && Golden->bGraphValidated && Golden->bGraphCompiled;
         if (!bVerified) OutError = "Deterministic scene/process postcondition failed";
         return bVerified;
     };
@@ -1305,7 +1342,7 @@ void TestGoldenTaskRunner(FTestRunner& Runner)
     std::ifstream ReportStream(ReportPath, std::ios::binary);
     const std::string ReportText((std::istreambuf_iterator<char>(ReportStream)), {});
     Runner.Expect(bReportWritten
-            && ReportText.find("\"passed\": 11") != std::string::npos
+            && ReportText.find("\"passed\": 12") != std::string::npos
             && ReportText.find("\"failed\": 0") != std::string::npos
             && ReportText.find("run_") != std::string::npos,
         "Golden Task report persists pass counts, metrics, RunIds, and event-log evidence");

@@ -1,0 +1,21 @@
+{
+  "format": "PicoGraph",
+  "version": 1,
+  "graph_id": "00004a5444367a300000000000000001",
+  "variables": [],
+  "nodes": [
+    {"id":"00004a544436c97c0000000000000002","type":"EntryEvent","title":"BeginPlay","position":[80.0,120.0],"pins":[{"id":"00004a544436d2140000000000000003","name":"Then","direction":"Output","type":"Exec","default":""}]},
+    {"id":"00004b00000000000000000000000001","type":"Branch","title":"Branch","position":[360.0,120.0],"pins":[{"id":"00004b00000000000000000000000002","name":"In","direction":"Input","type":"Exec","default":""},{"id":"00004b00000000000000000000000003","name":"Condition","direction":"Input","type":"Bool","default":"false"},{"id":"00004b00000000000000000000000004","name":"True","direction":"Output","type":"Exec","default":""},{"id":"00004b00000000000000000000000005","name":"False","direction":"Output","type":"Exec","default":""}]},
+    {"id":"00004b00000000000000000000000006","type":"GetBoolProperty","title":"Get Bool Property  [bDelayBeginPlayAction]","position":[80.0,360.0],"pins":[{"id":"00004b00000000000000000000000007","name":"PropertyName","direction":"Input","type":"String","default":"bDelayBeginPlayAction"},{"id":"00004b00000000000000000000000008","name":"Value","direction":"Output","type":"Bool","default":""}]},
+    {"id":"00004a56b4f8a2280000000000000004","type":"Delay","title":"Delay","position":[650.0,80.0],"pins":[{"id":"00004a56b4f8aac00000000000000005","name":"In","direction":"Input","type":"Exec","default":""},{"id":"00004a56b4f8b4200000000000000006","name":"Seconds","direction":"Input","type":"Float","default":"10.0"},{"id":"00004a56b4f8b7400000000000000007","name":"Completed","direction":"Output","type":"Exec","default":""}]},
+    {"id":"00004b0000000000000000000000000c","type":"PrintString","title":"Print String","position":[650.0,300.0],"pins":[{"id":"00004b0000000000000000000000000d","name":"In","direction":"Input","type":"Exec","default":""},{"id":"00004b0000000000000000000000000e","name":"Message","direction":"Input","type":"String","default":"BeginPlay action completed"},{"id":"00004b0000000000000000000000000f","name":"Duration","direction":"Input","type":"Float","default":"8.0"},{"id":"00004b00000000000000000000000010","name":"Then","direction":"Output","type":"Exec","default":""}]},
+    {"id":"00004b00000000000000000000000011","type":"PrintString","title":"Print String","position":[930.0,80.0],"pins":[{"id":"00004b00000000000000000000000012","name":"In","direction":"Input","type":"Exec","default":""},{"id":"00004b00000000000000000000000013","name":"Message","direction":"Input","type":"String","default":"BeginPlay action completed"},{"id":"00004b00000000000000000000000014","name":"Duration","direction":"Input","type":"Float","default":"8.0"},{"id":"00004b00000000000000000000000015","name":"Then","direction":"Output","type":"Exec","default":""}]}
+  ],
+  "links": [
+    {"id":"00004b00000000000000000000000016","output":"00004a544436d2140000000000000003","input":"00004b00000000000000000000000002"},
+    {"id":"00004b00000000000000000000000017","output":"00004b00000000000000000000000008","input":"00004b00000000000000000000000003"},
+    {"id":"00004b00000000000000000000000018","output":"00004b00000000000000000000000004","input":"00004a56b4f8aac00000000000000005"},
+    {"id":"00004b0000000000000000000000001a","output":"00004a56b4f8b7400000000000000007","input":"00004b00000000000000000000000012"},
+    {"id":"00004b0000000000000000000000001b","output":"00004b00000000000000000000000005","input":"00004b0000000000000000000000000d"}
+  ]
+}

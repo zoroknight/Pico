@@ -1,10 +1,15 @@
 #include "PicoGraphEditor.h"
+#include "EditorPropertyNaming.h"
 
 #include "Pico/Asset/AssetRegistry.h"
 #include "Pico/Core/Paths.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Graph/GraphAsset.h"
 #include "Pico/Graph/GraphCompiler.h"
+#include "Pico/Object/Class.h"
+#include "Pico/Object/ClassRegistry.h"
+#include "Pico/Object/Function.h"
+#include "Pico/Object/Property.h"
 
 #include <imgui.h>
 
@@ -14,6 +19,8 @@
 #include <cfloat>
 #include <cstring>
 #include <filesystem>
+#include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -93,6 +100,7 @@ struct FPicoGraphEditor::FImpl
     bool bOpen = false;
     bool bCreateOpen = false;
     bool bVariablePopupOpen = false;
+    bool bReloadConfirmOpen = false;
     bool bDirty = false;
     bool bKeyboardFocused = false;
 
@@ -155,6 +163,45 @@ struct FPicoGraphEditor::FImpl
         Report("Opened " + std::string(AssetPath.ToString()));
     }
 
+    void ReloadFromDisk()
+    {
+        if (bDirty)
+        {
+            bReloadConfirmOpen = true;
+            return;
+        }
+        const FAssetPath AssetPath = OpenedAsset;
+        Open(AssetPath);
+        Report("Reloaded " + std::string(AssetPath.ToString()) + " from disk");
+    }
+
+    void DrawReloadConfirmPopup()
+    {
+        if (bReloadConfirmOpen)
+        {
+            ImGui::OpenPopup("Reload PicoGraph from Disk?");
+            bReloadConfirmOpen = false;
+        }
+        if (!ImGui::BeginPopupModal(
+                "Reload PicoGraph from Disk?", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            return;
+        ImGui::TextUnformatted("This graph has unsaved changes.");
+        ImGui::TextUnformatted("Reloading will discard those changes and read the asset from disk.");
+        ImGui::Separator();
+        if (ImGui::Button("Reload and Discard", ImVec2(170.0f, 0.0f)))
+        {
+            const FAssetPath AssetPath = OpenedAsset;
+            bDirty = false;
+            Open(AssetPath);
+            Report("Reloaded " + std::string(AssetPath.ToString()) + " from disk");
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(90.0f, 0.0f)))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
     void Validate()
     {
         CompileResult = {};
@@ -205,6 +252,29 @@ struct FPicoGraphEditor::FImpl
             Report("No PicoGraph Schema for node type " + std::string(TypeName), true);
             return;
         }
+        const FPicoGraphAsset Before = Graph;
+        SelectedNodeId = Node.Id;
+        Graph.Nodes.push_back(std::move(Node));
+        PushUndo(Before);
+        SyncNodeZOrder();
+    }
+
+    void AddReflectedNode(
+        std::string_view TypeName,
+        std::string_view ValuePin,
+        std::string_view ReflectedName)
+    {
+        FGraphNode Node;
+        if (!MakeSchemaGraphNode(TypeName, 380.0f, 180.0f, Node)) return;
+        const auto Found = std::find_if(Node.Pins.begin(), Node.Pins.end(),
+            [ValuePin](const FGraphPin& Candidate)
+            {
+                return Candidate.Name == ValuePin
+                    && Candidate.Direction == EGraphPinDirection::Input;
+            });
+        if (Found == Node.Pins.end()) return;
+        Found->DefaultValue = ReflectedName;
+        Node.DisplayName += "  [" + std::string(ReflectedName) + "]";
         const FPicoGraphAsset Before = Graph;
         SelectedNodeId = Node.Id;
         Graph.Nodes.push_back(std::move(Node));
@@ -778,6 +848,7 @@ struct FPicoGraphEditor::FImpl
         if (ImGui::BeginMenuBar())
         {
             if (ImGui::MenuItem("Save", "Ctrl+S")) Save();
+            if (ImGui::MenuItem("Reload from Disk")) ReloadFromDisk();
             ImGui::BeginDisabled(!Transactions.CanUndo());
             if (ImGui::MenuItem("Undo", "Ctrl+Z")) Undo();
             ImGui::EndDisabled();
@@ -786,6 +857,7 @@ struct FPicoGraphEditor::FImpl
             ImGui::EndDisabled();
             ImGui::EndMenuBar();
         }
+        DrawReloadConfirmPopup();
         if (ImGui::Button("Add Entry Event"))
         {
             const FPicoGraphAsset Before = Graph;
@@ -801,6 +873,59 @@ struct FPicoGraphEditor::FImpl
             {
                 if (Schema.Opcode == EGraphIROpcode::EntryEvent) continue;
                 if (ImGui::MenuItem(Schema.DisplayName.c_str())) AddSchemaNode(Schema.TypeName);
+            }
+            if (ImGui::BeginMenu("Reflected Callable"))
+            {
+                std::set<std::string> Names;
+                for (const PClass* Class : FClassRegistry::GetClasses())
+                    if (Class != nullptr) for (const PFunction& Function : Class->GetFunctions())
+                        if (Function.HasAnyFlags(EFunctionFlags::Callable)
+                            && Function.GetParameters().empty())
+                            Names.insert(Function.GetName().ToString());
+                for (const std::string& Name : Names)
+                    if (ImGui::MenuItem(Name.c_str()))
+                        AddReflectedNode("CallFunction", "FunctionName", Name);
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Reflected Property"))
+            {
+                std::set<std::string> Names;
+                std::set<std::string> WritableNames;
+                std::map<std::string, EPropertyType> PropertyTypes;
+                std::map<std::string, std::string> PropertyLabels;
+                for (const PClass* Class : FClassRegistry::GetClasses())
+                    if (Class != nullptr) for (const PProperty& Property : Class->GetProperties())
+                        if (Property.GetType() == EPropertyType::Int32
+                            || Property.GetType() == EPropertyType::Float
+                            || Property.GetType() == EPropertyType::Bool
+                            || Property.GetType() == EPropertyType::Vector3)
+                        {
+                            const std::string Name = Property.GetName().ToString();
+                            Names.insert(Name);
+                            PropertyTypes.emplace(Name, Property.GetType());
+                            PropertyLabels.emplace(Name, MakeReflectedPropertyLabel(Property));
+                            if (Property.HasAnyFlags(EPropertyFlags::Editable)
+                                && !Property.HasAnyFlags(
+                                    EPropertyFlags::ReadOnly | EPropertyFlags::Transient))
+                                WritableNames.insert(Name);
+                        }
+                for (const std::string& Name : Names)
+                {
+                    if (!ImGui::BeginMenu(PropertyLabels.at(Name).c_str())) continue;
+                    if (ImGui::MenuItem("Get"))
+                    {
+                        const EPropertyType Type = PropertyTypes.at(Name);
+                        const char* NodeType = Type == EPropertyType::Bool
+                            ? "GetBoolProperty"
+                            : (Type == EPropertyType::Float
+                                ? "GetFloatProperty" : "GetProperty");
+                        AddReflectedNode(NodeType, "PropertyName", Name);
+                    }
+                    if (WritableNames.contains(Name) && ImGui::MenuItem("Set"))
+                        AddReflectedNode("SetProperty", "PropertyName", Name);
+                    ImGui::EndMenu();
+                }
+                ImGui::EndMenu();
             }
             ImGui::EndPopup();
         }

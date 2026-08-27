@@ -23,6 +23,7 @@
 #include "Pico/Engine/AnimInstance.h"
 #include "Pico/Engine/ActorBlueprint.h"
 #include "Pico/Engine/SkeletalMeshComponent.h"
+#include "Pico/Engine/ScriptComponent.h"
 #include "Pico/Input/InputSystem.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "PicoSandbox/SandboxCharacter.h"
@@ -402,10 +403,18 @@ int main()
         auto* FollowCamera = FollowCameraObject != nullptr
                 && FollowCameraObject->IsA(Pico::PCameraComponent::StaticClass())
             ? static_cast<Pico::PCameraComponent*>(FollowCameraObject) : nullptr;
+        Pico::PObject* ScriptObject = Pawn != nullptr
+            ? Pico::FindObject(Pawn, Pico::FName("ScriptComponent_1")) : nullptr;
+        auto* Script = ScriptObject != nullptr
+                && ScriptObject->IsA(Pico::PScriptComponent::StaticClass())
+            ? static_cast<Pico::PScriptComponent*>(ScriptObject) : nullptr;
+        Pico::FAssetPath DelayGraphPath;
+        Pico::FAssetPath::TryParse(
+            "/Game/Graphs/Week4DelayTest.pgraph", DelayGraphPath);
         const bool bBaseDefaultsValid =
             PicoSandbox::PSandboxPawn::StaticClass()->GetDefaultSubobjects().size() == 7
                 && Pawn != nullptr
-                && Pawn->GetComponents().size() == 7
+                && Pawn->GetComponents().size() == 8
                 && static_cast<PicoSandbox::PSandboxPawn*>(Pawn)
                     ->GetAbilitySystemComponent() != nullptr
                 && Pawn->GetRootComponent() != nullptr
@@ -421,6 +430,9 @@ int main()
                 && AnimatedMesh->GetAttachParent() == Pawn->GetRootComponent()
                 && CameraBoom != nullptr
                 && FollowCamera != nullptr
+                && Script != nullptr
+                && Script->GetGraphAsset() == DelayGraphPath
+                && Script->GetExecuteOnBeginPlay()
                 && Pico::HasAnyFlags(
                     AnimatedMesh->GetFlags(), Pico::EObjectFlags::DefaultSubobject);
         Runner.Expect(
@@ -452,6 +464,13 @@ int main()
             GameEngine.GetEngineLoop().GetWorld()->Tick(0.1f);
             Input.EndFrame();
             GameEngine.GetEngineLoop().GetWorld()->Tick(0.1f);
+            Runner.Expect(
+                Script != nullptr
+                    && Script->GetLastExecutionReport().IsSuspended()
+                    && Script->GetActiveLatentAction()
+                        == Pico::EScriptLatentAction::Delay
+                    && Script->GetLatentRemainingSeconds() > 0.0f,
+                "placed Pawn instance loads its Graph override and begins Delay on World BeginPlay");
             Runner.Expect(
                 AnimatedMesh != nullptr
                     && AnimatedMesh->GetAnimInstance() != nullptr

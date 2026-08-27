@@ -1,4 +1,5 @@
 #include "Pico/Packaging/Packaging.h"
+#include "Pico/Graph/GraphAsset.h"
 
 #include "TestRunner.h"
 
@@ -31,6 +32,11 @@ void TestDevelopmentPackage(FTestRunner& Runner)
     std::error_code Error;
     std::filesystem::remove_all(Root, Error);
 
+    Pico::FPicoGraphAsset Graph;
+    Graph.GraphId = Pico::CreateGraphStableId();
+    Graph.Nodes.push_back(Pico::MakeEntryEventNode("BeginPlay", 0.0f, 0.0f));
+    Pico::EGraphAssetError GraphError = Pico::EGraphAssetError::None;
+
     Runner.Expect(
         WriteFile(Engine / "Config/Pico.ini", "[Engine]\nMaxFPS=60\n")
             && WriteFile(
@@ -41,6 +47,8 @@ void TestDevelopmentPackage(FTestRunner& Runner)
                 "[Game]\nDefaultMap=/Game/Maps/Main.pworld\nExecutable=FakeGame\n")
             && WriteFile(Project / "Content/Maps/Main.pworld", "world")
             && WriteFile(Project / "Content/Materials/M_Test.pmat", "material")
+            && Pico::SaveGraphAssetToFile(
+                Project / "Content/Graphs/BeginPlay.pgraph", Graph, &GraphError)
             && WriteFile(Project / "Content/Source/Test/model.fbx", "source")
             && WriteFile(Project / "Content/Source/Test/Preview.pmat", "source material")
             && WriteFile(Project / "Content/Notes.txt", "editor note")
@@ -80,6 +88,12 @@ void TestDevelopmentPackage(FTestRunner& Runner)
             && std::filesystem::is_regular_file(
                 Stage / "LearningGame/Content/Materials/M_Test.pmat"),
         "Stage includes every registered Pico native asset type");
+    Runner.Expect(
+        !std::filesystem::exists(
+            Stage / "LearningGame/Content/Graphs/BeginPlay.pgraph")
+            && std::filesystem::is_regular_file(
+                Stage / "LearningGame/Content/Graphs/BeginPlay.pgraph.pgrb"),
+        "Packaging cooks PicoGraph JSON into Runtime PGRB and excludes editor source");
     Runner.Expect(
         !std::filesystem::exists(Stage / "LearningGame/Content/Source")
             && !std::filesystem::exists(Stage / "LearningGame/Content/Notes.txt"),

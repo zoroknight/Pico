@@ -87,18 +87,39 @@ void DrawGameplayStatusOverlay(Pico::FGameEngine& GameEngine)
     const ImVec2 Position(
         Viewport->WorkPos.x + Viewport->WorkSize.x - 14.0f,
         Viewport->WorkPos.y + 14.0f);
-    ImGui::SetNextWindowPos(Position, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-    ImGui::SetNextWindowSize(ImVec2(390.0f, 0.0f), ImGuiCond_Always);
+    const float PanelWidth = std::clamp(Viewport->WorkSize.x * 0.38f, 420.0f, 560.0f);
+    const float PanelHeight = std::clamp(Viewport->WorkSize.y * 0.58f, 260.0f, 560.0f);
+    const float PanelMaxWidth = std::max(360.0f, Viewport->WorkSize.x - 28.0f);
+    const float PanelMaxHeight = std::max(220.0f, Viewport->WorkSize.y - 28.0f);
+    ImGui::SetNextWindowPos(Position, ImGuiCond_FirstUseEver, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowSize(
+        ImVec2(std::min(PanelWidth, PanelMaxWidth), std::min(PanelHeight, PanelMaxHeight)),
+        ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(360.0f, 180.0f), ImVec2(PanelMaxWidth, PanelMaxHeight));
     ImGui::SetNextWindowBgAlpha(0.88f);
-    constexpr ImGuiWindowFlags Flags = ImGuiWindowFlags_NoMove
-        | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse
-        | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
+    constexpr ImGuiWindowFlags Flags = ImGuiWindowFlags_None;
     if (ImGui::Begin("Mini GAS Status", nullptr, Flags))
     {
         for (const std::string& Line : Lines)
         {
             if (Line == "---") ImGui::Separator();
-            else ImGui::TextUnformatted(Line.c_str());
+            else
+            {
+                const bool bGraphHeading = Line.rfind("Graph  ", 0) == 0;
+                const bool bGraphState = Line.rfind("State ", 0) == 0;
+                const bool bGraphMessage = Line.rfind("Message  ", 0) == 0;
+                if (bGraphHeading)
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.42f, 0.78f, 1.0f, 1.0f));
+                else if (bGraphState)
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.82f, 0.36f, 1.0f));
+                else if (bGraphMessage)
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 1.0f, 0.55f, 1.0f));
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
+                ImGui::TextUnformatted(Line.c_str());
+                ImGui::PopTextWrapPos();
+                if (bGraphHeading || bGraphState || bGraphMessage) ImGui::PopStyleColor();
+            }
         }
     }
     ImGui::End();

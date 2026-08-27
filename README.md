@@ -183,7 +183,7 @@ The current implementation can:
   stable drag target without stealing Pin clicks, and independent editor windows move only from their
   title bars. A shared Graph Schema Registry now drives Branch, literal, and typed arithmetic node creation;
   semantic validation reports stable Node/Pin diagnostics for invalid defaults, Schema drift, unreachable
-  control flow, and cycles. Valid graphs compile through typed IR into deterministic `PGRB v2` bytecode
+  control flow, and cycles. Valid graphs compile through typed IR into deterministic `PGRB v3` bytecode
   whose contents ignore editor-only layout. `FPicoScriptVM` decodes and executes that bytecode with total
   instruction, per-instruction loop, and data-call-depth budgets. `PScriptComponent` runs a Graph against
   its Actor owner at BeginPlay; the first reflection nodes call zero-argument PFunctions, read/write basic
@@ -192,7 +192,12 @@ The current implementation can:
   `FActorBlueprintReinstancer` refreshes matching placed Actors in place after Compile & Save, adding new default
   components and propagating changed defaults only when the instance still matches the old CDO. The component-tree
   context menu can remove Blueprint-owned components and synchronizes that removal to the asset, CDO, and placed
-  instances while protecting inherited, root, and attachment-parent components. Actor Blueprint preview Worlds now
+  instances while protecting inherited, root, and attachment-parent components. `PGRB v3` adds explicit latent
+  continuations for Delay, GameplayEvent, Montage, and Ability activation paths; `PScriptComponent` cancels pending
+  work with its Actor lifecycle and exposes execution state in the runtime overlay. Packaging validates and cooks
+  `.pgraph` JSON into `.pgraph.pgrb`, excluding editor source from Stage. Controlled Agent Graph tools create,
+  describe, edit, validate, and compile Graph assets by stable IDs, with a dedicated Skill and deterministic evals.
+  Actor Blueprint preview Worlds now
   register components for rendering without ticking or dispatching BeginPlay, so runtime Graph results cannot leak
   into authored defaults or the GeneratedClass CDO during Compile & Save.
 - Serialize reflected objects to `.pobj` files and reconstruct them with `PostLoad`.
@@ -311,7 +316,7 @@ PicoSandboxGame
 | `PicoInput` | Frame-based key and pointer state plus configurable Action/Axis mappings |
 | `PicoNetCore` | Network addresses and IDs, packet codec, deterministic loopback, non-blocking UDP, handshake, Ack, bounded reliable delivery, heartbeat, and timeout |
 | `PicoAsset` | Validated virtual asset discovery, deterministic project registry, and file metadata |
-| `PicoGraph` | Versioned graph assets, stable identities, Schema validation, typed IR, deterministic `PGRB v2` bytecode, graph transactions, and a budgeted script VM |
+| `PicoGraph` | Versioned graph assets, stable identities, Schema validation, typed IR, deterministic `PGRB v3` bytecode, latent continuations, cooked scripts, graph transactions, and a budgeted script VM |
 | `PicoAssetImport` | Developer-only OBJ conversion into validated native static-mesh assets |
 | `PicoObject` | Object model, reflection, delegates, strong/weak references, Root Set, mark-sweep GC, registry, handles, Outer graph, serialization |
 | `PicoPhysicsCore` | Backend-neutral shapes, body handles, queries, hit results, and PhysicsScene contracts |
@@ -724,6 +729,7 @@ the existing `PClass`, `PProperty`, and `PFunction` runtime. Generated files liv
 See:
 
 - [AI-First Development Roadmap (Chinese)](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)
+- [Agent Game Creation Pipeline and Six-Week Plan (Chinese)](Docs/AgentGameCreationPipeline.zh-CN.md)
 - [PicoTasks and Game Thread Dispatcher (Chinese)](Docs/AIPhase01_PicoTasksAndGameThreadDispatcher.md)
 - [Pico Agent Core and Recoverable Sessions (Chinese)](Docs/AIPhase02_PicoAgentCoreAndSessions.md)
 - [Agent Tool Safety Pipeline and Editor Transactions (Chinese)](Docs/AIPhase03_AgentToolPipeline.md)
@@ -756,6 +762,7 @@ See:
 - [PicoGraph Week 1: Assets and Editor (Chinese)](Docs/PicoGraphPhase01_AssetsAndEditor.zh-CN.md)
 - [PicoGraph Week 2: Schema and Compiler (Chinese)](Docs/PicoGraphPhase02_SchemaCompiler.zh-CN.md)
 - [PicoGraph Week 3: VM and ScriptComponent (Chinese)](Docs/PicoGraphPhase03_VMAndScriptComponent.zh-CN.md)
+- [PicoGraph Week 4: Latent, Cook, Agent, and Runtime State (Chinese)](Docs/PicoGraphPhase04_LatentCookAgent.zh-CN.md)
 - [PicoSandbox Guide](Projects/PicoSandbox/README.md)
 - [Month 3 Editor Viewport](Docs/Month03_10_Editor3DViewport.md)
 - [Month 3 Editor Docking](Docs/Month03_11_EditorDocking.md)
@@ -837,7 +844,7 @@ The remaining learning path is:
 
 - Dedicated-server/WAN validation, dependency-pruned Cook, Shipping, and clean-machine packaging
 - Expand deterministic AI tools for assets, materials, lights, save, Play, and Package
-- Finish PicoGraph Lite with async Gameplay nodes, cooked scripts, AI Graph tools, runtime visualization, and the reflection-driven migration
+- Build the AI game-assembly loop on the completed PicoGraph Lite latent, Cook, Agent, and reflection-driven vertical slice
 
 The maintained schedule and acceptance criteria are in the
 [AI-First Development Roadmap](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md). Detailed milestone
