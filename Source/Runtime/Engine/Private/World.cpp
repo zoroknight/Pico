@@ -4,6 +4,7 @@
 
 #include "Pico/Core/GameThread.h"
 #include "Pico/Core/Log.h"
+#include "Pico/Core/Profiler.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/GameModeBase.h"
 #include "Pico/Engine/GameStateBase.h"
@@ -134,6 +135,7 @@ bool PWorld::InitializeGameplay(const PClass* GameModeClass)
 
 void PWorld::Tick(float DeltaSeconds)
 {
+    PICO_PROFILE_SCOPE("World.Tick");
     if (!CheckGameThread("PWorld::Tick"))
     {
         return;
@@ -177,6 +179,7 @@ void PWorld::Tick(float DeltaSeconds)
     TickTaskManager.RunTickGroup(ETickGroup::DuringPhysics);
     if (PhysicsScene != nullptr)
     {
+        PICO_PROFILE_SCOPE("Physics.Step");
         PhysicsStepCount += PhysicsScene->Step(DeltaSeconds);
         SyncDynamicPhysicsBodies();
         LastPhysicsEvents = PhysicsScene->DrainContactEvents();

@@ -29,6 +29,7 @@ struct FAgentProviderResponse
     std::string Content;
     std::string Error;
     std::vector<FAgentToolCall> ToolCalls;
+    EAgentFailureClass FailureClass = EAgentFailureClass::None;
 };
 
 class IAgentProvider

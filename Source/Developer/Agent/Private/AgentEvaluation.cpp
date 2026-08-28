@@ -145,6 +145,9 @@ std::vector<FAgentGoldenTaskResult> FAgentGoldenTaskRunner::Run(
         Evaluation.RunId = RunResult.RunId;
         Evaluation.Counters = RunResult.Counters;
         Evaluation.Error = RunResult.Error;
+        Evaluation.FailureClass = RunResult.FailureClass;
+        Evaluation.RecoveryAction = RunResult.RecoveryAction;
+        Evaluation.MetricsPath = RunResult.MetricsPath;
 
         std::set<std::string> CalledTools;
         for (const FAgentEvent& Event : Session->GetEvents())
@@ -201,9 +204,12 @@ bool FAgentGoldenTaskRunner::WriteReport(
                 {"read_only_tool_calls", Result.Counters.ReadOnlyToolCalls},
                 {"mutation_tool_calls", Result.Counters.MutationToolCalls},
                 {"repair_attempts", Result.Counters.RepairAttempts},
+                {"failure_class", ToString(Result.FailureClass)},
+                {"recovery_action", ToString(Result.RecoveryAction)},
                 {"error", Result.Error},
                 {"verification_error", Result.VerificationError},
                 {"event_log", Result.EventLogPath.generic_string()}});
+            Tasks.back()["metrics"] = Result.MetricsPath.generic_string();
         }
         const FJson Report = {{"format_version", 1}, {"passed", Passed},
             {"failed", Results.size() - Passed}, {"tasks", std::move(Tasks)}};

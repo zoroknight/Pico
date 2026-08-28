@@ -32,6 +32,7 @@ Saved/
 **/ApiKeys.ini
 Projects/*/Packaged/
 Projects/.AgentStaging/
+Docs/Baselines/**/*.trace.json
 imgui.ini
 *.log
 

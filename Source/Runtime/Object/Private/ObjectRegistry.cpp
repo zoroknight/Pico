@@ -2,6 +2,7 @@
 
 #include "Pico/Core/Log.h"
 #include "Pico/Core/ScopeExit.h"
+#include "Pico/Core/Profiler.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/GarbageCollection.h"
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <exception>
 #include <numeric>
+#include <unordered_map>
 #include <vector>
 
 namespace Pico
@@ -22,6 +24,51 @@ struct FObjectSlot
     FObjectPtr Object;
     uint32 Serial = 0;
 };
+
+struct FObjectNameKey
+{
+    FObjectHandle OuterHandle;
+    FName Name;
+
+    friend bool operator==(const FObjectNameKey&, const FObjectNameKey&) = default;
+};
+
+struct FObjectNameKeyHash
+{
+    std::size_t operator()(const FObjectNameKey& Key) const noexcept
+    {
+        std::size_t Hash = FNameHash {}(Key.Name);
+        Hash ^= static_cast<std::size_t>(Key.OuterHandle.Index)
+            + 0x9e3779b9u + (Hash << 6u) + (Hash >> 2u);
+        Hash ^= static_cast<std::size_t>(Key.OuterHandle.Serial)
+            + 0x9e3779b9u + (Hash << 6u) + (Hash >> 2u);
+        return Hash;
+    }
+};
+
+FObjectNameKey MakeObjectNameKey(const PObject* Outer, FName Name)
+{
+    return {Outer != nullptr ? Outer->GetHandle() : FObjectHandle {}, Name};
+}
+
+std::unordered_map<FObjectNameKey, FObjectHandle, FObjectNameKeyHash>&
+GetObjectNameIndex()
+{
+    static std::unordered_map<FObjectNameKey, FObjectHandle, FObjectNameKeyHash>
+        NameIndex;
+    return NameIndex;
+}
+
+void RemoveObjectNameIndexEntry(const PObject* Object)
+{
+    if (Object == nullptr) return;
+    auto& NameIndex = GetObjectNameIndex();
+    const FObjectNameKey Key = MakeObjectNameKey(
+        Object->GetOuter(), Object->GetName());
+    const auto Found = NameIndex.find(Key);
+    if (Found != NameIndex.end() && Found->second == Object->GetHandle())
+        NameIndex.erase(Found);
+}
 
 std::vector<FObjectSlot>& GetObjectSlots()
 {
@@ -133,6 +180,7 @@ void FObjectRegistry::CallBeginDestroy(PObject* Object)
 
 PObject* FObjectRegistry::AddObject(FObjectPtr Object, bool bDeferPostInitProperties)
 {
+    PICO_PROFILE_SCOPE("ObjectRegistry.Add");
     if (IsDestroyingAllObjects() || IsCollectingGarbage())
     {
         PICO_LOG(LogObject, Error, "Cannot register objects while the registry is shutting down");
@@ -192,6 +240,20 @@ PObject* FObjectRegistry::AddObject(FObjectPtr Object, bool bDeferPostInitProper
 
     PObject* RawObject = Object.get();
     Slot.Object = std::move(Object);
+    const auto [IndexEntry, bInserted] = GetObjectNameIndex().emplace(
+        MakeObjectNameKey(RawObject->GetOuter(), RawObject->GetName()),
+        RawObject->GetHandle());
+    (void)IndexEntry;
+    if (!bInserted)
+    {
+        PICO_LOG(LogObject, Error,
+            "Object name index rejected duplicate '{}'", RawObject->GetPathName());
+        FObjectPtr RejectedObject = std::move(Slot.Object);
+        RejectedObject->HandlePrivate = {};
+        Slot.Serial = 0;
+        GetFreeObjectIndices().push_back(Index);
+        return nullptr;
+    }
 
     if (!bDeferPostInitProperties)
     {
@@ -221,6 +283,7 @@ void FObjectRegistry::PostInitObject(PObject* Object)
 
 bool FObjectRegistry::DestroyObject(PObject* Object)
 {
+    PICO_PROFILE_SCOPE("ObjectRegistry.Destroy");
     if (IsCollectingGarbage()
         || Object == nullptr
         || Object->LifecycleState != PObject::ELifecycleState::Alive)
@@ -252,6 +315,7 @@ bool FObjectRegistry::DestroyObject(PObject* Object)
     std::vector<FObjectSlot>& Slots = GetObjectSlots();
     FObjectSlot& Slot = Slots[Handle.Index];
     Object->LifecycleState = PObject::ELifecycleState::Destroying;
+    RemoveObjectNameIndexEntry(Object);
     FObjectPtr OwnedObject = std::move(Slot.Object);
     OwnedObject->HandlePrivate = {};
     Slot.Serial = 0;
@@ -324,6 +388,7 @@ void FObjectRegistry::DestroyAllObjects()
 
     GetObjectSlots().clear();
     GetFreeObjectIndices().clear();
+    GetObjectNameIndex().clear();
 }
 
 PObject* FObjectRegistry::ResolveObject(FObjectHandle Handle)
@@ -340,18 +405,15 @@ PObject* FObjectRegistry::ResolveObject(FObjectHandle Handle)
 
 PObject* FObjectRegistry::FindObject(PObject* Outer, FName Name)
 {
-    for (const FObjectSlot& Slot : GetObjectSlots())
-    {
-        if (Slot.Object != nullptr && Slot.Object->GetOuter() == Outer && Slot.Object->GetName() == Name)
-        {
-            return Slot.Object.get();
-        }
-    }
-    return nullptr;
+    PICO_PROFILE_SCOPE("ObjectRegistry.Find");
+    const auto& NameIndex = GetObjectNameIndex();
+    const auto Found = NameIndex.find(MakeObjectNameKey(Outer, Name));
+    return Found == NameIndex.end() ? nullptr : ResolveObject(Found->second);
 }
 
 bool FObjectRegistry::RenameObject(PObject* Object, FName NewName)
 {
+    PICO_PROFILE_SCOPE("ObjectRegistry.Rename");
     if (IsCollectingGarbage()
         || Object == nullptr
         || !IsValidObjectName(NewName)
@@ -370,6 +432,19 @@ bool FObjectRegistry::RenameObject(PObject* Object, FName NewName)
         return false;
     }
 
+    auto& NameIndex = GetObjectNameIndex();
+    const FObjectNameKey OldKey = MakeObjectNameKey(
+        Object->GetOuter(), Object->GetName());
+    const FObjectNameKey NewKey = MakeObjectNameKey(Object->GetOuter(), NewName);
+    const auto [NewEntry, bInserted] = NameIndex.emplace(NewKey, Object->GetHandle());
+    if (!bInserted) return false;
+    const auto OldEntry = NameIndex.find(OldKey);
+    if (OldEntry == NameIndex.end() || OldEntry->second != Object->GetHandle())
+    {
+        NameIndex.erase(NewEntry);
+        return false;
+    }
+    NameIndex.erase(OldEntry);
     Object->NamePrivate = NewName;
     return true;
 }
@@ -396,6 +471,40 @@ std::size_t FObjectRegistry::GetObjectCount()
         Count += Slot.Object != nullptr ? 1 : 0;
     }
     return Count;
+}
+
+bool FObjectRegistry::ValidateNameIndex(std::string* OutError)
+{
+    if (OutError) OutError->clear();
+    const auto Fail = [OutError](std::string Error)
+    {
+        if (OutError) *OutError = std::move(Error);
+        return false;
+    };
+    const auto& Slots = GetObjectSlots();
+    const auto& NameIndex = GetObjectNameIndex();
+    std::size_t LiveCount = 0;
+    for (const FObjectSlot& Slot : Slots)
+    {
+        const PObject* Object = Slot.Object.get();
+        if (Object == nullptr) continue;
+        ++LiveCount;
+        const auto Found = NameIndex.find(MakeObjectNameKey(
+            Object->GetOuter(), Object->GetName()));
+        if (Found == NameIndex.end() || Found->second != Object->GetHandle())
+            return Fail("Live object is missing or mismatched in the name index: "
+                + Object->GetPathName());
+    }
+    if (NameIndex.size() != LiveCount)
+        return Fail("Object name index entry count does not match live object count");
+    for (const auto& [Key, Handle] : NameIndex)
+    {
+        const PObject* Object = ResolveObject(Handle);
+        if (Object == nullptr
+            || MakeObjectNameKey(Object->GetOuter(), Object->GetName()) != Key)
+            return Fail("Object name index contains a stale entry");
+    }
+    return true;
 }
 
 bool FObjectRegistry::AddToRoot(PObject* Object)
@@ -452,6 +561,7 @@ FGarbageCollectionResult FObjectRegistry::CollectGarbage()
 
     IsCollectingGarbage() = true;
     const auto ResetCollecting = MakeScopeExit([]() { IsCollectingGarbage() = false; });
+    FProfileScopeToken MarkScope = FProfiler::Get().BeginScope("GC.Mark");
     std::vector<FObjectSlot>& Slots = GetObjectSlots();
     std::vector<bool> Marked(Slots.size(), false);
     std::vector<FObjectHandle> WorkStack;
@@ -501,6 +611,8 @@ FGarbageCollectionResult FObjectRegistry::CollectGarbage()
         }
     }
 
+    FProfiler::Get().EndScope(MarkScope);
+    PICO_PROFILE_SCOPE("GC.Sweep");
     struct FUnreachableObject
     {
         FObjectHandle Handle;
@@ -542,6 +654,7 @@ FGarbageCollectionResult FObjectRegistry::CollectGarbage()
         }
         FObjectSlot& Slot = Slots[Entry.Handle.Index];
         Object->LifecycleState = PObject::ELifecycleState::Destroying;
+        RemoveObjectNameIndexEntry(Object);
         FObjectPtr OwnedObject = std::move(Slot.Object);
         OwnedObject->HandlePrivate = {};
         Slot.Serial = 0;

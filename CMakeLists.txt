@@ -95,6 +95,7 @@ add_library(PicoCore STATIC
     Source/Runtime/Core/Private/Paths.cpp
     Source/Runtime/Core/Private/PlatformProcess.cpp
     Source/Runtime/Core/Private/PlatformTextInput.cpp
+    Source/Runtime/Core/Private/Profiler.cpp
     Source/Runtime/Core/Private/ProjectDescriptor.cpp
     Source/Runtime/Core/Private/Time.cpp
 )
@@ -130,6 +131,7 @@ add_library(PicoAgentCore STATIC
     Source/Developer/Agent/Private/AgentEvaluation.cpp
     Source/Developer/Agent/Private/AgentIntent.cpp
     Source/Developer/Agent/Private/AgentKnowledgeStore.cpp
+    Source/Developer/Agent/Private/AgentMetrics.cpp
     Source/Developer/Agent/Private/AgentOperationJournal.cpp
     Source/Developer/Agent/Private/AgentProjectHandoff.cpp
     Source/Developer/Agent/Private/AgentProvider.cpp
@@ -612,6 +614,21 @@ add_executable(PicoPackager
 add_executable(PicoAgentHost
     Source/Programs/PicoAgentHost/Private/Main.cpp
 )
+
+add_executable(PicoRuntimeBenchmarks
+    Source/Programs/PicoRuntimeBenchmarks/Private/Main.cpp
+)
+target_link_libraries(PicoRuntimeBenchmarks PRIVATE PicoEngine)
+target_include_directories(PicoRuntimeBenchmarks PRIVATE
+    ThirdParty/NlohmannJson/single_include)
+target_compile_definitions(PicoRuntimeBenchmarks PRIVATE
+    PICO_BENCHMARK_BUILD_CONFIG="$<CONFIG>")
+set_target_properties(PicoRuntimeBenchmarks PROPERTIES FOLDER "Programs")
+if(MSVC)
+    target_compile_options(PicoRuntimeBenchmarks PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoRuntimeBenchmarks PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 target_include_directories(PicoAgentHost PRIVATE ThirdParty/NlohmannJson/single_include)
 target_link_libraries(PicoAgentHost PRIVATE PicoAgentCore)
@@ -1295,6 +1312,10 @@ if(BUILD_TESTING)
     add_test(NAME PicoCoreTests COMMAND PicoCoreTests)
     add_test(NAME PicoTaskTests COMMAND PicoTaskTests)
     add_test(NAME PicoAgentTests COMMAND PicoAgentTests)
+    add_test(
+        NAME PicoRuntimeBenchmarksSmoke
+        COMMAND PicoRuntimeBenchmarks --quick
+            --output=${CMAKE_BINARY_DIR}/BenchmarkResults/CTest)
     add_test(NAME PicoPackagingTests COMMAND PicoPackagingTests)
     add_test(NAME PicoAssetTests COMMAND PicoAssetTests)
     add_test(NAME PicoGraphTests COMMAND PicoGraphTests)
@@ -1323,6 +1344,10 @@ if(BUILD_TESTING)
     )
     set_tests_properties(PicoAgentTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoRuntimeBenchmarksSmoke PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+        TIMEOUT 60
     )
     set_tests_properties(PicoPackagingTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}

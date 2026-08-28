@@ -4,6 +4,7 @@
 #include "Pico/Asset/AssetRegistry.h"
 #include "Pico/Asset/StaticMesh.h"
 #include "Pico/Core/Log.h"
+#include "Pico/Core/Profiler.h"
 #include "Pico/Core/Math/MathUtility.h"
 #include "Pico/Core/Math/Matrix4.h"
 #include "Pico/Core/Math/Transform.h"
@@ -1152,6 +1153,7 @@ bool FSceneViewportRenderer::Render(
     std::span<const FObjectHandle> SelectedObjects,
     const FSceneViewportRenderOptions& Options)
 {
+    PICO_PROFILE_SCOPE("Render.Frame");
     if (!Impl->bInitialized || Impl->Framebuffer == 0 || World == nullptr)
     {
         return false;

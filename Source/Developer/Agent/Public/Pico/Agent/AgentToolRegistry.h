@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Pico/Agent/AgentKnowledgeStore.h"
 #include "Pico/Agent/AgentProvider.h"
 
 #include <filesystem>
@@ -125,6 +126,18 @@ struct FAgentToolDefinition
     FAgentToolPreflight Preflight;
     FAgentToolHandler Handler;
     FAgentToolVerifier Verifier;
+    std::string CapabilityProvider;
+    std::vector<std::string> RevisionReadSet;
+    std::vector<std::string> RevisionWriteSet;
+};
+
+class IAgentCapabilityProvider
+{
+public:
+    virtual ~IAgentCapabilityProvider() = default;
+    virtual std::string_view GetName() const = 0;
+    virtual const std::vector<FAgentToolDefinition>& GetToolDefinitions() const = 0;
+    virtual std::vector<FAgentKnowledgeRecord> CollectKnowledgeRecords() const = 0;
 };
 
 class FAgentToolRegistry final : public IAgentToolExecutor
@@ -136,6 +149,9 @@ public:
         IAgentToolTransaction* Transaction = nullptr);
 
     bool Register(FAgentToolDefinition Definition, std::string* OutError = nullptr);
+    bool RegisterProvider(
+        const IAgentCapabilityProvider& Provider,
+        std::string* OutError = nullptr);
     bool Contains(std::string_view Name) const;
     std::vector<std::string> GetToolNames() const;
     std::string BuildToolCatalogJson() const;
@@ -163,7 +179,10 @@ private:
         const FAgentToolDefinition& Definition,
         std::string& OutError) const;
     void Trace(EAgentToolStage Stage, bool bSucceeded, std::string Message);
-    FAgentToolResult Failure(const FAgentToolCall& Call, std::string Error);
+    FAgentToolResult Failure(
+        const FAgentToolCall& Call,
+        std::string Error,
+        EAgentFailureClass FailureClass);
 
     FAgentToolPolicy Policy;
     IAgentToolApproval* Approval = nullptr;

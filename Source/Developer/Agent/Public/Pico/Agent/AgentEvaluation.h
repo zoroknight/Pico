@@ -30,9 +30,12 @@ struct FAgentGoldenTaskResult
     std::string RunId;
     std::string Error;
     std::string VerificationError;
+    EAgentFailureClass FailureClass = EAgentFailureClass::None;
+    EAgentRecoveryAction RecoveryAction = EAgentRecoveryAction::Abort;
     FAgentCounters Counters;
     std::uint64_t DurationMilliseconds = 0;
     std::filesystem::path EventLogPath;
+    std::filesystem::path MetricsPath;
 };
 
 struct FAgentGoldenTaskHooks

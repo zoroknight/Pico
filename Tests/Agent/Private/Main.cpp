@@ -57,6 +57,13 @@ public:
         const Pico::FCancellationToken*) override
     {
         ++Count;
+        if (FailureClass != Pico::EAgentFailureClass::None)
+        {
+            const Pico::FAgentRecoveryPolicy Recovery =
+                Pico::GetAgentRecoveryPolicy(FailureClass);
+            return {Call.Id, false, "{}", "classified failure", false,
+                FailureClass, Recovery.Action};
+        }
         return {Call.Id, true, R"({"changed":true})", {}, false};
     }
 
@@ -65,6 +72,7 @@ public:
     bool bRequiresApproval = false;
     bool bReadOnly = false;
     std::string ReadOnlyToolName;
+    Pico::EAgentFailureClass FailureClass = Pico::EAgentFailureClass::None;
 };
 
 class FRecordingProvider final : public Pico::IAgentProvider
@@ -378,6 +386,63 @@ void TestDeterministicCompletionAndRecovery(FTestRunner& Runner)
         "A completed chat starts a fresh per-turn budget while preserving session history");
 }
 
+void TestFailureTaxonomyAndRecoveryPolicy(FTestRunner& Runner)
+{
+    using Pico::EAgentFailureClass;
+    using Pico::EAgentRecoveryAction;
+    const std::vector<std::pair<EAgentFailureClass, EAgentRecoveryAction>> Cases = {
+        {EAgentFailureClass::None, EAgentRecoveryAction::Abort},
+        {EAgentFailureClass::ModelProtocol, EAgentRecoveryAction::Replan},
+        {EAgentFailureClass::InvalidArguments, EAgentRecoveryAction::Replan},
+        {EAgentFailureClass::PermissionDenied, EAgentRecoveryAction::AskUser},
+        {EAgentFailureClass::ApprovalRejected, EAgentRecoveryAction::WaitForApproval},
+        {EAgentFailureClass::PreconditionFailed, EAgentRecoveryAction::RefreshState},
+        {EAgentFailureClass::ExecutionFailed, EAgentRecoveryAction::Retry},
+        {EAgentFailureClass::VerificationFailed, EAgentRecoveryAction::Rollback},
+        {EAgentFailureClass::Infrastructure, EAgentRecoveryAction::Retry},
+        {EAgentFailureClass::BudgetExceeded, EAgentRecoveryAction::Abort},
+        {EAgentFailureClass::Conflict, EAgentRecoveryAction::RefreshState},
+        {EAgentFailureClass::Cancelled, EAgentRecoveryAction::Abort}};
+    bool bMappingsValid = true;
+    for (const auto& [FailureClass, ExpectedAction] : Cases)
+    {
+        EAgentFailureClass ParsedClass = EAgentFailureClass::None;
+        EAgentRecoveryAction ParsedAction = EAgentRecoveryAction::Abort;
+        const Pico::FAgentRecoveryPolicy Policy =
+            Pico::GetAgentRecoveryPolicy(FailureClass);
+        bMappingsValid &= Policy.Action == ExpectedAction
+            && Pico::TryParseAgentFailureClass(Pico::ToString(FailureClass), ParsedClass)
+            && ParsedClass == FailureClass
+            && Pico::TryParseAgentRecoveryAction(Pico::ToString(Policy.Action), ParsedAction)
+            && ParsedAction == Policy.Action;
+    }
+    Runner.Expect(bMappingsValid,
+        "Every Agent failure class has a stable serialized recovery policy");
+    Runner.Expect(
+        !Pico::GetAgentRecoveryPolicy(EAgentFailureClass::InvalidArguments)
+            .bAutomaticallyRetryable
+        && !Pico::GetAgentRecoveryPolicy(EAgentFailureClass::PermissionDenied)
+            .bAutomaticallyRetryable
+        && !Pico::GetAgentRecoveryPolicy(EAgentFailureClass::ApprovalRejected)
+            .bAutomaticallyRetryable,
+        "Invalid arguments, permission denial, and approval rejection never auto-retry");
+
+    const auto Path = MakeLogPath("non-retryable-failure");
+    auto Session = Pico::FAgentSession::OpenOrCreate("non-retryable-failure", Path);
+    Pico::FAgentProviderResponse ToolResponse;
+    ToolResponse.ToolCalls.push_back({"bad-arguments", "scene.fake", "{}"});
+    Pico::FFakeAgentProvider Provider({{ToolResponse, {}}, {Final("unexpected"), {}}});
+    FCountingToolExecutor Executor;
+    Executor.FailureClass = EAgentFailureClass::InvalidArguments;
+    Pico::FAgentRuntime Runtime(*Session, Provider, Executor);
+    const Pico::FAgentRunResult Result = Runtime.Run("exercise failure policy");
+    Runner.Expect(Result.Status == Pico::EAgentStatus::Failed
+            && Result.FailureClass == EAgentFailureClass::InvalidArguments
+            && Result.RecoveryAction == EAgentRecoveryAction::Replan
+            && Result.Counters.RepairAttempts == 0 && Executor.Count == 1,
+        "Runtime preserves failure semantics and stops non-retryable tool failures immediately");
+}
+
 void TestUnifiedTraceSpans(FTestRunner& Runner)
 {
     const auto Path = MakeLogPath("unified-trace");
@@ -443,6 +508,22 @@ void TestUnifiedTraceSpans(FTestRunner& Runner)
             && Event.RunId == Result.RunId && Event.SpanName == "AgentRun";
     Runner.Expect(bRestoredTrace,
         "Trace identifiers and span timing survive JSONL session recovery");
+
+    std::ifstream MetricsStream(Result.MetricsPath);
+    const std::string MetricsJson {
+        std::istreambuf_iterator<char>(MetricsStream),
+        std::istreambuf_iterator<char>()};
+    Runner.Expect(
+        Result.ContextBytes > 0 && !Result.MetricsPath.empty()
+            && MetricsJson.find("\"format_version\": 1") != std::string::npos
+            && MetricsJson.find("\"turns\": 2") != std::string::npos
+            && MetricsJson.find("\"provider\"") != std::string::npos
+            && MetricsJson.find("\"approval\"") != std::string::npos
+            && MetricsJson.find("\"tool\"") != std::string::npos
+            && MetricsJson.find("\"validation\"") != std::string::npos
+            && MetricsJson.find("\"completion_rate\": 1.0")
+                != std::string::npos,
+        "Every Agent run persists versioned counts, latency, context, and completion metrics");
 }
 
 void TestToolCallIdempotency(FTestRunner& Runner)
@@ -821,6 +902,7 @@ void TestToolPipelineRejectsBeforeSideEffects(FTestRunner& Runner)
         {"escape", "test.modify", R"({"amount":5,"path":"../outside.txt"})"}, nullptr);
     Runner.Expect(
         !WrongType.bSucceeded && !EscapedPath.bSucceeded
+            && WrongType.FailureClass == Pico::EAgentFailureClass::InvalidArguments
             && HandlerCalls == 0 && Transaction.BeginCount == 0
             && Approval.RequestCount == 0 && SideEffect == 0,
         "Wrong types and project path traversal fail before approval, transaction, or handler");
@@ -831,6 +913,7 @@ void TestToolPipelineRejectsBeforeSideEffects(FTestRunner& Runner)
     const auto DeniedResult = Registry.Execute(Denied, nullptr);
     Runner.Expect(
         !DeniedResult.bSucceeded && HandlerCalls == 0
+            && DeniedResult.FailureClass == Pico::EAgentFailureClass::ApprovalRejected
             && Transaction.BeginCount == 0 && SideEffect == 0,
         "User denial has zero side effects and never opens a transaction");
 
@@ -872,6 +955,61 @@ void TestToolPipelineRejectsBeforeSideEffects(FTestRunner& Runner)
     Runner.Expect(
         !PolicyResult.bSucceeded && HandlerCalls == 0 && Transaction.BeginCount == 0,
         "Permission policy denial occurs before approval and transaction");
+}
+
+void TestCapabilityProviderRegistration(FTestRunner& Runner)
+{
+    class FProvider final : public Pico::IAgentCapabilityProvider
+    {
+    public:
+        std::string Name = "TestCapabilityProvider";
+        std::vector<Pico::FAgentToolDefinition> Definitions;
+        std::string_view GetName() const override { return Name; }
+        const std::vector<Pico::FAgentToolDefinition>& GetToolDefinitions() const override
+        {
+            return Definitions;
+        }
+        std::vector<Pico::FAgentKnowledgeRecord> CollectKnowledgeRecords() const override
+        {
+            Pico::FAgentKnowledgeRecord Record;
+            Record.SourceType = "agent-capability";
+            Record.SourcePath = Name;
+            return {std::move(Record)};
+        }
+    };
+    const auto MakeTool = [](std::string Name)
+    {
+        Pico::FAgentToolDefinition Tool;
+        Tool.Name = std::move(Name);
+        Tool.Description = "Capability provider test tool";
+        Tool.RevisionReadSet = {"World.Revision"};
+        Tool.RevisionWriteSet = {"World.Revision"};
+        Tool.Handler = [](const Pico::FAgentToolCall& Call,
+                          const Pico::FCancellationToken*)
+        {
+            return Pico::FAgentToolResult {Call.Id, true, "{}", {}, false};
+        };
+        return Tool;
+    };
+
+    Pico::FAgentToolRegistry Registry;
+    FProvider Provider;
+    Provider.Definitions.push_back(MakeTool("provider.first"));
+    Provider.Definitions.push_back(MakeTool("provider.second"));
+    const bool bRegistered = Registry.RegisterProvider(Provider);
+    const std::string Catalog = Registry.BuildToolCatalogJson();
+    Runner.Expect(bRegistered && Registry.GetToolNames().size() == 2
+            && Catalog.find("TestCapabilityProvider") != std::string::npos
+            && Catalog.find("revision_read_set") != std::string::npos,
+        "Capability provider atomically publishes owned tools and revision metadata");
+
+    FProvider Conflicting;
+    Conflicting.Definitions.push_back(MakeTool("provider.temporary"));
+    Conflicting.Definitions.push_back(MakeTool("provider.first"));
+    Runner.Expect(!Registry.RegisterProvider(Conflicting)
+            && !Registry.Contains("provider.temporary")
+            && Registry.GetToolNames().size() == 2,
+        "A provider registration conflict rolls back its earlier tool definitions");
 }
 
 void TestToolPipelineCommitAndRollback(FTestRunner& Runner)
@@ -1418,6 +1556,7 @@ int main()
 {
     FTestRunner Runner;
     TestDeterministicCompletionAndRecovery(Runner);
+    TestFailureTaxonomyAndRecoveryPolicy(Runner);
     TestUnifiedTraceSpans(Runner);
     TestToolCallIdempotency(Runner);
     TestBoundedRepairAndBudget(Runner);
@@ -1428,6 +1567,7 @@ int main()
     TestIncompleteTailRecoveryAndStateRules(Runner);
     TestCooperativeCancellation(Runner);
     TestToolPipelineRejectsBeforeSideEffects(Runner);
+    TestCapabilityProviderRegistration(Runner);
     TestToolPipelineCommitAndRollback(Runner);
     TestToolCallIdCollisionFailsClosed(Runner);
     TestOpenAICompatibleProviderProtocolAndRetry(Runner);

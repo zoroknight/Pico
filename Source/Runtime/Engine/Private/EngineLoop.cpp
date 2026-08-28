@@ -8,6 +8,7 @@
 #include "Pico/Core/Log.h"
 #include "Pico/Core/Paths.h"
 #include "Pico/Core/ProjectDescriptor.h"
+#include "Pico/Core/Profiler.h"
 #include "Pico/Core/Types.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
@@ -77,6 +78,17 @@ int FEngineLoop::PreInit(
 
     bExited = false;
     FCommandLine::Init(Argc, Argv);
+    ProfileTracePath.clear();
+    if (const std::optional<std::string> TraceArgument =
+            FCommandLine::GetValue("profiletrace"))
+    {
+        ProfileTracePath = *TraceArgument;
+        FProfiler::Get().SetEnabled(true);
+    }
+    else if (FCommandLine::HasSwitch("profile"))
+    {
+        FProfiler::Get().SetEnabled(true);
+    }
 
     std::filesystem::path RequestedProjectFile = ProjectFile;
     if (RequestedProjectFile.empty())
@@ -396,6 +408,9 @@ void FEngineLoop::Tick(const FEngineFrameCallbacks& Callbacks)
         return;
     }
 
+    FProfiler::Get().BeginFrame();
+    auto EndProfileFrame = MakeScopeExit([]() { FProfiler::Get().EndFrame(); });
+    PICO_PROFILE_SCOPE("EngineLoop.Tick");
     FApp::BeginFrame();
     FrameTimer.Tick();
 
@@ -485,6 +500,14 @@ void FEngineLoop::Exit()
 
     bPreInitialized = false;
     bExited = true;
+    if (!ProfileTracePath.empty())
+    {
+        std::string ProfileError;
+        if (!FProfiler::Get().WriteChromeTrace(ProfileTracePath, &ProfileError))
+            PICO_LOG(LogEngine, Error, "Could not write profile trace: {}", ProfileError);
+        else
+            PICO_LOG(LogEngine, Info, "Profile trace written to {}", ProfileTracePath.string());
+    }
 }
 
 bool FEngineLoop::LoadWorld(

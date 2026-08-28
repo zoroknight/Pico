@@ -93,12 +93,37 @@ PGameplayAbilitySystemComponent* FindAbilitySystem(PObject* Object)
 
 std::string GetAbilitySemanticName(const PClass* AbilityClass)
 {
-    const std::string ClassName = AbilityClass != nullptr
+    const auto* Ability = AbilityClass != nullptr
+        ? static_cast<const PGameplayAbility*>(AbilityClass->GetDefaultObject())
+        : nullptr;
+    if (Ability != nullptr)
+    {
+        constexpr std::string_view Prefix = "Ability.Projectile.";
+        for (const FGameplayTag& Tag : Ability->GetAbilityTags().GetTags())
+        {
+            const std::string_view Name = Tag.ToString();
+            if (Name.starts_with(Prefix))
+                return std::string(Name.substr(Prefix.size())) + "Shot";
+        }
+    }
+    return AbilityClass != nullptr
         ? AbilityClass->GetName().ToString() : std::string();
-    if (ClassName == "PSandboxDashAbility") return "GravityShot";
-    if (ClassName == "PSandboxFireballAbility") return "BurnShot";
-    if (ClassName == "PSandboxStunAbility") return "FreezeShot";
-    return ClassName;
+}
+
+const PClass* FindGameplayAbilityClassByTag(std::string_view TagName)
+{
+    const FGameplayTag Tag = FGameplayTagsManager::Get().RequestGameplayTag(TagName);
+    if (!Tag.IsValid()) return nullptr;
+    for (const PClass* Class : FClassRegistry::GetClasses())
+    {
+        if (Class == nullptr || !Class->IsChildOf(PGameplayAbility::StaticClass()))
+            continue;
+        const auto* Ability = static_cast<const PGameplayAbility*>(
+            Class->GetDefaultObject());
+        if (Ability != nullptr && Ability->GetAbilityTags().HasTagExact(Tag))
+            return Class;
+    }
+    return nullptr;
 }
 
 FJson DescribeMiniGasProfile(PObject* Owner)
@@ -586,6 +611,123 @@ bool ReplaceFile(
     OutError = "Could not publish ChangeSet file: " + Error.message();
     return false;
 }
+
+class FEditorCapabilityProvider : public IAgentCapabilityProvider
+{
+public:
+    FEditorCapabilityProvider(
+        std::string InName,
+        std::vector<std::string> InRevisionReadSet,
+        std::vector<std::string> InRevisionWriteSet)
+        : Name(std::move(InName))
+        , RevisionReadSet(std::move(InRevisionReadSet))
+        , RevisionWriteSet(std::move(InRevisionWriteSet))
+    {
+    }
+
+    bool AddTool(FAgentToolDefinition Definition)
+    {
+        if (Definition.Name.empty() || !Definition.Handler) return false;
+        Definition.CapabilityProvider = Name;
+        if (Definition.RevisionReadSet.empty())
+            Definition.RevisionReadSet = RevisionReadSet;
+        if (Definition.Permission != EAgentToolPermission::ReadOnly
+            && Definition.RevisionWriteSet.empty())
+            Definition.RevisionWriteSet = RevisionWriteSet;
+        if (!Definition.Verifier)
+        {
+            Definition.Verifier = [](
+                const FAgentToolCall&,
+                const FAgentToolResult& Result,
+                std::string& OutError)
+            {
+                if (Result.bSucceeded) return true;
+                OutError = Result.Error.empty()
+                    ? "Capability tool returned a failed result" : Result.Error;
+                return false;
+            };
+        }
+        Definitions.push_back(std::move(Definition));
+        return true;
+    }
+
+    std::string_view GetName() const override { return Name; }
+    const std::vector<FAgentToolDefinition>& GetToolDefinitions() const override
+    {
+        return Definitions;
+    }
+    std::vector<FAgentKnowledgeRecord> CollectKnowledgeRecords() const override
+    {
+        FJson Tools = FJson::array();
+        for (const FAgentToolDefinition& Definition : Definitions)
+            Tools.push_back({{"name", Definition.Name},
+                {"permission", ToString(Definition.Permission)},
+                {"revision_read_set", Definition.RevisionReadSet},
+                {"revision_write_set", Definition.RevisionWriteSet}});
+        FAgentKnowledgeRecord Record;
+        Record.SourceType = "agent-capability";
+        Record.SourcePath = "PicoEditor/Capabilities/" + Name;
+        Record.Title = Name + " tool capability manifest";
+        Record.Content = FJson({{"provider", Name}, {"tools", std::move(Tools)}}).dump();
+        Record.Tags = {"agent", "tool", "capability", Name};
+        Record.Provenance = "IAgentCapabilityProvider runtime manifest";
+        return {std::move(Record)};
+    }
+
+private:
+    std::string Name;
+    std::vector<std::string> RevisionReadSet;
+    std::vector<std::string> RevisionWriteSet;
+    std::vector<FAgentToolDefinition> Definitions;
+};
+
+class FWorldToolProvider final : public FEditorCapabilityProvider
+{
+public:
+    FWorldToolProvider() : FEditorCapabilityProvider("WorldToolProvider",
+        {"World.Revision", "Selection.Revision"},
+        {"World.Revision", "Selection.Revision"}) {}
+};
+
+class FObjectToolProvider final : public FEditorCapabilityProvider
+{
+public:
+    FObjectToolProvider() : FEditorCapabilityProvider("ObjectToolProvider",
+        {"ObjectRegistry.Revision", "Reflection.MetadataRevision"},
+        {"ObjectRegistry.Revision", "World.Revision"}) {}
+};
+
+class FAssetToolProvider final : public FEditorCapabilityProvider
+{
+public:
+    FAssetToolProvider() : FEditorCapabilityProvider("AssetToolProvider",
+        {"AssetRegistry.Revision"}, {"AssetRegistry.Revision"}) {}
+};
+
+class FBlueprintGraphToolProvider final : public FEditorCapabilityProvider
+{
+public:
+    FBlueprintGraphToolProvider() : FEditorCapabilityProvider(
+        "BlueprintGraphToolProvider", {"GraphAsset.Revision", "Reflection.MetadataRevision"},
+        {"GraphAsset.Revision"}) {}
+};
+
+class FGameplayToolProvider final : public FEditorCapabilityProvider
+{
+public:
+    FGameplayToolProvider() : FEditorCapabilityProvider("GameplayToolProvider",
+        {"World.Revision", "Gameplay.SchemaRevision", "BlueprintDefaults.Revision"},
+        {"World.Revision", "BlueprintDefaults.Revision"}) {}
+};
+
+class FProjectProcessToolProvider final : public FEditorCapabilityProvider
+{
+public:
+    FProjectProcessToolProvider() : FEditorCapabilityProvider(
+        "ProjectProcessToolProvider",
+        {"ProjectDescriptor.Revision", "WorldAsset.Revision", "Process.State"},
+        {"ProjectDescriptor.Revision", "WorldAsset.Revision", "Process.State"}) {}
+};
 }
 
 struct FEditorAgentToolExecutor::FImpl
@@ -705,6 +847,12 @@ struct FEditorAgentToolExecutor::FImpl
         , Registry(BuildPolicy(InEngineLoop), Approval, &Transaction)
     {
         RegisterTools();
+        bInitialized = Registry.RegisterProvider(WorldTools) && bInitialized;
+        bInitialized = Registry.RegisterProvider(ObjectTools) && bInitialized;
+        bInitialized = Registry.RegisterProvider(AssetTools) && bInitialized;
+        bInitialized = Registry.RegisterProvider(BlueprintGraphTools) && bInitialized;
+        bInitialized = Registry.RegisterProvider(GameplayTools) && bInitialized;
+        bInitialized = Registry.RegisterProvider(ProjectProcessTools) && bInitialized;
     }
 
     void BeginRun(std::string_view RunId)
@@ -963,17 +1111,17 @@ struct FEditorAgentToolExecutor::FImpl
             Record.Title = "Pico Mini GAS safe configuration schema";
             Record.Content = FJson({
                 {"schema_revision", 2},
-                {"profile_owner", "PSandboxPawn reflected Mini GAS Profile"},
+                {"profile_owner", "reflected Mini GAS Profile owner"},
                 {"abilities", FJson::array({
                     {{"name", "GravityShot"}, {"input", "1"},
                         {"enabled", "bGravityShotEnabled"},
-                        {"legacy_internal_class", "PSandboxDashAbility"}},
+                        {"ability_tag", "Ability.Projectile.Gravity"}},
                     {{"name", "BurnShot"}, {"input", "2"},
                         {"enabled", "bBurnShotEnabled"},
-                        {"legacy_internal_class", "PSandboxFireballAbility"}},
+                        {"ability_tag", "Ability.Projectile.Burn"}},
                     {{"name", "FreezeShot"}, {"input", "3"},
                         {"enabled", "bFreezeShotEnabled"},
-                        {"legacy_internal_class", "PSandboxStunAbility"}}})},
+                        {"ability_tag", "Ability.Projectile.Freeze"}}})},
                 {"configurable_groups", FJson::array({
                     "initial health", "initial mana", "enabled", "mana cost", "cooldown", "range", "projectile speed",
                     "projectile color", "effect duration", "effect strength"})},
@@ -1018,7 +1166,46 @@ struct FEditorAgentToolExecutor::FImpl
             Record.Provenance = "FLog warning/error records";
             Result.push_back(std::move(Record));
         }
+        for (const IAgentCapabilityProvider* Provider : {
+            static_cast<const IAgentCapabilityProvider*>(&WorldTools),
+            static_cast<const IAgentCapabilityProvider*>(&ObjectTools),
+            static_cast<const IAgentCapabilityProvider*>(&AssetTools),
+            static_cast<const IAgentCapabilityProvider*>(&BlueprintGraphTools),
+            static_cast<const IAgentCapabilityProvider*>(&GameplayTools),
+            static_cast<const IAgentCapabilityProvider*>(&ProjectProcessTools)})
+        {
+            std::vector<FAgentKnowledgeRecord> Records =
+                Provider->CollectKnowledgeRecords();
+            Result.insert(Result.end(),
+                std::make_move_iterator(Records.begin()),
+                std::make_move_iterator(Records.end()));
+        }
         return Result;
+    }
+
+    bool RegisterTool(FAgentToolDefinition Definition)
+    {
+        const std::string& Name = Definition.Name;
+        if (Name.starts_with("editor.world.")
+            || Name.starts_with("editor.actor.")
+            || Name.starts_with("editor.scene."))
+            return WorldTools.AddTool(std::move(Definition));
+        if (Name.starts_with("editor.object.")
+            || Name.starts_with("editor.selection."))
+            return ObjectTools.AddTool(std::move(Definition));
+        if (Name.starts_with("editor.asset."))
+            return AssetTools.AddTool(std::move(Definition));
+        if (Name.starts_with("editor.graph."))
+            return BlueprintGraphTools.AddTool(std::move(Definition));
+        if (Name.starts_with("editor.gameplay.")
+            || Name.starts_with("editor.actor_blueprint."))
+            return GameplayTools.AddTool(std::move(Definition));
+        if (Name.starts_with("editor.project.")
+            || Name.starts_with("editor.play.")
+            || Name.starts_with("editor.agent."))
+            return ProjectProcessTools.AddTool(std::move(Definition));
+        PICO_LOG(LogAgent, Error, "No capability provider owns tool '{}'", Name);
+        return false;
     }
 
     void RegisterTools()
@@ -1076,7 +1263,7 @@ struct FEditorAgentToolExecutor::FImpl
                 {"actor_count", ActorCount}, {"component_count", ComponentCount},
                 {"actors", std::move(Actors)}});
         };
-        bInitialized = Registry.Register(std::move(DescribeWorld));
+        bInitialized = RegisterTool(std::move(DescribeWorld));
 
         FAgentToolDefinition DescribeAsc;
         DescribeAsc.Name = "editor.gameplay.asc.describe";
@@ -1096,7 +1283,7 @@ struct FEditorAgentToolExecutor::FImpl
                 ? Success(Call, DescribeAbilitySystem(AbilitySystem))
                 : Failure(Call, "Object has no AbilitySystemComponent");
         };
-        bInitialized = Registry.Register(std::move(DescribeAsc)) && bInitialized;
+        bInitialized = RegisterTool(std::move(DescribeAsc)) && bInitialized;
 
         FAgentToolDefinition ConfigureLoadout;
         ConfigureLoadout.Name = "editor.gameplay.configure_ability_loadout";
@@ -1197,21 +1384,22 @@ struct FEditorAgentToolExecutor::FImpl
                 struct FAbilityEntry
                 {
                     int32 Bit;
-                    const char* ClassName;
+                    const char* AbilityTag;
                     int32 InputId;
                     const char* CostProperty;
                     const char* CooldownProperty;
                 };
                 const FAbilityEntry Entries[] = {
-                    {1, "PSandboxDashAbility", 0,
+                    {1, "Ability.Projectile.Gravity", 0,
                         "GravityManaCost", "GravityCooldownSeconds"},
-                    {2, "PSandboxFireballAbility", 1,
+                    {2, "Ability.Projectile.Burn", 1,
                         "BurnManaCost", "BurnCooldownSeconds"},
-                    {4, "PSandboxStunAbility", 2,
+                    {4, "Ability.Projectile.Freeze", 2,
                         "FreezeManaCost", "FreezeCooldownSeconds"}};
                 for (const FAbilityEntry& Entry : Entries)
                 {
-                    const PClass* Class = FClassRegistry::FindClass(FName(Entry.ClassName));
+                    const PClass* Class = FindGameplayAbilityClassByTag(
+                        Entry.AbilityTag);
                     FGameplayAbilitySpecHandle Existing;
                     for (const FGameplayAbilitySpec& Spec : AbilitySystem->GetActivatableAbilities())
                         if (Spec.AbilityClass == Class) { Existing = Spec.Handle; break; }
@@ -1255,7 +1443,7 @@ struct FEditorAgentToolExecutor::FImpl
             }
             return true;
         };
-        bInitialized = Registry.Register(std::move(ConfigureLoadout)) && bInitialized;
+        bInitialized = RegisterTool(std::move(ConfigureLoadout)) && bInitialized;
 
         FAgentToolDefinition ListChanges;
         ListChanges.Name = "editor.agent.list_changes";
@@ -1332,7 +1520,7 @@ struct FEditorAgentToolExecutor::FImpl
                 {"current_fingerprint_error", CurrentFingerprintError},
                 {"last_recording_error", LastChangeSetError}});
         };
-        bInitialized = Registry.Register(std::move(ListChanges)) && bInitialized;
+        bInitialized = RegisterTool(std::move(ListChanges)) && bInitialized;
 
         FAgentToolDefinition RevertRun;
         RevertRun.Name = "editor.agent.revert_run";
@@ -1487,7 +1675,7 @@ struct FEditorAgentToolExecutor::FImpl
             }
             return true;
         };
-        bInitialized = Registry.Register(std::move(RevertRun)) && bInitialized;
+        bInitialized = RegisterTool(std::move(RevertRun)) && bInitialized;
 
         FAgentToolDefinition DescribeSelection;
         DescribeSelection.Name = "editor.selection.describe";
@@ -1497,7 +1685,7 @@ struct FEditorAgentToolExecutor::FImpl
             return Success(Call, {{"primary", Selection ? Selection->GetObjectPath() : ""},
                 {"objects", Selection ? Selection->GetObjectPaths() : std::vector<std::string> {}}});
         };
-        bInitialized = Registry.Register(std::move(DescribeSelection)) && bInitialized;
+        bInitialized = RegisterTool(std::move(DescribeSelection)) && bInitialized;
 
         FAgentToolDefinition SearchAssets;
         SearchAssets.Name = "editor.asset.search";
@@ -1539,7 +1727,7 @@ struct FEditorAgentToolExecutor::FImpl
             }
             return Success(Call, {{"assets", std::move(Assets)}});
         };
-        bInitialized = Registry.Register(std::move(SearchAssets)) && bInitialized;
+        bInitialized = RegisterTool(std::move(SearchAssets)) && bInitialized;
 
         const auto ResolveGraphFile = [](std::string_view Text,
                                          FAssetPath& OutPath,
@@ -1639,7 +1827,7 @@ struct FEditorAgentToolExecutor::FImpl
             FPicoGraphAsset Graph; FAssetPath Path; std::filesystem::path File;
             return LoadGraph(Call, Graph, Path, File, Error);
         };
-        bInitialized = Registry.Register(std::move(CreateGraph)) && bInitialized;
+        bInitialized = RegisterTool(std::move(CreateGraph)) && bInitialized;
 
         FAgentToolDefinition DescribeGraph;
         DescribeGraph.Name = "editor.graph.describe";
@@ -1679,7 +1867,7 @@ struct FEditorAgentToolExecutor::FImpl
                 {"nodes", std::move(Nodes)}, {"links", std::move(Links)},
                 {"variables", std::move(Variables)}});
         };
-        bInitialized = Registry.Register(std::move(DescribeGraph)) && bInitialized;
+        bInitialized = RegisterTool(std::move(DescribeGraph)) && bInitialized;
 
         FAgentToolDefinition AddGraphNode;
         AddGraphNode.Name = "editor.graph.add_node";
@@ -1714,7 +1902,7 @@ struct FEditorAgentToolExecutor::FImpl
             return Success(Call, {{"graph_path", Path.ToString()},
                 {"node_id", NodeId}, {"pins", std::move(Pins)}});
         };
-        bInitialized = Registry.Register(std::move(AddGraphNode)) && bInitialized;
+        bInitialized = RegisterTool(std::move(AddGraphNode)) && bInitialized;
 
         FAgentToolDefinition ConnectGraphPins;
         ConnectGraphPins.Name = "editor.graph.connect_pins";
@@ -1743,7 +1931,7 @@ struct FEditorAgentToolExecutor::FImpl
             return Success(Call, {{"graph_path", Path.ToString()},
                 {"link_count", Graph.Links.size()}});
         };
-        bInitialized = Registry.Register(std::move(ConnectGraphPins)) && bInitialized;
+        bInitialized = RegisterTool(std::move(ConnectGraphPins)) && bInitialized;
 
         FAgentToolDefinition SetGraphDefault;
         SetGraphDefault.Name = "editor.graph.set_default";
@@ -1771,7 +1959,7 @@ struct FEditorAgentToolExecutor::FImpl
             return Success(Call, {{"graph_path", Path.ToString()},
                 {"pin_id", Pin->Id}, {"value", Pin->DefaultValue}});
         };
-        bInitialized = Registry.Register(std::move(SetGraphDefault)) && bInitialized;
+        bInitialized = RegisterTool(std::move(SetGraphDefault)) && bInitialized;
 
         const auto MakeGraphAnalysisTool = [LoadGraph](bool bCompile)
         {
@@ -1813,8 +2001,8 @@ struct FEditorAgentToolExecutor::FImpl
             };
             return Tool;
         };
-        bInitialized = Registry.Register(MakeGraphAnalysisTool(false)) && bInitialized;
-        bInitialized = Registry.Register(MakeGraphAnalysisTool(true)) && bInitialized;
+        bInitialized = RegisterTool(MakeGraphAnalysisTool(false)) && bInitialized;
+        bInitialized = RegisterTool(MakeGraphAnalysisTool(true)) && bInitialized;
 
         FAgentToolDefinition DescribeObjectTool;
         DescribeObjectTool.Name = "editor.object.describe";
@@ -1833,7 +2021,7 @@ struct FEditorAgentToolExecutor::FImpl
             if (!Object) return Failure(Call, "Object path was not found in the active World");
             return Success(Call, DescribeObject(Object, true));
         };
-        bInitialized = Registry.Register(std::move(DescribeObjectTool)) && bInitialized;
+        bInitialized = RegisterTool(std::move(DescribeObjectTool)) && bInitialized;
 
         FAgentToolDefinition GetProperty;
         GetProperty.Name = "editor.object.get_property";
@@ -1864,7 +2052,7 @@ struct FEditorAgentToolExecutor::FImpl
                 {"property_name", PropertyName},
                 {"property", DescribeProperty(*Property, Object)}});
         };
-        bInitialized = Registry.Register(std::move(GetProperty)) && bInitialized;
+        bInitialized = RegisterTool(std::move(GetProperty)) && bInitialized;
 
         FAgentToolDefinition SetProperties;
         SetProperties.Name = "editor.object.set_properties";
@@ -1952,7 +2140,7 @@ struct FEditorAgentToolExecutor::FImpl
             }
             return true;
         };
-        bInitialized = Registry.Register(std::move(SetProperties)) && bInitialized;
+        bInitialized = RegisterTool(std::move(SetProperties)) && bInitialized;
 
         FAgentToolDefinition DescribeBlueprintDefaults;
         DescribeBlueprintDefaults.Name = "editor.actor_blueprint.describe_defaults";
@@ -1982,7 +2170,7 @@ struct FEditorAgentToolExecutor::FImpl
                 {"generated_class", GeneratedClass->GetName().ToString()},
                 {"defaults", DescribeObject(const_cast<PObject*>(Defaults), false)}});
         };
-        bInitialized = Registry.Register(std::move(DescribeBlueprintDefaults))
+        bInitialized = RegisterTool(std::move(DescribeBlueprintDefaults))
             && bInitialized;
 
         FAgentToolDefinition SetBlueprintDefaults;
@@ -2130,7 +2318,7 @@ struct FEditorAgentToolExecutor::FImpl
             }
             return true;
         };
-        bInitialized = Registry.Register(std::move(SetBlueprintDefaults)) && bInitialized;
+        bInitialized = RegisterTool(std::move(SetBlueprintDefaults)) && bInitialized;
 
         FAgentToolDefinition BatchSetProperties;
         BatchSetProperties.Name = "editor.object.batch_set_properties";
@@ -2249,7 +2437,7 @@ struct FEditorAgentToolExecutor::FImpl
             }
             return true;
         };
-        bInitialized = Registry.Register(std::move(BatchSetProperties)) && bInitialized;
+        bInitialized = RegisterTool(std::move(BatchSetProperties)) && bInitialized;
 
         FAgentToolDefinition SpawnActor;
         SpawnActor.Name = "editor.actor.spawn";
@@ -2296,7 +2484,7 @@ struct FEditorAgentToolExecutor::FImpl
             }
             return true;
         };
-        bInitialized = Registry.Register(std::move(SpawnActor)) && bInitialized;
+        bInitialized = RegisterTool(std::move(SpawnActor)) && bInitialized;
 
         FAgentToolDefinition SpawnBlueprint;
         SpawnBlueprint.Name = "editor.actor.spawn_blueprint";
@@ -2376,7 +2564,7 @@ struct FEditorAgentToolExecutor::FImpl
             }
             return true;
         };
-        bInitialized = Registry.Register(std::move(SpawnBlueprint)) && bInitialized;
+        bInitialized = RegisterTool(std::move(SpawnBlueprint)) && bInitialized;
 
         FAgentToolDefinition DeleteActor;
         DeleteActor.Name = "editor.actor.delete";
@@ -2413,7 +2601,7 @@ struct FEditorAgentToolExecutor::FImpl
             }
             return true;
         };
-        bInitialized = Registry.Register(std::move(DeleteActor)) && bInitialized;
+        bInitialized = RegisterTool(std::move(DeleteActor)) && bInitialized;
 
         FAgentToolDefinition DeleteActors;
         DeleteActors.Name = "editor.actor.delete_many";
@@ -2477,7 +2665,7 @@ struct FEditorAgentToolExecutor::FImpl
                 }
             return true;
         };
-        bInitialized = Registry.Register(std::move(DeleteActors)) && bInitialized;
+        bInitialized = RegisterTool(std::move(DeleteActors)) && bInitialized;
 
         FAgentToolDefinition CreateRoom;
         CreateRoom.Name = "editor.scene.create_room";
@@ -2548,7 +2736,7 @@ struct FEditorAgentToolExecutor::FImpl
             if (!bCreated) return Failure(Call, "Could not create every room part");
             return Success(Call, {{"actors", std::move(Paths)}, {"parts", 5}});
         };
-        bInitialized = Registry.Register(std::move(CreateRoom)) && bInitialized;
+        bInitialized = RegisterTool(std::move(CreateRoom)) && bInitialized;
 
         FAgentToolDefinition CreateThirdPerson;
         CreateThirdPerson.Name = "editor.gameplay.create_third_person_character";
@@ -2621,7 +2809,7 @@ struct FEditorAgentToolExecutor::FImpl
                 {"player_start", Start->GetPathName()},
                 {"profile", ProfilePath.ToString()}});
         };
-        bInitialized = Registry.Register(std::move(CreateThirdPerson)) && bInitialized;
+        bInitialized = RegisterTool(std::move(CreateThirdPerson)) && bInitialized;
 
         FAgentToolDefinition SetLocation;
         SetLocation.Name = "editor.actor.set_location";
@@ -2671,7 +2859,7 @@ struct FEditorAgentToolExecutor::FImpl
             }
             return true;
         };
-        bInitialized = Registry.Register(std::move(SetLocation)) && bInitialized;
+        bInitialized = RegisterTool(std::move(SetLocation)) && bInitialized;
 
         FAgentToolDefinition ValidateGameplay;
         ValidateGameplay.Name = "editor.play.validate";
@@ -2688,7 +2876,7 @@ struct FEditorAgentToolExecutor::FImpl
                 ? Success(Call, {{"valid", true}, {"message", Result.Message}})
                 : Failure(Call, Result.Message);
         };
-        bInitialized = Registry.Register(std::move(ValidateGameplay)) && bInitialized;
+        bInitialized = RegisterTool(std::move(ValidateGameplay)) && bInitialized;
 
         FAgentToolDefinition StartPlay;
         StartPlay.Name = "editor.play.start";
@@ -2705,7 +2893,7 @@ struct FEditorAgentToolExecutor::FImpl
                 ? Success(Call, {{"started", true}, {"message", Result.second}})
                 : Failure(Call, Result.second);
         };
-        bInitialized = Registry.Register(std::move(StartPlay)) && bInitialized;
+        bInitialized = RegisterTool(std::move(StartPlay)) && bInitialized;
 
         FAgentToolDefinition StopPlay;
         StopPlay.Name = "editor.play.stop";
@@ -2722,7 +2910,7 @@ struct FEditorAgentToolExecutor::FImpl
                 ? Success(Call, {{"stopped", true}, {"message", Result.second}})
                 : Failure(Call, Result.second);
         };
-        bInitialized = Registry.Register(std::move(StopPlay)) && bInitialized;
+        bInitialized = RegisterTool(std::move(StopPlay)) && bInitialized;
 
         FAgentToolDefinition SaveWorld;
         SaveWorld.Name = "editor.world.save";
@@ -2741,7 +2929,7 @@ struct FEditorAgentToolExecutor::FImpl
                     {"file", HostServices.WorldDocument->GetFilePath().string()}})
                 : Failure(Call, Result.Message);
         };
-        bInitialized = Registry.Register(std::move(SaveWorld)) && bInitialized;
+        bInitialized = RegisterTool(std::move(SaveWorld)) && bInitialized;
 
         FAgentToolDefinition CreateProject;
         CreateProject.Name = "editor.project.create_from_third_person_template";
@@ -2879,7 +3067,7 @@ struct FEditorAgentToolExecutor::FImpl
             }
             return true;
         };
-        bInitialized = Registry.Register(std::move(CreateProject)) && bInitialized;
+        bInitialized = RegisterTool(std::move(CreateProject)) && bInitialized;
 
         FAgentToolDefinition PackageProject;
         PackageProject.Name = "editor.project.package";
@@ -2912,13 +3100,19 @@ struct FEditorAgentToolExecutor::FImpl
                     {"output", (OutputRoot / PackageName).string()}})
                 : Failure(Call, Result.second);
         };
-        bInitialized = Registry.Register(std::move(PackageProject)) && bInitialized;
+        bInitialized = RegisterTool(std::move(PackageProject)) && bInitialized;
     }
 
     FEngineLoop* EngineLoop = nullptr;
     FEditorSelection* Selection = nullptr;
     FEditorAgentHostServices HostServices;
     FTransaction Transaction;
+    FWorldToolProvider WorldTools;
+    FObjectToolProvider ObjectTools;
+    FAssetToolProvider AssetTools;
+    FBlueprintGraphToolProvider BlueprintGraphTools;
+    FGameplayToolProvider GameplayTools;
+    FProjectProcessToolProvider ProjectProcessTools;
     FAgentToolRegistry Registry;
     std::optional<FPendingChangeSet> PendingChangeSet;
     std::string LastChangeSetError;

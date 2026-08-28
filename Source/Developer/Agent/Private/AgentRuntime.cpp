@@ -1,5 +1,7 @@
 #include "Pico/Agent/AgentRuntime.h"
 
+#include "Pico/Agent/AgentMetrics.h"
+
 #include "Pico/Tasks/TaskSystem.h"
 
 #include <nlohmann/json.hpp>
@@ -26,6 +28,19 @@ std::int64_t NowMilliseconds()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+std::uint64_t MeasureRequestContextBytes(const FAgentProviderRequest& Request)
+{
+    std::uint64_t Bytes = Request.ProgressLedgerJson.size()
+        + Request.KnowledgeContextJson.size() + Request.SkillContextJson.size();
+    for (const FAgentMessage& Message : Request.Messages)
+    {
+        Bytes += Message.Content.size() + Message.ToolCallId.size();
+        for (const FAgentToolCall& Call : Message.ToolCalls)
+            Bytes += Call.Id.size() + Call.Name.size() + Call.ArgumentsJson.size();
+    }
+    return Bytes;
 }
 }
 
@@ -55,6 +70,7 @@ FAgentRunResult FAgentRuntime::Run(
     const FCancellationToken* CancellationToken)
 {
     StartTime = std::chrono::steady_clock::now();
+    ContextBytes = 0;
     RunId = MakeTraceId("run");
     TurnId.clear();
     RunSpan = BeginSpan("AgentRun", {});
@@ -69,7 +85,8 @@ FAgentRunResult FAgentRuntime::Run(
         UserMessage.Content = std::move(Prompt);
         if (!Session.Append(std::move(UserMessage), &Error))
         {
-            return Finish(EAgentStatus::Failed, std::move(Error));
+            return Finish(EAgentStatus::Failed, std::move(Error),
+                EAgentFailureClass::Infrastructure);
         }
     }
     else if (CurrentGoal.empty())
@@ -87,18 +104,21 @@ FAgentRunResult FAgentRuntime::Run(
 
     if (!Transition(EAgentStatus::Planning, Error))
     {
-        return Finish(EAgentStatus::Failed, std::move(Error));
+        return Finish(EAgentStatus::Failed, std::move(Error),
+            EAgentFailureClass::Infrastructure);
     }
 
     while (true)
     {
         if (IsCancelled(CancellationToken))
         {
-            return Finish(EAgentStatus::Cancelled, "Agent run was cancelled");
+            return Finish(EAgentStatus::Cancelled, "Agent run was cancelled",
+                EAgentFailureClass::Cancelled);
         }
         if (!CheckBudget(Error))
         {
-            return Finish(EAgentStatus::Failed, std::move(Error));
+            return Finish(EAgentStatus::Failed, std::move(Error),
+                EAgentFailureClass::BudgetExceeded);
         }
 
         ++Counters.Steps;
@@ -111,6 +131,7 @@ FAgentRunResult FAgentRuntime::Run(
         Request.OnTextDelta = Context.OnAssistantDelta;
         Request.Step = Counters.Steps;
         Request.RepairAttempt = Counters.RepairAttempts;
+        ContextBytes += MeasureRequestContextBytes(Request);
         FActiveSpan ModelSpan = BeginSpan("Model.Generate", TurnSpan.Id);
         FAgentProviderResponse Response = Provider.Generate(Request, CancellationToken);
         const bool bProviderCancelled = IsCancelled(CancellationToken)
@@ -120,24 +141,40 @@ FAgentRunResult FAgentRuntime::Run(
 
         if (bProviderCancelled)
         {
-            return Finish(EAgentStatus::Cancelled, "Agent run was cancelled");
+            return Finish(EAgentStatus::Cancelled, "Agent run was cancelled",
+                EAgentFailureClass::Cancelled);
         }
         if (!Response.bSucceeded)
         {
+            const EAgentFailureClass ProviderFailure =
+                Response.FailureClass == EAgentFailureClass::None
+                ? EAgentFailureClass::Infrastructure : Response.FailureClass;
+            const FAgentRecoveryPolicy Recovery =
+                GetAgentRecoveryPolicy(ProviderFailure);
             FAgentEvent Failure;
             Failure.Type = EAgentEventType::Error;
             Failure.Content = Response.Error.empty() ? "Provider failed" : Response.Error;
+            Failure.FailureClass = ProviderFailure;
+            Failure.RecoveryAction = Recovery.Action;
             Session.Append(std::move(Failure));
+            if (!Recovery.bAutomaticallyRetryable)
+            {
+                return Finish(EAgentStatus::Failed,
+                    Response.Error.empty() ? "Provider failed" : Response.Error,
+                    ProviderFailure);
+            }
             if (Counters.RepairAttempts >= Budget.MaxRepairAttempts)
             {
-                return Finish(EAgentStatus::Failed, "Agent repair budget exhausted");
+                return Finish(EAgentStatus::Failed, "Agent repair budget exhausted",
+                    EAgentFailureClass::BudgetExceeded);
             }
             ++Counters.RepairAttempts;
             if (!Transition(EAgentStatus::Repairing, Error)
                 || !Session.WriteCheckpoint(EAgentStatus::Repairing, Counters, &Error)
                 || !Transition(EAgentStatus::Planning, Error))
             {
-                return Finish(EAgentStatus::Failed, std::move(Error));
+                return Finish(EAgentStatus::Failed, std::move(Error),
+                    EAgentFailureClass::Infrastructure);
             }
             EndTurn(false, Response.Error.empty() ? "Provider failed" : Response.Error);
             continue;
@@ -151,7 +188,8 @@ FAgentRunResult FAgentRuntime::Run(
             AssistantMessage.Content = Response.Content;
             if (!Session.Append(std::move(AssistantMessage), &Error))
             {
-                return Finish(EAgentStatus::Failed, std::move(Error));
+                return Finish(EAgentStatus::Failed, std::move(Error),
+                    EAgentFailureClass::Infrastructure);
             }
         }
 
@@ -162,7 +200,8 @@ FAgentRunResult FAgentRuntime::Run(
                     Budget.MaxSteps, Budget.ReservedFinalSteps))
             {
                 return Finish(EAgentStatus::Failed,
-                    "Agent used the step reserved for its final answer to request another tool");
+                    "Agent used the step reserved for its final answer to request another tool",
+                    EAgentFailureClass::BudgetExceeded);
             }
             bool bNeedsApproval = false;
             std::size_t NewToolCallCount = 0;
@@ -175,7 +214,8 @@ FAgentRunResult FAgentRuntime::Run(
                 if (ExistingResult && !Session.MatchesToolCall(Call))
                 {
                     return Finish(EAgentStatus::Failed,
-                        "ToolCall id was reused with different tool or arguments: " + Call.Id);
+                        "ToolCall id was reused with different tool or arguments: " + Call.Id,
+                        EAgentFailureClass::Conflict);
                 }
                 const bool bReadOnly = ToolExecutor.IsReadOnly(Call);
                 const bool bSemanticCacheHit = !ExistingResult && bReadOnly
@@ -193,21 +233,24 @@ FAgentRunResult FAgentRuntime::Run(
                 || NewToolCallCount > Budget.MaxToolCalls - Counters.ToolCalls)
             {
                 return Finish(EAgentStatus::Failed,
-                    "Agent tool-call budget exhausted before approval");
+                    "Agent tool-call budget exhausted before approval",
+                    EAgentFailureClass::BudgetExceeded);
             }
             if (Counters.ReadOnlyToolCalls > Budget.MaxReadOnlyToolCalls
                 || NewReadOnlyCallCount
                     > Budget.MaxReadOnlyToolCalls - Counters.ReadOnlyToolCalls)
             {
                 return Finish(EAgentStatus::Failed,
-                    "Agent read-only tool budget exhausted before approval");
+                    "Agent read-only tool budget exhausted before approval",
+                    EAgentFailureClass::BudgetExceeded);
             }
             if (Counters.MutationToolCalls > Budget.MaxMutationToolCalls
                 || NewMutationCallCount
                     > Budget.MaxMutationToolCalls - Counters.MutationToolCalls)
             {
                 return Finish(EAgentStatus::Failed,
-                    "Agent mutation tool budget exhausted before approval");
+                    "Agent mutation tool budget exhausted before approval",
+                    EAgentFailureClass::BudgetExceeded);
             }
             if (bNeedsApproval)
             {
@@ -215,7 +258,8 @@ FAgentRunResult FAgentRuntime::Run(
                 if (!Transition(EAgentStatus::AwaitingApproval, Error))
                 {
                     EndSpan(ApprovalSpan, false, Error);
-                    return Finish(EAgentStatus::Failed, std::move(Error));
+                    return Finish(EAgentStatus::Failed, std::move(Error),
+                        EAgentFailureClass::Infrastructure);
                 }
                 for (const FAgentToolCall& Call : Response.ToolCalls)
                 {
@@ -229,19 +273,23 @@ FAgentRunResult FAgentRuntime::Run(
             }
             if (!Transition(EAgentStatus::ExecutingTool, Error))
             {
-                return Finish(EAgentStatus::Failed, std::move(Error));
+                return Finish(EAgentStatus::Failed, std::move(Error),
+                    EAgentFailureClass::Infrastructure);
             }
             bool bToolFailed = false;
             bool bMadeProgress = false;
+            EAgentFailureClass ToolFailureClass = EAgentFailureClass::None;
             for (const FAgentToolCall& Call : Response.ToolCalls)
             {
                 if (IsCancelled(CancellationToken))
                 {
-                    return Finish(EAgentStatus::Cancelled, "Agent run was cancelled");
+                    return Finish(EAgentStatus::Cancelled, "Agent run was cancelled",
+                        EAgentFailureClass::Cancelled);
                 }
                 if (Call.Id.empty() || Call.Name.empty())
                 {
                     bToolFailed = true;
+                    ToolFailureClass = EAgentFailureClass::ModelProtocol;
                     Error = "Provider emitted a tool call without a stable id or name";
                     break;
                 }
@@ -270,7 +318,8 @@ FAgentRunResult FAgentRuntime::Run(
                     if (!Session.Append(std::move(CallEvent), &Error))
                     {
                         EndSpan(ToolSpan, false, Error);
-                        return Finish(EAgentStatus::Failed, std::move(Error));
+                        return Finish(EAgentStatus::Failed, std::move(Error),
+                            EAgentFailureClass::Infrastructure);
                     }
                     const auto Cached = bReadOnly
                         ? ReadOnlyCache.find(SemanticKey) : ReadOnlyCache.end();
@@ -287,7 +336,8 @@ FAgentRunResult FAgentRuntime::Run(
                             EndSpan(ToolSpan, false,
                                 "Agent tool-call budget exhausted");
                             return Finish(EAgentStatus::Failed,
-                                "Agent tool-call budget exhausted");
+                                "Agent tool-call budget exhausted",
+                                EAgentFailureClass::BudgetExceeded);
                         }
                         ++Counters.ToolCalls;
                         if (bReadOnly) ++Counters.ReadOnlyToolCalls;
@@ -326,16 +376,21 @@ FAgentRunResult FAgentRuntime::Run(
                 ResultEvent.Content = Result.Error;
                 ResultEvent.bSucceeded = Result.bSucceeded;
                 ResultEvent.bReused = Result.bReused;
+                ResultEvent.FailureClass = Result.FailureClass;
+                ResultEvent.RecoveryAction = Result.RecoveryAction;
                 if (!Session.Append(std::move(ResultEvent), &Error))
                 {
                     EndSpan(ToolSpan, false, Error);
-                    return Finish(EAgentStatus::Failed, std::move(Error));
+                    return Finish(EAgentStatus::Failed, std::move(Error),
+                        EAgentFailureClass::Infrastructure);
                 }
                 ToolExecutor.CommitDurableResult(Call);
                 EndSpan(ToolSpan, Result.bSucceeded, Result.Error);
                 if (!Result.bSucceeded)
                 {
                     bToolFailed = true;
+                    ToolFailureClass = Result.FailureClass == EAgentFailureClass::None
+                        ? EAgentFailureClass::ExecutionFailed : Result.FailureClass;
                     Error = Result.Error.empty() ? "Tool execution failed" : Result.Error;
                     break;
                 }
@@ -343,16 +398,25 @@ FAgentRunResult FAgentRuntime::Run(
 
             if (bToolFailed)
             {
+                const FAgentRecoveryPolicy Recovery =
+                    GetAgentRecoveryPolicy(ToolFailureClass);
+                if (!Recovery.bAutomaticallyRetryable)
+                {
+                    return Finish(EAgentStatus::Failed, Error, ToolFailureClass);
+                }
                 if (Counters.RepairAttempts >= Budget.MaxRepairAttempts)
                 {
-                    return Finish(EAgentStatus::Failed, Error);
+                    return Finish(EAgentStatus::Failed,
+                        "Agent repair budget exhausted after: " + Error,
+                        EAgentFailureClass::BudgetExceeded);
                 }
                 ++Counters.RepairAttempts;
                 if (!Transition(EAgentStatus::Repairing, Error)
                     || !Session.WriteCheckpoint(EAgentStatus::Repairing, Counters, &Error)
                     || !Transition(EAgentStatus::Planning, Error))
                 {
-                    return Finish(EAgentStatus::Failed, std::move(Error));
+                    return Finish(EAgentStatus::Failed, std::move(Error),
+                        EAgentFailureClass::Infrastructure);
                 }
                 EndTurn(false, Error);
                 continue;
@@ -372,7 +436,8 @@ FAgentRunResult FAgentRuntime::Run(
                     return Finish(EAgentStatus::Failed,
                         "Agent stopped after repeated tool calls made no progress; "
                         "use the cached facts, perform a state-changing action, ask the "
-                        "user for missing information, or return a final answer");
+                        "user for missing information, or return a final answer",
+                        EAgentFailureClass::BudgetExceeded);
                 }
             }
 
@@ -382,7 +447,8 @@ FAgentRunResult FAgentRuntime::Run(
                 || !Transition(EAgentStatus::Planning, Error))
             {
                 EndSpan(ValidationSpan, false, Error);
-                return Finish(EAgentStatus::Failed, std::move(Error));
+                return Finish(EAgentStatus::Failed, std::move(Error),
+                    EAgentFailureClass::Infrastructure);
             }
             EndSpan(ValidationSpan, true);
             EndTurn(true);
@@ -398,14 +464,17 @@ FAgentRunResult FAgentRuntime::Run(
 
         if (Counters.RepairAttempts >= Budget.MaxRepairAttempts)
         {
-            return Finish(EAgentStatus::Failed, "Provider returned neither a final answer nor a tool call");
+            return Finish(EAgentStatus::Failed,
+                "Provider returned neither a final answer nor a tool call",
+                EAgentFailureClass::BudgetExceeded);
         }
         ++Counters.RepairAttempts;
         if (!Transition(EAgentStatus::Repairing, Error)
             || !Session.WriteCheckpoint(EAgentStatus::Repairing, Counters, &Error)
             || !Transition(EAgentStatus::Planning, Error))
         {
-            return Finish(EAgentStatus::Failed, std::move(Error));
+            return Finish(EAgentStatus::Failed, std::move(Error),
+                EAgentFailureClass::Infrastructure);
         }
         EndTurn(false, "Provider returned neither a final answer nor a tool call");
     }
@@ -526,14 +595,28 @@ bool FAgentRuntime::Transition(EAgentStatus Status, std::string& OutError)
     return Session.SetStatus(Status, &OutError);
 }
 
-FAgentRunResult FAgentRuntime::Finish(EAgentStatus Status, std::string Error)
+FAgentRunResult FAgentRuntime::Finish(
+    EAgentStatus Status,
+    std::string Error,
+    EAgentFailureClass FailureClass)
 {
+    if (Status == EAgentStatus::Completed)
+        FailureClass = EAgentFailureClass::None;
+    else if (Status == EAgentStatus::Cancelled)
+        FailureClass = EAgentFailureClass::Cancelled;
+    else if (Status == EAgentStatus::Failed
+        && FailureClass == EAgentFailureClass::None)
+        FailureClass = EAgentFailureClass::Infrastructure;
+    const FAgentRecoveryPolicy Recovery = GetAgentRecoveryPolicy(FailureClass);
+
     std::string PersistenceError;
     if (!Error.empty())
     {
         FAgentEvent Event;
         Event.Type = EAgentEventType::Error;
         Event.Content = Error;
+        Event.FailureClass = FailureClass;
+        Event.RecoveryAction = Recovery.Action;
         Session.Append(std::move(Event), &PersistenceError);
     }
     Session.SetStatus(Status, &PersistenceError);
@@ -548,6 +631,23 @@ FAgentRunResult FAgentRuntime::Finish(EAgentStatus Status, std::string Error)
     Result.Error = std::move(Error);
     Result.Counters = Counters;
     Result.RunId = RunId;
+    Result.ContextBytes = ContextBytes;
+    Result.FailureClass = FailureClass;
+    Result.RecoveryAction = Recovery.Action;
+    const FAgentRunMetrics Metrics = BuildAgentRunMetrics(
+        Session, Result, ContextBytes);
+    const std::filesystem::path MetricsPath =
+        Session.GetEventLogPath().parent_path() / "Metrics" / (RunId + ".json");
+    std::string MetricsError;
+    if (Metrics.WriteJson(MetricsPath, &MetricsError))
+        Result.MetricsPath = MetricsPath.string();
+    else if (Result.Error.empty())
+    {
+        Result.Error = "Could not persist Agent Metrics: " + MetricsError;
+        Result.FailureClass = EAgentFailureClass::Infrastructure;
+        Result.RecoveryAction = GetAgentRecoveryPolicy(
+            Result.FailureClass).Action;
+    }
     return Result;
 }
 

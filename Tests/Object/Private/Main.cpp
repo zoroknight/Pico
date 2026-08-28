@@ -1024,6 +1024,59 @@ void TestObjectCreationAndIdentity(FTestRunner& Runner)
         "PostInitProperties failure leaves no half-registered parent object");
 }
 
+void TestObjectNameIndexLifecycle(FTestRunner& Runner)
+{
+    PTestObject* OuterA = Pico::NewObject<PTestObject>(nullptr, "IndexOuterA");
+    PTestObject* OuterB = Pico::NewObject<PTestObject>(nullptr, "IndexOuterB");
+    PTestObject* ChildA = OuterA != nullptr
+        ? Pico::NewObject<PTestObject>(OuterA, "SharedName") : nullptr;
+    PTestObject* ChildB = OuterB != nullptr
+        ? Pico::NewObject<PTestObject>(OuterB, "SharedName") : nullptr;
+    Runner.Expect(ChildA != nullptr && ChildB != nullptr
+            && Pico::FindObject(OuterA, Pico::FName("SharedName")) == ChildA
+            && Pico::FindObject(OuterB, Pico::FName("SharedName")) == ChildB,
+        "Object name index scopes identical names by stable Outer handle");
+
+    Runner.Expect(ChildA != nullptr
+            && Pico::RenameObject(ChildA, Pico::FName("RenamedChild"))
+            && Pico::FindObject(OuterA, Pico::FName("SharedName")) == nullptr
+            && Pico::FindObject(OuterA, Pico::FName("RenamedChild")) == ChildA,
+        "Rename atomically moves the object name index entry");
+
+    const Pico::FObjectHandle OldHandle = ChildA != nullptr
+        ? ChildA->GetHandle() : Pico::FObjectHandle {};
+    Runner.Expect(ChildA != nullptr && Pico::DestroyObject(ChildA)
+            && Pico::FindObject(OuterA, Pico::FName("RenamedChild")) == nullptr,
+        "Destroy removes the object name index entry");
+    PTestObject* Replacement = OuterA != nullptr
+        ? Pico::NewObject<PTestObject>(OuterA, "RenamedChild") : nullptr;
+    Runner.Expect(Replacement != nullptr && Replacement->GetHandle() != OldHandle
+            && Pico::FindObject(OuterA, Pico::FName("RenamedChild")) == Replacement,
+        "A reused slot publishes only its new serial in the name index");
+
+    std::vector<PTestObject*> ChurnObjects;
+    ChurnObjects.reserve(2000);
+    for (std::size_t Index = 0; Index < 2000; ++Index)
+        ChurnObjects.push_back(Pico::NewObject<PTestObject>(nullptr,
+            "IndexChurn_" + std::to_string(Index)));
+    bool bAllFound = true;
+    for (std::size_t Index = 0; Index < ChurnObjects.size(); ++Index)
+        bAllFound &= Pico::FindObject(nullptr,
+            Pico::FName("IndexChurn_" + std::to_string(Index))) == ChurnObjects[Index];
+    for (PTestObject* Object : ChurnObjects)
+        if (Object != nullptr) Pico::DestroyObject(Object);
+    std::string IndexError;
+    Runner.Expect(bAllFound && Pico::FObjectRegistry::ValidateNameIndex(&IndexError),
+        "Name index remains complete and free of stale entries after slot churn");
+
+    if (Replacement != nullptr) Pico::DestroyObject(Replacement);
+    if (ChildB != nullptr) Pico::DestroyObject(ChildB);
+    if (OuterA != nullptr) Pico::DestroyObject(OuterA);
+    if (OuterB != nullptr) Pico::DestroyObject(OuterB);
+    Runner.Expect(Pico::FObjectRegistry::ValidateNameIndex(&IndexError),
+        "Name index matches the registry after nested object cleanup");
+}
+
 void TestPropertyReflection(FTestRunner& Runner)
 {
     const Pico::PClass* TestClass = PTestObject::StaticClass();
@@ -1783,6 +1836,7 @@ int main()
         TestObjectDelegates(Runner);
         TestReflectionMacros(Runner);
         TestObjectCreationAndIdentity(Runner);
+        TestObjectNameIndexLifecycle(Runner);
         TestPropertyReflection(Runner);
         TestFunctionReflection(Runner);
         TestBeginDestroy(Runner);

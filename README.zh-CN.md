@@ -20,6 +20,9 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   ToolCall ID 幂等。
 - Agent 工具执行固定经过 JSON Schema、权限、审批、现有 World Snapshot 事务、后置验证和回滚；阶段 Trace
   写入 Session，CallId 不能换参数复用授权，Agent 创建的 Actor 可直接进入编辑器原有 Undo 历史。
+- Agent 每次运行复用 Run/Turn/Model/Approval/Tool/Validation Span，向 Session 旁持久化版本化 Metrics，统一记录
+  调用数、阶段延迟、上下文字节、Repair、Cache Hit、权限拒绝、失败分类和 Completion Rate，供 Golden Task
+  与后续 CI 使用，不从聊天文本猜测成功与否。
 - Agent 可通过通用工具发现 Actor/Component 的 `PProperty`、当前值和语义元数据，并在一次审批与 Undo 事务中
   批量修改支持的 `Editable` 属性；新增普通反射属性不需要再手写专用工具。
 - AI Chat 支持按 Provider 隔离的多会话、新建/删除、重启恢复、自动定位最新消息、气泡复制，以及基于 MD4C 的
@@ -38,6 +41,11 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   StateRevision 语义缓存、结构化 Progress Ledger、分类预算
   和连续无进展检测约束重复查询。
 - 运行类似 UE 的 `PreInit -> Init -> Tick -> Exit` 引擎循环。
+- 通过位于 `PicoCore` 的低开销 CPU Profiler 记录 Frame/Thread/Parent Scope，导出 Chrome Trace 和聚合 JSON；
+  独立 `PicoRuntimeBenchmarks` 以 Quick/Full 两档测量真实 Object、Tick、GC 和 Replication 路径并输出版本化
+  JSON/CSV，本阶段先建立证据，不提前修改被测算法。
+- 通过[性能优化总览与追踪记录](Docs/Pico_Performance_Optimization_Log.zh-CN.md)持续记录性能瓶颈、发现依据、
+  优化方法、优化前后 Release 数据、额外代价和后续决定。
 - 通过独立 `PicoNetCore` 使用确定性 Loopback 或非阻塞 Windows UDP 连接一个服务器和多个客户端，提供版本化
   Packet、握手、Sequence/Ack、有界且有序的可靠交付、心跳、超时，以及 World 前后 NetDriver 阶段。
 - 通过每连接 ActorChannel、服务器分配的 NetObjectId、稳定反射 Schema 和确认属性基线复制显式启用的 Actor，
@@ -557,6 +565,10 @@ private:
 相关文档：
 
 - [AI 优先后续开发路线（当前首要计划）](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)
+- [工程深度 8 周路线（当前最高优先级）](Docs/Pico_Engineering_Depth_Roadmap.zh-CN.md)
+- [工程深度第 1 周：Profiler、Runtime Benchmark 与 Agent Metrics](Docs/EngineeringDepthWeek01_MeasurementFoundation.zh-CN.md)
+- [工程深度第 2 周：Runtime 基线与 Agent 失败语义](Docs/EngineeringDepthWeek02_BaselineAndFailureSemantics.zh-CN.md)
+- [工程深度第 3 周：Object Index 与 Agent Capability Provider](Docs/EngineeringDepthWeek03_ObjectIndexAndAgentCapabilities.zh-CN.md)
 - [PicoTasks 与 Game Thread Dispatcher](Docs/AIPhase01_PicoTasksAndGameThreadDispatcher.md)
 - [Pico Agent Core 与可恢复 Session](Docs/AIPhase02_PicoAgentCoreAndSessions.md)
 - [Agent Tool 安全管线与编辑器事务](Docs/AIPhase03_AgentToolPipeline.md)

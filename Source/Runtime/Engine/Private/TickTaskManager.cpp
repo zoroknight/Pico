@@ -2,6 +2,7 @@
 
 #include "Pico/Core/GameThread.h"
 #include "Pico/Core/Log.h"
+#include "Pico/Core/Profiler.h"
 #include "Pico/Engine/TickFunction.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectGlobals.h"
@@ -177,6 +178,8 @@ const FTickTaskManager::FRegisteredTick* FTickTaskManager::FindRegisteredTick(ui
 
 void FTickTaskManager::TickGroup(uint64 RegistrationLimit, int GroupIndex, float DeltaSeconds)
 {
+    FProfileScopeToken ScheduleScope =
+        FProfiler::Get().BeginScope("Tick.Schedule");
     const ETickGroup Group = static_cast<ETickGroup>(GroupIndex);
     std::vector<uint64> Nodes;
     for (const FRegisteredTick& Entry : RegisteredTicks)
@@ -243,6 +246,8 @@ void FTickTaskManager::TickGroup(uint64 RegistrationLimit, int GroupIndex, float
         }
     }
 
+    FProfiler::Get().EndScope(ScheduleScope);
+    PICO_PROFILE_SCOPE("Tick.Execute");
     for (uint64 Id : Ordered)
     {
         FRegisteredTick* LiveEntry = FindRegisteredTick(Id);

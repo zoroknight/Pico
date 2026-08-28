@@ -60,7 +60,10 @@ private:
         const FAgentToolCall& Call,
         const FAgentToolResult& Cached) const;
     bool Transition(EAgentStatus Status, std::string& OutError);
-    FAgentRunResult Finish(EAgentStatus Status, std::string Error = {});
+    FAgentRunResult Finish(
+        EAgentStatus Status,
+        std::string Error = {},
+        EAgentFailureClass FailureClass = EAgentFailureClass::None);
     FActiveSpan BeginSpan(std::string Name, std::string ParentId);
     void EndSpan(FActiveSpan& Span, bool bSucceeded, std::string Error = {});
     void BeginTurn();
@@ -78,6 +81,7 @@ private:
     std::vector<FProgressAction> ProgressActions;
     std::chrono::steady_clock::time_point StartTime;
     std::string RunId;
+    std::uint64_t ContextBytes = 0;
     std::string TurnId;
     FActiveSpan RunSpan;
     FActiveSpan TurnSpan;

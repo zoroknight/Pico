@@ -29,6 +29,39 @@ enum class EAgentStatus
     Cancelled
 };
 
+enum class EAgentFailureClass
+{
+    None,
+    ModelProtocol,
+    InvalidArguments,
+    PermissionDenied,
+    ApprovalRejected,
+    PreconditionFailed,
+    ExecutionFailed,
+    VerificationFailed,
+    Infrastructure,
+    BudgetExceeded,
+    Conflict,
+    Cancelled
+};
+
+enum class EAgentRecoveryAction
+{
+    Retry,
+    RefreshState,
+    Replan,
+    WaitForApproval,
+    AskUser,
+    Rollback,
+    Abort
+};
+
+struct FAgentRecoveryPolicy
+{
+    EAgentRecoveryAction Action = EAgentRecoveryAction::Abort;
+    bool bAutomaticallyRetryable = false;
+};
+
 enum class EAgentEventType
 {
     SessionCreated,
@@ -63,6 +96,8 @@ struct FAgentToolResult
     std::string OutputJson = "{}";
     std::string Error;
     bool bReused = false;
+    EAgentFailureClass FailureClass = EAgentFailureClass::None;
+    EAgentRecoveryAction RecoveryAction = EAgentRecoveryAction::Abort;
 };
 
 struct FAgentBudget
@@ -95,6 +130,10 @@ struct FAgentRunResult
     std::string Error;
     FAgentCounters Counters;
     std::string RunId;
+    std::uint64_t ContextBytes = 0;
+    std::string MetricsPath;
+    EAgentFailureClass FailureClass = EAgentFailureClass::None;
+    EAgentRecoveryAction RecoveryAction = EAgentRecoveryAction::Abort;
 };
 
 std::string_view ToString(EAgentRole Role);
@@ -103,5 +142,14 @@ std::string_view ToString(EAgentEventType Type);
 bool TryParseAgentRole(std::string_view Text, EAgentRole& OutRole);
 bool TryParseAgentStatus(std::string_view Text, EAgentStatus& OutStatus);
 bool TryParseAgentEventType(std::string_view Text, EAgentEventType& OutType);
+std::string_view ToString(EAgentFailureClass FailureClass);
+std::string_view ToString(EAgentRecoveryAction Action);
+bool TryParseAgentFailureClass(
+    std::string_view Text,
+    EAgentFailureClass& OutFailureClass);
+bool TryParseAgentRecoveryAction(
+    std::string_view Text,
+    EAgentRecoveryAction& OutAction);
+FAgentRecoveryPolicy GetAgentRecoveryPolicy(EAgentFailureClass FailureClass);
 bool IsAllowedAgentTransition(EAgentStatus From, EAgentStatus To);
 }

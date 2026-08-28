@@ -1,0 +1,255 @@
+{
+  "build_config": "Debug",
+  "core_type_sizes": {
+    "FActorChannelSnapshot": 40,
+    "FNetConnection": 616,
+    "FObjectHandle": 8,
+    "FReplicationFieldDescriptor": 24,
+    "FTickFunction": 80,
+    "PActor": 312,
+    "PActorComponent": 216,
+    "PClass": 168,
+    "PObject": 128,
+    "PProperty": 336
+  },
+  "environment": {
+    "hardware_threads": 32,
+    "pointer_size": 8
+  },
+  "format_version": 2,
+  "full_scale_contract": {
+    "dirty_ratio_percent": [
+      1,
+      10,
+      100
+    ],
+    "object": [
+      1000,
+      10000,
+      100000
+    ],
+    "replication": [
+      100,
+      1000
+    ],
+    "tick": [
+      1000,
+      10000
+    ]
+  },
+  "preset": "quick",
+  "profile_scopes": [
+    {
+      "count": 42,
+      "max_us": 3294,
+      "min_us": 7,
+      "name": "GC.Mark",
+      "total_us": 27195
+    },
+    {
+      "count": 42,
+      "max_us": 1002,
+      "min_us": 71,
+      "name": "GC.Sweep",
+      "total_us": 16656
+    },
+    {
+      "count": 7,
+      "max_us": 5,
+      "min_us": 3,
+      "name": "Physics.Step",
+      "total_us": 29
+    },
+    {
+      "count": 84,
+      "max_us": 1431,
+      "min_us": 0,
+      "name": "Tick.Execute",
+      "total_us": 15311
+    },
+    {
+      "count": 84,
+      "max_us": 3699,
+      "min_us": 1,
+      "name": "Tick.Schedule",
+      "total_us": 38143
+    },
+    {
+      "count": 7,
+      "max_us": 64,
+      "min_us": 31,
+      "name": "World.Tick",
+      "total_us": 261
+    }
+  ],
+  "records": [
+    {
+      "bytes_per_frame": 0,
+      "case": "Create",
+      "max_us": 18279,
+      "mean_us": 17210.85714285714,
+      "ns_per_operation": 17210.85714285714,
+      "operations": 1000,
+      "p50_us": 17163,
+      "p95_us": 18279,
+      "parameters": "",
+      "sample_count": 7,
+      "scale": 1000,
+      "suite": "Object"
+    },
+    {
+      "bytes_per_frame": 0,
+      "case": "Find",
+      "max_us": 6392,
+      "mean_us": 6031.285714285715,
+      "ns_per_operation": 6031.285714285715,
+      "operations": 1000,
+      "p50_us": 5963,
+      "p95_us": 6392,
+      "parameters": "found=1000",
+      "sample_count": 7,
+      "scale": 1000,
+      "suite": "Object"
+    },
+    {
+      "bytes_per_frame": 0,
+      "case": "Rename",
+      "max_us": 13196,
+      "mean_us": 12295.57142857143,
+      "ns_per_operation": 12295.57142857143,
+      "operations": 1000,
+      "p50_us": 12348,
+      "p95_us": 13196,
+      "parameters": "",
+      "sample_count": 7,
+      "scale": 1000,
+      "suite": "Object"
+    },
+    {
+      "bytes_per_frame": 0,
+      "case": "Destroy",
+      "max_us": 5339,
+      "mean_us": 4935.428571428572,
+      "ns_per_operation": 4935.428571428572,
+      "operations": 1000,
+      "p50_us": 4830,
+      "p95_us": 5339,
+      "parameters": "",
+      "sample_count": 7,
+      "scale": 1000,
+      "suite": "Object"
+    },
+    {
+      "bytes_per_frame": 0,
+      "case": "StaticSchedule",
+      "max_us": 3744,
+      "mean_us": 3390.5714285714284,
+      "ns_per_operation": 3390.5714285714284,
+      "operations": 1000,
+      "p50_us": 3308,
+      "p95_us": 3744,
+      "parameters": "",
+      "sample_count": 7,
+      "scale": 1000,
+      "suite": "Tick"
+    },
+    {
+      "bytes_per_frame": 0,
+      "case": "DependencyChange",
+      "max_us": 5563,
+      "mean_us": 5269.428571428572,
+      "ns_per_operation": 5269.428571428572,
+      "operations": 1000,
+      "p50_us": 5186,
+      "p95_us": 5563,
+      "parameters": "chain=1",
+      "sample_count": 7,
+      "scale": 1000,
+      "suite": "Tick"
+    },
+    {
+      "bytes_per_frame": 0,
+      "case": "Collect",
+      "max_us": 814,
+      "mean_us": 707.4285714285714,
+      "ns_per_operation": 707.4285714285714,
+      "operations": 1000,
+      "p50_us": 721,
+      "p95_us": 814,
+      "parameters": "survival=10;density=0;outer_depth=0;collected=900",
+      "sample_count": 7,
+      "scale": 1000,
+      "suite": "GC"
+    },
+    {
+      "bytes_per_frame": 0,
+      "case": "Collect",
+      "max_us": 1261,
+      "mean_us": 1115.142857142857,
+      "ns_per_operation": 1115.142857142857,
+      "operations": 1000,
+      "p50_us": 1056,
+      "p95_us": 1261,
+      "parameters": "survival=50;density=2;outer_depth=4;collected=500",
+      "sample_count": 7,
+      "scale": 1000,
+      "suite": "GC"
+    },
+    {
+      "bytes_per_frame": 0,
+      "case": "Collect",
+      "max_us": 3555,
+      "mean_us": 3260.4285714285716,
+      "ns_per_operation": 3260.4285714285716,
+      "operations": 1000,
+      "p50_us": 3236,
+      "p95_us": 3555,
+      "parameters": "survival=90;density=8;outer_depth=16;collected=100",
+      "sample_count": 7,
+      "scale": 1000,
+      "suite": "GC"
+    },
+    {
+      "bytes_per_frame": 23,
+      "case": "DirtyScan",
+      "max_us": 929,
+      "mean_us": 798.2857142857143,
+      "ns_per_operation": 7982.857142857143,
+      "operations": 100,
+      "p50_us": 771,
+      "p95_us": 929,
+      "parameters": "dirty_percent=1",
+      "sample_count": 7,
+      "scale": 100,
+      "suite": "Replication"
+    },
+    {
+      "bytes_per_frame": 230,
+      "case": "DirtyScan",
+      "max_us": 871,
+      "mean_us": 811.7142857142857,
+      "ns_per_operation": 8117.142857142857,
+      "operations": 100,
+      "p50_us": 799,
+      "p95_us": 871,
+      "parameters": "dirty_percent=10",
+      "sample_count": 7,
+      "scale": 100,
+      "suite": "Replication"
+    },
+    {
+      "bytes_per_frame": 2300,
+      "case": "DirtyScan",
+      "max_us": 1408,
+      "mean_us": 1204.4285714285713,
+      "ns_per_operation": 12044.285714285714,
+      "operations": 100,
+      "p50_us": 1170,
+      "p95_us": 1408,
+      "parameters": "dirty_percent=100",
+      "sample_count": 7,
+      "scale": 100,
+      "suite": "Replication"
+    }
+  ]
+}

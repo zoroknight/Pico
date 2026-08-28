@@ -57,9 +57,10 @@ The current implementation can:
   messages; ground turns through an audited project Knowledge Store and bounded cited RAG Lite, then
   narrow both advertised and executable tools with versioned Pico Skills.
 - Correlate each Agent run through persistent Run/Turn/Span IDs for model, approval, tool, and validation
-  timing. Persist changed World runs as conflict-checked ChangeSets so the Agent can list and restore an
-  exact pre-run snapshot without overwriting later edits. Regression-test production routing with 39 tracked
-  Chinese/English prompts, then run eleven offline Golden Tasks with required/forbidden tools and verifiers,
+  timing, then persist versioned per-run Metrics for counts, phase latency, context bytes, repair/cache use,
+  policy rejection, failure class, and completion rate. Persist changed World runs as conflict-checked ChangeSets so the Agent can list and restore an
+  exact pre-run snapshot without overwriting later edits. Regression-test production routing with 42 tracked
+  Chinese/English prompts, then run twelve offline Golden Tasks with required/forbidden tools and verifiers,
   isolated sessions, and machine-readable reports before GAS or PicoGraph extends the suite.
 - Let the scene Agent search real AssetRegistry entries, create an undoable collision room, assemble a
   third-person Pawn from a Data-Only Actor Blueprint and Character Profile, validate/save the World,
@@ -76,6 +77,11 @@ The current implementation can:
   native project classes before map loading and selects a reflected project `PGameInstance` class.
 - Keep object creation, destruction, GC, reflected property writes, and World ticking on an explicit
   Game Thread, with worker-thread misuse rejected at the API boundary.
+- Profile Frame/Thread/Parent CPU scopes from `PicoCore`, export Chrome Trace and aggregate JSON, and run
+  independent versioned Object/Tick/GC/Replication benchmarks in quick or full scale without changing
+  the measured Runtime algorithms.
+- Track performance work from bottleneck discovery through profiler evidence, optimization cost, before/after Release
+  data, and follow-up decisions in [`Docs/Pico_Performance_Optimization_Log.zh-CN.md`](Docs/Pico_Performance_Optimization_Log.zh-CN.md).
 - Schedule Actor and ActorComponent updates through `FTickFunction`, four ordered TickGroups,
   same-World prerequisites, runtime enable/disable, and tick intervals.
 - Construct a rooted `PGameInstance` through `PClass/NewObject` and notify it across Init, map load,
@@ -730,6 +736,7 @@ See:
 
 - [AI-First Development Roadmap (Chinese)](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)
 - [Engineering Depth: Profiler, Runtime Scalability, and Agent Reliability (Chinese)](Docs/Pico_Engineering_Depth_Roadmap.zh-CN.md)
+- [Engineering Depth Week 1: Measurement Foundation (Chinese)](Docs/EngineeringDepthWeek01_MeasurementFoundation.zh-CN.md)
 - [Agent Game Creation Pipeline and Six-Week Plan (Chinese)](Docs/AgentGameCreationPipeline.zh-CN.md)
 - [PicoTasks and Game Thread Dispatcher (Chinese)](Docs/AIPhase01_PicoTasksAndGameThreadDispatcher.md)
 - [Pico Agent Core and Recoverable Sessions (Chinese)](Docs/AIPhase02_PicoAgentCoreAndSessions.md)
@@ -741,6 +748,8 @@ See:
 - [Streaming, Project Knowledge, RAG Lite, and Pico Skill v0 (Chinese)](Docs/AIPhase08_StreamingKnowledgeRagAndSkills.md)
 - [Durable Agent Operations and Crash Recovery (Chinese)](Docs/AIPhase09_DurableOperationsAndCrashRecovery.md)
 - [Unified Agent Tracing and Golden Task Baseline (Chinese)](Docs/AIPhase10_UnifiedTracingAndGoldenTasks.md)
+- [Engineering Depth Week 2: Runtime Baseline and Agent Failure Semantics (Chinese)](Docs/EngineeringDepthWeek02_BaselineAndFailureSemantics.zh-CN.md)
+- [Engineering Depth Week 3: Object Index and Agent Capability Providers (Chinese)](Docs/EngineeringDepthWeek03_ObjectIndexAndAgentCapabilities.zh-CN.md)
 - [Remaining Development Roadmap (Chinese)](Docs/Pico_Remaining_Development_Roadmap.zh-CN.md)
 - [Pre-Network Readiness (Chinese)](Docs/Month08_14_PreNetworkReadiness.md)
 - [Network Risk Register (Chinese)](Docs/NetworkRiskRegister.zh-CN.md)

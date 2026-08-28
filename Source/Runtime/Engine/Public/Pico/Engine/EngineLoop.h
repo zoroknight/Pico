@@ -54,6 +54,7 @@ private:
     FAssetRegistry AssetRegistry;
     FAssetManager AssetManager;
     FFrameTimer FrameTimer;
+    std::filesystem::path ProfileTracePath;
     FObjectHandle WorldHandle;
     int MaxFrameCount = -1;
     double MaxFPS = 60.0;

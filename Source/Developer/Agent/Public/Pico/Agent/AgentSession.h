@@ -30,6 +30,8 @@ struct FAgentEvent
     std::uint64_t DurationMicroseconds = 0;
     bool bSucceeded = false;
     bool bReused = false;
+    EAgentFailureClass FailureClass = EAgentFailureClass::None;
+    EAgentRecoveryAction RecoveryAction = EAgentRecoveryAction::Abort;
     FAgentCounters Counters;
 };
 

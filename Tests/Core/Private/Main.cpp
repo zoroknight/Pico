@@ -12,6 +12,7 @@
 #include "Pico/Core/PlatformProcess.h"
 #include "Pico/Core/PlatformTextInput.h"
 #include "Pico/Core/ProjectDescriptor.h"
+#include "Pico/Core/Profiler.h"
 #include "Pico/Core/Time.h"
 
 #include <chrono>
@@ -713,6 +714,73 @@ void TestLogOutputs(FTestRunner& Runner)
     Pico::FLog::SetConsoleOutputEnabled(true);
     std::filesystem::remove(LogFile, Error);
 }
+
+void TestProfiler(FTestRunner& Runner)
+{
+    Pico::FProfiler& Profiler = Pico::FProfiler::Get();
+    Profiler.SetEnabled(false);
+    Profiler.Reset();
+    {
+        PICO_PROFILE_SCOPE("Disabled.Scope");
+    }
+    Runner.Expect(
+        Profiler.GetEvents().empty(),
+        "Disabled profiler records no events");
+
+    Profiler.SetEnabled(true);
+    Profiler.BeginFrame();
+    {
+        PICO_PROFILE_SCOPE("Frame.Root");
+        {
+            PICO_PROFILE_SCOPE("Frame.Child");
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    Profiler.EndFrame();
+    std::thread Worker([]()
+    {
+        PICO_PROFILE_SCOPE("Worker.Scope");
+    });
+    Worker.join();
+
+    const std::vector<Pico::FProfileEvent> Events = Profiler.GetEvents();
+    const auto Root = std::find_if(Events.begin(), Events.end(),
+        [](const Pico::FProfileEvent& Event) { return Event.Name == "Frame.Root"; });
+    const auto Child = std::find_if(Events.begin(), Events.end(),
+        [](const Pico::FProfileEvent& Event) { return Event.Name == "Frame.Child"; });
+    const auto WorkerEvent = std::find_if(Events.begin(), Events.end(),
+        [](const Pico::FProfileEvent& Event) { return Event.Name == "Worker.Scope"; });
+    Runner.Expect(
+        Events.size() == 3 && Root != Events.end() && Child != Events.end()
+            && Child->ParentId == Root->Id && Root->FrameId == 1
+            && Child->Depth == 1,
+        "Profiler records frame, parent scope, and nesting depth");
+    Runner.Expect(
+        WorkerEvent != Events.end() && Root != Events.end()
+            && WorkerEvent->ThreadId != Root->ThreadId,
+        "Profiler distinguishes worker-thread events");
+
+    const std::filesystem::path RootPath =
+        std::filesystem::temp_directory_path() / "PicoProfilerTests";
+    const std::filesystem::path TracePath = RootPath / "Trace.json";
+    const std::filesystem::path SummaryPath = RootPath / "Summary.json";
+    std::string Error;
+    const bool bTraceWritten = Profiler.WriteChromeTrace(TracePath, &Error);
+    const bool bSummaryWritten = Profiler.WriteSummaryJson(SummaryPath, &Error);
+    std::ifstream TraceStream(TracePath);
+    const std::string TraceContents {
+        std::istreambuf_iterator<char>(TraceStream),
+        std::istreambuf_iterator<char>()};
+    Runner.Expect(
+        bTraceWritten && bSummaryWritten
+            && TraceContents.find("\"ph\":\"X\"") != std::string::npos
+            && TraceContents.find("\"parent_id\"") != std::string::npos,
+        "Profiler exports Chrome Trace and aggregate JSON reports");
+    std::error_code RemoveError;
+    std::filesystem::remove_all(RootPath, RemoveError);
+    Profiler.SetEnabled(false);
+    Profiler.Reset();
+}
 }
 
 int main(int Argc, char** Argv)
@@ -748,5 +816,6 @@ int main(int Argc, char** Argv)
     TestRotationMath(Runner);
     TestTransformMath(Runner);
     TestLogOutputs(Runner);
+    TestProfiler(Runner);
     return Runner.Finish();
 }

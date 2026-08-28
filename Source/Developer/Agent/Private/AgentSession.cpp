@@ -32,6 +32,8 @@ FJson ToJson(const FAgentEvent& Event, std::string_view SessionId)
         {"span_name", Event.SpanName},
         {"started_timestamp_ms", Event.StartedTimestampMilliseconds},
         {"duration_us", Event.DurationMicroseconds},
+        {"failure_class", ToString(Event.FailureClass)},
+        {"recovery_action", ToString(Event.RecoveryAction)},
         {"steps", Event.Counters.Steps},
         {"tool_calls", Event.Counters.ToolCalls},
         {"read_only_tool_calls", Event.Counters.ReadOnlyToolCalls},
@@ -76,6 +78,14 @@ bool FromJson(const FJson& Json, std::string_view SessionId, FAgentEvent& Out, s
         Out.DurationMicroseconds = Json.value("duration_us", std::uint64_t {0});
         Out.bSucceeded = Json.value("succeeded", false);
         Out.bReused = Json.value("reused", false);
+        if (!TryParseAgentFailureClass(
+                Json.value("failure_class", "None"), Out.FailureClass)
+            || !TryParseAgentRecoveryAction(
+                Json.value("recovery_action", "Abort"), Out.RecoveryAction))
+        {
+            Error = "Session event contains an unknown failure or recovery value";
+            return false;
+        }
         Out.Counters.Steps = Json.value("steps", 0U);
         Out.Counters.ToolCalls = Json.value("tool_calls", 0U);
         Out.Counters.ReadOnlyToolCalls = Json.value("read_only_tool_calls", 0U);
@@ -230,7 +240,8 @@ std::optional<FAgentToolResult> FAgentSession::FindToolResult(std::string_view C
         if (It->Type == EAgentEventType::ToolResult && It->CallId == CallId)
         {
             return FAgentToolResult {It->CallId, It->bSucceeded, It->PayloadJson,
-                It->bSucceeded ? std::string {} : It->Content, true};
+                It->bSucceeded ? std::string {} : It->Content, true,
+                It->FailureClass, It->RecoveryAction};
         }
     }
     return std::nullopt;

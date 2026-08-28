@@ -4,6 +4,7 @@
 #include "Pico/Object/ObjectTypes.h"
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 namespace Pico
@@ -25,6 +26,7 @@ public:
     static bool RenameObject(PObject* Object, FName NewName);
     static std::vector<PObject*> GetObjects();
     static std::size_t GetObjectCount();
+    static bool ValidateNameIndex(std::string* OutError = nullptr);
     static bool AddToRoot(PObject* Object);
     static bool RemoveFromRoot(PObject* Object);
     static bool IsRooted(const PObject* Object);

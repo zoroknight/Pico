@@ -2,6 +2,7 @@
 
 #include "Pico/Core/CommandLine.h"
 #include "Pico/Core/Log.h"
+#include "Pico/Core/Profiler.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/Character.h"
 #include "Pico/Engine/World.h"
@@ -167,6 +168,7 @@ void FNetDriver::Shutdown()
 
 void FNetDriver::TickDispatch(float DeltaSeconds)
 {
+    PICO_PROFILE_SCOPE("Net.Receive");
     if (!bInitialized) return;
     ReplicationSystem.BeginNetworkFrame();
     ElapsedSeconds += std::max(0.0f, DeltaSeconds);
@@ -239,6 +241,7 @@ void FNetDriver::TickDispatch(float DeltaSeconds)
 
 void FNetDriver::TickFlush(float)
 {
+    PICO_PROFILE_SCOPE("Net.Replication");
     if (!bInitialized || Transport == nullptr) return;
     FlushDelayedPackets();
     for (const std::unique_ptr<FNetConnection>& Connection : Connections)

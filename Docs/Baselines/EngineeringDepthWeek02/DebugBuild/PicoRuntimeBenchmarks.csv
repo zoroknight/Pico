@@ -1,0 +1,13 @@
+format_version,preset,suite,case,scale,operations,samples,p50_us,p95_us,max_us,mean_us,ns_per_operation,bytes_per_frame,parameters
+2,quick,Object,Create,1000,1000,7,17163,18279,18279,17210.9,17210.857,0,
+2,quick,Object,Find,1000,1000,7,5963,6392,6392,6031.286,6031.286,0,found=1000
+2,quick,Object,Rename,1000,1000,7,12348,13196,13196,12295.571,12295.571,0,
+2,quick,Object,Destroy,1000,1000,7,4830,5339,5339,4935.429,4935.429,0,
+2,quick,Tick,StaticSchedule,1000,1000,7,3308,3744,3744,3390.571,3390.571,0,
+2,quick,Tick,DependencyChange,1000,1000,7,5186,5563,5563,5269.429,5269.429,0,chain=1
+2,quick,GC,Collect,1000,1000,7,721,814,814,707.429,707.429,0,survival=10;density=0;outer_depth=0;collected=900
+2,quick,GC,Collect,1000,1000,7,1056,1261,1261,1115.143,1115.143,0,survival=50;density=2;outer_depth=4;collected=500
+2,quick,GC,Collect,1000,1000,7,3236,3555,3555,3260.429,3260.429,0,survival=90;density=8;outer_depth=16;collected=100
+2,quick,Replication,DirtyScan,100,100,7,771,929,929,798.286,7982.857,23,dirty_percent=1
+2,quick,Replication,DirtyScan,100,100,7,799,871,871,811.714,8117.143,230,dirty_percent=10
+2,quick,Replication,DirtyScan,100,100,7,1170,1408,1408,1204.429,12044.286,2300,dirty_percent=100

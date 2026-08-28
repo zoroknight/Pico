@@ -146,6 +146,37 @@ bool FAgentToolRegistry::Register(
     return true;
 }
 
+bool FAgentToolRegistry::RegisterProvider(
+    const IAgentCapabilityProvider& Provider,
+    std::string* OutError)
+{
+    if (Provider.GetName().empty())
+    {
+        if (OutError) *OutError = "Capability provider name is empty";
+        return false;
+    }
+    std::vector<std::string> RegisteredNames;
+    for (FAgentToolDefinition Definition : Provider.GetToolDefinitions())
+    {
+        if (Definition.CapabilityProvider.empty())
+            Definition.CapabilityProvider = Provider.GetName();
+        if (Definition.CapabilityProvider != Provider.GetName())
+        {
+            if (OutError) *OutError = "Tool capability provider ownership mismatch";
+            for (const std::string& Name : RegisteredNames) Definitions.erase(Name);
+            return false;
+        }
+        const std::string ToolName = Definition.Name;
+        if (!Register(std::move(Definition), OutError))
+        {
+            for (const std::string& Name : RegisteredNames) Definitions.erase(Name);
+            return false;
+        }
+        RegisteredNames.push_back(ToolName);
+    }
+    return true;
+}
+
 bool FAgentToolRegistry::Contains(std::string_view Name) const
 {
     return Find(Name) != nullptr;
@@ -188,6 +219,9 @@ std::string FAgentToolRegistry::BuildToolCatalogJson() const
         Catalog.push_back({
             {"name", Definition.Name}, {"description", Definition.Description},
             {"permission", ToString(Definition.Permission)},
+            {"capability_provider", Definition.CapabilityProvider},
+            {"revision_read_set", Definition.RevisionReadSet},
+            {"revision_write_set", Definition.RevisionWriteSet},
             {"input_schema", {{"type", "object"}, {"properties", Properties},
                 {"required", Required},
                 {"additionalProperties", Definition.Schema.bAllowAdditionalFields}}}
@@ -232,14 +266,16 @@ FAgentToolResult FAgentToolRegistry::Execute(
     if (!Definition)
     {
         Trace(EAgentToolStage::Validate, false, "Unknown tool: " + Call.Name);
-        return Failure(Call, "Unknown tool: " + Call.Name);
+        return Failure(Call, "Unknown tool: " + Call.Name,
+            EAgentFailureClass::ModelProtocol);
     }
 
     std::string Error;
     if (!Validate(Call, *Definition, Error))
     {
         Trace(EAgentToolStage::Validate, false, Error);
-        return Failure(Call, std::move(Error));
+        return Failure(Call, std::move(Error),
+            EAgentFailureClass::InvalidArguments);
     }
     Trace(EAgentToolStage::Validate, true, "Arguments match schema");
 
@@ -247,7 +283,8 @@ FAgentToolResult FAgentToolRegistry::Execute(
     {
         Error = "Permission denied for " + std::string(ToString(Definition->Permission));
         Trace(EAgentToolStage::Permission, false, Error);
-        return Failure(Call, std::move(Error));
+        return Failure(Call, std::move(Error),
+            EAgentFailureClass::PermissionDenied);
     }
     Trace(EAgentToolStage::Permission, true, "Permission allowed by policy");
 
@@ -265,7 +302,8 @@ FAgentToolResult FAgentToolRegistry::Execute(
         if (!bApproved)
         {
             Trace(EAgentToolStage::Approval, false, "User denied tool call");
-            return Failure(Call, "User denied tool call");
+            return Failure(Call, "User denied tool call",
+                EAgentFailureClass::ApprovalRejected);
         }
         Trace(EAgentToolStage::Approval, true, "User approved tool call");
     }
@@ -276,14 +314,16 @@ FAgentToolResult FAgentToolRegistry::Execute(
 
     if (CancellationToken && CancellationToken->IsCancellationRequested())
     {
-        return Failure(Call, "Tool call was cancelled before execution");
+        return Failure(Call, "Tool call was cancelled before execution",
+            EAgentFailureClass::Cancelled);
     }
 
     if (Definition->Preflight && !Definition->Preflight(Call, Error))
     {
         if (Error.empty()) Error = "Tool precondition was not satisfied";
         Trace(EAgentToolStage::Execute, false, Error);
-        return Failure(Call, std::move(Error));
+        return Failure(Call, std::move(Error),
+            EAgentFailureClass::PreconditionFailed);
     }
 
     const bool bTransactional =
@@ -294,7 +334,8 @@ FAgentToolResult FAgentToolRegistry::Execute(
         {
             if (Error.empty()) Error = "Could not begin tool transaction";
             Trace(EAgentToolStage::Transaction, false, Error);
-            return Failure(Call, std::move(Error));
+            return Failure(Call, std::move(Error),
+                EAgentFailureClass::Infrastructure);
         }
         Trace(EAgentToolStage::Transaction, true, "Transaction started");
     }
@@ -319,15 +360,23 @@ FAgentToolResult FAgentToolRegistry::Execute(
     }
     catch (const std::exception& Exception)
     {
-        Result = Failure(Call, Exception.what());
+        Result = Failure(Call, Exception.what(),
+            EAgentFailureClass::ExecutionFailed);
     }
     catch (...)
     {
-        Result = Failure(Call, "Tool handler threw an unknown exception");
+        Result = Failure(Call, "Tool handler threw an unknown exception",
+            EAgentFailureClass::ExecutionFailed);
     }
 
     if (!Result.bSucceeded)
     {
+        if (Result.FailureClass == EAgentFailureClass::None)
+        {
+            Result.FailureClass = EAgentFailureClass::ExecutionFailed;
+            Result.RecoveryAction = GetAgentRecoveryPolicy(
+                Result.FailureClass).Action;
+        }
         Trace(EAgentToolStage::Execute, false,
             Result.Error.empty() ? "Tool execution failed" : Result.Error);
         if (bTransactional)
@@ -352,7 +401,8 @@ FAgentToolResult FAgentToolRegistry::Execute(
             Trace(EAgentToolStage::Transaction, bRolledBack,
                 bRolledBack ? "Transaction rolled back" : RollbackError);
         }
-        return Failure(Call, Error.empty() ? "Tool verification failed" : Error);
+        return Failure(Call, Error.empty() ? "Tool verification failed" : Error,
+            EAgentFailureClass::VerificationFailed);
     }
     Trace(EAgentToolStage::Verify, true,
         Definition->Verifier ? "Postcondition verified" : "No extra verifier required");
@@ -365,7 +415,8 @@ FAgentToolResult FAgentToolRegistry::Execute(
             Transaction->Rollback(RollbackError);
             Trace(EAgentToolStage::Transaction, false,
                 Error.empty() ? "Could not commit tool transaction" : Error);
-            return Failure(Call, Error.empty() ? "Could not commit tool transaction" : Error);
+            return Failure(Call, Error.empty() ? "Could not commit tool transaction" : Error,
+                EAgentFailureClass::Infrastructure);
         }
         Trace(EAgentToolStage::Transaction, true, "Transaction committed");
     }
@@ -494,9 +545,11 @@ void FAgentToolRegistry::Trace(
 
 FAgentToolResult FAgentToolRegistry::Failure(
     const FAgentToolCall& Call,
-    std::string Error)
+    std::string Error,
+    EAgentFailureClass FailureClass)
 {
-    return {Call.Id, false, "{}", std::move(Error), false};
+    return {Call.Id, false, "{}", std::move(Error), false, FailureClass,
+        GetAgentRecoveryPolicy(FailureClass).Action};
 }
 
 std::string_view ToString(EAgentToolPermission Permission)

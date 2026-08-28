@@ -890,6 +890,7 @@ void TestEditorCommandService(FTestRunner& Runner)
     };
     Runner.Expect(
         AgentTools.IsInitialized()
+            && AgentToolNames.size() == 33
             && HasAgentTool("editor.world.describe")
             && HasAgentTool("editor.actor.spawn")
             && HasAgentTool("editor.gameplay.asc.describe")
@@ -899,6 +900,24 @@ void TestEditorCommandService(FTestRunner& Runner)
             && HasAgentTool("editor.play.start")
             && HasAgentTool("editor.project.package"),
         "Editor Agent adapter registers inspection, scene, gameplay, save, project, and package tools");
+    const std::string AgentCatalog = AgentTools.BuildToolCatalogJson();
+    const std::vector<Pico::FAgentKnowledgeRecord> CapabilityKnowledge =
+        AgentTools.CollectKnowledgeRecords();
+    std::size_t CapabilityManifestCount = 0;
+    for (const Pico::FAgentKnowledgeRecord& Record : CapabilityKnowledge)
+        CapabilityManifestCount += Record.SourceType == "agent-capability" ? 1 : 0;
+    Runner.Expect(
+        AgentCatalog.find("WorldToolProvider") != std::string::npos
+            && AgentCatalog.find("ObjectToolProvider") != std::string::npos
+            && AgentCatalog.find("AssetToolProvider") != std::string::npos
+            && AgentCatalog.find("BlueprintGraphToolProvider") != std::string::npos
+            && AgentCatalog.find("GameplayToolProvider") != std::string::npos
+            && AgentCatalog.find("ProjectProcessToolProvider") != std::string::npos
+            && AgentCatalog.find("revision_read_set") != std::string::npos
+            && AgentCatalog.find("revision_write_set") != std::string::npos
+            && AgentCatalog.find("PSandbox") == std::string::npos
+            && CapabilityManifestCount == 6,
+        "Six capability providers own all tools, revision sets, and knowledge manifests without Sandbox class coupling");
     Runner.Expect(
         AgentTools.IsReadOnly(
             {"classify-read", "editor.world.describe", "{}"})

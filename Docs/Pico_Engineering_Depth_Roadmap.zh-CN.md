@@ -13,6 +13,8 @@ Agent Reliability + Decoupling
 后续对话、规划和实施如果与其他未完成排期冲突，以本文档为准。总体长期目标仍由
 [AI 优先后续开发路线](Pico_AI_First_Development_Roadmap.zh-CN.md) 记录。
 
+性能优化的跨周总账见[性能优化总览与追踪记录](Pico_Performance_Optimization_Log.zh-CN.md)。
+
 ## 调整原因
 
 Pico 已经完成对象、反射、GC、Gameplay、物理、动画、网络、打包、Mini GAS、PicoGraph 和 Agent Harness
@@ -77,7 +79,10 @@ Pico 已经完成对象、反射、GC、Gameplay、物理、动画、网络、�
 5. 从全局 StateRevision 演进为资源域 Revision；
 6. 增加 Failure Injection、Adversarial Eval 和可比较 Metrics。
 
-## 第 1 周：测量基础
+## 第 1 周：测量基础（已完成）
+
+完成记录与命令见
+[工程深度第 1 周：Profiler、Runtime Benchmark 与 Agent Metrics](EngineeringDepthWeek01_MeasurementFoundation.zh-CN.md)。
 
 ### Runtime
 
@@ -123,6 +128,11 @@ Cache Hit、Failure Class、Forbidden Tool 和 Completion Rate。
 - Agent Run 输出机器可读 Metrics；
 - 本周不提交任何未经基线证明的性能优化。
 
+验收状态：Profiler 主干 Scope、Chrome Trace/聚合导出、独立 Quick/Full Benchmark 契约、版本化 JSON/CSV、
+Agent Run Metrics 和 Golden Task Metrics 引用均已落地。Debug Core/Agent 测试分别为 102/102、101/101，
+Release Agent 为 101/101；Debug/Release Quick Benchmark 均通过。完整硬件基线、P50/P95 和 Failure Taxonomy
+按边界留给第 2 周。
+
 ## 第 2 周：基线与失败语义
 
 ### Runtime
@@ -157,6 +167,12 @@ Cancelled
 - 能根据数据列出 Runtime 最昂贵的三个 Scope；
 - 每类 Failure 有默认 Recovery Action 和是否可重试；
 - PermissionDenied、ApprovalRejected 和非法参数不会进入无意义自动重试。
+
+验收状态：已完成。Debug Quick 7 样本与 Release Full 5 样本基线已保存，输出包含 P50/P95/max、
+Replication BytesPerFrame、GC/Tick Scope 和核心类型尺寸。数据确认最昂贵的端到端 Case 为 100K Object
+Rename/Create/Find，Profiler 累计前三为 `Tick.Schedule`、`Tick.Execute`、`GC.Sweep`。12 类 Failure 均有固定
+Recovery Policy，失败语义已贯穿 ToolRegistry、Session、Runtime、Metrics 和 Golden Task；非法参数、权限拒绝、
+审批拒绝均不会自动重试。详见 `EngineeringDepthWeek02_BaselineAndFailureSemantics.zh-CN.md`。
 
 ## 第 3 周：Object Index 与 Tool 解耦
 
@@ -193,6 +209,13 @@ ProjectProcessToolProvider
 - Object/GC/序列化测试全部通过；
 - 现有 Tool Catalog 和 Golden Tasks 不减少；
 - 通用 Editor Provider 不再引用 `PSandbox*` 类名。
+
+验收状态：已完成。Object Registry 新增 `(OuterHandle, FName) -> ObjectHandle` 索引，Add/Rename/Destroy/
+GC/Reset 同步维护并提供双向一致性检查。相同 5 样本 Release Full 合约下，100K Create/Find/Rename P95
+分别提升约 195.2x、181.6x、153.6x；Destroy 的 Outer 子对象扫描仍是已记录热点。现有 33 个 Editor Tool
+已归属六类 `IAgentCapabilityProvider`，Catalog 暴露 Provider 与 Revision Read/Write Set，Provider 同时生成 Knowledge
+Manifest 且原子安装。Tool Name、Golden Tasks 和 Session 协议保持兼容，通用 Editor Tool 不再包含 `PSandbox*`
+类名。详见 `EngineeringDepthWeek03_ObjectIndexAndAgentCapabilities.zh-CN.md`。
 
 ## 第 4 周：Tick Cache 与结构化 Tool Result
 
@@ -234,6 +257,31 @@ LLM 展示文本从结构化结果生成，不作为 Runtime 事实。大结果�
 - 动态注册/注销/依赖变化只触发必要 Group 重建；
 - Verifier、Trace、Replay 和 UI 共用结构化 Tool Result；
 - 不通过解析自然语言判断 Tool 是否成功。
+
+## 第 4 周后置门：Object Hierarchy Index
+
+第 4 周验收完成后、进入第 5 周 Replication Scaling 前，处理第 3 周基准暴露出的 Destroy 热点。该任务是
+已排期的性能债务，不再只作为风险备注。实现范围严格限定为对象层级关系，不顺带增加 Class、Tag 或 Path Index。
+
+### Runtime
+
+增加：
+
+```text
+OuterHandle -> ChildHandle Set
+```
+
+用它替代 `HasChildObjects` 和对象树销毁中的全 Slot 扫描。Add、Destroy、GC Sweep、Outer 变更和 Registry Reset
+必须同步维护索引；Debug 提供父子双向一致性检查。先记录索引的额外内存与维护耗时，再决定 Child Set 的具体容器，
+不得只为了降低单项耗时而破坏稳定 Handle 和 Outer 生命周期规则。
+
+### 周末验收
+
+- `HasChildObjects` 不再扫描完整 Live Slot；
+- 单对象销毁、递归对象树销毁、GC Sweep、Slot 复用和 Outer 变更测试全部通过；
+- 100K Destroy 使用与第 3 周相同的 Release Full 合约重新采样，并与 `7.573 s` P95 基线对比；
+- 报告 Destroy P50/P95/max、索引内存成本和 Add/Destroy 维护成本；
+- 若数据证明索引收益不足以覆盖复杂度，保留测量结果并明确否决原因，不强行合入。
 
 ## 第 5 周：Replication Scaling 与故障注入
 
