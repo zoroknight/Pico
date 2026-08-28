@@ -4,7 +4,12 @@
 
 本文档是 Pico 在**暂不引入代码生成 Harness**的前提下，让 Agent 组装简单 3D 游戏的权威实施方案。
 总体月份优先级仍以 [AI-First Development Roadmap](Pico_AI_First_Development_Roadmap.zh-CN.md) 为准；
-涉及第 10 月 Agent 游戏搭建的范围、架构、周计划和验收标准时，以本文档为准。
+涉及 Agent 游戏搭建的范围、架构、周计划和验收标准时，以本文档为准。
+
+> 状态：**已顺延**。当前最高优先级是
+> [Pico 工程深度阶段路线](Pico_Engineering_Depth_Roadmap.zh-CN.md) 的 8 周
+> `Profiler + Runtime Scalability` 与 `Agent Reliability + Decoupling`。只有该阶段完成门槛全部通过后，
+> 才开始本文的六周实施计划。
 
 当前目标不是让模型自由创造任意游戏，也不是让模型直接修改引擎源码。目标是在 Pico 已有反射、Data-Only
 Actor Blueprint、PicoGraph、GAS、Replication、编辑器事务、Play 和 Package 链路上，让 Agent 可靠组装以下
@@ -162,7 +167,7 @@ Package 成功必须同时满足退出码、`PackageReport.ini`、`PicoPackage.c
 
 ## PicoGraph 必要增量
 
-第 10 月只补齐组装 Demo 必需的表达能力：
+本阶段只补齐组装 Demo 必需的表达能力：
 
 - Input、Overlap、RepNotify 和 Custom Event；
 - 事件参数、对象引用和目标对象；

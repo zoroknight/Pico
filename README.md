@@ -729,6 +729,7 @@ the existing `PClass`, `PProperty`, and `PFunction` runtime. Generated files liv
 See:
 
 - [AI-First Development Roadmap (Chinese)](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)
+- [Engineering Depth: Profiler, Runtime Scalability, and Agent Reliability (Chinese)](Docs/Pico_Engineering_Depth_Roadmap.zh-CN.md)
 - [Agent Game Creation Pipeline and Six-Week Plan (Chinese)](Docs/AgentGameCreationPipeline.zh-CN.md)
 - [PicoTasks and Game Thread Dispatcher (Chinese)](Docs/AIPhase01_PicoTasksAndGameThreadDispatcher.md)
 - [Pico Agent Core and Recoverable Sessions (Chinese)](Docs/AIPhase02_PicoAgentCoreAndSessions.md)

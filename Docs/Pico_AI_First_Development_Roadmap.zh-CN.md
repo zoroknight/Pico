@@ -1,8 +1,9 @@
 # Pico AI 优先后续开发路线
 
-本文档记录 Pico 在完成第 6 月网络学习型 MVP 后的新主线。它是后续任务规划、实现顺序和阶段验收的
-首要依据；当本文档与 [`Pico_Remaining_Development_Roadmap.zh-CN.md`](Pico_Remaining_Development_Roadmap.zh-CN.md)
-中的未完成排期冲突时，以本文档为准。旧路线继续保留已经完成的架构基线、风险记录和历史决策。
+本文档记录 Pico 在完成第 6 月网络学习型 MVP 后的新主线。当前 8 周任务的最高优先级、实施顺序和验收标准以
+[`Pico_Engineering_Depth_Roadmap.zh-CN.md`](Pico_Engineering_Depth_Roadmap.zh-CN.md) 为准；其余长期排期以本文档
+为准。当本文档与 [`Pico_Remaining_Development_Roadmap.zh-CN.md`](Pico_Remaining_Development_Roadmap.zh-CN.md)
+中的未完成排期冲突时，以新路线为准。旧路线继续保留已经完成的架构基线、风险记录和历史决策。
 
 计划中的“月份”均指项目开发月份，不是自然月。已经完成的对象系统、编辑器、Gameplay、物理、动画、
 打包和网络主链不再重复列为新任务。
@@ -12,13 +13,13 @@
 Pico 已经通过本机多进程和两台真实 Windows 电脑验证 UDP、Replication、RPC、Ownership、客户端预测、
 服务器纠错和模拟代理平滑。网络核心学习目标已经成立，下一阶段不再以公网、重连和回放为主线。
 
-后续目标调整为：
+在完成 Agent Harness、Mini GAS 和 PicoGraph Lite 后，项目从功能扩展转入工程深度阶段。后续目标调整为：
 
 1. 学习现代 Agent Harness 的真实组成，而不只调用聊天 API。
 2. 让 AI 安全使用 Pico 已有的反射、资产、事务、World、Gameplay、网络和打包能力。
-3. 逐步从“创建场景”推进到“创建可执行玩法”和“完成简单 3D 游戏”。
-4. 保持模型、Harness、工具协议和编辑器执行层可以独立替换。
-5. 在 AI 主线形成完整纵向切片后，再推进 ECS 和复杂渲染架构。
+3. 先建立 Profiler、Benchmark、Failure Taxonomy 和 Eval，让性能与 Agent 正确性可测量。
+4. 加固 Object/Tick/GC/Replication 的扩展性，并解除 Agent 通用层与项目特例的耦合。
+5. 工程深度阶段验收后，再恢复“完成简单 3D 游戏”、ECS 和复杂渲染架构。
 
 ## 新实施顺序
 
@@ -29,8 +30,9 @@ Pico 已经通过本机多进程和两台真实 Windows 电脑验证 UDP、Repli
  -> 编辑器场景 Agent
  -> Mini GAS / AbilityTask
  -> PicoGraph Lite
+ -> Profiler + Runtime Scalability（当前最高优先级）
+ -> Agent Reliability + Decoupling（当前最高优先级）
  -> AI 完整游戏搭建
- -> MCP / Skill / RAG 增强
  -> ECS 纵向切片
  -> Render Architecture
 ```
@@ -38,16 +40,17 @@ Pico 已经通过本机多进程和两台真实 Windows 电脑验证 UDP、Repli
 固定优先级为：
 
 ```text
-PicoTask
- > Harness 安全基础
- > 场景 Agent
- > Mini GAS / AbilityTask
- > PicoGraph
- > AI 完整游戏
- > MCP / LangGraph 对照实验
+Profiler / Benchmark / Agent Metrics
+ > Runtime Scalability / Agent Reliability
+ > AI 完整游戏搭建
  > ECS
  > 深入渲染
+ > MCP / Multi-Agent / Code Agent
 ```
+
+当前冻结范围、8 周拆解和完成门槛详见
+[Pico 工程深度阶段路线](Pico_Engineering_Depth_Roadmap.zh-CN.md)。本阶段完成前不得以旧月份排期为理由
+启动 ECS、复杂渲染、更多 GAS、MCP 或 Code Agent。
 
 ## AI 架构决策
 
@@ -237,17 +240,18 @@ Agent 阶段收尾已将 Intent Router 提取到 `PicoAgentCore`，当前已冻�
 ## Harness 成熟度加固路线
 
 Pico 保留自研 C++ Harness，不为了功能数量迁移到 LangChain/LangGraph。后续重点是把现有纵向链路变得可观察、
-可评测、可恢复和可扩展；加固工作伴随 GAS、PicoGraph 主线增量完成，不另起一套 Agent Runtime。
+可评测、可恢复和可扩展；基础能力已伴随 GAS、PicoGraph 增量完成，进一步解耦与可靠性加固转入当前 8 周
+工程深度阶段，不另起一套 Agent Runtime。
 
 | 优先级与时机 | 任务 | 验收标准 |
 | --- | --- | --- |
 | P0：已完成基础版 | 统一 `SessionId/RunId/TurnId/SpanId`，为 Model、Tool、Approval、Validation 建立父子 Span | Session JSONL 可还原调用顺序、耗时、结果和失败位置；旧日志兼容；编辑器时间线 UI 后续补充 |
-| P0：已完成离线基线 | 将路由 Eval 从 18 条扩展到 37 条；建立端到端 Eval Runner 和首批 10 个 Golden Tasks；增加原子批量属性/删除与冲突保护的 Run ChangeSet | 确定性测试不访问真实 Provider；生成带 RunId、耗时、计数和证据路径的报告；真实 Editor Fixture 留到第 10 月 |
+| P0：已完成离线基线 | 扩展路由 Eval；建立端到端 Eval Runner 和首批 Golden Tasks；增加原子批量属性/删除与冲突保护的 Run ChangeSet | 确定性测试不访问真实 Provider；生成带 RunId、耗时、计数和证据路径的报告；真实 Editor Fixture 在工程深度阶段加固后进入 Agent 游戏搭建阶段 |
 | P0：第 8～9 月伴随主线 | 建立上下文分区预算、摘要快照和大结果 Artifact/Handle，避免把完整日志和 Tool Result 反复送入模型 | 超预算时可解释地裁剪；关键指令、审批状态、引用来源和最近错误不丢失 |
 | P0：第 8 月持续 | 完善 Provider 超时、取消、可重试/不可重试错误、指数退避、限流和单 Run Token/费用预算 | Provider 断网、限流或非法响应不会破坏项目，也不会形成无限重试 |
 | P0：第 8～9 月伴随主线 | 在 Durable Operation Journal 上增加轻量 `RunCheckpoint`，记录 Skill、已完成 ToolCall、待审批调用、预算和下一步 | 仅从 Tool 边界恢复；先 reconcile 再重试；不承诺从工具函数内部某一行继续 |
 | P0：第 9 月 Skill 增长时 | Skill Registry 返回带匹配 Trigger/Tag、分数和排除理由的确定性候选列表 | 候选结果可解释、可固定测试，不增加权限，也不依赖模型或网络 |
-| P1：第 10 月 | 对歧义候选启用结构化模型路由 Shadow Mode，并扩展到至少 20 个端到端 Golden Tasks | 模型结果先只记录比较；达到固定准确率、误触发和禁止副作用门槛后才处理歧义路由 |
+| P1：Agent 游戏搭建阶段 | 对歧义候选启用结构化模型路由 Shadow Mode，并扩展到至少 20 个端到端 Golden Tasks | 模型结果先只记录比较；达到固定准确率、误触发和禁止副作用门槛后才处理歧义路由 |
 
 伴随开发规则：
 
@@ -524,7 +528,7 @@ PClass 注册表生成 Callable 和基础 Property 节点，只读/Transient 属
 Graph 节点类或 Agent 属性 Tool。PicoSandbox 早期 Mini GAS 语义工具暂作为旧 Skill 兼容适配器保留；后续扩展
 DisplayName、Category、范围和权限元数据后，再将该适配器完全移出通用 Editor 模块。
 
-## 第 10 月（六周阶段）：AI 游戏搭建闭环
+## 后续阶段 A（顺延，六周）：AI 游戏搭建闭环
 
 目标：让 AI 在受控工具、Skill、上下文检索和验证器的约束下完成一个简单可玩、可联网、可打包的 3D 游戏。
 本阶段不是开放任意代码生成，而是补齐“自然语言需求 -> 结构化规格 -> 可复用玩法积木 -> 自动运行验收 -> 打包证据”的
@@ -573,7 +577,7 @@ Skill 数量增加后采用分层路由，而不是用模型替换现有规则�
 
 ### 端到端 Golden Tasks
 
-现有 39 条 `IntentRoutingCases.tsv` 和 11 个离线 Golden Tasks 继续负责快速验证 Harness；第 10 月在其上增加真实
+现有 `IntentRoutingCases.tsv` 和离线 Golden Tasks 继续负责快速验证 Harness；本阶段在其上增加真实
 Editor Fixture、三进程 Scenario Runner，并扩展到至少 20 个固定端到端
 Golden Tasks，覆盖“自然语言需求 -> Agent 规划 -> Tool Pipeline -> 场景修改 -> 保存 -> Play/验证 -> Package”的真实链路。
 
@@ -584,12 +588,12 @@ Golden Tasks，覆盖“自然语言需求 -> Agent 规划 -> Tool Pipeline -> �
 - Golden Tasks 使用可重建的 Fixture 项目或临时副本运行，失败时保留 Journal、Session、Tool Trace 和验证报告，避免污染开发项目。
 - 修改 Provider、Prompt、Skill、RAG、Tool Schema 或 Agent Runtime 后必须重跑；路由 Eval 负责快速定位，端到端 Eval 负责发现跨模块回归。
 
-## 第 11 月：ECS 纵向切片
+## 后续阶段 B（顺延）：ECS 纵向切片
 
 ECS 不替换 `PObject/Actor/Component`。Actor 继续管理身份、生命周期、Gameplay、网络和编辑器对象；ECS
 用于大量同构、数据导向的运行时实体。
 
-进入门槛：第 10 月六周链路和第二个非同构玩法复用验收均通过。若未通过，继续修正 Catalog、Recipe、Graph
+进入门槛：工程深度 8 周阶段、Agent 游戏搭建六周链路和第二个非同构玩法复用验收均通过。若未通过，继续修正 Catalog、Recipe、Graph
 表达力或 Scenario Runner，不以 ECS 新功能掩盖 Agent 游戏搭建链路的缺口。
 
 | 周次 | 任务 | 周末验收 |
@@ -601,7 +605,7 @@ ECS 不替换 `PObject/Actor/Component`。Actor 继续管理身份、生命周�
 
 没有第二个高密度用例前，不把 Gameplay Framework、Character 或现有 Component 全面迁移到 ECS。
 
-## 第 12 月：Render Architecture
+## 后续阶段 C（顺延）：Render Architecture
 
 本阶段先拆清渲染职责，再增加复杂效果：
 
@@ -651,10 +655,10 @@ PrimitiveComponent
 | Tool Policy 与事务 | 第 7 月第 3 周 | 非法输入、拒绝、路径穿越和未知工具零副作用 |
 | Provider 隔离 | 第 7 月第 4 周 | 切换 DeepSeek/Kimi 不修改 Editor Tool 实现 |
 | 跨进程持久操作 | 第 7 月收尾并已加固 | Journal 区分 Applied/Committed；项目和 Package 使用 Staging；Play/Package 子进程归属 Job Object；Package 最终退出码、报告和完成标记回写原 Tool Result |
-| Skill 路由 | 第 10 月第 1 周 | 候选筛选后才允许结构化模型选 Skill；未知、低置信度和越权结果无副作用；固定 Eval 覆盖误路由 |
+| Skill 路由 | Agent 游戏搭建阶段第 1 周 | 候选筛选后才允许结构化模型选 Skill；未知、低置信度和越权结果无副作用；固定 Eval 覆盖误路由 |
 | Graph 类型和执行预算 | 第 9 月第 3 周 | 非法图不可运行；超预算终止当前执行而不阻塞 World |
-| AI 完成判定 | 第 10 月第 3 周 | 编译、引用、Play、日志和 Package 由验证器判定 |
-| 端到端 Agent Eval | 第 10 月第 4 周 | 至少 20 个 Golden Tasks 可重复运行；覆盖场景修改、保存、Play、验证、Package 和禁止副作用 |
+| AI 完成判定 | Agent 游戏搭建阶段第 3 周 | 编译、引用、Play、日志和 Package 由验证器判定 |
+| 端到端 Agent Eval | Agent 游戏搭建阶段第 6 周 | 至少 20 个 Golden Tasks 可重复运行；覆盖场景修改、保存、Play、验证、Package 和禁止副作用 |
 
 从第一版开始覆盖以下故障测试：
 

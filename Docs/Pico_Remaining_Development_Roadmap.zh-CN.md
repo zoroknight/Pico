@@ -1,8 +1,9 @@
 # Pico 剩余开发路线
 
-> 后续排期已经调整为 AI 优先主线。新的未完成任务、实施顺序和验收标准以
+> 当前最高优先级已调整为 8 周工程深度阶段，任务、实施顺序和验收标准以
+> [`Pico_Engineering_Depth_Roadmap.zh-CN.md`](Pico_Engineering_Depth_Roadmap.zh-CN.md) 为准；后续长期阶段以
 > [`Pico_AI_First_Development_Roadmap.zh-CN.md`](Pico_AI_First_Development_Roadmap.zh-CN.md) 为准。
-> 本文档继续保留已完成基线、历史计划和长期架构决策；两份文档冲突时优先采用新路线。
+> 本文档继续保留已完成基线、历史计划和长期架构决策；文档冲突时优先采用新的专项路线。
 
 本文档是 Pico 后续开发的长期基准，用于避免因对话上下文压缩、计划迭代或项目月份混淆而遗忘关键目标。
 
@@ -985,12 +986,15 @@ Editor Utility 权限。可视化调试只显示当前节点、最近错误、�
 
 第 4 周实现与验收细节见 [PicoGraph 第 4 周](PicoGraphPhase04_LatentCookAgent.zh-CN.md)。当前首版将
 Delay、GameplayEvent/Montage 等待、Ability 激活、Cook、Agent Graph Tools 和状态可视化闭合；更完整的
-Trigger/拾取节点库可以在第 10 月 AI 游戏搭建任务中通过同一 Schema/Extension 机制增量加入。
+Trigger/拾取节点库可以在顺延后的 Agent 游戏搭建阶段通过同一 Schema/Extension 机制增量加入。
 
-第 10 月已根据现有 Agent、GAS、PicoGraph 和网络基础重构为六周“Agent 游戏制作链路”阶段。该阶段先完成
+原计划中的 Agent 游戏制作链路已顺延。当前先完成 8 周
+[Pico 工程深度阶段](Pico_Engineering_Depth_Roadmap.zh-CN.md)，建立 Profiler、Runtime Benchmark、Object/Tick/
+Replication/GC 扩展性基线，并完成 Agent Tool 解耦、失败语义、故障注入和对抗 Eval。只有该阶段完成门槛
+全部通过后，才恢复六周“Agent 游戏制作链路”：
 Capability Catalog、Gameplay Recipe、PicoGameSpec、Build Plan、通用玩法积木、三进程 Scenario Runner 和
 Package Evidence，再进入 ECS。详细范围与验收以
-[Agent 游戏制作链路规划](AgentGameCreationPipeline.zh-CN.md) 为准；本文件不再重复维护旧的四周 AI 游戏搭建计划。
+[Agent 游戏制作链路规划](AgentGameCreationPipeline.zh-CN.md) 为准。
 
 ## MVP 后任务
 
@@ -1012,5 +1016,5 @@ Package Evidence，再进入 ECS。详细范围与验收以
 - 每完成一个阶段，更新对应表格和“当前完成基线”。
 - 新计划不得重新列入已经验收完成的任务。
 - 改变系统边界、网络范围或最终 Demo 时，必须同步修改“固定架构决策”。
-- 后续对话和实施均以本文档为优先依据。
+- 当前 8 周任务以 `Pico_Engineering_Depth_Roadmap.zh-CN.md` 为最高优先依据；长期排期以 AI-first 路线为准。
 - AI 游戏制作阶段的具体范围、周计划和完成门槛以 `AgentGameCreationPipeline.zh-CN.md` 为优先依据；若与本文旧描述冲突，以该专项文档为准。
