@@ -1,5 +1,7 @@
 #include "Pico/Core/Profiler.h"
 
+#include "Pico/Core/MemoryTracker.h"
+
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -118,6 +120,12 @@ void FProfiler::BeginFrame()
 
 void FProfiler::EndFrame()
 {
+    if (!FMemoryTracker::Get().IsEnabled()) return;
+    std::lock_guard Lock(Impl->Mutex);
+    FMemoryTracker::Get().Report(EMemoryTag::ProfilerEvents,
+        Impl->Events.size() * sizeof(FProfileEvent),
+        Impl->Events.capacity() * sizeof(FProfileEvent),
+        Impl->Events.size());
 }
 
 FProfileScopeToken FProfiler::BeginScope(const char* Name)
@@ -161,7 +169,15 @@ void FProfiler::EndScope(FProfileScopeToken& Token)
     Event.Name = Token.Name;
     {
         std::lock_guard Lock(Impl->Mutex);
+        const std::size_t PreviousCapacity = Impl->Events.capacity();
         Impl->Events.push_back(std::move(Event));
+        if (Impl->Events.capacity() != PreviousCapacity)
+        {
+            FMemoryTracker::Get().Report(EMemoryTag::ProfilerEvents,
+                Impl->Events.size() * sizeof(FProfileEvent),
+                Impl->Events.capacity() * sizeof(FProfileEvent),
+                Impl->Events.size());
+        }
     }
     Token = {};
 }
@@ -170,6 +186,8 @@ void FProfiler::Reset()
 {
     std::lock_guard Lock(Impl->Mutex);
     Impl->Events.clear();
+    FMemoryTracker::Get().Report(EMemoryTag::ProfilerEvents,
+        0, Impl->Events.capacity() * sizeof(FProfileEvent), 0);
     Impl->Origin = std::chrono::steady_clock::now();
     CurrentFrameId.store(0, std::memory_order_relaxed);
     NextEventId.store(1, std::memory_order_relaxed);

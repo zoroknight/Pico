@@ -101,6 +101,29 @@ void DrawGameplayStatusOverlay(Pico::FGameEngine& GameEngine)
     constexpr ImGuiWindowFlags Flags = ImGuiWindowFlags_None;
     if (ImGui::Begin("Mini GAS Status", nullptr, Flags))
     {
+        const Pico::FEngineLoop& EngineLoop = GameEngine.GetEngineLoop();
+        ImGui::Text(
+            "Performance  FPS %.1f  |  Frame %.2f ms",
+            EngineLoop.GetAverageFPS(),
+            EngineLoop.GetAverageFrameTimeMS());
+        const Pico::EFramePacingMode PacingMode =
+            EngineLoop.GetFramePacingMode(true);
+        if (PacingMode == Pico::EFramePacingMode::Software)
+        {
+            ImGui::Text(
+                "Pacing  %s  |  Target %.0f FPS",
+                Pico::ToString(PacingMode),
+                EngineLoop.GetFramePacingSettings().MaxFPS);
+        }
+        else
+        {
+            ImGui::Text(
+                "Pacing  %s  |  %s",
+                Pico::ToString(PacingMode),
+                PacingMode == Pico::EFramePacingMode::VSync
+                    ? "Target display refresh" : "No frame limit");
+        }
+        ImGui::Separator();
         for (const std::string& Line : Lines)
         {
             if (Line == "---") ImGui::Separator();
@@ -1029,7 +1052,6 @@ int RunPicoGame(
     const int WindowY = FCommandLine::GetInt("windowy").value_or(-1);
     if (WindowX >= 0 && WindowY >= 0) glfwSetWindowPos(Window, WindowX, WindowY);
     glfwMakeContextCurrent(Window);
-    glfwSwapInterval(1);
 
     FGameEngine GameEngine(GameModule);
     FSceneViewportRenderer Renderer;
@@ -1070,6 +1092,12 @@ int RunPicoGame(
         const std::filesystem::path ProjectFile =
             FindProjectFile(Argc, Argv, DefaultProjectFile);
         ExitCode = GameEngine.PreInit(Argc, Argv, ProjectFile);
+        if (ExitCode == 0)
+        {
+            glfwSwapInterval(
+                GameEngine.GetEngineLoop().GetFramePacingSettings().bVSync
+                    ? 1 : 0);
+        }
         if (ExitCode == 0)
         {
             ExitCode = GameEngine.Init();
@@ -1114,7 +1142,8 @@ int RunPicoGame(
             int Width = 0;
             int Height = 0;
             glfwGetFramebufferSize(Window, &Width, &Height);
-            if (Width > 0 && Height > 0)
+            const bool bCanPresent = Width > 0 && Height > 0;
+            if (bCanPresent)
             {
                 Renderer.Resize(
                     static_cast<uint32>(Width),
@@ -1153,6 +1182,7 @@ int RunPicoGame(
                 glfwSwapBuffers(Window);
             }
             Input.EndFrame();
+            GameEngine.GetEngineLoop().WaitForFrameLimit(bCanPresent);
         }
     }
     catch (const std::exception& Exception)

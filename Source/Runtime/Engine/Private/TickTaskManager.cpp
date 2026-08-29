@@ -35,7 +35,8 @@ bool FTickTaskManager::RegisterTickFunction(FTickFunction& TickFunction, PObject
     TickFunction.Manager = this;
     TickFunction.RegistrationId = Id;
     TickFunction.AccumulatedSeconds = 0.0f;
-    RegisteredTicks.push_back({Id, &TickFunction});
+    RegisteredTicks.emplace(Id, FRegisteredTick {Id, &TickFunction});
+    MarkGroupDirty(TickFunction.GetTickGroup());
     return true;
 }
 
@@ -47,13 +48,17 @@ void FTickTaskManager::UnregisterTickFunction(FTickFunction& TickFunction)
         return;
     }
     const uint64 RemovedId = TickFunction.RegistrationId;
-    std::erase_if(RegisteredTicks,
-        [RemovedId](const FRegisteredTick& Entry) { return Entry.Id == RemovedId; });
-    for (FRegisteredTick& Entry : RegisteredTicks)
+    const ETickGroup RemovedGroup = TickFunction.GetTickGroup();
+    RegisteredTicks.erase(RemovedId);
+    MarkGroupDirty(RemovedGroup);
+    for (auto& [Id, Entry] : RegisteredTicks)
     {
         if (Entry.Function != nullptr)
         {
-            std::erase(Entry.Function->PrerequisiteIds, RemovedId);
+            if (std::erase(Entry.Function->PrerequisiteIds, RemovedId) > 0)
+            {
+                MarkGroupDirty(Entry.Function->GetTickGroup());
+            }
         }
     }
     TickFunction.Manager = nullptr;
@@ -137,7 +142,7 @@ void FTickTaskManager::EndFrame()
 void FTickTaskManager::Reset()
 {
     if (!CheckGameThread("FTickTaskManager::Reset")) return;
-    for (FRegisteredTick& Entry : RegisteredTicks)
+    for (auto& [Id, Entry] : RegisteredTicks)
     {
         if (Entry.Function != nullptr)
         {
@@ -149,6 +154,10 @@ void FTickTaskManager::Reset()
         }
     }
     RegisteredTicks.clear();
+    for (FCachedTickGroup& Cached : CachedGroups) Cached = {};
+    GroupGenerations = {};
+    CycleDiagnostics.clear();
+    ScheduleGeneration = 1;
     bTicking = false;
     FrameRegistrationLimit = 0;
     FrameDeltaSeconds = 0.0f;
@@ -162,38 +171,84 @@ std::size_t FTickTaskManager::GetRegisteredTickFunctionCount() const
 
 bool FTickTaskManager::IsTicking() const { return bTicking; }
 
+uint64 FTickTaskManager::GetScheduleGeneration() const
+{
+    return ScheduleGeneration;
+}
+
+uint64 FTickTaskManager::GetScheduleBuildCount(ETickGroup Group) const
+{
+    const int Index = static_cast<int>(Group);
+    return Index >= 0 && Index < static_cast<int>(CachedGroups.size())
+        ? CachedGroups[static_cast<std::size_t>(Index)].BuildCount : 0;
+}
+
+const std::vector<FTickTaskManager::FCycleDiagnostic>&
+FTickTaskManager::GetCycleDiagnostics() const
+{
+    return CycleDiagnostics;
+}
+
 FTickTaskManager::FRegisteredTick* FTickTaskManager::FindRegisteredTick(uint64 Id)
 {
-    const auto Found = std::find_if(RegisteredTicks.begin(), RegisteredTicks.end(),
-        [Id](const FRegisteredTick& Entry) { return Entry.Id == Id; });
-    return Found != RegisteredTicks.end() ? &*Found : nullptr;
+    const auto Found = RegisteredTicks.find(Id);
+    return Found != RegisteredTicks.end() ? &Found->second : nullptr;
 }
 
 const FTickTaskManager::FRegisteredTick* FTickTaskManager::FindRegisteredTick(uint64 Id) const
 {
-    const auto Found = std::find_if(RegisteredTicks.begin(), RegisteredTicks.end(),
-        [Id](const FRegisteredTick& Entry) { return Entry.Id == Id; });
-    return Found != RegisteredTicks.end() ? &*Found : nullptr;
+    const auto Found = RegisteredTicks.find(Id);
+    return Found != RegisteredTicks.end() ? &Found->second : nullptr;
 }
 
-void FTickTaskManager::TickGroup(uint64 RegistrationLimit, int GroupIndex, float DeltaSeconds)
+void FTickTaskManager::MarkGroupDirty(ETickGroup Group)
 {
-    FProfileScopeToken ScheduleScope =
-        FProfiler::Get().BeginScope("Tick.Schedule");
+    const int Index = static_cast<int>(Group);
+    if (Index < 0 || Index >= static_cast<int>(GroupGenerations.size())) return;
+    ++ScheduleGeneration;
+    if (ScheduleGeneration == 0) ++ScheduleGeneration;
+    GroupGenerations[static_cast<std::size_t>(Index)] = ScheduleGeneration;
+}
+
+void FTickTaskManager::NotifyTickGroupChanged(
+    uint64 RegistrationId,
+    ETickGroup OldGroup,
+    ETickGroup NewGroup)
+{
+    MarkGroupDirty(OldGroup);
+    MarkGroupDirty(NewGroup);
+    for (const auto& [Id, Entry] : RegisteredTicks)
+    {
+        if (Entry.Function != nullptr
+            && std::find(Entry.Function->PrerequisiteIds.begin(),
+                Entry.Function->PrerequisiteIds.end(), RegistrationId)
+                != Entry.Function->PrerequisiteIds.end())
+        {
+            MarkGroupDirty(Entry.Function->GetTickGroup());
+        }
+    }
+}
+
+void FTickTaskManager::NotifyPrerequisitesChanged(ETickGroup Group)
+{
+    MarkGroupDirty(Group);
+}
+
+void FTickTaskManager::BuildSchedule(int GroupIndex)
+{
+    PICO_PROFILE_SCOPE("Tick.Schedule.Build");
     const ETickGroup Group = static_cast<ETickGroup>(GroupIndex);
     std::vector<uint64> Nodes;
-    for (const FRegisteredTick& Entry : RegisteredTicks)
+    Nodes.reserve(RegisteredTicks.size());
+    for (const auto& [Id, Entry] : RegisteredTicks)
     {
         FTickFunction* Function = Entry.Function;
-        if (Entry.Id < RegistrationLimit
-            && Function != nullptr
-            && Function->GetTickGroup() == Group
-            && Function->IsTickEnabled()
-            && ResolveObject(Function->OwnerHandle) != nullptr)
+        if (Function != nullptr && Function->GetTickGroup() == Group)
         {
             Nodes.push_back(Entry.Id);
         }
     }
+    std::sort(Nodes.begin(), Nodes.end());
 
     std::unordered_map<uint64, std::size_t> InDegree;
     std::unordered_map<uint64, std::vector<uint64>> Dependents;
@@ -240,16 +295,45 @@ void FTickTaskManager::TickGroup(uint64 RegistrationLimit, int GroupIndex, float
     if (Ordered.size() != Nodes.size())
     {
         PICO_LOG(LogEngine, Error, "Tick prerequisite cycle detected in group {}", GroupIndex);
+        FCycleDiagnostic Diagnostic;
+        Diagnostic.Group = Group;
+        Diagnostic.Message = "Tick prerequisite cycle detected";
         for (uint64 Id : Nodes)
         {
-            if (std::find(Ordered.begin(), Ordered.end(), Id) == Ordered.end()) Ordered.push_back(Id);
+            if (std::find(Ordered.begin(), Ordered.end(), Id) == Ordered.end())
+            {
+                Diagnostic.RegistrationIds.push_back(Id);
+                Ordered.push_back(Id);
+            }
         }
+        CycleDiagnostics.push_back(std::move(Diagnostic));
     }
 
-    FProfiler::Get().EndScope(ScheduleScope);
-    PICO_PROFILE_SCOPE("Tick.Execute");
-    for (uint64 Id : Ordered)
+    FCachedTickGroup& Cached = CachedGroups[static_cast<std::size_t>(GroupIndex)];
+    Cached.OrderedIds = std::move(Ordered);
+    Cached.BuiltGeneration = GroupGenerations[static_cast<std::size_t>(GroupIndex)];
+    ++Cached.BuildCount;
+}
+
+void FTickTaskManager::TickGroup(uint64 RegistrationLimit, int GroupIndex, float DeltaSeconds)
+{
+    FCachedTickGroup& Cached = CachedGroups[static_cast<std::size_t>(GroupIndex)];
+    const uint64 RequiredGeneration =
+        GroupGenerations[static_cast<std::size_t>(GroupIndex)];
+    if (Cached.BuiltGeneration != RequiredGeneration)
     {
+        std::erase_if(CycleDiagnostics,
+            [GroupIndex](const FCycleDiagnostic& Diagnostic)
+            {
+                return static_cast<int>(Diagnostic.Group) == GroupIndex;
+            });
+        BuildSchedule(GroupIndex);
+    }
+
+    PICO_PROFILE_SCOPE("Tick.Execute");
+    for (uint64 Id : Cached.OrderedIds)
+    {
+        if (Id >= RegistrationLimit) continue;
         FRegisteredTick* LiveEntry = FindRegisteredTick(Id);
         if (LiveEntry == nullptr || LiveEntry->Function == nullptr) continue;
         FTickFunction* Function = LiveEntry->Function;

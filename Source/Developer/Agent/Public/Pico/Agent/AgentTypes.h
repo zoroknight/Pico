@@ -81,6 +81,44 @@ struct FAgentToolCall
     std::string ArgumentsJson = "{}";
 };
 
+enum class EAgentToolResultStatus
+{
+    Unknown,
+    Succeeded,
+    Failed,
+    Pending
+};
+
+enum class EAgentDiagnosticSeverity
+{
+    Info,
+    Warning,
+    Error
+};
+
+struct FAgentArtifact
+{
+    std::string Handle;
+    std::string Kind;
+    std::string Summary;
+    std::string RelativePath;
+    std::uint64_t SizeBytes = 0;
+};
+
+struct FAgentDiagnostic
+{
+    EAgentDiagnosticSeverity Severity = EAgentDiagnosticSeverity::Info;
+    std::string Code;
+    std::string Message;
+};
+
+struct FAgentRevisionChange
+{
+    std::string Domain;
+    std::uint64_t Before = 0;
+    std::uint64_t After = 0;
+};
+
 struct FAgentMessage
 {
     EAgentRole Role = EAgentRole::User;
@@ -98,6 +136,13 @@ struct FAgentToolResult
     bool bReused = false;
     EAgentFailureClass FailureClass = EAgentFailureClass::None;
     EAgentRecoveryAction RecoveryAction = EAgentRecoveryAction::Abort;
+    EAgentToolResultStatus Status = EAgentToolResultStatus::Unknown;
+    std::string FactsJson = "{}";
+    std::vector<FAgentArtifact> Artifacts;
+    std::vector<FAgentDiagnostic> Diagnostics;
+    std::vector<std::string> StateChanges;
+    std::vector<FAgentRevisionChange> RevisionChanges;
+    std::string RecoveryHint;
 };
 
 struct FAgentBudget
@@ -144,12 +189,27 @@ bool TryParseAgentStatus(std::string_view Text, EAgentStatus& OutStatus);
 bool TryParseAgentEventType(std::string_view Text, EAgentEventType& OutType);
 std::string_view ToString(EAgentFailureClass FailureClass);
 std::string_view ToString(EAgentRecoveryAction Action);
+std::string_view ToString(EAgentToolResultStatus Status);
+std::string_view ToString(EAgentDiagnosticSeverity Severity);
 bool TryParseAgentFailureClass(
     std::string_view Text,
     EAgentFailureClass& OutFailureClass);
 bool TryParseAgentRecoveryAction(
     std::string_view Text,
     EAgentRecoveryAction& OutAction);
+bool TryParseAgentToolResultStatus(
+    std::string_view Text,
+    EAgentToolResultStatus& OutStatus);
+bool TryParseAgentDiagnosticSeverity(
+    std::string_view Text,
+    EAgentDiagnosticSeverity& OutSeverity);
+void NormalizeAgentToolResult(FAgentToolResult& Result);
+std::string SerializeAgentToolResult(const FAgentToolResult& Result);
+bool DeserializeAgentToolResult(
+    std::string_view Json,
+    FAgentToolResult& OutResult,
+    std::string* OutError = nullptr);
+std::string BuildAgentToolResultModelJson(const FAgentToolResult& Result);
 FAgentRecoveryPolicy GetAgentRecoveryPolicy(EAgentFailureClass FailureClass);
 bool IsAllowedAgentTransition(EAgentStatus From, EAgentStatus To);
 }

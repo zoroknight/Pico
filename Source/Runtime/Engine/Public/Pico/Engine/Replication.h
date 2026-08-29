@@ -47,6 +47,14 @@ public:
         return Fields;
     }
     const FReplicationFieldDescriptor* FindField(uint16 FieldId) const;
+    std::size_t GetStorageBytes() const
+    {
+        return Fields.size() * sizeof(FReplicationFieldDescriptor);
+    }
+    std::size_t GetReservedStorageBytes() const
+    {
+        return Fields.capacity() * sizeof(FReplicationFieldDescriptor);
+    }
 
 private:
     const PClass* Class = nullptr;
@@ -143,6 +151,7 @@ public:
     const FNetObjectRegistry& GetObjectRegistry() const { return ObjectRegistry; }
     std::vector<FActorChannelSnapshot> GetChannelSnapshots() const;
     FReplicationStatistics GetStatistics() const;
+    void PublishMemoryStatistics() const;
     void SetActorOwningConnection(PActor* Actor, FNetConnectionId ConnectionId);
     FNetConnectionId GetActorOwningConnection(const PActor* Actor) const;
     bool BuildRpcMessage(

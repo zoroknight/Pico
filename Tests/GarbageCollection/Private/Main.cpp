@@ -157,6 +157,10 @@ int main()
         std::string NameIndexError;
         Runner.Expect(Pico::FObjectRegistry::ValidateNameIndex(&NameIndexError),
             "GC mark/sweep leaves the object name index consistent");
+        std::string HierarchyIndexError;
+        Runner.Expect(
+            Pico::FObjectRegistry::ValidateHierarchyIndex(&HierarchyIndexError),
+            "GC mark/sweep leaves the object hierarchy index consistent");
         Runner.Expect(PGCNode::GetDestroyedInstanceCount() >= 10, "BeginDestroy runs for collected instances");
         Runner.Expect(PGCNode::StaticClass()->GetDefaultObject() != nullptr, "CDO remains owned outside runtime GC");
         Pico::PObjectSystem::Shutdown();

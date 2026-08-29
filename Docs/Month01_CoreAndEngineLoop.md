@@ -47,10 +47,14 @@ Currently supported values:
 ```ini
 [Engine]
 MaxFrameCount=-1
+
+[Display]
+VSync=true
 MaxFPS=60
 ```
 
-Command line arguments override config values. For example, `-maxfps=120` wins over `MaxFPS=60` in `Pico.ini`.
+Command line arguments override config values. For example, `-vsync=0 -maxfps=120` selects the software
+120 FPS pacer. The legacy `[Engine] MaxFPS` key remains readable for older projects.
 
 Frame limits have explicit boundary behavior:
 
@@ -58,7 +62,9 @@ Frame limits have explicit boundary behavior:
 - `-frames=0` initializes and shuts down without ticking.
 - `-frames=N`, where `N` is positive, runs exactly `N` frames.
 - Values below `-1` fail during `PreInit` instead of entering an accidental infinite loop.
-- `-maxfps=0` disables the frame cap, while negative or non-finite values fail during `PreInit`.
+- With VSync enabled, Present owns pacing and software `MaxFPS` is ignored.
+- With VSync disabled, `-maxfps=0` selects Unlimited; positive values select the software pacer.
+- Negative or non-finite frame limits and invalid `-vsync` values fail during `PreInit`.
 
 `GuardedMain` has one exit path. Once `FEngineLoop` has been created, `Exit` is called after successful execution, initialization failure, or an exception. `Exit` is idempotent so later subsystems can safely add phase-aware cleanup.
 

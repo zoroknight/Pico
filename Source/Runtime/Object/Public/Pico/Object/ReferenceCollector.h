@@ -2,6 +2,7 @@
 
 #include "Pico/Object/ObjectPtr.h"
 
+#include <cstddef>
 #include <vector>
 
 namespace Pico
@@ -35,6 +36,10 @@ public:
     }
 
     const std::vector<FObjectHandle>& GetReferences() const { return References; }
+    std::size_t GetReservedBytes() const
+    {
+        return References.capacity() * sizeof(FObjectHandle);
+    }
 
 private:
     std::vector<FObjectHandle> References;

@@ -2,6 +2,7 @@
 
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
+#include "Pico/Engine/TickTaskManager.h"
 #include "Pico/Object/ObjectGlobals.h"
 
 #include <algorithm>
@@ -45,7 +46,16 @@ bool FTickFunction::ShouldStartWithTickEnabled() const
     return bStartWithTickEnabled;
 }
 
-void FTickFunction::SetTickGroup(ETickGroup Group) { TickGroup = Group; }
+void FTickFunction::SetTickGroup(ETickGroup Group)
+{
+    if (TickGroup == Group) return;
+    const ETickGroup OldGroup = TickGroup;
+    TickGroup = Group;
+    if (Manager != nullptr)
+    {
+        Manager->NotifyTickGroupChanged(RegistrationId, OldGroup, Group);
+    }
+}
 ETickGroup FTickFunction::GetTickGroup() const { return TickGroup; }
 
 void FTickFunction::SetTickInterval(float Seconds)
@@ -71,13 +81,19 @@ bool FTickFunction::AddPrerequisite(FTickFunction& Prerequisite)
         == PrerequisiteIds.end())
     {
         PrerequisiteIds.push_back(Prerequisite.RegistrationId);
+        Manager->NotifyPrerequisitesChanged(TickGroup);
     }
     return true;
 }
 
 bool FTickFunction::RemovePrerequisite(const FTickFunction& Prerequisite)
 {
-    return std::erase(PrerequisiteIds, Prerequisite.RegistrationId) > 0;
+    const bool bRemoved = std::erase(PrerequisiteIds, Prerequisite.RegistrationId) > 0;
+    if (bRemoved && Manager != nullptr)
+    {
+        Manager->NotifyPrerequisitesChanged(TickGroup);
+    }
+    return bRemoved;
 }
 
 bool FTickFunction::HasPrerequisite(const FTickFunction& Prerequisite) const
@@ -87,7 +103,15 @@ bool FTickFunction::HasPrerequisite(const FTickFunction& Prerequisite) const
             Prerequisite.RegistrationId) != PrerequisiteIds.end();
 }
 
-void FTickFunction::ClearPrerequisites() { PrerequisiteIds.clear(); }
+void FTickFunction::ClearPrerequisites()
+{
+    if (PrerequisiteIds.empty()) return;
+    PrerequisiteIds.clear();
+    if (Manager != nullptr)
+    {
+        Manager->NotifyPrerequisitesChanged(TickGroup);
+    }
+}
 FObjectHandle FTickFunction::GetOwnerHandle() const { return OwnerHandle; }
 
 void FActorTickFunction::ExecuteTick(float DeltaSeconds)

@@ -1,9 +1,101 @@
 #include "Pico/Core/Time.h"
 
+#include "Pico/Core/Platform.h"
+
+#include <algorithm>
 #include <thread>
+
+#if PICO_PLATFORM_WINDOWS
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 namespace Pico
 {
+namespace
+{
+using FClock = std::chrono::steady_clock;
+
+void SleepForFramePacing(double Seconds)
+{
+    if (Seconds <= 0.0)
+    {
+        return;
+    }
+#if PICO_PLATFORM_WINDOWS
+    struct FThreadWaitableTimer
+    {
+        FThreadWaitableTimer()
+        {
+#if defined(CREATE_WAITABLE_TIMER_HIGH_RESOLUTION)
+            Handle = CreateWaitableTimerExW(
+                nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_MODIFY_STATE | SYNCHRONIZE);
+#endif
+            if (Handle == nullptr)
+            {
+                Handle = CreateWaitableTimerExW(
+                    nullptr, nullptr, 0, TIMER_MODIFY_STATE | SYNCHRONIZE);
+            }
+        }
+
+        ~FThreadWaitableTimer()
+        {
+            if (Handle != nullptr)
+            {
+                CloseHandle(Handle);
+            }
+        }
+
+        HANDLE Handle = nullptr;
+    };
+
+    static thread_local FThreadWaitableTimer Timer;
+    if (Timer.Handle != nullptr)
+    {
+        LARGE_INTEGER DueTime {};
+        DueTime.QuadPart = -std::max<LONGLONG>(
+            1, static_cast<LONGLONG>(Seconds * 10000000.0));
+        if (SetWaitableTimer(
+                Timer.Handle, &DueTime, 0, nullptr, nullptr, FALSE)
+            && WaitForSingleObject(Timer.Handle, INFINITE) == WAIT_OBJECT_0)
+        {
+            return;
+        }
+    }
+#endif
+    std::this_thread::sleep_for(std::chrono::duration<double>(Seconds));
+}
+}
+
+const char* ToString(EFramePacingMode Mode)
+{
+    switch (Mode)
+    {
+    case EFramePacingMode::VSync: return "VSync";
+    case EFramePacingMode::Software: return "Software";
+    case EFramePacingMode::Unlimited: return "Unlimited";
+    }
+    return "Unknown";
+}
+
+EFramePacingMode FFramePacingSettings::ResolveMode(
+    bool bPresentationCanVSync) const
+{
+    if (bVSync && bPresentationCanVSync)
+    {
+        return EFramePacingMode::VSync;
+    }
+    return MaxFPS > 0.0
+        ? EFramePacingMode::Software
+        : EFramePacingMode::Unlimited;
+}
+
 void FFrameTimer::Reset()
 {
     StartTime = FClock::now();
@@ -39,13 +131,21 @@ void FFrameTimer::WaitForMaxFPS(double MaxFPS)
     }
 
     const double TargetFrameSeconds = 1.0 / MaxFPS;
+    constexpr double SpinTailSeconds = 0.0005;
+    const FClock::time_point Deadline = FrameStartTime
+        + std::chrono::duration_cast<FClock::duration>(
+            std::chrono::duration<double>(TargetFrameSeconds));
     const FClock::time_point Now = FClock::now();
-    const double ElapsedSeconds = std::chrono::duration<double>(Now - FrameStartTime).count();
-    const double RemainingSeconds = TargetFrameSeconds - ElapsedSeconds;
+    const double RemainingSeconds =
+        std::chrono::duration<double>(Deadline - Now).count();
 
-    if (RemainingSeconds > 0.0)
+    if (RemainingSeconds > SpinTailSeconds)
     {
-        std::this_thread::sleep_for(std::chrono::duration<double>(RemainingSeconds));
+        SleepForFramePacing(RemainingSeconds - SpinTailSeconds);
+    }
+    while (FClock::now() < Deadline)
+    {
+        std::this_thread::yield();
     }
 }
 

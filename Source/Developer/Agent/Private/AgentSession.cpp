@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cctype>
 #include <fstream>
 #include <unordered_set>
 
@@ -26,6 +27,7 @@ FJson ToJson(const FAgentEvent& Event, std::string_view SessionId)
         {"status", ToString(Event.Status)}, {"role", ToString(Event.Role)},
         {"content", Event.Content}, {"call_id", Event.CallId}, {"tool_name", Event.ToolName},
         {"payload", FJson::parse(Event.PayloadJson)}, {"succeeded", Event.bSucceeded},
+        {"structured_result", FJson::parse(Event.StructuredResultJson)},
         {"trace", FJson::parse(Event.TraceJson)}, {"reused", Event.bReused},
         {"run_id", Event.RunId}, {"turn_id", Event.TurnId},
         {"span_id", Event.SpanId}, {"parent_span_id", Event.ParentSpanId},
@@ -67,6 +69,8 @@ bool FromJson(const FJson& Json, std::string_view SessionId, FAgentEvent& Out, s
         Out.CallId = Json.value("call_id", "");
         Out.ToolName = Json.value("tool_name", "");
         Out.PayloadJson = Json.value("payload", FJson::object()).dump();
+        Out.StructuredResultJson = Json.value(
+            "structured_result", FJson::object()).dump();
         Out.TraceJson = Json.value("trace", FJson::array()).dump();
         Out.RunId = Json.value("run_id", "");
         Out.TurnId = Json.value("turn_id", "");
@@ -137,6 +141,9 @@ bool FAgentSession::Append(FAgentEvent Event, std::string* OutError)
         if (Event.SpanId.empty()) Event.SpanId = CurrentSpanId;
         const FJson ValidatedPayload = FJson::parse(Event.PayloadJson);
         Event.PayloadJson = ValidatedPayload.dump();
+        const FJson ValidatedStructuredResult =
+            FJson::parse(Event.StructuredResultJson);
+        Event.StructuredResultJson = ValidatedStructuredResult.dump();
         const FJson ValidatedTrace = FJson::parse(Event.TraceJson);
         Event.TraceJson = ValidatedTrace.dump();
         std::filesystem::create_directories(EventLogPath.parent_path());
@@ -225,9 +232,19 @@ std::vector<FAgentMessage> FAgentSession::BuildMessageHistory() const
         {
             if (!IncludedToolResults.insert(Event.CallId).second)
                 continue;
-            Result.push_back({EAgentRole::Tool,
-                Event.bSucceeded ? Event.PayloadJson : Event.Content,
-                Event.CallId});
+            FAgentToolResult ToolResult;
+            std::string ModelContent;
+            if (Event.StructuredResultJson != "{}"
+                && DeserializeAgentToolResult(
+                    Event.StructuredResultJson, ToolResult))
+            {
+                ModelContent = BuildAgentToolResultModelJson(ToolResult);
+            }
+            else
+            {
+                ModelContent = Event.bSucceeded ? Event.PayloadJson : Event.Content;
+            }
+            Result.push_back({EAgentRole::Tool, std::move(ModelContent), Event.CallId});
         }
     }
     return Result;
@@ -239,12 +256,72 @@ std::optional<FAgentToolResult> FAgentSession::FindToolResult(std::string_view C
     {
         if (It->Type == EAgentEventType::ToolResult && It->CallId == CallId)
         {
-            return FAgentToolResult {It->CallId, It->bSucceeded, It->PayloadJson,
+            FAgentToolResult Result;
+            if (It->StructuredResultJson != "{}"
+                && DeserializeAgentToolResult(It->StructuredResultJson, Result))
+            {
+                Result.bReused = true;
+                return Result;
+            }
+            Result = FAgentToolResult {It->CallId, It->bSucceeded, It->PayloadJson,
                 It->bSucceeded ? std::string {} : It->Content, true,
                 It->FailureClass, It->RecoveryAction};
+            NormalizeAgentToolResult(Result);
+            return Result;
         }
     }
     return std::nullopt;
+}
+
+bool FAgentSession::ExternalizeLargeToolResult(
+    FAgentToolResult& Result,
+    std::size_t ThresholdBytes,
+    std::string* OutError) const
+{
+    NormalizeAgentToolResult(Result);
+    if (Result.FactsJson.size() <= ThresholdBytes) return true;
+    try
+    {
+        std::string SafeCallId;
+        SafeCallId.reserve(Result.CallId.size());
+        for (const unsigned char Character : Result.CallId)
+        {
+            SafeCallId.push_back(std::isalnum(Character) || Character == '-'
+                || Character == '_' ? static_cast<char>(Character) : '_');
+        }
+        if (SafeCallId.empty()) SafeCallId = "tool-result";
+        const std::filesystem::path ArtifactDirectory =
+            EventLogPath.parent_path() / "Artifacts";
+        const std::filesystem::path Target =
+            ArtifactDirectory / (SafeCallId + ".facts.json");
+        const std::filesystem::path Temporary = Target.string() + ".tmp";
+        std::filesystem::create_directories(ArtifactDirectory);
+        {
+            std::ofstream Stream(Temporary, std::ios::binary | std::ios::trunc);
+            Stream.write(Result.FactsJson.data(),
+                static_cast<std::streamsize>(Result.FactsJson.size()));
+            Stream.flush();
+            if (!Stream) throw std::runtime_error("Could not write Tool Result artifact");
+        }
+        std::error_code RemoveError;
+        std::filesystem::remove(Target, RemoveError);
+        std::filesystem::rename(Temporary, Target);
+        const std::string Handle = "artifact:" + Result.CallId + ":facts";
+        Result.Artifacts.push_back({Handle, "application/json",
+            "Full Tool Result facts",
+            (std::filesystem::path("Artifacts") / Target.filename()).generic_string(),
+            static_cast<std::uint64_t>(Result.FactsJson.size())});
+        Result.FactsJson = FJson {{"artifact_handle", Handle},
+            {"summary", "Large Tool Result facts were externalized"},
+            {"size_bytes", Result.Artifacts.back().SizeBytes}}.dump();
+        Result.OutputJson = Result.FactsJson;
+        return true;
+    }
+    catch (const std::exception& Exception)
+    {
+        if (OutError) *OutError = Exception.what();
+        return false;
+    }
 }
 
 std::optional<FAgentToolCall> FAgentSession::FindToolCall(std::string_view CallId) const

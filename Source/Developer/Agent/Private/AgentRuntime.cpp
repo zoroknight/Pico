@@ -344,13 +344,22 @@ FAgentRunResult FAgentRuntime::Run(
                         else ++Counters.MutationToolCalls;
                         Result = ToolExecutor.Execute(Call, CancellationToken);
                         Result.CallId = Call.Id;
+                        NormalizeAgentToolResult(Result);
                         if (Result.bSucceeded)
                         {
                             bMadeProgress = true;
                             if (bReadOnly)
                                 ReadOnlyCache[SemanticKey] = Result;
                             else
+                            {
+                                const std::uint64_t BeforeRevision = StateRevision;
                                 ++StateRevision;
+                                for (FAgentRevisionChange& Change : Result.RevisionChanges)
+                                {
+                                    Change.Before = BeforeRevision;
+                                    Change.After = StateRevision;
+                                }
+                            }
                         }
                     }
                 }
@@ -369,7 +378,15 @@ FAgentRunResult FAgentRuntime::Run(
                 ResultEvent.Role = EAgentRole::Tool;
                 ResultEvent.CallId = Call.Id;
                 ResultEvent.ToolName = Call.Name;
+                if (!Session.ExternalizeLargeToolResult(Result, 64 * 1024, &Error))
+                {
+                    EndSpan(ToolSpan, false, Error);
+                    return Finish(EAgentStatus::Failed,
+                        "Could not persist Tool Result artifact: " + Error,
+                        EAgentFailureClass::Infrastructure);
+                }
                 ResultEvent.PayloadJson = Result.OutputJson;
+                ResultEvent.StructuredResultJson = SerializeAgentToolResult(Result);
                 ResultEvent.TraceJson = bSemanticCacheHit
                     ? R"([{"stage":"Execute","succeeded":true,"message":"Semantic read cache hit; tool handler was not called"}])"
                     : ToolExecutor.GetLastExecutionTraceJson();
@@ -556,8 +573,10 @@ FAgentToolResult FAgentRuntime::MakeSemanticCacheResult(
     {
         Result.OutputJson = FJson {{"cached_result", Result.OutputJson},
             {"_pico_harness", {{"semantic_cache_hit", true},
-                {"state_revision", StateRevision}}}}.dump();
+            {"state_revision", StateRevision}}}}.dump();
     }
+    Result.FactsJson = Result.OutputJson;
+    NormalizeAgentToolResult(Result);
     return Result;
 }
 

@@ -91,6 +91,7 @@ add_library(PicoCore STATIC
     Source/Runtime/Core/Private/GameThread.cpp
     Source/Runtime/Core/Private/Log.cpp
     Source/Runtime/Core/Private/Math/Math.cpp
+    Source/Runtime/Core/Private/MemoryTracker.cpp
     Source/Runtime/Core/Private/Name.cpp
     Source/Runtime/Core/Private/Paths.cpp
     Source/Runtime/Core/Private/PlatformProcess.cpp

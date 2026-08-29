@@ -460,6 +460,8 @@ int main(int Argc, char** Argv)
             ExitCode = EngineLoop.PreInit(Argc, Argv, ProjectFile);
             if (ExitCode == 0)
             {
+                glfwSwapInterval(
+                    EngineLoop.GetFramePacingSettings().bVSync ? 1 : 0);
                 std::filesystem::path LogFile;
                 if (!Pico::FPaths::TryGetProjectWritePath(
                         Pico::EProjectWriteRoot::Saved,
@@ -537,6 +539,9 @@ int main(int Argc, char** Argv)
                 App.Draw();
 
                 PresentImGuiFrame(Window, IO);
+                const bool bCanPresent =
+                    glfwGetWindowAttrib(Window, GLFW_ICONIFIED) == GLFW_FALSE;
+                EngineLoop.WaitForFrameLimit(bCanPresent);
                 if (App.ShouldClose())
                 {
                     break;

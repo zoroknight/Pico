@@ -258,10 +258,57 @@ LLM 展示文本从结构化结果生成，不作为 Runtime 事实。大结果�
 - Verifier、Trace、Replay 和 UI 共用结构化 Tool Result；
 - 不通过解析自然语言判断 Tool 是否成功。
 
-## 第 4 周后置门：Object Hierarchy Index
+验收状态：已完成。Tick Scheduler 使用按 Group Generation 失效的 Cached Schedule 和 RegistrationId 哈希索引，
+静态图普通帧不再重建拓扑；10K 首次静态调度与依赖变化 P95 相对第 2 周分别提升约 5.1x 和 8.5x，连续 60 个
+静态帧 P95 为 20.647 ms 且 rebuild 为 0。Agent Tool Result 已统一 Status、Facts、Artifacts、Diagnostics、
+StateChanges、RevisionChanges 与 RecoveryHint，并贯穿 Verifier、Session、Operation Journal、Replay、模型历史和
+AI Chat；超过 64 KiB 的 Facts 外置为 Artifact。详见
+`EngineeringDepthWeek04_TickCacheAndStructuredToolResult.zh-CN.md`。
 
-第 4 周验收完成后、进入第 5 周 Replication Scaling 前，处理第 3 周基准暴露出的 Destroy 热点。该任务是
-已排期的性能债务，不再只作为风险备注。实现范围严格限定为对象层级关系，不顺带增加 Class、Tag 或 Path Index。
+## 第 4 周收尾门：Frame Pacing Correctness
+
+在继续解释 Runtime 热点前，先修正 Editor/Game 当前由软件 `MaxFPS` 与 GLFW VSync 同时等待造成的帧调度
+错误。实测 Release Game 在相同 StarterWorld 中由约 `28 FPS` 提升到 `59.2 FPS / 16.89 ms`；角色输入与移动
+也明显更平滑。该对照证明现阶段首先要消除重复等待，而不是把 Idle/Present 时间误判为 Tick 或渲染成本。
+
+### Runtime
+
+建立互斥的 Frame Pacing Policy：
+
+```text
+VSync On                 -> Present/VSync 负责等待，忽略软件 MaxFPS
+VSync Off + MaxFPS > 0   -> 完整 Render/Present 后由软件 Frame Pacer 等待
+VSync Off + MaxFPS = 0   -> Unlimited，不主动等待
+Dedicated Server         -> 使用独立 ServerTickRate，不依赖显示器
+```
+
+EngineLoop 不再在 Render/Present 之前睡眠。Editor、Game 与 Server 共享计时基础设施，但由最外层 Host 根据自身
+是否拥有窗口和 VSync 决定 Pacing。保留命令行覆盖，并增加 `VSync / 30 / 60 / 90 / 120 / 144 / Unlimited`
+可配置档位；默认 Release Game 使用 VSync，当前质量门槛仍为稳定 60 FPS，120 FPS 只作为性能余量测试，不在
+本阶段引入多线程或渲染后端重构。
+
+### 周末验收
+
+- StarterWorld Release Game 默认 VSync 在 60 Hz 显示器约为 60 FPS，不再回落到约 28～30 FPS；
+- `-vsync=0 -maxfps=30/60/120/0` 分别表现为对应软件上限或 Unlimited；
+- Runtime 状态窗口显示 FPS、平均帧时间和当前有效 Pacing Mode；
+- 30/60/120 FPS 下角色移动速度、跳跃高度、动画时长和网络状态同步语义不随渲染帧率改变；
+- 保存修复前后的 Release 数据，明确区分 Game/Tick、Render、Present/VSync 与 Idle/Pacing；
+- 编辑器的前台 VSync、后台 10～20 FPS 和不可见预览降频保留到第 7 周深化，不阻塞本收尾门。
+
+验收状态：已完成。EngineLoop 不再在 Render/Present 前等待；Game、Editor 和无窗口 Launch 在完整帧末尾通过
+同一 `FFramePacingSettings` 解析 VSync、Software 或 Unlimited。Windows Software Pacer 使用高精度 Waitable
+Timer 与短尾段校准，30帧纯节拍 30/60/120 FPS 中位耗时分别为 `979.10/495.05/253.59 ms`，Unlimited 为
+`9.67 ms`。真实 Release Game 固定60帧总耗时为 DefaultVSync `1607.46 ms`、Software30 `2561.16 ms`、
+Software60 `1514.87 ms`、Software120 `1004.96 ms`、Unlimited `555.44 ms`；其中约0.55秒为启动和场景加载
+固定成本。Runtime 状态窗口显示最终 Pacing Mode。详见
+`EngineeringDepthWeek04_FramePacingCorrectness.zh-CN.md`。
+
+## 第 4 周后置门：Object Hierarchy Index（已完成）
+
+第 4 周 Tick Cache 与 Frame Pacing Correctness 收尾门验收后、进入第 5 周 Replication Scaling 前，处理第 3 周
+基准暴露出的 Destroy 热点。该任务是已排期的性能债务，不再只作为风险备注。实现范围严格限定为对象层级关系，
+不顺带增加 Class、Tag 或 Path Index。
 
 ### Runtime
 
@@ -271,32 +318,50 @@ LLM 展示文本从结构化结果生成，不作为 Runtime 事实。大结果�
 OuterHandle -> ChildHandle Set
 ```
 
-用它替代 `HasChildObjects` 和对象树销毁中的全 Slot 扫描。Add、Destroy、GC Sweep、Outer 变更和 Registry Reset
-必须同步维护索引；Debug 提供父子双向一致性检查。先记录索引的额外内存与维护耗时，再决定 Child Set 的具体容器，
-不得只为了降低单项耗时而破坏稳定 Handle 和 Outer 生命周期规则。
+用它替代 `HasChildObjects` 和对象树销毁中的全 Slot 扫描。Add、Destroy、GC Sweep 和 Registry Reset 同步维护
+索引；`DestroyAllObjects` 使用叶节点队列，在子节点移除后推进父节点。Debug 提供父子双向一致性检查。Pico 当前
+没有运行时 Reparent/SetOuter API，Outer 只在构造时确定；未来新增该 API 时必须原子维护 Name 与 Hierarchy
+两个索引，不在本门为了清单额外创造未使用接口。
 
 ### 周末验收
 
 - `HasChildObjects` 不再扫描完整 Live Slot；
-- 单对象销毁、递归对象树销毁、GC Sweep、Slot 复用和 Outer 变更测试全部通过；
+- 单对象销毁、递归对象树销毁、GC Sweep、Slot 复用和 Registry Reset 测试全部通过；
 - 100K Destroy 使用与第 3 周相同的 Release Full 合约重新采样，并与 `7.573 s` P95 基线对比；
 - 报告 Destroy P50/P95/max、索引内存成本和 Add/Destroy 维护成本；
 - 若数据证明索引收益不足以覆盖复杂度，保留测量结果并明确否决原因，不强行合入。
+
+验收状态：已完成。相同 Release Full、5 样本、100K Object 合约下，平铺 Destroy P50/P95 从第 3 周的
+`7100.452/7573.463 ms` 降至 `33.865/107.531 ms`，P95 约提升 `70.4x`。新增层级 Case 中，100K
+直接子对象的 Create P50/P95 为 `128.412/180.959 ms`，整树 Destroy 为 `48.375/172.380 ms`；索引结构
+估算存储为 `1,848,648 bytes`，约 `18.5 bytes/relation`，该估算不包含标准库节点分配器额外开销。Debug/Release
+完整测试矩阵均通过。详见 `EngineeringDepthWeek04_ObjectHierarchyIndex.zh-CN.md`。
 
 ## 第 5 周：Replication Scaling 与故障注入
 
 ### Runtime
 
-按风险从低到高完成：
+先用约 1～2 天完成最小内存观测门，再按风险从低到高推进 Replication：
 
-1. 按 `PClass` 缓存 `FReplicationSchema`；
-2. `(ConnectionId, NetObjectId)` Channel Index；
-3. NetObject Handle Index；
-4. 消除 Field Delta 的重复线性查找；
-5. 分别统计 Gather/Compare/Serialize/Queue；
-6. 增加 Actor ReplicationGeneration、Property Dirty Mask 和 Connection LastObservedGeneration。
+1. 增加轻量 `PicoMemoryTracker`，第一版由子系统主动报告，不拦截全局 `new/delete`；
+2. 固定 `CurrentBytes/ReservedBytes/PeakBytes/ElementCount/GrowthCount` 指标，并接入 Benchmark JSON/CSV；
+3. 首批分类覆盖 `Object.Slots`、`Object.NameIndex`、`Object.HierarchyIndex`、`GC.Scratch`、
+   `Profiler.Events`、`Replication.Schema` 和 `Replication.Channels`；
+4. 按 `PClass` 缓存 `FReplicationSchema`；
+5. `(ConnectionId, NetObjectId)` Channel Index；
+6. NetObject Handle Index；
+7. 消除 Field Delta 的重复线性查找；
+8. 分别统计 Gather/Compare/Serialize/Queue；
+9. 增加 Actor ReplicationGeneration、Property Dirty Mask 和 Connection LastObservedGeneration；
+10. 同时记录 Schema/Channel 占用、Dirty Actor/Property 数、缓存跳过次数和每帧编码字节。
 
 初期保留可选完整轮询校验，用来发现漏标 Dirty。暂不实现复杂 Replication Graph。
+
+内存观测前置门验收状态：已完成。`PicoMemoryTracker` 已以固定 Tag 接入 Object、GC、Profiler 和 Replication，
+Benchmark v3 输出 `memory_categories` 与 `PicoRuntimeMemory.csv`，Debug/Release 相关回归和 Release Full 七分类
+自校验通过。100K Full 合约首次测得 `Profiler.Events` Peak/Reserved 约为 `120.47/138.58 MB`，确认第 7 周
+Bounded Trace 的必要性。实现、口径和原始数据见
+[第 5 周 Memory Observability Gate](EngineeringDepthWeek05_MemoryObservabilityGate.zh-CN.md)。
 
 ### Agent
 
@@ -307,6 +372,8 @@ Crash Before Persist、Duplicate ToolCall、Approval Rejection、Verification Fa
 
 - 无变化 Actor 不再重复编码全部属性；
 - 双客户端现有同步、预测与修正结果不变；
+- Runtime Benchmark 能输出上述内存分类的当前值、保留容量和峰值，且关闭跟踪时不改变生命周期语义；
+- 1K Actor、1%/10%/100% Dirty Case 能同时解释 CPU、缓存跳过率、内存和 `BytesPerFrame`；
 - 副作用完成但结果未记录时先 Reconcile，不重复创建对象；
 - 不可恢复错误停止并保留 Journal、Trace 和现场。
 
@@ -314,9 +381,14 @@ Crash Before Persist、Duplicate ToolCall、Approval Rejection、Verification Fa
 
 ### Runtime
 
-默认只实现低风险 GC 优化：缓存每个 `PClass` 的强引用属性布局、复用 Mark Buffer/Work Stack，并分开记录
-RootScan/Mark/UnreachableSort/Destroy。只有基线证明 P95 Pause 已成为真实问题，才另行规划增量 GC；并行 GC
-不进入本阶段。
+默认只实现低风险 GC 优化：
+
+1. 缓存每个 `PClass` 的强引用属性布局，避免每次 GC 重复筛选完整反射属性链；
+2. 复用 Mark Buffer、Work Stack、Unreachable List 和引用收集 Scratch，按历史峰值保留合理容量；
+3. 分开记录 RootScan/Mark/UnreachableSort/Destroy 的 CPU、Current/Reserved/Peak Bytes 和 GrowthCount；
+4. 对比不同对象规模与引用密度，确认收益来自减少重复扫描还是减少临时分配。
+
+只有基线证明 P95 Pause 已成为真实问题，才另行规划增量 GC；并行 GC、GC Cluster 和复杂写屏障不进入本阶段。
 
 ### Agent
 
@@ -328,7 +400,8 @@ Golden Tasks 增加：Knowledge Prompt Injection、未知 Tool、Skill Forbidden
 
 ### 周末验收
 
-- GC 改动能说明对哪个阶段、哪个对象规模有效；
+- GC 改动能说明对哪个阶段、哪个对象规模和引用密度有效，并给出临时内存峰值与增长次数；
+- 连续多轮 GC 不重复制造与历史峰值等量的临时分配，Object/GC/Serialization 生命周期回归保持通过；
 - 对抗任务不会产生未审批副作用；
 - 根据检索数据决定未来是否值得做 Embedding，而不是预设答案。
 
@@ -337,7 +410,17 @@ Golden Tasks 增加：Knowledge Prompt Injection、未知 Tool、Skill Forbidden
 ### Runtime
 
 在 PicoInspector 或独立开发面板显示 Frame P50/P95、Top CPU Scopes、Object/Tick 数、Schedule Rebuild、最近
-GC、Replicated Actor/DirtyField/BytesPerFrame 和 Task Queue。正式游戏 HUD 不承载这些开发统计。
+GC、Replicated Actor/DirtyField/BytesPerFrame、Task Queue，以及 Object/GC/Profiler/Replication 的
+Current/Reserved/Peak Bytes。正式游戏 HUD 不承载这些开发统计。
+
+将 Profiler 事件存储拆为 `Disabled`、`AggregateOnly` 和 `BoundedTrace`：长期开发默认使用聚合统计，
+`BoundedTrace` 通过固定容量 Ring Buffer 只保留最近一段帧，完整 Trace 必须由用户显式开启。项目关闭、地图切换、
+打包前或显式 Compact 命令可以在生命周期安全点 Trim 长期保留的峰值容量；禁止每帧自动 `shrink_to_fit()`。
+
+深化第 4 周收尾门建立的 Frame Pacing：增加 Frame P50/P95/P99、超出 16.67 ms 的长帧计数，以及 Game/Tick、
+Physics、Network、GC、Render、Runtime UI、Present/VSync、Idle/Pacing 分项。Editor 前台跟随 VSync，后台降到
+10～20 FPS；只更新可见且启用 Realtime 的 Viewport/资产预览。此处依据数据决定是否增加基础质量档位，不能以
+追求 120 FPS 为理由预先接入多线程、复杂 LOD 或替换渲染后端。
 
 ### Agent
 
@@ -349,7 +432,9 @@ GC、Replicated Actor/DirtyField/BytesPerFrame 和 Task Queue。正式游戏 HUD
 
 - Graph 修改不会让无关 Asset 查询缓存失效；
 - 长会话上下文有固定上限且不丢失审批、目标和最近错误；
-- Runtime 与 Agent Metrics 均可被开发者直观看到。
+- Runtime 与 Agent Metrics 均可被开发者直观看到；
+- 连续运行时 Profiler Trace 内存保持有界，AggregateOnly 不保存逐事件历史；
+- 安全点 Trim 不破坏 Object Handle、GC 引用、网络 Channel、资产缓存或编辑器事务。
 
 ## 第 8 周：综合验收与工程报告
 
@@ -363,6 +448,10 @@ GC、Replicated Actor/DirtyField/BytesPerFrame 和 Task Queue。正式游戏 HUD
 输出优化前后 CPU、P50/P95、内存、BytesPerFrame、ScheduleRebuild、GCPause 和正确性测试结果。不强制追求
 预设百分比，必须解释数据与代价。
 
+基于 Parent Child 数分布、Hierarchy 真实 Reserved/Peak Bytes、Create/Destroy 吞吐和 Child 遍历 P95，完成
+当前 `unordered_map<ParentHandle, unordered_set<ChildHandle>>` 与紧凑连续 Child List 原型的 A/B 决策。第 8 周
+只要求形成有数据支撑的“保留、延期或采用”结论，不强制重写已获得显著收益的 Hierarchy Index。
+
 ### Agent 固定验收
 
 Fake Provider 与真实 Provider 分开运行普通 Golden、Adversarial、Failure Injection、Crash Recovery、
@@ -372,6 +461,7 @@ Token/Latency、ForbiddenSideEffect 和 RecoverableFailureRecoveryRate。
 ### 阶段完成门槛
 
 - Runtime 优化均有可复现 Benchmark 和前后数据；
+- Memory Tracker 分类可解释主要 Runtime 缓存的当前、保留和峰值成本，Profiler 长会话内存有明确上限；
 - Agent 通用层不存在 PicoSandbox 类名/属性名硬编码；
 - Editor、Play、网络、Graph、GAS 和 Package 无行为回归；
 - 形成“采用了什么、拒绝了什么、为什么”的工程报告；
@@ -384,7 +474,7 @@ Token/Latency、ForbiddenSideEffect 和 RecoverableFailureRecoveryRate。
 - ECS 和全面数据导向迁移；
 - 新渲染效果、RHI 扩展和光线追踪；
 - 更完整 GAS、GameplayTask 和新项目玩法组件；
-- SIMD Intrinsics、全面 SoA、自定义通用 Allocator；
+- SIMD Intrinsics、全面 SoA、自定义通用 Allocator、全局 `new/delete` 替换和完整 Binned 分配器；
 - Tick 全面并行、通用 Task Graph、并行/增量 GC；
 - Embedding、Vector DB、MCP、Multi-Agent 和 Code Agent；
 - 仅服务于单一 Demo 的 Agent Tool。

@@ -1002,6 +1002,14 @@ void TestCapabilityProviderRegistration(FTestRunner& Runner)
             && Catalog.find("TestCapabilityProvider") != std::string::npos
             && Catalog.find("revision_read_set") != std::string::npos,
         "Capability provider atomically publishes owned tools and revision metadata");
+    const Pico::FAgentToolResult StructuredResult = Registry.Execute(
+        {"provider-result", "provider.first", "{}"}, nullptr);
+    Runner.Expect(StructuredResult.bSucceeded
+            && StructuredResult.Status == Pico::EAgentToolResultStatus::Succeeded
+            && StructuredResult.FactsJson == "{}"
+            && StructuredResult.RevisionChanges.size() == 1
+            && StructuredResult.RevisionChanges.front().Domain == "World.Revision",
+        "Tool Registry normalizes legacy handler output into one structured result contract");
 
     FProvider Conflicting;
     Conflicting.Definitions.push_back(MakeTool("provider.temporary"));
@@ -1504,6 +1512,58 @@ void TestCredentialStoreRejectsInvalidInput(FTestRunner& Runner)
         "Credential store rejects implausibly short API keys before local storage");
 }
 
+void TestStructuredToolResultAndArtifactPersistence(FTestRunner& Runner)
+{
+    const std::filesystem::path SessionPath = MakeLogPath("structured-result");
+    std::error_code ErrorCode;
+    std::filesystem::remove_all(SessionPath.parent_path() / "Artifacts", ErrorCode);
+    auto Session = Pico::FAgentSession::OpenOrCreate(
+        "structured-result", SessionPath);
+    Pico::FAgentToolResult Result;
+    Result.CallId = "large-result";
+    Result.bSucceeded = true;
+    Result.OutputJson = "{\"blob\":\"" + std::string(4096, 'x') + "\"}";
+    Result.StateChanges = {"World actor created"};
+    Result.RevisionChanges = {{"World.Revision", 4, 5}};
+    Pico::NormalizeAgentToolResult(Result);
+
+    std::string Error;
+    const bool bExternalized = Session
+        && Session->ExternalizeLargeToolResult(Result, 1024, &Error);
+    Pico::FAgentEvent Event;
+    Event.Type = Pico::EAgentEventType::ToolResult;
+    Event.Role = Pico::EAgentRole::Tool;
+    Event.CallId = Result.CallId;
+    Event.ToolName = "test.large_result";
+    Event.PayloadJson = Result.OutputJson;
+    Event.StructuredResultJson = Pico::SerializeAgentToolResult(Result);
+    Event.bSucceeded = Result.bSucceeded;
+    const bool bAppended = bExternalized && Session
+        && Session->Append(std::move(Event), &Error);
+
+    auto Reopened = Pico::FAgentSession::OpenOrCreate(
+        "structured-result", SessionPath, &Error);
+    const auto Restored = Reopened
+        ? Reopened->FindToolResult("large-result") : std::nullopt;
+    const auto History = Reopened
+        ? Reopened->BuildMessageHistory() : std::vector<Pico::FAgentMessage> {};
+    const std::filesystem::path ArtifactPath = SessionPath.parent_path()
+        / "Artifacts" / "large-result.facts.json";
+    Runner.Expect(bAppended && Restored && Restored->bSucceeded
+            && Restored->Status == Pico::EAgentToolResultStatus::Succeeded
+            && Restored->Artifacts.size() == 1
+            && Restored->StateChanges == std::vector<std::string> {"World actor created"}
+            && Restored->RevisionChanges.size() == 1
+            && std::filesystem::is_regular_file(ArtifactPath),
+        "Structured Tool Result facts, state, revisions, and Artifact handles survive replay");
+    Runner.Expect(!History.empty()
+            && History.back().Content.find("artifact:large-result:facts")
+                != std::string::npos
+            && History.back().Content.find(std::string(256, 'x'))
+                == std::string::npos,
+        "Large Tool Results keep only a bounded Artifact handle and summary in model history");
+}
+
 void TestDurableOperationJournal(FTestRunner& Runner)
 {
     const std::filesystem::path Root = std::filesystem::temp_directory_path()
@@ -1576,6 +1636,7 @@ int main()
     TestPicoSkillRegistry(Runner);
     TestIntentAndSkillEvalSet(Runner);
     TestGoldenTaskRunner(Runner);
+    TestStructuredToolResultAndArtifactPersistence(Runner);
     TestCredentialStoreRejectsInvalidInput(Runner);
     TestDurableOperationJournal(Runner);
     return Runner.Finish();

@@ -15,6 +15,7 @@ public:
     static bool HasSwitch(std::string_view Name);
     static std::optional<std::string> GetValue(std::string_view Name);
     static std::optional<int> GetInt(std::string_view Name);
+    static std::optional<bool> GetBool(std::string_view Name);
 
     static const std::vector<std::string>& GetArguments();
 

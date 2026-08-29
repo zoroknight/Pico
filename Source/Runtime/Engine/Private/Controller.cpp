@@ -17,6 +17,8 @@ bool PController::RegisterProperties(PClass& Class)
     std::vector<PProperty> Properties;
     PICO_ADD_PROPERTY_METADATA(Properties, Pawn, Metadata);
     Metadata.RepNotifyFunction = {};
+    // Local view state stays responsive; authority-facing rotation travels through explicit moves/RPCs.
+    Metadata.Flags = EPropertyFlags::Transient;
     PICO_ADD_PROPERTY_METADATA(Properties, ControlRotation, Metadata);
     Metadata.Flags = EPropertyFlags::None;
     PICO_ADD_PROPERTY_METADATA(Properties, ViewPitchMin, Metadata);

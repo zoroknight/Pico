@@ -4,6 +4,23 @@
 
 namespace Pico
 {
+enum class EFramePacingMode
+{
+    VSync,
+    Software,
+    Unlimited
+};
+
+const char* ToString(EFramePacingMode Mode);
+
+struct FFramePacingSettings
+{
+    EFramePacingMode ResolveMode(bool bPresentationCanVSync) const;
+
+    bool bVSync = true;
+    double MaxFPS = 60.0;
+};
+
 class FFrameTimer
 {
 public:

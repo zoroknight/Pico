@@ -1,6 +1,8 @@
 #include "Pico/Core/CommandLine.h"
 
 #include <charconv>
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <system_error>
 
@@ -66,6 +68,32 @@ std::optional<int> FCommandLine::GetInt(std::string_view Name)
     }
 
     return Result;
+}
+
+std::optional<bool> FCommandLine::GetBool(std::string_view Name)
+{
+    const std::optional<std::string> Value = GetValue(Name);
+    if (!Value.has_value())
+    {
+        return std::nullopt;
+    }
+
+    std::string Lower = *Value;
+    std::transform(
+        Lower.begin(), Lower.end(), Lower.begin(),
+        [](unsigned char Character)
+        {
+            return static_cast<char>(std::tolower(Character));
+        });
+    if (Lower == "true" || Lower == "1" || Lower == "yes" || Lower == "on")
+    {
+        return true;
+    }
+    if (Lower == "false" || Lower == "0" || Lower == "no" || Lower == "off")
+    {
+        return false;
+    }
+    return std::nullopt;
 }
 
 const std::vector<std::string>& FCommandLine::GetArguments()

@@ -3,6 +3,8 @@
 #include "Pico/Core/AssetPath.h"
 #include "Pico/Core/Log.h"
 #include "Pico/Core/Math/Transform.h"
+#include "Pico/Core/MemoryTracker.h"
+#include "Pico/Core/ScopeExit.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/Character.h"
 #include "Pico/Engine/GameStateBase.h"
@@ -1059,6 +1061,7 @@ void FReplicationSystem::Reset()
     ObjectRegistry.Reset();
     Statistics = {};
     World = nullptr;
+    PublishMemoryStatistics();
 }
 
 void FReplicationSystem::ReplicateServerConnection(
@@ -1068,6 +1071,15 @@ void FReplicationSystem::ReplicateServerConnection(
 {
     if (World == nullptr || !ConnectionId.IsValid() || !QueueReliable) return;
     if (Impl == nullptr) Impl = std::make_shared<FImpl>();
+
+    FMemoryTracker& MemoryTracker = FMemoryTracker::Get();
+    const auto ResetSchemaMemory = MakeScopeExit([&MemoryTracker]()
+    {
+        MemoryTracker.Report(EMemoryTag::ReplicationSchema, 0, 0, 0);
+    });
+    std::size_t SchemaPeakBytes = 0;
+    std::size_t SchemaPeakReservedBytes = 0;
+    std::size_t SchemaPeakFieldCount = 0;
 
     std::vector<PActor*> ReplicatedActors;
     for (PLevel* Level : World->GetLevels())
@@ -1106,6 +1118,12 @@ void FReplicationSystem::ReplicateServerConnection(
         if (Channel->PendingReliableId != 0) continue;
         const FReplicationSchema Schema =
             FReplicationSchema::Build(Actor->GetClass());
+        SchemaPeakBytes = std::max(
+            SchemaPeakBytes, Schema.GetStorageBytes());
+        SchemaPeakReservedBytes = std::max(
+            SchemaPeakReservedBytes, Schema.GetReservedStorageBytes());
+        SchemaPeakFieldCount = std::max(
+            SchemaPeakFieldCount, Schema.GetFields().size());
         if (Schema.GetClass() == nullptr) continue;
         if (Channel->State == EActorChannelState::PendingOpen)
         {
@@ -1169,6 +1187,8 @@ void FReplicationSystem::ReplicateServerConnection(
             ++Statistics.DestroyMessagesSent;
         }
     }
+    MemoryTracker.Report(EMemoryTag::ReplicationSchema,
+        SchemaPeakBytes, SchemaPeakReservedBytes, SchemaPeakFieldCount);
 }
 
 bool FReplicationSystem::HandleReliableMessage(
@@ -1847,5 +1867,50 @@ FReplicationStatistics FReplicationSystem::GetStatistics() const
     Result.UnresolvedReferenceCount =
         Impl != nullptr ? Impl->PendingReferences.size() : 0;
     return Result;
+}
+
+void FReplicationSystem::PublishMemoryStatistics() const
+{
+    FMemoryTracker& Tracker = FMemoryTracker::Get();
+    if (!Tracker.IsEnabled()) return;
+    if (Impl == nullptr)
+    {
+        Tracker.Report(EMemoryTag::ReplicationChannels, 0, 0, 0);
+        return;
+    }
+
+    std::size_t CurrentBytes = Impl->Channels.size()
+        * sizeof(FImpl::FChannel)
+        + Impl->PendingReferences.size() * sizeof(FPendingReference)
+        + Impl->Ownership.size() * sizeof(FImpl::FOwnership)
+        + Impl->RpcFrameCounts.size() * sizeof(FImpl::FRpcFrameCount);
+    std::size_t ReservedBytes = Impl->Channels.capacity()
+        * sizeof(FImpl::FChannel)
+        + Impl->PendingReferences.capacity() * sizeof(FPendingReference)
+        + Impl->Ownership.capacity() * sizeof(FImpl::FOwnership)
+        + Impl->RpcFrameCounts.capacity() * sizeof(FImpl::FRpcFrameCount);
+    for (const FImpl::FChannel& Channel : Impl->Channels)
+    {
+        CurrentBytes += Channel.Baseline.size() * sizeof(FFieldValue)
+            + Channel.TransformBaseline.size()
+            + Channel.PendingValues.size() * sizeof(FFieldValue)
+            + Channel.PendingTransform.size();
+        ReservedBytes += Channel.Baseline.capacity() * sizeof(FFieldValue)
+            + Channel.TransformBaseline.capacity()
+            + Channel.PendingValues.capacity() * sizeof(FFieldValue)
+            + Channel.PendingTransform.capacity();
+        for (const FFieldValue& Value : Channel.Baseline)
+        {
+            CurrentBytes += Value.Data.size();
+            ReservedBytes += Value.Data.capacity();
+        }
+        for (const FFieldValue& Value : Channel.PendingValues)
+        {
+            CurrentBytes += Value.Data.size();
+            ReservedBytes += Value.Data.capacity();
+        }
+    }
+    Tracker.Report(EMemoryTag::ReplicationChannels,
+        CurrentBytes, ReservedBytes, Impl->Channels.size());
 }
 }

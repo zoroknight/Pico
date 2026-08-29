@@ -7,6 +7,7 @@
 #include "Pico/Core/Delegate.h"
 #include "Pico/Core/Log.h"
 #include "Pico/Core/Math/Math.h"
+#include "Pico/Core/MemoryTracker.h"
 #include "Pico/Core/Name.h"
 #include "Pico/Core/Paths.h"
 #include "Pico/Core/PlatformProcess.h"
@@ -249,14 +250,23 @@ void TestCommandLine(FTestRunner& Runner)
     char Frames[] = "-frames=5";
     char Verbose[] = "-verbose";
     char InvalidNumber[] = "-invalid=abc";
-    char* Arguments[] = { Program, Frames, Verbose, InvalidNumber };
+    char VSync[] = "-vsync=off";
+    char InvalidBool[] = "-invalidbool=maybe";
+    char* Arguments[] = {
+        Program, Frames, Verbose, InvalidNumber, VSync, InvalidBool };
 
-    Pico::FCommandLine::Init(4, Arguments);
+    Pico::FCommandLine::Init(6, Arguments);
 
     Runner.Expect(Pico::FCommandLine::HasSwitch("verbose"), "Command line finds a switch");
     Runner.Expect(!Pico::FCommandLine::HasSwitch("missing"), "Command line rejects a missing switch");
     Runner.Expect(Pico::FCommandLine::GetInt("frames") == 5, "Command line parses an integer value");
     Runner.Expect(!Pico::FCommandLine::GetInt("invalid").has_value(), "Command line rejects an invalid integer");
+    Runner.Expect(
+        Pico::FCommandLine::GetBool("vsync") == false,
+        "Command line parses a boolean value");
+    Runner.Expect(
+        !Pico::FCommandLine::GetBool("invalidbool").has_value(),
+        "Command line rejects an invalid boolean");
     Runner.Expect(!Pico::FCommandLine::GetValue("missing").has_value(), "Command line reports a missing value");
 }
 
@@ -580,6 +590,22 @@ void TestFrameTimer(FTestRunner& Runner)
     Runner.Expect(Timer.GetTotalSeconds() >= 0.0, "Frame timer produces a non-negative total time");
     Runner.Expect(Timer.GetAverageFrameTimeMS() >= 0.0, "Frame timer produces a non-negative average frame time");
     Runner.Expect(Timer.GetAverageFPS() >= 0.0, "Frame timer produces a non-negative average FPS");
+
+    Pico::FFramePacingSettings Settings;
+    Runner.Expect(
+        Settings.ResolveMode(true) == Pico::EFramePacingMode::VSync,
+        "Frame pacing uses VSync when presentation supports it");
+    Runner.Expect(
+        Settings.ResolveMode(false) == Pico::EFramePacingMode::Software,
+        "Frame pacing falls back to the software limit without presentation");
+    Settings.bVSync = false;
+    Runner.Expect(
+        Settings.ResolveMode(true) == Pico::EFramePacingMode::Software,
+        "Disabling VSync selects the software frame limit");
+    Settings.MaxFPS = 0.0;
+    Runner.Expect(
+        Settings.ResolveMode(true) == Pico::EFramePacingMode::Unlimited,
+        "Zero MaxFPS without VSync selects unlimited pacing");
 }
 
 void TestVectorMath(FTestRunner& Runner)
@@ -781,6 +807,48 @@ void TestProfiler(FTestRunner& Runner)
     Profiler.SetEnabled(false);
     Profiler.Reset();
 }
+
+void TestMemoryTracker(FTestRunner& Runner)
+{
+    Pico::FMemoryTracker& Tracker = Pico::FMemoryTracker::Get();
+    Tracker.SetEnabled(false);
+    Tracker.Reset();
+    Tracker.Report(Pico::EMemoryTag::ObjectSlots, 64, 128, 4);
+    Runner.Expect(
+        Tracker.GetSnapshot(Pico::EMemoryTag::ObjectSlots).CurrentBytes == 0,
+        "Disabled memory tracker ignores reports");
+
+    Tracker.SetEnabled(true);
+    Tracker.Report(Pico::EMemoryTag::ObjectSlots, 64, 128, 4);
+    Tracker.Report(Pico::EMemoryTag::ObjectSlots, 96, 128, 6);
+    Tracker.Report(Pico::EMemoryTag::ObjectSlots, 32, 256, 2);
+    Tracker.Report(Pico::EMemoryTag::GCScratch, 48, 64, 3);
+    const Pico::FMemorySnapshot Slots =
+        Tracker.GetSnapshot(Pico::EMemoryTag::ObjectSlots);
+    const Pico::FMemorySnapshot GC =
+        Tracker.GetSnapshot(Pico::EMemoryTag::GCScratch);
+    Runner.Expect(
+        Slots.CurrentBytes == 32 && Slots.ReservedBytes == 256
+            && Slots.PeakBytes == 96 && Slots.ElementCount == 2
+            && Slots.GrowthCount == 2,
+        "Memory tracker records current, reserved, peak, elements, and growth");
+    Runner.Expect(
+        GC.CurrentBytes == 48 && GC.PeakBytes == 48
+            && GC.GrowthCount == 1
+            && Pico::GetMemoryTagName(GC.Tag) == "GC.Scratch",
+        "Memory tracker keeps categories independent and names them deterministically");
+    Runner.Expect(
+        Tracker.GetSnapshots().size()
+            == static_cast<std::size_t>(Pico::EMemoryTag::Count),
+        "Memory tracker exposes every fixed runtime category");
+
+    Tracker.Reset();
+    Runner.Expect(
+        Tracker.GetSnapshot(Pico::EMemoryTag::ObjectSlots).PeakBytes == 0
+            && Tracker.GetSnapshot(Pico::EMemoryTag::GCScratch).CurrentBytes == 0,
+        "Memory tracker reset clears current and historical values");
+    Tracker.SetEnabled(false);
+}
 }
 
 int main(int Argc, char** Argv)
@@ -817,5 +885,6 @@ int main(int Argc, char** Argv)
     TestTransformMath(Runner);
     TestLogOutputs(Runner);
     TestProfiler(Runner);
+    TestMemoryTracker(Runner);
     return Runner.Finish();
 }

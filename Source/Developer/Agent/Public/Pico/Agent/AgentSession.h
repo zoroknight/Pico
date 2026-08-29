@@ -20,6 +20,7 @@ struct FAgentEvent
     std::string CallId;
     std::string ToolName;
     std::string PayloadJson = "{}";
+    std::string StructuredResultJson = "{}";
     std::string TraceJson = "[]";
     std::string RunId;
     std::string TurnId;
@@ -63,6 +64,10 @@ public:
     std::optional<FAgentToolCall> FindToolCall(std::string_view CallId) const;
     bool MatchesToolCall(const FAgentToolCall& Call) const;
     std::optional<FAgentToolResult> FindToolResult(std::string_view CallId) const;
+    bool ExternalizeLargeToolResult(
+        FAgentToolResult& Result,
+        std::size_t ThresholdBytes = 64 * 1024,
+        std::string* OutError = nullptr) const;
 
 private:
     bool Load(std::string* OutError);

@@ -193,9 +193,11 @@ std::string ToolCallMarkdown(const FAgentEvent& Event)
 
 std::string ToolResultMarkdown(const FAgentEvent& Event)
 {
-    std::string Text = Event.bSucceeded
-        ? JsonCodeBlock(Event.PayloadJson)
-        : Event.Content;
+    std::string Text;
+    if (Event.StructuredResultJson != "{}")
+        Text = JsonCodeBlock(Event.StructuredResultJson);
+    else
+        Text = Event.bSucceeded ? JsonCodeBlock(Event.PayloadJson) : Event.Content;
     if (Event.bReused) Text += "\n\n*Result reused by CallId*";
     if (Event.TraceJson != "[]")
         Text += "\n\n**Execution trace**\n\n" + JsonCodeBlock(Event.TraceJson);

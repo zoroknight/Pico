@@ -1,4 +1,5 @@
 #include "Pico/Core/Profiler.h"
+#include "Pico/Core/MemoryTracker.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/EngineLoop.h"
@@ -6,6 +7,7 @@
 #include "Pico/Engine/TickTaskManager.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Object/ObjectGlobals.h"
+#include "Pico/Object/ObjectRegistry.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/Property.h"
 #include "Pico/Net/NetConnection.h"
@@ -158,7 +160,8 @@ public:
     bool Write(
         const std::filesystem::path& OutputRoot,
         bool bFull,
-        const std::vector<Pico::FProfileAggregate>& Aggregates) const
+        const std::vector<Pico::FProfileAggregate>& Aggregates,
+        const std::vector<Pico::FMemorySnapshot>& MemorySnapshots) const
     {
         using FJson = nlohmann::json;
         std::error_code Error;
@@ -168,7 +171,9 @@ public:
             std::ios::binary | std::ios::trunc);
         std::ofstream Csv(OutputRoot / "PicoRuntimeBenchmarks.csv",
             std::ios::binary | std::ios::trunc);
-        if (!Json || !Csv) return false;
+        std::ofstream MemoryCsv(OutputRoot / "PicoRuntimeMemory.csv",
+            std::ios::binary | std::ios::trunc);
+        if (!Json || !Csv || !MemoryCsv) return false;
         FJson JsonRecords = FJson::array();
         Csv << "format_version,preset,suite,case,scale,operations,samples,p50_us,p95_us,max_us,mean_us,ns_per_operation,bytes_per_frame,parameters\n";
         for (const FBenchmarkRecord& Record : Records)
@@ -192,7 +197,7 @@ public:
                 {"p50_us", P50}, {"p95_us", P95}, {"max_us", Max},
                 {"mean_us", Mean}, {"ns_per_operation", NanosecondsPerOperation},
                 {"bytes_per_frame", Bytes}, {"parameters", Record.Parameters}});
-            Csv << "2," << (bFull ? "full" : "quick") << ','
+            Csv << "3," << (bFull ? "full" : "quick") << ','
                 << Record.Suite << ',' << Record.Case << ',' << Record.Scale
                 << ',' << Record.Operations << ',' << Record.SamplesMicroseconds.size()
                 << ',' << P50 << ',' << P95 << ',' << Max << ',' << Mean
@@ -206,7 +211,22 @@ public:
                 {"count", Aggregate.Count}, {"total_us", Aggregate.TotalMicroseconds},
                 {"min_us", Aggregate.MinMicroseconds},
                 {"max_us", Aggregate.MaxMicroseconds}});
-        const FJson Baseline = {{"format_version", 2},
+        FJson MemoryCategories = FJson::array();
+        MemoryCsv << "format_version,category,current_bytes,reserved_bytes,peak_bytes,element_count,growth_count\n";
+        for (const Pico::FMemorySnapshot& Snapshot : MemorySnapshots)
+        {
+            const std::string Name(Pico::GetMemoryTagName(Snapshot.Tag));
+            MemoryCategories.push_back({{"category", Name},
+                {"current_bytes", Snapshot.CurrentBytes},
+                {"reserved_bytes", Snapshot.ReservedBytes},
+                {"peak_bytes", Snapshot.PeakBytes},
+                {"element_count", Snapshot.ElementCount},
+                {"growth_count", Snapshot.GrowthCount}});
+            MemoryCsv << "3," << Name << ',' << Snapshot.CurrentBytes << ','
+                << Snapshot.ReservedBytes << ',' << Snapshot.PeakBytes << ','
+                << Snapshot.ElementCount << ',' << Snapshot.GrowthCount << '\n';
+        }
+        const FJson Baseline = {{"format_version", 3},
             {"build_config", PICO_BENCHMARK_BUILD_CONFIG},
             {"preset", bFull ? "full" : "quick"},
             {"environment", {{"hardware_threads", std::thread::hardware_concurrency()},
@@ -221,6 +241,7 @@ public:
                 {"FActorChannelSnapshot", sizeof(Pico::FActorChannelSnapshot)},
                 {"FNetConnection", sizeof(Pico::FNetConnection)}}},
             {"records", std::move(JsonRecords)}, {"profile_scopes", ProfileScopes},
+            {"memory_categories", std::move(MemoryCategories)},
             {"full_scale_contract", {{"object", {1000, 10000, 100000}},
                 {"tick", {1000, 10000}}, {"replication", {100, 1000}},
                 {"dirty_ratio_percent", {1, 10, 100}}}}};
@@ -229,7 +250,8 @@ public:
             std::ios::binary | std::ios::trunc);
         if (!RuntimeBaseline) return false;
         RuntimeBaseline << Baseline.dump(2) << '\n';
-        return static_cast<bool>(Json) && static_cast<bool>(Csv);
+        return static_cast<bool>(Json) && static_cast<bool>(Csv)
+            && static_cast<bool>(MemoryCsv);
     }
 
 private:
@@ -243,6 +265,41 @@ std::uint64_t MeasureMicroseconds(const std::function<void()>& Function)
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - Start).count());
+}
+
+bool ValidateMemorySnapshots(
+    const std::vector<Pico::FMemorySnapshot>& Snapshots,
+    std::string& OutError)
+{
+    const std::size_t ExpectedCount =
+        static_cast<std::size_t>(Pico::EMemoryTag::Count);
+    if (Snapshots.size() != ExpectedCount)
+    {
+        OutError = "Memory snapshot category count is incomplete";
+        return false;
+    }
+    for (std::size_t Index = 0; Index < Snapshots.size(); ++Index)
+    {
+        const Pico::FMemorySnapshot& Snapshot = Snapshots[Index];
+        if (Snapshot.Tag != static_cast<Pico::EMemoryTag>(Index)
+            || Pico::GetMemoryTagName(Snapshot.Tag) == "Unknown")
+        {
+            OutError = "Memory snapshot category order or name is invalid";
+            return false;
+        }
+        if (Snapshot.CurrentBytes > Snapshot.ReservedBytes)
+        {
+            OutError = "Memory snapshot current bytes exceed reserved bytes";
+            return false;
+        }
+        if (Snapshot.PeakBytes == 0 || Snapshot.GrowthCount == 0)
+        {
+            OutError = "Memory snapshot did not observe category activity: "
+                + std::string(Pico::GetMemoryTagName(Snapshot.Tag));
+            return false;
+        }
+    }
+    return true;
 }
 
 void RunObjectBenchmarks(FBenchmarkReport& Report, bool bFull)
@@ -261,6 +318,7 @@ void RunObjectBenchmarks(FBenchmarkReport& Report, bool bFull)
                     nullptr, "BenchObject_" + std::to_string(Index)));
         });
         Report.Add("Object", "Create", Scale, Scale, CreateDuration);
+        Pico::FObjectRegistry::PublishMemoryStatistics();
 
         std::size_t FoundCount = 0;
         const std::uint64_t FindDuration = MeasureMicroseconds([&]()
@@ -285,6 +343,47 @@ void RunObjectBenchmarks(FBenchmarkReport& Report, bool bFull)
             for (PBenchmarkObject* Object : Objects) Pico::DestroyObject(Object);
         });
         Report.Add("Object", "Destroy", Scale, Scale, DestroyDuration);
+        Pico::FObjectRegistry::PublishMemoryStatistics();
+
+        const Pico::FObjectHierarchyIndexStats HierarchyBefore =
+            Pico::FObjectRegistry::GetHierarchyIndexStats();
+        PBenchmarkObject* HierarchyRoot = Pico::NewObject<PBenchmarkObject>(
+            nullptr, "HierarchyRoot_" + std::to_string(Scale));
+        std::vector<PBenchmarkObject*> Children;
+        Children.reserve(Scale);
+        const std::uint64_t HierarchyCreateDuration = MeasureMicroseconds([&]()
+        {
+            for (std::size_t Index = 0; Index < Scale; ++Index)
+                Children.push_back(Pico::NewObject<PBenchmarkObject>(
+                    HierarchyRoot, "HierarchyChild_" + std::to_string(Index)));
+        });
+        const Pico::FObjectHierarchyIndexStats HierarchyPopulated =
+            Pico::FObjectRegistry::GetHierarchyIndexStats();
+        Pico::FObjectRegistry::PublishMemoryStatistics();
+        const std::size_t AddedStorage =
+            HierarchyPopulated.EstimatedStorageBytes
+                >= HierarchyBefore.EstimatedStorageBytes
+            ? HierarchyPopulated.EstimatedStorageBytes
+                - HierarchyBefore.EstimatedStorageBytes
+            : 0;
+        const std::string HierarchyParameters =
+            "parent_entries=" + std::to_string(
+                HierarchyPopulated.ParentEntryCount
+                    - HierarchyBefore.ParentEntryCount)
+            + ";child_relations=" + std::to_string(
+                HierarchyPopulated.ChildRelationCount
+                    - HierarchyBefore.ChildRelationCount)
+            + ";estimated_storage_bytes=" + std::to_string(AddedStorage);
+        Report.Add("Object", "HierarchyCreate", Scale, Scale,
+            HierarchyCreateDuration, HierarchyParameters);
+
+        const std::uint64_t HierarchyDestroyDuration = MeasureMicroseconds([&]()
+        {
+            Pico::DestroyObjectTree(HierarchyRoot);
+        });
+        Report.Add("Object", "HierarchyDestroy", Scale, Scale + 1,
+            HierarchyDestroyDuration, HierarchyParameters);
+        Pico::FObjectRegistry::PublishMemoryStatistics();
     }
 }
 
@@ -316,6 +415,22 @@ void RunTickBenchmarks(FBenchmarkReport& Report, bool bFull)
             Manager.Tick(1.0f / 60.0f);
         });
         Report.Add("Tick", "StaticSchedule", Scale, Scale, StaticDuration);
+
+        const Pico::uint64 BuildCountBeforeCachedFrames =
+            Manager.GetScheduleBuildCount(Pico::ETickGroup::PrePhysics);
+        constexpr std::size_t CachedFrameCount = 60;
+        const std::uint64_t CachedDuration = MeasureMicroseconds([&]()
+        {
+            for (std::size_t Frame = 0; Frame < CachedFrameCount; ++Frame)
+                Manager.Tick(1.0f / 60.0f);
+        });
+        const Pico::uint64 CachedRebuildCount =
+            Manager.GetScheduleBuildCount(Pico::ETickGroup::PrePhysics)
+                - BuildCountBeforeCachedFrames;
+        Report.Add("Tick", "CachedStaticFrames", Scale,
+            Scale * CachedFrameCount, CachedDuration,
+            "frames=" + std::to_string(CachedFrameCount)
+                + ";schedule_rebuilds=" + std::to_string(CachedRebuildCount));
 
         const std::uint64_t DependencyDuration = MeasureMicroseconds([&]()
         {
@@ -373,6 +488,7 @@ void RunGarbageCollectionBenchmark(
         if (Pico::ResolveObject(Objects[Index]->GetHandle()) == Objects[Index])
             Pico::RemoveFromRoot(Objects[Index]);
     Pico::CollectGarbage();
+    Pico::FObjectRegistry::PublishMemoryStatistics();
 }
 
 void RunGarbageCollectionBenchmarks(FBenchmarkReport& Report, bool bFull)
@@ -420,6 +536,7 @@ void RunReplicationBenchmarks(
             return true;
         };
         Replication.ReplicateServerConnection(Connection, Queue);
+        Replication.PublishMemoryStatistics();
         for (const Pico::uint32 Id : ReliableIds)
             Replication.HandleReliableAcknowledged(Connection, Id);
 
@@ -437,6 +554,7 @@ void RunReplicationBenchmarks(
             {
                 Replication.ReplicateServerConnection(Connection, Queue);
             });
+            Replication.PublishMemoryStatistics();
             Report.Add("Replication", "DirtyScan", Scale, Scale, Duration,
                 "dirty_percent=" + std::to_string(DirtyPercent), BytesQueued);
             for (const Pico::uint32 Id : ReliableIds)
@@ -452,6 +570,7 @@ void RunReplicationBenchmarks(
 int main(int Argc, char** Argv)
 {
     bool bFull = false;
+    bool bWriteTrace = true;
     std::size_t SampleCount = 5;
     std::filesystem::path OutputRoot =
         std::filesystem::current_path() / "BenchmarkResults";
@@ -460,6 +579,7 @@ int main(int Argc, char** Argv)
         const std::string Argument = Argv[Index];
         if (Argument == "--full") bFull = true;
         else if (Argument == "--quick") bFull = false;
+        else if (Argument == "--no-trace") bWriteTrace = false;
         else if (Argument.starts_with("--samples="))
             SampleCount = std::max<std::size_t>(1, std::stoull(
                 Argument.substr(std::string("--samples=").size())));
@@ -481,6 +601,8 @@ int main(int Argc, char** Argv)
         return 1;
     }
 
+    Pico::FMemoryTracker::Get().SetEnabled(true);
+    Pico::FMemoryTracker::Get().Reset();
     Pico::FProfiler::Get().Reset();
     Pico::FProfiler::Get().SetEnabled(true);
     Pico::FProfiler::Get().BeginFrame();
@@ -493,16 +615,27 @@ int main(int Argc, char** Argv)
         RunReplicationBenchmarks(Report, *EngineLoop.GetWorld(), bFull);
     }
     Pico::FProfiler::Get().EndFrame();
+    Pico::FObjectRegistry::PublishMemoryStatistics();
+    const std::vector<Pico::FMemorySnapshot> MemorySnapshots =
+        Pico::FMemoryTracker::Get().GetSnapshots();
+    std::string MemoryValidationError;
+    const bool bMemorySnapshotsValid = ValidateMemorySnapshots(
+        MemorySnapshots, MemoryValidationError);
     const bool bReportWritten = Report.Write(OutputRoot, bFull,
-        Pico::FProfiler::Get().GetAggregates());
+        Pico::FProfiler::Get().GetAggregates(),
+        MemorySnapshots);
     std::string TraceError;
-    const bool bTraceWritten = Pico::FProfiler::Get().WriteChromeTrace(
-        OutputRoot / "PicoRuntimeBenchmarks.trace.json", &TraceError);
+    const bool bTraceWritten = !bWriteTrace
+        || Pico::FProfiler::Get().WriteChromeTrace(
+            OutputRoot / "PicoRuntimeBenchmarks.trace.json", &TraceError);
     Pico::FProfiler::Get().SetEnabled(false);
+    Pico::FMemoryTracker::Get().SetEnabled(false);
     EngineLoop.Exit();
-    if (!bReportWritten || !bTraceWritten)
+    if (!bMemorySnapshotsValid || !bReportWritten || !bTraceWritten)
     {
-        std::cerr << "Could not write benchmark report: " << TraceError << '\n';
+        std::cerr << "Could not validate or write benchmark report: "
+            << (!MemoryValidationError.empty()
+                ? MemoryValidationError : TraceError) << '\n';
         return 2;
     }
     std::cout << "Pico Runtime benchmarks written to " << OutputRoot << '\n';

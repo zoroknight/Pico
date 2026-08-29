@@ -222,7 +222,10 @@ int FEngineLoop::PreInit(
     }
 
     MaxFrameCount = Config.GetInt("Engine", "MaxFrameCount", -1);
-    MaxFPS = Config.GetDouble("Engine", "MaxFPS", 60.0);
+    FramePacingSettings.bVSync = Config.GetBool("Display", "VSync", true);
+    FramePacingSettings.MaxFPS = Config.GetDouble(
+        "Display", "MaxFPS",
+        Config.GetDouble("Engine", "MaxFPS", 60.0));
     GarbageCollectionIntervalSeconds = Config.GetDouble(
         "Engine", "GarbageCollectionIntervalSeconds", 60.0);
 
@@ -233,7 +236,22 @@ int FEngineLoop::PreInit(
 
     if (const std::optional<int> CommandLineMaxFPS = FCommandLine::GetInt("maxfps"))
     {
-        MaxFPS = *CommandLineMaxFPS;
+        FramePacingSettings.MaxFPS = *CommandLineMaxFPS;
+    }
+
+    if (FCommandLine::GetValue("vsync").has_value())
+    {
+        const std::optional<bool> CommandLineVSync =
+            FCommandLine::GetBool("vsync");
+        if (!CommandLineVSync.has_value())
+        {
+            PICO_LOG(
+                LogEngine,
+                Error,
+                "PreInit: vsync must be true/false or 1/0");
+            return 1;
+        }
+        FramePacingSettings.bVSync = *CommandLineVSync;
     }
 
     if (MaxFrameCount < -1)
@@ -242,9 +260,14 @@ int FEngineLoop::PreInit(
         return 1;
     }
 
-    if (!std::isfinite(MaxFPS) || MaxFPS < 0.0)
+    if (!std::isfinite(FramePacingSettings.MaxFPS)
+        || FramePacingSettings.MaxFPS < 0.0)
     {
-        PICO_LOG(LogEngine, Error, "PreInit: max fps must be finite and non-negative, got {}", MaxFPS);
+        PICO_LOG(
+            LogEngine,
+            Error,
+            "PreInit: max fps must be finite and non-negative, got {}",
+            FramePacingSettings.MaxFPS);
         return 1;
     }
 
@@ -278,7 +301,12 @@ int FEngineLoop::PreInit(
         PICO_LOG(LogPaths, Info, "PreInit: project root={}", FPaths::GetProjectRootDir().string());
     }
     PICO_LOG(LogEngine, Info, "PreInit: max frames={}", MaxFrameCount);
-    PICO_LOG(LogEngine, Info, "PreInit: max fps={}", MaxFPS);
+    PICO_LOG(
+        LogEngine,
+        Info,
+        "PreInit: frame pacing vsync={} max fps={}",
+        FramePacingSettings.bVSync,
+        FramePacingSettings.MaxFPS);
     PICO_LOG(
         LogEngine,
         Info,
@@ -456,10 +484,6 @@ void FEngineLoop::Tick(const FEngineFrameCallbacks& Callbacks)
         FApp::RequestExit();
     }
 
-    if (!ShouldExit())
-    {
-        FrameTimer.WaitForMaxFPS(MaxFPS);
-    }
 }
 
 void FEngineLoop::Exit()
@@ -683,6 +707,27 @@ double FEngineLoop::GetAverageFPS() const
     return FrameTimer.GetAverageFPS();
 }
 
+const FFramePacingSettings& FEngineLoop::GetFramePacingSettings() const
+{
+    return FramePacingSettings;
+}
+
+EFramePacingMode FEngineLoop::GetFramePacingMode(
+    bool bPresentationCanVSync) const
+{
+    return FramePacingSettings.ResolveMode(bPresentationCanVSync);
+}
+
+void FEngineLoop::WaitForFrameLimit(bool bPresentationCanVSync)
+{
+    if (!ShouldExit()
+        && GetFramePacingMode(bPresentationCanVSync)
+            == EFramePacingMode::Software)
+    {
+        FrameTimer.WaitForMaxFPS(FramePacingSettings.MaxFPS);
+    }
+}
+
 PWorld* FEngineLoop::GetWorld() const
 {
     PObject* Object = ResolveObject(WorldHandle);
@@ -709,6 +754,7 @@ int GuardedMain(int Argc, char** Argv)
             while (!EngineLoop.ShouldExit())
             {
                 EngineLoop.Tick();
+                EngineLoop.WaitForFrameLimit(false);
             }
         }
     }

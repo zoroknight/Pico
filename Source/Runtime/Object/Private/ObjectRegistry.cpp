@@ -1,6 +1,7 @@
 #include "Pico/Object/ObjectRegistry.h"
 
 #include "Pico/Core/Log.h"
+#include "Pico/Core/MemoryTracker.h"
 #include "Pico/Core/ScopeExit.h"
 #include "Pico/Core/Profiler.h"
 #include "Pico/Object/Object.h"
@@ -13,6 +14,7 @@
 #include <exception>
 #include <numeric>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Pico
@@ -46,6 +48,22 @@ struct FObjectNameKeyHash
     }
 };
 
+struct FObjectHandleHash
+{
+    std::size_t operator()(FObjectHandle Handle) const noexcept
+    {
+        std::size_t Hash = static_cast<std::size_t>(Handle.Index);
+        Hash ^= static_cast<std::size_t>(Handle.Serial)
+            + 0x9e3779b9u + (Hash << 6u) + (Hash >> 2u);
+        return Hash;
+    }
+};
+
+using FChildHandleSet =
+    std::unordered_set<FObjectHandle, FObjectHandleHash>;
+using FObjectHierarchyIndex =
+    std::unordered_map<FObjectHandle, FChildHandleSet, FObjectHandleHash>;
+
 FObjectNameKey MakeObjectNameKey(const PObject* Outer, FName Name)
 {
     return {Outer != nullptr ? Outer->GetHandle() : FObjectHandle {}, Name};
@@ -57,6 +75,35 @@ GetObjectNameIndex()
     static std::unordered_map<FObjectNameKey, FObjectHandle, FObjectNameKeyHash>
         NameIndex;
     return NameIndex;
+}
+
+FObjectHierarchyIndex& GetObjectHierarchyIndex()
+{
+    static FObjectHierarchyIndex HierarchyIndex;
+    return HierarchyIndex;
+}
+
+bool AddObjectHierarchyIndexEntry(const PObject* Object)
+{
+    if (Object == nullptr || Object->GetOuter() == nullptr) return true;
+    return GetObjectHierarchyIndex()[Object->GetOuter()->GetHandle()]
+        .insert(Object->GetHandle()).second;
+}
+
+void RemoveObjectHierarchyIndexEntry(const PObject* Object)
+{
+    if (Object == nullptr) return;
+    FObjectHierarchyIndex& HierarchyIndex = GetObjectHierarchyIndex();
+    if (const PObject* Outer = Object->GetOuter())
+    {
+        const auto Parent = HierarchyIndex.find(Outer->GetHandle());
+        if (Parent != HierarchyIndex.end())
+        {
+            Parent->second.erase(Object->GetHandle());
+            if (Parent->second.empty()) HierarchyIndex.erase(Parent);
+        }
+    }
+    HierarchyIndex.erase(Object->GetHandle());
 }
 
 void RemoveObjectNameIndexEntry(const PObject* Object)
@@ -107,14 +154,19 @@ uint32 AllocateObjectSerial()
 
 bool HasChildObjects(const PObject* Parent)
 {
-    for (const FObjectSlot& Slot : GetObjectSlots())
-    {
-        if (Slot.Object != nullptr && Slot.Object->GetOuter() == Parent)
-        {
-            return true;
-        }
-    }
-    return false;
+    if (Parent == nullptr) return false;
+    const auto& HierarchyIndex = GetObjectHierarchyIndex();
+    const auto Found = HierarchyIndex.find(Parent->GetHandle());
+    return Found != HierarchyIndex.end() && !Found->second.empty();
+}
+
+std::vector<FObjectHandle> GetChildObjectHandles(const PObject* Parent)
+{
+    if (Parent == nullptr) return {};
+    const auto& HierarchyIndex = GetObjectHierarchyIndex();
+    const auto Found = HierarchyIndex.find(Parent->GetHandle());
+    if (Found == HierarchyIndex.end()) return {};
+    return {Found->second.begin(), Found->second.end()};
 }
 
 void DestroyObjectTreeInternal(FObjectHandle RootHandle)
@@ -125,14 +177,7 @@ void DestroyObjectTreeInternal(FObjectHandle RootHandle)
         return;
     }
 
-    std::vector<FObjectHandle> Children;
-    for (const FObjectSlot& Slot : GetObjectSlots())
-    {
-        if (Slot.Object != nullptr && Slot.Object->GetOuter() == Root)
-        {
-            Children.push_back(Slot.Object->GetHandle());
-        }
-    }
+    std::vector<FObjectHandle> Children = GetChildObjectHandles(Root);
     std::sort(
         Children.begin(),
         Children.end(),
@@ -255,6 +300,18 @@ PObject* FObjectRegistry::AddObject(FObjectPtr Object, bool bDeferPostInitProper
         return nullptr;
     }
 
+    if (!AddObjectHierarchyIndexEntry(RawObject))
+    {
+        PICO_LOG(LogObject, Error,
+            "Object hierarchy index rejected duplicate '{}'", RawObject->GetPathName());
+        GetObjectNameIndex().erase(IndexEntry);
+        FObjectPtr RejectedObject = std::move(Slot.Object);
+        RejectedObject->HandlePrivate = {};
+        Slot.Serial = 0;
+        GetFreeObjectIndices().push_back(Index);
+        return nullptr;
+    }
+
     if (!bDeferPostInitProperties)
     {
         PostInitObject(RawObject);
@@ -316,6 +373,7 @@ bool FObjectRegistry::DestroyObject(PObject* Object)
     FObjectSlot& Slot = Slots[Handle.Index];
     Object->LifecycleState = PObject::ELifecycleState::Destroying;
     RemoveObjectNameIndexEntry(Object);
+    RemoveObjectHierarchyIndexEntry(Object);
     FObjectPtr OwnedObject = std::move(Slot.Object);
     OwnedObject->HandlePrivate = {};
     Slot.Serial = 0;
@@ -346,42 +404,43 @@ void FObjectRegistry::DestroyAllObjects()
             IsDestroyingAllObjects() = false;
         });
 
-    while (GetObjectCount() > 0)
+    std::vector<FObjectHandle> LeafHandles;
+    LeafHandles.reserve(GetObjectCount());
+    for (const FObjectSlot& Slot : GetObjectSlots())
     {
-        bool bDestroyedObject = false;
-        std::vector<FObjectHandle> LeafHandles;
-        for (const FObjectSlot& Slot : GetObjectSlots())
+        PObject* Object = Slot.Object.get();
+        if (Object != nullptr && !HasChildObjects(Object))
+            LeafHandles.push_back(Object->GetHandle());
+    }
+    while (!LeafHandles.empty())
+    {
+        const FObjectHandle Handle = LeafHandles.back();
+        LeafHandles.pop_back();
+        PObject* Object = ResolveObject(Handle);
+        if (Object == nullptr || HasChildObjects(Object)) continue;
+        const FObjectHandle OuterHandle = Object->GetOuter() != nullptr
+            ? Object->GetOuter()->GetHandle() : FObjectHandle {};
+        if (DestroyObject(Object) && OuterHandle.IsValid())
         {
-            PObject* Object = Slot.Object.get();
-            if (Object != nullptr && !HasChildObjects(Object))
-            {
-                LeafHandles.push_back(Object->GetHandle());
-            }
+            PObject* Outer = ResolveObject(OuterHandle);
+            if (Outer != nullptr && !HasChildObjects(Outer))
+                LeafHandles.push_back(OuterHandle);
         }
-        for (FObjectHandle Handle : LeafHandles)
-        {
-            if (PObject* Object = ResolveObject(Handle))
-            {
-                bDestroyedObject = DestroyObject(Object) || bDestroyedObject;
-            }
-        }
+    }
 
-        if (!bDestroyedObject)
+    if (GetObjectCount() > 0)
+    {
+        PICO_LOG(LogObject, Error, "Object outer graph contains a cycle; forcing registry shutdown");
+        for (FObjectSlot& Slot : GetObjectSlots())
         {
-            PICO_LOG(LogObject, Error, "Object outer graph contains a cycle; forcing registry shutdown");
-            for (FObjectSlot& Slot : GetObjectSlots())
+            if (Slot.Object == nullptr) continue;
+            CallBeginDestroy(Slot.Object.get());
+            if (Slot.Object != nullptr)
             {
-                if (Slot.Object != nullptr)
-                {
-                    CallBeginDestroy(Slot.Object.get());
-                    if (Slot.Object != nullptr)
-                    {
-                        Slot.Object->LifecycleState = PObject::ELifecycleState::Destroying;
-                        Slot.Object->HandlePrivate = {};
-                        Slot.Object.reset();
-                        Slot.Serial = 0;
-                    }
-                }
+                Slot.Object->LifecycleState = PObject::ELifecycleState::Destroying;
+                Slot.Object->HandlePrivate = {};
+                Slot.Object.reset();
+                Slot.Serial = 0;
             }
         }
     }
@@ -389,6 +448,7 @@ void FObjectRegistry::DestroyAllObjects()
     GetObjectSlots().clear();
     GetFreeObjectIndices().clear();
     GetObjectNameIndex().clear();
+    GetObjectHierarchyIndex().clear();
 }
 
 PObject* FObjectRegistry::ResolveObject(FObjectHandle Handle)
@@ -507,6 +567,97 @@ bool FObjectRegistry::ValidateNameIndex(std::string* OutError)
     return true;
 }
 
+bool FObjectRegistry::ValidateHierarchyIndex(std::string* OutError)
+{
+    if (OutError) OutError->clear();
+    const auto Fail = [OutError](std::string Error)
+    {
+        if (OutError) *OutError = std::move(Error);
+        return false;
+    };
+    const auto& HierarchyIndex = GetObjectHierarchyIndex();
+    std::size_t ExpectedRelations = 0;
+    for (const FObjectSlot& Slot : GetObjectSlots())
+    {
+        const PObject* Object = Slot.Object.get();
+        if (Object == nullptr || Object->GetOuter() == nullptr) continue;
+        ++ExpectedRelations;
+        const auto Parent = HierarchyIndex.find(Object->GetOuter()->GetHandle());
+        if (Parent == HierarchyIndex.end()
+            || !Parent->second.contains(Object->GetHandle()))
+            return Fail("Live object is missing from the hierarchy index: "
+                + Object->GetPathName());
+    }
+
+    std::size_t IndexedRelations = 0;
+    for (const auto& [ParentHandle, Children] : HierarchyIndex)
+    {
+        const PObject* Parent = ResolveObject(ParentHandle);
+        if (Parent == nullptr || Children.empty())
+            return Fail("Object hierarchy index contains a stale parent entry");
+        IndexedRelations += Children.size();
+        for (FObjectHandle ChildHandle : Children)
+        {
+            const PObject* Child = ResolveObject(ChildHandle);
+            if (Child == nullptr || Child->GetOuter() != Parent)
+                return Fail("Object hierarchy index contains a stale child entry");
+        }
+    }
+    if (IndexedRelations != ExpectedRelations)
+        return Fail("Object hierarchy index relation count does not match live objects");
+    return true;
+}
+
+FObjectHierarchyIndexStats FObjectRegistry::GetHierarchyIndexStats()
+{
+    const FObjectHierarchyIndex& HierarchyIndex = GetObjectHierarchyIndex();
+    FObjectHierarchyIndexStats Stats;
+    Stats.ParentEntryCount = HierarchyIndex.size();
+    Stats.EstimatedStorageBytes = HierarchyIndex.bucket_count() * sizeof(void*)
+        + HierarchyIndex.size()
+            * (sizeof(FObjectHandle) + sizeof(FChildHandleSet));
+    for (const auto& [Parent, Children] : HierarchyIndex)
+    {
+        (void)Parent;
+        Stats.ChildRelationCount += Children.size();
+        Stats.EstimatedStorageBytes += Children.bucket_count() * sizeof(void*)
+            + Children.size() * sizeof(FObjectHandle);
+    }
+    return Stats;
+}
+
+void FObjectRegistry::PublishMemoryStatistics()
+{
+    FMemoryTracker& Tracker = FMemoryTracker::Get();
+    if (!Tracker.IsEnabled()) return;
+
+    const std::vector<FObjectSlot>& Slots = GetObjectSlots();
+    Tracker.Report(EMemoryTag::ObjectSlots,
+        Slots.size() * sizeof(FObjectSlot),
+        Slots.capacity() * sizeof(FObjectSlot), Slots.size());
+
+    const auto& NameIndex = GetObjectNameIndex();
+    const std::size_t NamePayloadBytes = NameIndex.size()
+        * (sizeof(FObjectNameKey) + sizeof(FObjectHandle));
+    const std::size_t NameReservedBytes = NamePayloadBytes
+        + NameIndex.bucket_count() * sizeof(void*);
+    Tracker.Report(EMemoryTag::ObjectNameIndex,
+        NamePayloadBytes, NameReservedBytes, NameIndex.size());
+
+    const FObjectHierarchyIndex& HierarchyIndex = GetObjectHierarchyIndex();
+    const FObjectHierarchyIndexStats HierarchyStats = GetHierarchyIndexStats();
+    std::size_t HierarchyPayloadBytes = HierarchyIndex.size()
+        * (sizeof(FObjectHandle) + sizeof(FChildHandleSet));
+    for (const auto& [Parent, Children] : HierarchyIndex)
+    {
+        (void)Parent;
+        HierarchyPayloadBytes += Children.size() * sizeof(FObjectHandle);
+    }
+    Tracker.Report(EMemoryTag::ObjectHierarchyIndex,
+        HierarchyPayloadBytes, HierarchyStats.EstimatedStorageBytes,
+        HierarchyStats.ChildRelationCount);
+}
+
 bool FObjectRegistry::AddToRoot(PObject* Object)
 {
     if (IsCollectingGarbage()
@@ -561,10 +712,17 @@ FGarbageCollectionResult FObjectRegistry::CollectGarbage()
 
     IsCollectingGarbage() = true;
     const auto ResetCollecting = MakeScopeExit([]() { IsCollectingGarbage() = false; });
+    FMemoryTracker& MemoryTracker = FMemoryTracker::Get();
+    const auto ResetScratchMemory = MakeScopeExit([&MemoryTracker]()
+    {
+        MemoryTracker.Report(EMemoryTag::GCScratch, 0, 0, 0);
+    });
     FProfileScopeToken MarkScope = FProfiler::Get().BeginScope("GC.Mark");
     std::vector<FObjectSlot>& Slots = GetObjectSlots();
     std::vector<bool> Marked(Slots.size(), false);
     std::vector<FObjectHandle> WorkStack;
+    std::size_t WorkStackPeakSize = 0;
+    std::size_t ReferencePeakBytes = 0;
 
     for (const FObjectSlot& Slot : Slots)
     {
@@ -572,6 +730,7 @@ FGarbageCollectionResult FObjectRegistry::CollectGarbage()
             && HasAnyFlags(Slot.Object->GetFlags(), EObjectFlags::RootSet))
         {
             WorkStack.push_back(Slot.Object->GetHandle());
+            WorkStackPeakSize = std::max(WorkStackPeakSize, WorkStack.size());
             ++Result.RootCount;
         }
     }
@@ -591,6 +750,8 @@ FGarbageCollectionResult FObjectRegistry::CollectGarbage()
 
         FReferenceCollector Collector;
         Object->AddReferencedObjects(Collector);
+        ReferencePeakBytes = std::max(
+            ReferencePeakBytes, Collector.GetReservedBytes());
         for (const FObjectHandle Reference : Collector.GetReferences())
         {
             WorkStack.push_back(Reference);
@@ -609,7 +770,18 @@ FGarbageCollectionResult FObjectRegistry::CollectGarbage()
                 }
             }
         }
+        WorkStackPeakSize = std::max(WorkStackPeakSize, WorkStack.size());
     }
+
+    const std::size_t MarkedCurrentBytes = (Marked.size() + 7) / 8;
+    const std::size_t MarkedReservedBytes = (Marked.capacity() + 7) / 8;
+    const std::size_t MarkCurrentBytes = MarkedCurrentBytes
+        + WorkStackPeakSize * sizeof(FObjectHandle) + ReferencePeakBytes;
+    const std::size_t MarkReservedBytes = MarkedReservedBytes
+        + WorkStack.capacity() * sizeof(FObjectHandle) + ReferencePeakBytes;
+    MemoryTracker.Report(EMemoryTag::GCScratch,
+        MarkCurrentBytes, MarkReservedBytes,
+        Marked.size() + WorkStackPeakSize);
 
     FProfiler::Get().EndScope(MarkScope);
     PICO_PROFILE_SCOPE("GC.Sweep");
@@ -641,6 +813,16 @@ FGarbageCollectionResult FObjectRegistry::CollectGarbage()
             return Left.OuterDepth > Right.OuterDepth;
         });
 
+    const std::size_t SweepCurrentBytes = MarkedCurrentBytes
+        + Unreachable.size() * sizeof(FUnreachableObject);
+    const std::size_t SweepReservedBytes = MarkedReservedBytes
+        + WorkStack.capacity() * sizeof(FObjectHandle)
+        + Unreachable.capacity() * sizeof(FUnreachableObject)
+        + ReferencePeakBytes;
+    MemoryTracker.Report(EMemoryTag::GCScratch,
+        SweepCurrentBytes, SweepReservedBytes,
+        Marked.size() + Unreachable.size());
+
     for (const FUnreachableObject& Entry : Unreachable)
     {
         CallBeginDestroy(ResolveObject(Entry.Handle));
@@ -655,6 +837,7 @@ FGarbageCollectionResult FObjectRegistry::CollectGarbage()
         FObjectSlot& Slot = Slots[Entry.Handle.Index];
         Object->LifecycleState = PObject::ELifecycleState::Destroying;
         RemoveObjectNameIndexEntry(Object);
+        RemoveObjectHierarchyIndexEntry(Object);
         FObjectPtr OwnedObject = std::move(Slot.Object);
         OwnedObject->HandlePrivate = {};
         Slot.Serial = 0;

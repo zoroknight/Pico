@@ -2941,6 +2941,16 @@ void TestGameplayFrameworkTypes(FTestRunner& Runner)
             && Controller->GetViewPitchMax() == 55.0f
             && Controller->GetControlRotation().Pitch == 55.0f,
         "Controller exposes configurable UE-style view pitch limits");
+    const Pico::PProperty* ControlRotationProperty =
+        Pico::PController::StaticClass()->FindProperty(
+            Pico::FName("ControlRotation"));
+    Runner.Expect(
+        ControlRotationProperty != nullptr
+            && ControlRotationProperty->HasAnyFlags(
+                Pico::EPropertyFlags::Transient)
+            && !ControlRotationProperty->HasAnyFlags(
+                Pico::EPropertyFlags::Replicated),
+        "Controller keeps local ControlRotation out of generic replication");
 
     Controller->UnPossess();
     Runner.Expect(
@@ -3151,6 +3161,13 @@ void TestTickSchedulingAndGameThread(FTestRunner& Runner)
     Disabled->PrimaryActorTick.SetTickEnabled(false);
 
     World->Tick(0.0f);
+    Pico::FTickTaskManager& TickManager = World->GetTickTaskManager();
+    const Pico::uint64 PreBuildsBeforeDependency =
+        TickManager.GetScheduleBuildCount(Pico::ETickGroup::PrePhysics);
+    const Pico::uint64 PostPhysicsBuildsBeforeDependency =
+        TickManager.GetScheduleBuildCount(Pico::ETickGroup::PostPhysics);
+    const Pico::uint64 PostUpdateBuildsBeforeDependency =
+        TickManager.GetScheduleBuildCount(Pico::ETickGroup::PostUpdateWork);
     Runner.Expect(
         Dependent->PrimaryActorTick.AddPrerequisite(Prerequisite->PrimaryActorTick),
         "Registered tick functions accept same-World prerequisites");
@@ -3162,7 +3179,19 @@ void TestTickSchedulingAndGameThread(FTestRunner& Runner)
     Runner.Expect(
         Interval->TickCount == 0 && Disabled->TickCount == 0,
         "Tick intervals and disabled tick functions suppress execution");
+    Runner.Expect(
+        TickManager.GetScheduleBuildCount(Pico::ETickGroup::PrePhysics)
+                == PreBuildsBeforeDependency
+            && TickManager.GetScheduleBuildCount(Pico::ETickGroup::PostPhysics)
+                == PostPhysicsBuildsBeforeDependency
+            && TickManager.GetScheduleBuildCount(Pico::ETickGroup::PostUpdateWork)
+                == PostUpdateBuildsBeforeDependency + 1,
+        "A prerequisite change rebuilds only its affected TickGroup");
 
+    const Pico::uint64 PreBuildsBeforeStaticFrames =
+        TickManager.GetScheduleBuildCount(Pico::ETickGroup::PrePhysics);
+    const Pico::uint64 PostBuildsBeforeStaticFrames =
+        TickManager.GetScheduleBuildCount(Pico::ETickGroup::PostUpdateWork);
     World->Tick(0.04f);
     World->Tick(0.04f);
     Runner.Expect(
@@ -3172,6 +3201,22 @@ void TestTickSchedulingAndGameThread(FTestRunner& Runner)
     Runner.Expect(
         Component->TickCount == 4,
         "Registered ActorComponents receive their own component ticks");
+    Runner.Expect(
+        TickManager.GetScheduleBuildCount(Pico::ETickGroup::PrePhysics)
+                == PreBuildsBeforeStaticFrames
+            && TickManager.GetScheduleBuildCount(Pico::ETickGroup::PostUpdateWork)
+                == PostBuildsBeforeStaticFrames,
+        "Static Tick graphs reuse their cached schedules across frames");
+
+    Runner.Expect(
+        Prerequisite->PrimaryActorTick.AddPrerequisite(Dependent->PrimaryActorTick),
+        "A reverse prerequisite can be registered for cycle diagnostics");
+    World->Tick(0.0f);
+    Runner.Expect(
+        !TickManager.GetCycleDiagnostics().empty()
+            && TickManager.GetCycleDiagnostics().back().RegistrationIds.size() == 2,
+        "Tick schedule rebuilds retain structured dependency-cycle diagnostics");
+    Prerequisite->PrimaryActorTick.RemovePrerequisite(Dependent->PrimaryActorTick);
 
     const int PreTicksBeforeDisable = Pre->TickCount;
     Pre->PrimaryActorTick.SetTickEnabled(false);
@@ -3480,6 +3525,41 @@ void TestEngineFrameCallbacks(FTestRunner& Runner)
             "BeforeWorld", "AfterWorld" },
         "Engine frame callbacks preserve the pre-World and post-World order");
     EngineLoop.Exit();
+}
+
+void TestEngineFramePacingConfiguration(FTestRunner& Runner)
+{
+    char Program[] = "PicoFramePacingTests";
+    char VSync[] = "-vsync=0";
+    char MaxFPS[] = "-maxfps=120";
+    char* Arguments[] = { Program, VSync, MaxFPS };
+
+    Pico::FEngineLoop EngineLoop;
+    const bool bPreInitialized = EngineLoop.PreInit(3, Arguments) == 0;
+    Runner.Expect(
+        bPreInitialized,
+        "Frame pacing accepts explicit VSync and MaxFPS overrides");
+    if (bPreInitialized)
+    {
+        const Pico::FFramePacingSettings& Settings =
+            EngineLoop.GetFramePacingSettings();
+        Runner.Expect(
+            !Settings.bVSync && Settings.MaxFPS == 120.0,
+            "Frame pacing command line overrides project display settings");
+        Runner.Expect(
+            EngineLoop.GetFramePacingMode(true)
+                == Pico::EFramePacingMode::Software,
+            "A window without VSync resolves to software pacing");
+    }
+    EngineLoop.Exit();
+
+    char InvalidVSync[] = "-vsync=maybe";
+    char* InvalidArguments[] = { Program, InvalidVSync };
+    Pico::FEngineLoop InvalidEngineLoop;
+    Runner.Expect(
+        InvalidEngineLoop.PreInit(2, InvalidArguments) != 0,
+        "Frame pacing rejects an invalid VSync override");
+    InvalidEngineLoop.Exit();
 }
 
 void TestZeroFrameLifecycle(FTestRunner& Runner)
@@ -3865,6 +3945,7 @@ int main()
     TestTickSchedulingAndGameThread(Runner);
     TestEngineLoopWorldLifecycle(Runner);
     TestEngineFrameCallbacks(Runner);
+    TestEngineFramePacingConfiguration(Runner);
     TestTwoFrameLifecycle(Runner);
     TestZeroFrameLifecycle(Runner);
     TestInvalidFrameLimit(Runner);

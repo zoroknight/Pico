@@ -357,6 +357,7 @@ FAgentToolResult FAgentToolRegistry::Execute(
             const auto ParsedOutput = FJson::parse(Result.OutputJson);
             (void)ParsedOutput;
         }
+        NormalizeAgentToolResult(Result);
     }
     catch (const std::exception& Exception)
     {
@@ -377,6 +378,7 @@ FAgentToolResult FAgentToolRegistry::Execute(
             Result.RecoveryAction = GetAgentRecoveryPolicy(
                 Result.FailureClass).Action;
         }
+        NormalizeAgentToolResult(Result);
         Trace(EAgentToolStage::Execute, false,
             Result.Error.empty() ? "Tool execution failed" : Result.Error);
         if (bTransactional)
@@ -420,6 +422,11 @@ FAgentToolResult FAgentToolRegistry::Execute(
         }
         Trace(EAgentToolStage::Transaction, true, "Transaction committed");
     }
+    for (const std::string& Domain : Definition->RevisionWriteSet)
+    {
+        Result.RevisionChanges.push_back({Domain, 0, 0});
+    }
+    NormalizeAgentToolResult(Result);
     return Result;
 }
 
@@ -548,8 +555,10 @@ FAgentToolResult FAgentToolRegistry::Failure(
     std::string Error,
     EAgentFailureClass FailureClass)
 {
-    return {Call.Id, false, "{}", std::move(Error), false, FailureClass,
-        GetAgentRecoveryPolicy(FailureClass).Action};
+    FAgentToolResult Result {Call.Id, false, "{}", std::move(Error), false,
+        FailureClass, GetAgentRecoveryPolicy(FailureClass).Action};
+    NormalizeAgentToolResult(Result);
+    return Result;
 }
 
 std::string_view ToString(EAgentToolPermission Permission)

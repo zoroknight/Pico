@@ -12,6 +12,13 @@ namespace Pico
 class PObject;
 struct FGarbageCollectionResult;
 
+struct FObjectHierarchyIndexStats
+{
+    std::size_t ParentEntryCount = 0;
+    std::size_t ChildRelationCount = 0;
+    std::size_t EstimatedStorageBytes = 0;
+};
+
 class FObjectRegistry
 {
 public:
@@ -27,6 +34,9 @@ public:
     static std::vector<PObject*> GetObjects();
     static std::size_t GetObjectCount();
     static bool ValidateNameIndex(std::string* OutError = nullptr);
+    static bool ValidateHierarchyIndex(std::string* OutError = nullptr);
+    static FObjectHierarchyIndexStats GetHierarchyIndexStats();
+    static void PublishMemoryStatistics();
     static bool AddToRoot(PObject* Object);
     static bool RemoveFromRoot(PObject* Object);
     static bool IsRooted(const PObject* Object);

@@ -129,11 +129,18 @@ std::optional<FAgentOperationRecord> ReadRecord(
         {
             const FJson& ResultJson = Json.at("result");
             FAgentToolResult Result;
-            Result.CallId = Record.OperationId;
-            Result.bSucceeded = ResultJson.value("succeeded", false);
-            Result.OutputJson = ResultJson.value("output", FJson::object()).dump();
-            Result.Error = ResultJson.value("error", "");
-            Result.bReused = ResultJson.value("reused", false);
+            const bool bHasStructured = ResultJson.contains("structured_result")
+                && DeserializeAgentToolResult(
+                    ResultJson.at("structured_result").dump(), Result);
+            if (!bHasStructured)
+            {
+                Result.CallId = Record.OperationId;
+                Result.bSucceeded = ResultJson.value("succeeded", false);
+                Result.OutputJson = ResultJson.value("output", FJson::object()).dump();
+                Result.Error = ResultJson.value("error", "");
+                Result.bReused = ResultJson.value("reused", false);
+                NormalizeAgentToolResult(Result);
+            }
             Record.Result = std::move(Result);
         }
         return Record;
@@ -291,7 +298,9 @@ bool FAgentOperationJournal::Save(
     {
         Json["result"] = {{"succeeded", Record.Result->bSucceeded},
             {"output", FJson::parse(Record.Result->OutputJson)},
-            {"error", Record.Result->Error}, {"reused", Record.Result->bReused}};
+            {"error", Record.Result->Error}, {"reused", Record.Result->bReused},
+            {"structured_result", FJson::parse(
+                SerializeAgentToolResult(*Record.Result))}};
     }
     return AtomicWrite(RecordPath(Record.OperationId), Json.dump(2), OutError);
 }

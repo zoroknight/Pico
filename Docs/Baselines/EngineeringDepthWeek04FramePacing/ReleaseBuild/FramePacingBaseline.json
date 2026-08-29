@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "date": "2026-08-29",
+  "build_config": "Release",
+  "software_pacer": {
+    "executable": "PicoLaunch",
+    "frames": 30,
+    "samples_per_mode": 3,
+    "median_total_ms": {
+      "30": 979.10,
+      "60": 495.05,
+      "120": 253.59,
+      "unlimited": 9.67
+    }
+  },
+  "game_process": {
+    "executable": "PicoSandboxGame",
+    "project": "PicoSandbox",
+    "map": "StarterWorld",
+    "window": "640x360",
+    "frames": 60,
+    "total_ms": {
+      "default_vsync": 1607.46,
+      "software_30": 2561.16,
+      "software_60": 1514.87,
+      "software_120": 1004.96,
+      "unlimited": 555.44
+    }
+  },
+  "manual_before_after": {
+    "before_fps_approx": 28.0,
+    "after_fps": 59.2,
+    "after_frame_ms": 16.89,
+    "observation": "Character movement was visibly smoother after removing duplicate software pacing."
+  },
+  "interpretation": "Process totals include startup and map-load cost; they validate pacing order and are not frame-time percentiles."
+}

@@ -1053,6 +1053,9 @@ void TestObjectNameIndexLifecycle(FTestRunner& Runner)
     Runner.Expect(Replacement != nullptr && Replacement->GetHandle() != OldHandle
             && Pico::FindObject(OuterA, Pico::FName("RenamedChild")) == Replacement,
         "A reused slot publishes only its new serial in the name index");
+    std::string HierarchyError;
+    Runner.Expect(Pico::FObjectRegistry::ValidateHierarchyIndex(&HierarchyError),
+        "Hierarchy index replaces stale child serials after slot reuse");
 
     std::vector<PTestObject*> ChurnObjects;
     ChurnObjects.reserve(2000);
@@ -1075,6 +1078,50 @@ void TestObjectNameIndexLifecycle(FTestRunner& Runner)
     if (OuterB != nullptr) Pico::DestroyObject(OuterB);
     Runner.Expect(Pico::FObjectRegistry::ValidateNameIndex(&IndexError),
         "Name index matches the registry after nested object cleanup");
+}
+
+void TestObjectHierarchyIndexLifecycle(FTestRunner& Runner)
+{
+    PTestObject* Root = Pico::NewObject<PTestObject>(nullptr, "HierarchyRoot");
+    PTestObject* ChildA = Root != nullptr
+        ? Pico::NewObject<PTestObject>(Root, "HierarchyChildA") : nullptr;
+    PTestObject* ChildB = Root != nullptr
+        ? Pico::NewObject<PTestObject>(Root, "HierarchyChildB") : nullptr;
+    PTestObject* Grandchild = ChildA != nullptr
+        ? Pico::NewObject<PTestObject>(ChildA, "HierarchyGrandchild") : nullptr;
+    const Pico::FObjectHandle Handles[] = {
+        Root != nullptr ? Root->GetHandle() : Pico::FObjectHandle {},
+        ChildA != nullptr ? ChildA->GetHandle() : Pico::FObjectHandle {},
+        ChildB != nullptr ? ChildB->GetHandle() : Pico::FObjectHandle {},
+        Grandchild != nullptr ? Grandchild->GetHandle() : Pico::FObjectHandle {}};
+
+    std::string HierarchyError;
+    const Pico::FObjectHierarchyIndexStats PopulatedStats =
+        Pico::FObjectRegistry::GetHierarchyIndexStats();
+    Runner.Expect(
+        Root != nullptr && ChildA != nullptr && ChildB != nullptr
+            && Grandchild != nullptr
+            && PopulatedStats.ParentEntryCount == 2
+            && PopulatedStats.ChildRelationCount == 3
+            && PopulatedStats.EstimatedStorageBytes > 0
+            && Pico::FObjectRegistry::ValidateHierarchyIndex(&HierarchyError),
+        "Hierarchy index records each direct Outer-child relationship");
+    Runner.Expect(
+        !Pico::DestroyObject(Root),
+        "Hierarchy index prevents destroying an Outer with live children");
+
+    Pico::DestroyObjectTree(Root);
+    bool bAllHandlesExpired = true;
+    for (Pico::FObjectHandle Handle : Handles)
+        bAllHandlesExpired &= Pico::ResolveObject(Handle) == nullptr;
+    const Pico::FObjectHierarchyIndexStats EmptyStats =
+        Pico::FObjectRegistry::GetHierarchyIndexStats();
+    Runner.Expect(
+        bAllHandlesExpired
+            && EmptyStats.ParentEntryCount == 0
+            && EmptyStats.ChildRelationCount == 0
+            && Pico::FObjectRegistry::ValidateHierarchyIndex(&HierarchyError),
+        "Recursive destruction removes hierarchy entries child before parent");
 }
 
 void TestPropertyReflection(FTestRunner& Runner)
@@ -1807,9 +1854,16 @@ void TestShutdownAndReinitialize(FTestRunner& Runner)
     Runner.Expect(Pico::FObjectRegistry::GetObjectCount() == 0, "Object system shutdown destroys all objects");
     Runner.Expect(Pico::FClassRegistry::GetClassCount() == 0, "Object system shutdown clears class registration");
     Runner.Expect(Pico::ResolveObject(OldHandle) == nullptr, "Handles remain invalid after system shutdown");
+    std::string HierarchyError;
+    Runner.Expect(
+        Pico::FObjectRegistry::GetHierarchyIndexStats().ChildRelationCount == 0
+            && Pico::FObjectRegistry::ValidateHierarchyIndex(&HierarchyError),
+        "Object system shutdown clears the hierarchy index");
 
     Runner.Expect(Pico::PObjectSystem::Init(), "Object system can initialize again after shutdown");
     Runner.Expect(Pico::FClassRegistry::GetClassCount() == 1, "Reinitialization restores only intrinsic classes");
+    Runner.Expect(Pico::FObjectRegistry::ValidateHierarchyIndex(&HierarchyError),
+        "Object system restart begins with a consistent hierarchy index");
     Runner.Expect(PMacroObject::RegisterClass() && PMacroDerivedObject::RegisterClass(),
         "Macro-declared classes can register again after object-system restart");
 
@@ -1837,6 +1891,7 @@ int main()
         TestReflectionMacros(Runner);
         TestObjectCreationAndIdentity(Runner);
         TestObjectNameIndexLifecycle(Runner);
+        TestObjectHierarchyIndexLifecycle(Runner);
         TestPropertyReflection(Runner);
         TestFunctionReflection(Runner);
         TestBeginDestroy(Runner);

@@ -42,6 +42,9 @@ public:
     float GetDeltaSeconds() const;
     double GetAverageFrameTimeMS() const;
     double GetAverageFPS() const;
+    const FFramePacingSettings& GetFramePacingSettings() const;
+    EFramePacingMode GetFramePacingMode(bool bPresentationCanVSync) const;
+    void WaitForFrameLimit(bool bPresentationCanVSync);
     PWorld* GetWorld() const;
     FAssetRegistry& GetAssetRegistry();
     const FAssetRegistry& GetAssetRegistry() const;
@@ -57,7 +60,7 @@ private:
     std::filesystem::path ProfileTracePath;
     FObjectHandle WorldHandle;
     int MaxFrameCount = -1;
-    double MaxFPS = 60.0;
+    FFramePacingSettings FramePacingSettings;
     double GarbageCollectionIntervalSeconds = 60.0;
     double GarbageCollectionElapsedSeconds = 0.0;
     bool bPreInitialized = false;

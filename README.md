@@ -82,6 +82,8 @@ The current implementation can:
   the measured Runtime algorithms.
 - Track performance work from bottleneck discovery through profiler evidence, optimization cost, before/after Release
   data, and follow-up decisions in [`Docs/Pico_Performance_Optimization_Log.zh-CN.md`](Docs/Pico_Performance_Optimization_Log.zh-CN.md).
+- Track fixed-tag Object, GC, Profiler, and Replication structural memory through a lightweight
+  `PicoMemoryTracker`; Runtime Benchmark v3 exports Current/Reserved/Peak/Element/Growth values to JSON and CSV.
 - Schedule Actor and ActorComponent updates through `FTickFunction`, four ordered TickGroups,
   same-World prerequisites, runtime enable/disable, and tick intervals.
 - Construct a rooted `PGameInstance` through `PClass/NewObject` and notify it across Init, map load,
@@ -135,7 +137,8 @@ The current implementation can:
   tests keep local prediction and future server replay on the same control semantics.
 - Clamp reflected Controller view pitch to configurable limits (`-75` to `+55` degrees in Sandbox),
   and retract SpringArm through an optional UE-style sphere sweep with a configurable probe size.
-- Show smoothed FPS/frame time in the editor through `View -> Frame Rate`; Editor, Game, and packaged
+- Show smoothed FPS/frame time in the editor and runtime status panel. VSync, software MaxFPS, and
+  Unlimited pacing are mutually exclusive, and software waiting runs only after a complete frame; Editor, Game, and packaged
   executables use the Windows GUI subsystem and do not open a console by default. Editor startup logs
   persist under `Saved/Logs`, and `-console` or `-log` restores a diagnostic console on demand.
 - Inspect the live Gameplay object chain, restart/destroy/repossess its Pawn, and reload the map from
@@ -737,6 +740,10 @@ See:
 - [AI-First Development Roadmap (Chinese)](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)
 - [Engineering Depth: Profiler, Runtime Scalability, and Agent Reliability (Chinese)](Docs/Pico_Engineering_Depth_Roadmap.zh-CN.md)
 - [Engineering Depth Week 1: Measurement Foundation (Chinese)](Docs/EngineeringDepthWeek01_MeasurementFoundation.zh-CN.md)
+- [Engineering Depth Week 4: Tick Cache and Structured Tool Result (Chinese)](Docs/EngineeringDepthWeek04_TickCacheAndStructuredToolResult.zh-CN.md)
+- [Engineering Depth Week 4 Gate: Frame Pacing Correctness (Chinese)](Docs/EngineeringDepthWeek04_FramePacingCorrectness.zh-CN.md)
+- [Engineering Depth Week 4 Gate: Object Hierarchy Index (Chinese)](Docs/EngineeringDepthWeek04_ObjectHierarchyIndex.zh-CN.md)
+- [Engineering Depth Week 5 Gate: Memory Observability (Chinese)](Docs/EngineeringDepthWeek05_MemoryObservabilityGate.zh-CN.md)
 - [Agent Game Creation Pipeline and Six-Week Plan (Chinese)](Docs/AgentGameCreationPipeline.zh-CN.md)
 - [PicoTasks and Game Thread Dispatcher (Chinese)](Docs/AIPhase01_PicoTasksAndGameThreadDispatcher.md)
 - [Pico Agent Core and Recoverable Sessions (Chinese)](Docs/AIPhase02_PicoAgentCoreAndSessions.md)

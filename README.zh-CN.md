@@ -46,6 +46,8 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   JSON/CSV，本阶段先建立证据，不提前修改被测算法。
 - 通过[性能优化总览与追踪记录](Docs/Pico_Performance_Optimization_Log.zh-CN.md)持续记录性能瓶颈、发现依据、
   优化方法、优化前后 Release 数据、额外代价和后续决定。
+- 通过固定 Tag 的轻量 `PicoMemoryTracker` 记录 Object、GC、Profiler 和 Replication 的 Current、Reserved、
+  Peak、Element 与 Growth；Runtime Benchmark v3 将七类结构内存输出为 JSON 和独立 CSV。
 - 通过独立 `PicoNetCore` 使用确定性 Loopback 或非阻塞 Windows UDP 连接一个服务器和多个客户端，提供版本化
   Packet、握手、Sequence/Ack、有界且有序的可靠交付、心跳、超时，以及 World 前后 NetDriver 阶段。
 - 通过每连接 ActorChannel、服务器分配的 NetObjectId、稳定反射 Schema 和确认属性基线复制显式启用的 Actor，
@@ -97,7 +99,8 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   Hash、F1 身份诊断和 0/90 度黄金测试保证未来本地预测与服务器重演使用同一套控制语义。
 - Controller 提供可反射的俯仰角上下限，Sandbox 默认限制为 `-75` 到 `+55` 度；SpringArm 参考 UE 的
   球形 Sweep 在墙壁、地板或天花板前回缩，并可通过 `Do Collision Test` 和 `Probe Size` 独立配置。
-- 编辑器顶部可显示平滑后的 FPS 与帧耗时，通过 `View -> Frame Rate` 开关；Editor、Game 与打包 EXE 使用
+- 编辑器顶部及 Runtime 状态窗口可显示平滑后的 FPS 与帧耗时。VSync、Software MaxFPS 与 Unlimited
+  互斥，完整帧结束后才执行软件等待，避免 VSync 与 MaxFPS 重复限帧；Editor、Game 与打包 EXE 使用
   Windows GUI 子系统，默认不显示控制台。编辑器日志保存到 `Saved/Logs`，需要调试时可用 `-console` 或
   `-log` 临时打开控制台。
 - 每次骨骼导入自动生成 `.pcharprofile`，集中引用 Mesh、AnimationSet、Montage 与材质槽；项目可切换
@@ -569,6 +572,10 @@ private:
 - [工程深度第 1 周：Profiler、Runtime Benchmark 与 Agent Metrics](Docs/EngineeringDepthWeek01_MeasurementFoundation.zh-CN.md)
 - [工程深度第 2 周：Runtime 基线与 Agent 失败语义](Docs/EngineeringDepthWeek02_BaselineAndFailureSemantics.zh-CN.md)
 - [工程深度第 3 周：Object Index 与 Agent Capability Provider](Docs/EngineeringDepthWeek03_ObjectIndexAndAgentCapabilities.zh-CN.md)
+- [工程深度第 4 周：Tick Cache 与结构化 Tool Result](Docs/EngineeringDepthWeek04_TickCacheAndStructuredToolResult.zh-CN.md)
+- [工程深度第 4 周收尾：Frame Pacing Correctness](Docs/EngineeringDepthWeek04_FramePacingCorrectness.zh-CN.md)
+- [工程深度第 4 周后置门：Object Hierarchy Index](Docs/EngineeringDepthWeek04_ObjectHierarchyIndex.zh-CN.md)
+- [工程深度第 5 周前置门：Memory Observability Gate](Docs/EngineeringDepthWeek05_MemoryObservabilityGate.zh-CN.md)
 - [PicoTasks 与 Game Thread Dispatcher](Docs/AIPhase01_PicoTasksAndGameThreadDispatcher.md)
 - [Pico Agent Core 与可恢复 Session](Docs/AIPhase02_PicoAgentCoreAndSessions.md)
 - [Agent Tool 安全管线与编辑器事务](Docs/AIPhase03_AgentToolPipeline.md)
