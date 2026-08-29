@@ -81,6 +81,7 @@ public:
     EClassMetadataError GetMetadataError() const;
     const PProperty* FindProperty(FName PropertyName) const;
     const std::deque<PProperty>& GetProperties() const;
+    std::span<const PProperty* const> GetStrongReferenceProperties() const;
     const PFunction* FindFunction(FName FunctionName) const;
     const std::deque<PFunction>& GetFunctions() const;
 
@@ -110,6 +111,7 @@ private:
     std::deque<PFunction> Functions;
     bool bMetadataValid = true;
     mutable bool bMetadataFinalized = false;
+    mutable std::vector<const PProperty*> StrongReferenceProperties;
     EClassMetadataError MetadataError = EClassMetadataError::None;
     mutable FObjectPtr ClassDefaultObject;
     mutable std::vector<FDefaultSubobjectRecord> DefaultSubobjects;

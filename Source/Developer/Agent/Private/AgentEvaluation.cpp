@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cctype>
 #include <fstream>
+#include <map>
 #include <set>
 #include <stdexcept>
 
@@ -225,6 +226,228 @@ bool FAgentGoldenTaskRunner::WriteReport(
         std::error_code ErrorCode;
         std::filesystem::remove(Path, ErrorCode);
         std::filesystem::rename(StagingPath, Path);
+        return true;
+    }
+    catch (const std::exception& Exception)
+    {
+        if (OutError) *OutError = Exception.what();
+        return false;
+    }
+}
+
+bool FAgentRagBenchmarkRunner::LoadFixture(
+    const std::filesystem::path& Path,
+    FAgentRagBenchmarkFixture& OutFixture,
+    std::string* OutError)
+{
+    OutFixture = {};
+    if (OutError) OutError->clear();
+    try
+    {
+        std::ifstream Stream(Path, std::ios::binary);
+        if (!Stream) throw std::runtime_error("Could not open RAG benchmark fixture");
+        FJson Root;
+        Stream >> Root;
+        if (Root.value("format_version", 0) != 1
+            || !Root.contains("records") || !Root.at("records").is_array()
+            || !Root.contains("cases") || !Root.at("cases").is_array())
+        {
+            throw std::runtime_error("Unsupported RAG benchmark fixture format");
+        }
+
+        std::set<std::string> RecordIds;
+        for (const FJson& Json : Root.at("records"))
+        {
+            FAgentKnowledgeRecord Record;
+            Record.Id = Json.value("id", "");
+            Record.SourceType = Json.value("source_type", "");
+            Record.SourcePath = Json.value("source_path", "");
+            Record.Title = Json.value("title", "");
+            Record.Content = Json.value("content", "");
+            Record.Tags = Json.value("tags", std::vector<std::string> {});
+            Record.Provenance = Json.value("provenance", Record.SourcePath);
+            if (Record.Id.empty() || Record.SourceType.empty()
+                || Record.Title.empty() || Record.Content.empty()
+                || !RecordIds.insert(Record.Id).second)
+            {
+                throw std::runtime_error("Invalid RAG benchmark record");
+            }
+            OutFixture.Records.push_back(std::move(Record));
+        }
+
+        std::set<std::string> CaseIds;
+        for (const FJson& Json : Root.at("cases"))
+        {
+            FAgentRagBenchmarkCase Case;
+            Case.Id = Json.value("id", "");
+            Case.Query = Json.value("query", "");
+            Case.ExpectedRecordIds = Json.value(
+                "expected_record_ids", std::vector<std::string> {});
+            Case.AllowedSourceTypes = Json.value(
+                "allowed_source_types", std::vector<std::string> {});
+            Case.ForbiddenSourceTypes = Json.value(
+                "forbidden_source_types", std::vector<std::string> {});
+            if (!IsSafeTaskId(Case.Id) || Case.Query.empty()
+                || Case.ExpectedRecordIds.empty()
+                || !CaseIds.insert(Case.Id).second)
+            {
+                throw std::runtime_error("Invalid RAG benchmark case: " + Case.Id);
+            }
+            for (const std::string& Expected : Case.ExpectedRecordIds)
+                if (!RecordIds.contains(Expected))
+                    throw std::runtime_error(
+                        "Unknown expected RAG record: " + Expected);
+            OutFixture.Cases.push_back(std::move(Case));
+        }
+        if (OutFixture.Records.empty() || OutFixture.Cases.empty())
+            throw std::runtime_error("RAG benchmark fixture is empty");
+        return true;
+    }
+    catch (const std::exception& Exception)
+    {
+        OutFixture = {};
+        if (OutError) *OutError = Exception.what();
+        return false;
+    }
+}
+
+FAgentRagBenchmarkReport FAgentRagBenchmarkRunner::Run(
+    const FAgentRagBenchmarkFixture& Fixture) const
+{
+    FAgentRagBenchmarkReport Report;
+    FAgentKnowledgeStore Store;
+    std::map<std::string, std::vector<FAgentKnowledgeRecord>> Sources;
+    for (const FAgentKnowledgeRecord& Record : Fixture.Records)
+        Sources[Record.SourceType].push_back(Record);
+    for (auto& [SourceType, Records] : Sources)
+        Store.ReplaceSource(SourceType, std::move(Records));
+
+    std::size_t TotalRetrieved = 0;
+    std::size_t TotalForbidden = 0;
+    for (const FAgentRagBenchmarkCase& Case : Fixture.Cases)
+    {
+        FAgentKnowledgeQuery Query;
+        Query.Text = Case.Query;
+        Query.MaxResults = 8;
+        Query.MaxContextBytes = 12000;
+        Query.SourceTypes = Case.AllowedSourceTypes;
+        const auto StartedAt = std::chrono::steady_clock::now();
+        const std::vector<FAgentKnowledgeHit> Hits = Store.Query(Query);
+        const std::uint64_t RetrievalNanoseconds =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<
+                std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - StartedAt).count());
+        const std::string Context = Store.BuildGroundingContextJson(Query);
+
+        FAgentRagBenchmarkCaseResult Result;
+        Result.Id = Case.Id;
+        Result.ContextBytes = Context.size();
+        Result.RetrievalNanoseconds = RetrievalNanoseconds;
+        std::set<std::string> Expected(
+            Case.ExpectedRecordIds.begin(), Case.ExpectedRecordIds.end());
+        const auto RecallAt = [&](std::size_t K)
+        {
+            std::size_t Found = 0;
+            for (std::size_t Index = 0;
+                Index < std::min(K, Hits.size()); ++Index)
+            {
+                if (Expected.contains(Hits[Index].Record.Id)) ++Found;
+            }
+            return static_cast<double>(Found)
+                / static_cast<double>(Expected.size());
+        };
+        Result.RecallAt1 = RecallAt(1);
+        Result.RecallAt3 = RecallAt(3);
+        Result.RecallAt8 = RecallAt(8);
+        for (std::size_t Index = 0; Index < Hits.size(); ++Index)
+        {
+            Result.RetrievedRecordIds.push_back(Hits[Index].Record.Id);
+            if (Result.ReciprocalRank == 0.0
+                && Expected.contains(Hits[Index].Record.Id))
+            {
+                Result.ReciprocalRank = 1.0
+                    / static_cast<double>(Index + 1);
+            }
+            if (std::find(Case.ForbiddenSourceTypes.begin(),
+                    Case.ForbiddenSourceTypes.end(),
+                    Hits[Index].Record.SourceType)
+                != Case.ForbiddenSourceTypes.end())
+            {
+                ++Result.ForbiddenSourceHits;
+            }
+        }
+        TotalRetrieved += Hits.size();
+        TotalForbidden += Result.ForbiddenSourceHits;
+        Report.RecallAt1 += Result.RecallAt1;
+        Report.RecallAt3 += Result.RecallAt3;
+        Report.RecallAt8 += Result.RecallAt8;
+        Report.MeanReciprocalRank += Result.ReciprocalRank;
+        Report.MeanContextBytes += Result.ContextBytes;
+        Report.MeanRetrievalNanoseconds += Result.RetrievalNanoseconds;
+        Report.Cases.push_back(std::move(Result));
+    }
+
+    if (!Report.Cases.empty())
+    {
+        const double Count = static_cast<double>(Report.Cases.size());
+        Report.RecallAt1 /= Count;
+        Report.RecallAt3 /= Count;
+        Report.RecallAt8 /= Count;
+        Report.MeanReciprocalRank /= Count;
+        Report.MeanContextBytes /= Report.Cases.size();
+        Report.MeanRetrievalNanoseconds /= Report.Cases.size();
+    }
+    Report.ForbiddenSourceRate = TotalRetrieved == 0 ? 0.0
+        : static_cast<double>(TotalForbidden)
+            / static_cast<double>(TotalRetrieved);
+    return Report;
+}
+
+bool FAgentRagBenchmarkRunner::WriteReport(
+    const std::filesystem::path& Path,
+    const FAgentRagBenchmarkReport& Report,
+    std::string* OutError)
+{
+    if (OutError) OutError->clear();
+    try
+    {
+        FJson Cases = FJson::array();
+        for (const FAgentRagBenchmarkCaseResult& Result : Report.Cases)
+        {
+            Cases.push_back({{"id", Result.Id},
+                {"retrieved_record_ids", Result.RetrievedRecordIds},
+                {"recall_at_1", Result.RecallAt1},
+                {"recall_at_3", Result.RecallAt3},
+                {"recall_at_8", Result.RecallAt8},
+                {"reciprocal_rank", Result.ReciprocalRank},
+                {"context_bytes", Result.ContextBytes},
+                {"retrieval_nanoseconds", Result.RetrievalNanoseconds},
+                {"forbidden_source_hits", Result.ForbiddenSourceHits}});
+        }
+        const FJson Json = {{"format_version", 1},
+            {"recall_at_1", Report.RecallAt1},
+            {"recall_at_3", Report.RecallAt3},
+            {"recall_at_8", Report.RecallAt8},
+            {"mrr", Report.MeanReciprocalRank},
+            {"mean_context_bytes", Report.MeanContextBytes},
+            {"mean_retrieval_nanoseconds", Report.MeanRetrievalNanoseconds},
+            {"forbidden_source_rate", Report.ForbiddenSourceRate},
+            {"cases", std::move(Cases)}};
+        std::filesystem::create_directories(Path.parent_path());
+        const std::filesystem::path Staging = Path.string() + ".tmp";
+        {
+            std::ofstream Stream(Staging, std::ios::binary | std::ios::trunc);
+            if (!Stream) throw std::runtime_error(
+                "Could not open RAG benchmark report staging file");
+            Stream << Json.dump(2) << '\n';
+            Stream.flush();
+            if (!Stream) throw std::runtime_error(
+                "Could not flush RAG benchmark report");
+        }
+        std::error_code Error;
+        std::filesystem::remove(Path, Error);
+        std::filesystem::rename(Staging, Path, Error);
+        if (Error) throw std::runtime_error(Error.message());
         return true;
     }
     catch (const std::exception& Exception)

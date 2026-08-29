@@ -22,17 +22,33 @@ class PReplicationTestActor : public Pico::PActor
     PICO_DECLARE_CLASS(PReplicationTestActor, Pico::PActor)
 
 public:
-    void SetValue(Pico::int32 InValue) { Value = InValue; }
+    void SetValue(Pico::int32 InValue)
+    {
+        if (Value == InValue) return;
+        Value = InValue;
+        MarkReplicatedPropertyDirty(Pico::FName("Value"));
+    }
     Pico::int32 GetValue() const { return Value; }
-    void SetInitialValue(Pico::int32 InValue) { InitialValue = InValue; }
+    void SetValueWithoutDirtyForTest(Pico::int32 InValue) { Value = InValue; }
+    void SetInitialValue(Pico::int32 InValue)
+    {
+        if (InitialValue == InValue) return;
+        InitialValue = InValue;
+        MarkReplicatedPropertyDirty(Pico::FName("InitialValue"));
+    }
     Pico::int32 GetInitialValue() const { return InitialValue; }
-    void SetTarget(PReplicationTestActor* InTarget) { Target = InTarget; }
+    void SetTarget(PReplicationTestActor* InTarget)
+    {
+        if (Target.Get() == InTarget) return;
+        Target = InTarget;
+        MarkReplicatedPropertyDirty(Pico::FName("Target"));
+    }
     PReplicationTestActor* GetTarget() const { return Target.Get(); }
     int GetRepNotifyCount() const { return RepNotifyCount; }
     void OnRep_Value() { ++RepNotifyCount; }
     void ServerSetValue(Pico::int32 InValue)
     {
-        Value = InValue;
+        SetValue(InValue);
         ++ServerRpcCount;
     }
     void ClientConfirm(bool bAccepted)
@@ -326,7 +342,42 @@ void TestReplicationLifecycle(FTestRunner& Runner)
     Messages.clear();
     ServerReplication.ReplicateServerConnection(Connection, Queue);
     Runner.Expect(Messages.empty(),
+        "A dirty generation whose bytes returned to baseline emits no Delta");
+    const Pico::FReplicationStatistics BeforeUnchanged =
+        ServerReplication.GetStatistics();
+    ServerReplication.ReplicateServerConnection(Connection, Queue);
+    const Pico::FReplicationStatistics AfterUnchanged =
+        ServerReplication.GetStatistics();
+    Runner.Expect(Messages.empty(),
         "Acknowledged unchanged properties produce no Delta");
+    Runner.Expect(
+        AfterUnchanged.ActorsSkippedUnchanged
+                > BeforeUnchanged.ActorsSkippedUnchanged
+            && AfterUnchanged.PropertiesCompared
+                == BeforeUnchanged.PropertiesCompared
+            && AfterUnchanged.SchemaCacheHits
+                > BeforeUnchanged.SchemaCacheHits
+            && AfterUnchanged.ChannelIndexHits
+                > BeforeUnchanged.ChannelIndexHits,
+        "Push-model generation skips unchanged Actor encoding through cached Schema and Channel indexes");
+
+    Source->SetValueWithoutDirtyForTest(15);
+    ServerReplication.SetDirtyMode(
+        Pico::EReplicationDirtyMode::FullPollingValidation);
+    ServerReplication.BeginNetworkFrame();
+    const Pico::FReplicationStatistics BeforeValidation =
+        ServerReplication.GetStatistics();
+    ServerReplication.ReplicateServerConnection(Connection, Queue);
+    const Pico::FReplicationStatistics AfterValidation =
+        ServerReplication.GetStatistics();
+    Runner.Expect(Messages.size() == 1
+            && AfterValidation.DirtyValidationMisses
+                > BeforeValidation.DirtyValidationMisses,
+        "Full-poll validation detects a replicated write that missed its dirty marker");
+    if (!Messages.empty()) ServerReplication.HandleReliableAcknowledged(
+        Connection, Messages.front().ReliableId);
+    Messages.clear();
+    ServerReplication.SetDirtyMode(Pico::EReplicationDirtyMode::PushModel);
 
     Source->SetValue(20);
     Source->SetInitialValue(99);
@@ -350,11 +401,29 @@ void TestReplicationLifecycle(FTestRunner& Runner)
     ServerReplication.ReplicateServerConnection(SecondConnection, Queue);
     Runner.Expect(Messages.size() == 2,
         "A second connection owns an independent initial baseline");
+    for (const FQueuedMessage& Message : Messages)
+        ServerReplication.HandleReliableAcknowledged(
+            SecondConnection, Message.ReliableId);
+    Messages.clear();
+
+    Source->SetValue(25);
+    ServerReplication.BeginNetworkFrame();
+    ServerReplication.ReplicateServerConnection(Connection, Queue);
+    for (const FQueuedMessage& Message : Messages)
+        ServerReplication.HandleReliableAcknowledged(
+            Connection, Message.ReliableId);
+    Messages.clear();
+    ServerReplication.BeginNetworkFrame();
+    ServerReplication.ReplicateServerConnection(SecondConnection, Queue);
+    Runner.Expect(Messages.size() == 1,
+        "A lagging second connection reads Actor dirty history after the first connection observes it");
+    for (const FQueuedMessage& Message : Messages)
+        ServerReplication.HandleReliableAcknowledged(
+            SecondConnection, Message.ReliableId);
+    Messages.clear();
     ServerReplication.HandleConnectionClosed(SecondConnection);
     Runner.Expect(ServerReplication.GetStatistics().ChannelCount == 2,
         "Disconnect removes only that connection's ActorChannels");
-    Messages.clear();
-
     Runner.Expect(ServerWorld->DestroyActor(Target),
         "Server destroys the referenced actor");
     ServerReplication.ReplicateServerConnection(Connection, Queue);

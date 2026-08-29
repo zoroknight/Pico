@@ -18,9 +18,12 @@
 #include "Pico/Object/ObjectGlobals.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <limits>
+#include <unordered_map>
 #include <utility>
 
 namespace Pico
@@ -34,6 +37,26 @@ constexpr std::size_t MaxReplicatedFields = 64;
 constexpr std::size_t MaxReplicationStringBytes = 255;
 constexpr std::size_t MaxPendingObjectReferences = 256;
 constexpr std::size_t MaxRpcArguments = 8;
+
+uint64 MakeObjectHandleKey(FObjectHandle Handle)
+{
+    return (static_cast<uint64>(Handle.Index) << 32)
+        | static_cast<uint64>(Handle.Serial);
+}
+
+uint64 MakeChannelKey(
+    FNetConnectionId ConnectionId,
+    FNetObjectId NetObjectId)
+{
+    return (static_cast<uint64>(ConnectionId.Value) << 32)
+        | static_cast<uint64>(NetObjectId.Value);
+}
+
+uint64 ElapsedNanoseconds(std::chrono::steady_clock::time_point Start)
+{
+    return static_cast<uint64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - Start).count());
+}
 
 enum class EReplicationMessageType : uint8
 {
@@ -752,13 +775,9 @@ FReplicationSchema FReplicationSchema::Build(const PClass* InClass)
 const FReplicationFieldDescriptor* FReplicationSchema::FindField(
     uint16 FieldId) const
 {
-    const auto It = std::find_if(
-        Fields.begin(), Fields.end(),
-        [FieldId](const FReplicationFieldDescriptor& Field)
-        {
-            return Field.FieldId == FieldId;
-        });
-    return It != Fields.end() ? &*It : nullptr;
+    if (FieldId == 0 || FieldId > Fields.size()) return nullptr;
+    const FReplicationFieldDescriptor& Field = Fields[FieldId - 1];
+    return Field.FieldId == FieldId ? &Field : nullptr;
 }
 
 FNetObjectId FNetObjectRegistry::RegisterAuthorityObject(PActor* Actor)
@@ -769,6 +788,8 @@ FNetObjectId FNetObjectRegistry::RegisterAuthorityObject(PActor* Actor)
     FNetObjectId NetId = NextAuthorityId;
     if (++NextAuthorityId.Value == 0) ++NextAuthorityId.Value;
     Entries.push_back({NetId, Actor->GetHandle()});
+    HandleIndex[MakeObjectHandleKey(Actor->GetHandle())] = NetId;
+    NetIdIndex[NetId.Value] = Actor->GetHandle();
     Actor->SetNetObjectId(NetId);
     return NetId;
 }
@@ -777,13 +798,13 @@ bool FNetObjectRegistry::RegisterRemoteObject(
     FNetObjectId NetId,
     PActor* Actor)
 {
-    const bool bNetIdAlreadyRegistered = std::any_of(
-        Entries.begin(), Entries.end(),
-        [NetId](const FEntry& Entry) { return Entry.NetId == NetId; });
+    const bool bNetIdAlreadyRegistered = NetIdIndex.contains(NetId.Value);
     if (!NetId.IsValid() || Actor == nullptr
         || bNetIdAlreadyRegistered
         || FindNetId(Actor->GetHandle()).IsValid()) return false;
     Entries.push_back({NetId, Actor->GetHandle()});
+    HandleIndex[MakeObjectHandleKey(Actor->GetHandle())] = NetId;
+    NetIdIndex[NetId.Value] = Actor->GetHandle();
     Actor->SetNetObjectId(NetId);
     return true;
 }
@@ -791,20 +812,27 @@ bool FNetObjectRegistry::RegisterRemoteObject(
 FNetObjectId FNetObjectRegistry::FindNetId(FObjectHandle Handle) const
 {
     if (!Handle.IsValid()) return {};
-    const auto It = std::find_if(
-        Entries.begin(), Entries.end(),
-        [Handle](const FEntry& Entry) { return Entry.Handle == Handle; });
-    return It != Entries.end() ? It->NetId : FNetObjectId {};
+    const auto It = HandleIndex.find(MakeObjectHandleKey(Handle));
+    if (It != HandleIndex.end())
+    {
+        ++IndexHits;
+        return It->second;
+    }
+    ++IndexMisses;
+    return {};
 }
 
 PActor* FNetObjectRegistry::ResolveActor(FNetObjectId NetId) const
 {
     if (!NetId.IsValid()) return nullptr;
-    const auto It = std::find_if(
-        Entries.begin(), Entries.end(),
-        [NetId](const FEntry& Entry) { return Entry.NetId == NetId; });
-    if (It == Entries.end()) return nullptr;
-    PObject* Object = ResolveObject(It->Handle);
+    const auto It = NetIdIndex.find(NetId.Value);
+    if (It == NetIdIndex.end())
+    {
+        ++IndexMisses;
+        return nullptr;
+    }
+    ++IndexHits;
+    PObject* Object = ResolveObject(It->second);
     return Object != nullptr && Object->IsA(PActor::StaticClass())
         ? static_cast<PActor*>(Object) : nullptr;
 }
@@ -813,6 +841,12 @@ bool FNetObjectRegistry::RemoveByNetId(FNetObjectId NetId)
 {
     PActor* Actor = ResolveActor(NetId);
     if (Actor != nullptr) Actor->SetNetObjectId({});
+    const auto HandleIt = NetIdIndex.find(NetId.Value);
+    if (HandleIt != NetIdIndex.end())
+    {
+        HandleIndex.erase(MakeObjectHandleKey(HandleIt->second));
+        NetIdIndex.erase(HandleIt);
+    }
     return std::erase_if(Entries,
         [NetId](const FEntry& Entry) { return Entry.NetId == NetId; }) > 0;
 }
@@ -828,7 +862,27 @@ void FNetObjectRegistry::Reset()
         }
     }
     Entries.clear();
+    HandleIndex.clear();
+    NetIdIndex.clear();
     NextAuthorityId.Value = 1;
+    IndexHits = 0;
+    IndexMisses = 0;
+}
+
+std::size_t FNetObjectRegistry::GetStorageBytes() const
+{
+    return Entries.size() * sizeof(FEntry)
+        + HandleIndex.size() * sizeof(decltype(HandleIndex)::value_type)
+        + NetIdIndex.size() * sizeof(decltype(NetIdIndex)::value_type);
+}
+
+std::size_t FNetObjectRegistry::GetReservedStorageBytes() const
+{
+    return Entries.capacity() * sizeof(FEntry)
+        + HandleIndex.bucket_count() * sizeof(void*)
+        + HandleIndex.size() * sizeof(decltype(HandleIndex)::value_type)
+        + NetIdIndex.bucket_count() * sizeof(void*)
+        + NetIdIndex.size() * sizeof(decltype(NetIdIndex)::value_type);
 }
 
 struct FReplicationSystem::FImpl
@@ -845,9 +899,18 @@ struct FReplicationSystem::FImpl
         std::vector<uint8> PendingTransform;
         uint32 PendingReliableId = 0;
         EReplicationMessageType PendingType = EReplicationMessageType::Spawn;
+        uint64 LastObservedGeneration = 0;
+        uint64 PendingGeneration = 0;
     };
 
     std::vector<FChannel> Channels;
+    std::unordered_map<uint64, std::size_t> ChannelIndex;
+    std::unordered_map<const PClass*, FReplicationSchema> SchemaCache;
+    EReplicationDirtyMode DirtyMode = EReplicationDirtyMode::PushModel;
+    uint64 SchemaCacheHits = 0;
+    uint64 SchemaCacheMisses = 0;
+    uint64 ChannelIndexHits = 0;
+    uint64 ChannelIndexMisses = 0;
     std::vector<FPendingReference> PendingReferences;
     struct FOwnership
     {
@@ -865,19 +928,47 @@ struct FReplicationSystem::FImpl
 
 namespace
 {
+void RebuildChannelIndex(FReplicationSystem::FImpl& Impl)
+{
+    Impl.ChannelIndex.clear();
+    Impl.ChannelIndex.reserve(Impl.Channels.size());
+    for (std::size_t Index = 0; Index < Impl.Channels.size(); ++Index)
+    {
+        const auto& Channel = Impl.Channels[Index];
+        Impl.ChannelIndex[MakeChannelKey(
+            Channel.ConnectionId, Channel.NetObjectId)] = Index;
+    }
+}
+
 FReplicationSystem::FImpl::FChannel* FindChannel(
     FReplicationSystem::FImpl& Impl,
     FNetConnectionId ConnectionId,
     FNetObjectId NetObjectId)
 {
-    const auto It = std::find_if(
-        Impl.Channels.begin(), Impl.Channels.end(),
-        [ConnectionId, NetObjectId](const auto& Channel)
-        {
-            return Channel.ConnectionId == ConnectionId
-                && Channel.NetObjectId == NetObjectId;
-        });
-    return It != Impl.Channels.end() ? &*It : nullptr;
+    const auto It = Impl.ChannelIndex.find(
+        MakeChannelKey(ConnectionId, NetObjectId));
+    if (It != Impl.ChannelIndex.end() && It->second < Impl.Channels.size())
+    {
+        ++Impl.ChannelIndexHits;
+        return &Impl.Channels[It->second];
+    }
+    ++Impl.ChannelIndexMisses;
+    return nullptr;
+}
+
+const FReplicationSchema& GetCachedSchema(
+    FReplicationSystem::FImpl& Impl,
+    const PClass* Class)
+{
+    const auto It = Impl.SchemaCache.find(Class);
+    if (It != Impl.SchemaCache.end())
+    {
+        ++Impl.SchemaCacheHits;
+        return It->second;
+    }
+    ++Impl.SchemaCacheMisses;
+    return Impl.SchemaCache.emplace(Class,
+        FReplicationSchema::Build(Class)).first->second;
 }
 
 std::vector<FFieldValue> CaptureValues(
@@ -885,11 +976,15 @@ std::vector<FFieldValue> CaptureValues(
     const PActor* Actor,
     const FNetObjectRegistry& Registry,
     bool bInitial,
-    bool bIsOwner)
+    bool bIsOwner,
+    uint64 FieldMask = ~uint64 {0})
 {
     std::vector<FFieldValue> Result;
     for (const FReplicationFieldDescriptor& Field : Schema.GetFields())
     {
+        const uint64 FieldBit = Field.FieldId > 0 && Field.FieldId <= 64
+            ? uint64 {1} << (Field.FieldId - 1) : 0;
+        if ((FieldMask & FieldBit) == 0) continue;
         if (Field.Property == nullptr
             || !ShouldReplicate(Field.Condition, bInitial, bIsOwner)) continue;
         FFieldValue Value;
@@ -903,27 +998,21 @@ std::vector<FFieldValue> CaptureValues(
     return Result;
 }
 
-const FFieldValue* FindValue(
-    const std::vector<FFieldValue>& Values,
-    uint16 FieldId)
-{
-    const auto It = std::find_if(
-        Values.begin(), Values.end(),
-        [FieldId](const FFieldValue& Value)
-        {
-            return Value.FieldId == FieldId;
-        });
-    return It != Values.end() ? &*It : nullptr;
-}
-
 std::vector<FFieldValue> BuildDelta(
     const std::vector<FFieldValue>& Current,
     const std::vector<FFieldValue>& Baseline)
 {
+    std::array<const FFieldValue*, MaxReplicatedFields + 1> BaselineByField {};
+    for (const FFieldValue& Value : Baseline)
+    {
+        if (Value.FieldId <= MaxReplicatedFields)
+            BaselineByField[Value.FieldId] = &Value;
+    }
     std::vector<FFieldValue> Result;
     for (const FFieldValue& Value : Current)
     {
-        const FFieldValue* Previous = FindValue(Baseline, Value.FieldId);
+        const FFieldValue* Previous = Value.FieldId <= MaxReplicatedFields
+            ? BaselineByField[Value.FieldId] : nullptr;
         if (Previous == nullptr || Previous->Type != Value.Type
             || Previous->Data != Value.Data) Result.push_back(Value);
     }
@@ -936,14 +1025,15 @@ void MergeBaseline(
 {
     for (const FFieldValue& Value : Values)
     {
-        const auto It = std::find_if(
-            Baseline.begin(), Baseline.end(),
-            [&Value](const FFieldValue& Existing)
+        const auto It = std::lower_bound(
+            Baseline.begin(), Baseline.end(), Value.FieldId,
+            [](const FFieldValue& Existing, uint16 FieldId)
             {
-                return Existing.FieldId == Value.FieldId;
+                return Existing.FieldId < FieldId;
             });
         if (It == Baseline.end()) Baseline.push_back(Value);
-        else *It = Value;
+        else if (It->FieldId == Value.FieldId) *It = Value;
+        else Baseline.insert(It, Value);
     }
 }
 
@@ -953,14 +1043,19 @@ bool QueueSpawn(
     const FReplicationSchema& Schema,
     const FNetObjectRegistry& Registry,
     const FReplicationSystem::FQueueReliable& Queue,
-    bool bIsOwner)
+    bool bIsOwner,
+    uint64 Generation,
+    FReplicationStatistics& Statistics)
 {
+    const auto GatherStart = std::chrono::steady_clock::now();
     FNetByteWriter Writer;
     const std::vector<FFieldValue> Values = CaptureValues(
         Schema, Actor, Registry, true, bIsOwner);
     const std::vector<uint8> Transform = Actor->GetRootComponent() != nullptr
         ? EncodeTransform(Actor->GetActorTransform())
         : std::vector<uint8> {};
+    Statistics.GatherNanoseconds += ElapsedNanoseconds(GatherStart);
+    const auto SerializeStart = std::chrono::steady_clock::now();
     if (!WriteMessageHeader(Writer, EReplicationMessageType::Spawn)
         || !Writer.WriteUInt32(Channel.NetObjectId.Value)
         || !WriteString(Writer, Actor->GetClass()->GetName().ToString())
@@ -970,13 +1065,19 @@ bool QueueSpawn(
         || !Writer.WriteUInt16(static_cast<uint16>(Transform.size()))
         || !Writer.WriteBytes(Transform)
         || !WriteFieldValues(Writer, Values)) return false;
+    Statistics.SerializeNanoseconds += ElapsedNanoseconds(SerializeStart);
 
     uint32 ReliableId = 0;
+    const auto QueueStart = std::chrono::steady_clock::now();
     if (!Queue(Writer.GetBytes(), &ReliableId)) return false;
+    Statistics.QueueNanoseconds += ElapsedNanoseconds(QueueStart);
+    Statistics.BytesQueued += Writer.GetBytes().size();
+    Statistics.PropertiesEncoded += Values.size();
     Channel.PendingReliableId = ReliableId;
     Channel.PendingType = EReplicationMessageType::Spawn;
     Channel.PendingValues = Values;
     Channel.PendingTransform = Transform;
+    Channel.PendingGeneration = Generation;
     return true;
 }
 
@@ -986,19 +1087,45 @@ bool QueueDelta(
     const FReplicationSchema& Schema,
     const FNetObjectRegistry& Registry,
     const FReplicationSystem::FQueueReliable& Queue,
-    bool bIsOwner)
+    bool bIsOwner,
+    uint64 Generation,
+    uint64 DirtyMask,
+    bool bTransformDirty,
+    bool bValidateDirty,
+    FReplicationStatistics& Statistics)
 {
+    const uint64 CaptureMask = bValidateDirty ? ~uint64 {0} : DirtyMask;
+    const auto GatherStart = std::chrono::steady_clock::now();
     const std::vector<FFieldValue> Current = CaptureValues(
-        Schema, Actor, Registry, false, bIsOwner);
+        Schema, Actor, Registry, false, bIsOwner, CaptureMask);
+    Statistics.GatherNanoseconds += ElapsedNanoseconds(GatherStart);
+    const auto CompareStart = std::chrono::steady_clock::now();
     const std::vector<FFieldValue> Delta = BuildDelta(
         Current, Channel.Baseline);
-    const std::vector<uint8> Transform = Actor->GetRootComponent() != nullptr
+    Statistics.PropertiesCompared += Current.size();
+    if (bValidateDirty)
+    {
+        for (const FFieldValue& Value : Delta)
+        {
+            const uint64 Bit = uint64 {1} << (Value.FieldId - 1);
+            if ((DirtyMask & Bit) == 0) ++Statistics.DirtyValidationMisses;
+        }
+    }
+    Statistics.CompareNanoseconds += ElapsedNanoseconds(CompareStart);
+    const bool bCaptureTransform = bValidateDirty || bTransformDirty;
+    const std::vector<uint8> Transform = bCaptureTransform
+        && Actor->GetRootComponent() != nullptr
         ? EncodeTransform(Actor->GetActorTransform())
         : std::vector<uint8> {};
     const bool bTransformChanged = !Transform.empty()
         && Transform != Channel.TransformBaseline;
-    if (Delta.empty() && !bTransformChanged) return false;
+    if (Delta.empty() && !bTransformChanged)
+    {
+        Channel.LastObservedGeneration = Generation;
+        return false;
+    }
 
+    const auto SerializeStart = std::chrono::steady_clock::now();
     FNetByteWriter Writer;
     if (!WriteMessageHeader(Writer, EReplicationMessageType::Delta)
         || !Writer.WriteUInt32(Channel.NetObjectId.Value)
@@ -1008,26 +1135,38 @@ bool QueueDelta(
             && (!Writer.WriteUInt16(static_cast<uint16>(Transform.size()))
                 || !Writer.WriteBytes(Transform)))
         || !WriteFieldValues(Writer, Delta)) return false;
+    Statistics.SerializeNanoseconds += ElapsedNanoseconds(SerializeStart);
 
     uint32 ReliableId = 0;
+    const auto QueueStart = std::chrono::steady_clock::now();
     if (!Queue(Writer.GetBytes(), &ReliableId)) return false;
+    Statistics.QueueNanoseconds += ElapsedNanoseconds(QueueStart);
+    Statistics.BytesQueued += Writer.GetBytes().size();
+    Statistics.PropertiesEncoded += Delta.size();
     Channel.PendingReliableId = ReliableId;
     Channel.PendingType = EReplicationMessageType::Delta;
     Channel.PendingValues = Delta;
     Channel.PendingTransform = bTransformChanged
         ? Transform : std::vector<uint8> {};
+    Channel.PendingGeneration = Generation;
     return true;
 }
 
 bool QueueDestroy(
     FReplicationSystem::FImpl::FChannel& Channel,
-    const FReplicationSystem::FQueueReliable& Queue)
+    const FReplicationSystem::FQueueReliable& Queue,
+    FReplicationStatistics& Statistics)
 {
+    const auto SerializeStart = std::chrono::steady_clock::now();
     FNetByteWriter Writer;
     if (!WriteMessageHeader(Writer, EReplicationMessageType::Destroy)
         || !Writer.WriteUInt32(Channel.NetObjectId.Value)) return false;
+    Statistics.SerializeNanoseconds += ElapsedNanoseconds(SerializeStart);
     uint32 ReliableId = 0;
+    const auto QueueStart = std::chrono::steady_clock::now();
     if (!Queue(Writer.GetBytes(), &ReliableId)) return false;
+    Statistics.QueueNanoseconds += ElapsedNanoseconds(QueueStart);
+    Statistics.BytesQueued += Writer.GetBytes().size();
     Channel.PendingReliableId = ReliableId;
     Channel.PendingType = EReplicationMessageType::Destroy;
     Channel.PendingValues.clear();
@@ -1046,7 +1185,22 @@ void FReplicationSystem::SetWorld(PWorld* InWorld)
 
 void FReplicationSystem::BeginNetworkFrame()
 {
-    if (Impl != nullptr) Impl->RpcFrameCounts.clear();
+    if (Impl != nullptr)
+    {
+        Impl->RpcFrameCounts.clear();
+    }
+}
+
+void FReplicationSystem::SetDirtyMode(EReplicationDirtyMode Mode)
+{
+    if (Impl == nullptr) Impl = std::make_shared<FImpl>();
+    Impl->DirtyMode = Mode;
+}
+
+EReplicationDirtyMode FReplicationSystem::GetDirtyMode() const
+{
+    return Impl != nullptr
+        ? Impl->DirtyMode : EReplicationDirtyMode::PushModel;
 }
 
 void FReplicationSystem::Reset()
@@ -1054,9 +1208,15 @@ void FReplicationSystem::Reset()
     if (Impl != nullptr)
     {
         Impl->Channels.clear();
+        Impl->ChannelIndex.clear();
+        Impl->SchemaCache.clear();
         Impl->PendingReferences.clear();
         Impl->Ownership.clear();
         Impl->RpcFrameCounts.clear();
+        Impl->SchemaCacheHits = 0;
+        Impl->SchemaCacheMisses = 0;
+        Impl->ChannelIndexHits = 0;
+        Impl->ChannelIndexMisses = 0;
     }
     ObjectRegistry.Reset();
     Statistics = {};
@@ -1072,15 +1232,7 @@ void FReplicationSystem::ReplicateServerConnection(
     if (World == nullptr || !ConnectionId.IsValid() || !QueueReliable) return;
     if (Impl == nullptr) Impl = std::make_shared<FImpl>();
 
-    FMemoryTracker& MemoryTracker = FMemoryTracker::Get();
-    const auto ResetSchemaMemory = MakeScopeExit([&MemoryTracker]()
-    {
-        MemoryTracker.Report(EMemoryTag::ReplicationSchema, 0, 0, 0);
-    });
-    std::size_t SchemaPeakBytes = 0;
-    std::size_t SchemaPeakReservedBytes = 0;
-    std::size_t SchemaPeakFieldCount = 0;
-
+    const auto GatherStart = std::chrono::steady_clock::now();
     std::vector<PActor*> ReplicatedActors;
     for (PLevel* Level : World->GetLevels())
     {
@@ -1091,6 +1243,7 @@ void FReplicationSystem::ReplicateServerConnection(
                 && !Actor->IsPendingDestroy()) ReplicatedActors.push_back(Actor);
         }
     }
+    Statistics.GatherNanoseconds += ElapsedNanoseconds(GatherStart);
 
     for (PActor* Actor : ReplicatedActors)
     {
@@ -1099,6 +1252,7 @@ void FReplicationSystem::ReplicateServerConnection(
 
     for (PActor* Actor : ReplicatedActors)
     {
+        ++Statistics.ActorsConsidered;
         const bool bIsOwner =
             GetActorOwningConnection(Actor) == ConnectionId;
         if (Actor->IsOnlyRelevantToOwner() && !bIsOwner) continue;
@@ -1113,29 +1267,49 @@ void FReplicationSystem::ReplicateServerConnection(
             NewChannel.NetObjectId = NetId;
             NewChannel.ActorHandle = Actor->GetHandle();
             Impl->Channels.push_back(std::move(NewChannel));
+            Impl->ChannelIndex[MakeChannelKey(ConnectionId, NetId)] =
+                Impl->Channels.size() - 1;
             Channel = &Impl->Channels.back();
         }
         if (Channel->PendingReliableId != 0) continue;
-        const FReplicationSchema Schema =
-            FReplicationSchema::Build(Actor->GetClass());
-        SchemaPeakBytes = std::max(
-            SchemaPeakBytes, Schema.GetStorageBytes());
-        SchemaPeakReservedBytes = std::max(
-            SchemaPeakReservedBytes, Schema.GetReservedStorageBytes());
-        SchemaPeakFieldCount = std::max(
-            SchemaPeakFieldCount, Schema.GetFields().size());
+        const FReplicationSchema& Schema =
+            GetCachedSchema(*Impl, Actor->GetClass());
         if (Schema.GetClass() == nullptr) continue;
+        const uint64 ReplicationGeneration =
+            Actor->GetReplicationGeneration();
+        uint64 DirtyMask = 0;
+        bool bTransformDirty = false;
+        Actor->GetReplicationDirtyStateSince(
+            Channel->LastObservedGeneration,
+            DirtyMask, bTransformDirty);
+        const bool bValidateDirty =
+            Impl->DirtyMode == EReplicationDirtyMode::FullPollingValidation;
         if (Channel->State == EActorChannelState::PendingOpen)
         {
             if (QueueSpawn(*Channel, Actor, Schema, ObjectRegistry,
-                    QueueReliable, bIsOwner))
+                    QueueReliable, bIsOwner, ReplicationGeneration, Statistics))
                 ++Statistics.SpawnMessagesSent;
         }
-        else if (Channel->State == EActorChannelState::Open
-            && QueueDelta(*Channel, Actor, Schema, ObjectRegistry,
-                QueueReliable, bIsOwner))
+        else if (Channel->State == EActorChannelState::Open)
         {
-            ++Statistics.DeltaMessagesSent;
+            if (!bValidateDirty
+                && Channel->LastObservedGeneration == ReplicationGeneration)
+            {
+                ++Statistics.ActorsSkippedUnchanged;
+            }
+            else
+            {
+                ++Statistics.DirtyActors;
+                Statistics.DirtyProperties += static_cast<uint64>(
+                    std::popcount(DirtyMask));
+                if (QueueDelta(*Channel, Actor, Schema, ObjectRegistry,
+                        QueueReliable, bIsOwner, ReplicationGeneration,
+                        DirtyMask, bTransformDirty,
+                        bValidateDirty, Statistics))
+                {
+                    ++Statistics.DeltaMessagesSent;
+                }
+            }
         }
 
         if (Channel->State == EActorChannelState::Open
@@ -1182,13 +1356,12 @@ void FReplicationSystem::ReplicateServerConnection(
             && static_cast<PActor*>(Object)->GetIsReplicated()
             && !static_cast<PActor*>(Object)->IsPendingDestroy();
         if (!bStillReplicated
-            && QueueDestroy(Channel, QueueReliable))
+            && QueueDestroy(Channel, QueueReliable, Statistics))
         {
             ++Statistics.DestroyMessagesSent;
         }
     }
-    MemoryTracker.Report(EMemoryTag::ReplicationSchema,
-        SchemaPeakBytes, SchemaPeakReservedBytes, SchemaPeakFieldCount);
+    PublishMemoryStatistics();
 }
 
 bool FReplicationSystem::HandleReliableMessage(
@@ -1405,6 +1578,7 @@ bool FReplicationSystem::HandleMessage(
                 return Channel.ConnectionId == ConnectionId
                     && Channel.NetObjectId == NetId;
             });
+        RebuildChannelIndex(*Impl);
         std::erase_if(Impl->PendingReferences,
             [NetId](const FPendingReference& Pending)
             {
@@ -1415,7 +1589,7 @@ bool FReplicationSystem::HandleMessage(
     }
 
     PActor* Actor = nullptr;
-    FReplicationSchema Schema;
+    const FReplicationSchema* Schema = nullptr;
     std::vector<uint8> TransformData;
     std::vector<FFieldValue> Values;
     if (Type == EReplicationMessageType::Spawn)
@@ -1436,12 +1610,12 @@ bool FReplicationSystem::HandleMessage(
             || Reader.GetRemainingBytes() != 0) return Reject();
         const PClass* Class = FClassRegistry::FindClass(FName(ClassName));
         if (Class == nullptr || !Class->IsChildOf(PActor::StaticClass())) return Reject();
-        Schema = FReplicationSchema::Build(Class);
+        Schema = &GetCachedSchema(*Impl, Class);
         FTransform ValidatedTransform;
-        if (Schema.GetHash() != SchemaHash
+        if (Schema->GetHash() != SchemaHash
             || (!TransformData.empty()
                 && !DecodeTransform(TransformData, ValidatedTransform))
-            || !ValidateIncomingValues(Schema, Values, ObjectRegistry))
+            || !ValidateIncomingValues(*Schema, Values, ObjectRegistry))
             return Reject();
         std::size_t NewPendingReferences = 0;
         for (const FFieldValue& Value : Values)
@@ -1487,6 +1661,8 @@ bool FReplicationSystem::HandleMessage(
             Channel.ActorHandle = Actor->GetHandle();
             Channel.State = EActorChannelState::Open;
             Impl->Channels.push_back(std::move(Channel));
+            Impl->ChannelIndex[MakeChannelKey(ConnectionId, NetId)] =
+                Impl->Channels.size() - 1;
         }
     }
     else if (Type == EReplicationMessageType::Delta)
@@ -1505,12 +1681,12 @@ bool FReplicationSystem::HandleMessage(
             || Reader.GetRemainingBytes() != 0) return Reject();
         Actor = ObjectRegistry.ResolveActor(NetId);
         if (Actor == nullptr) return Reject();
-        Schema = FReplicationSchema::Build(Actor->GetClass());
+        Schema = &GetCachedSchema(*Impl, Actor->GetClass());
         FTransform ValidatedTransform;
-        if (Schema.GetHash() != SchemaHash
+        if (Schema->GetHash() != SchemaHash
             || (!TransformData.empty()
                 && !DecodeTransform(TransformData, ValidatedTransform))
-            || !ValidateIncomingValues(Schema, Values, ObjectRegistry))
+            || !ValidateIncomingValues(*Schema, Values, ObjectRegistry))
             return Reject();
         std::size_t NewPendingReferences = 0;
         for (const FFieldValue& Value : Values)
@@ -1543,7 +1719,7 @@ bool FReplicationSystem::HandleMessage(
     std::vector<const FReplicationFieldDescriptor*> RepNotifies;
     for (const FFieldValue& Value : Values)
     {
-        const FReplicationFieldDescriptor* Field = Schema.FindField(Value.FieldId);
+        const FReplicationFieldDescriptor* Field = Schema->FindField(Value.FieldId);
         if (Field == nullptr || Field->Property == nullptr
             || Field->Property->GetType() != Value.Type) return Reject();
         std::vector<uint8> Previous;
@@ -1749,10 +1925,12 @@ void FReplicationSystem::HandleReliableAcknowledged(
         if (!Channel->PendingTransform.empty())
             Channel->TransformBaseline = Channel->PendingTransform;
         Channel->State = EActorChannelState::Open;
+        Channel->LastObservedGeneration = Channel->PendingGeneration;
     }
     Channel->PendingReliableId = 0;
     Channel->PendingValues.clear();
     Channel->PendingTransform.clear();
+    Channel->PendingGeneration = 0;
 
     const FNetObjectId ClosedNetId = Channel->NetObjectId;
     std::erase_if(Impl->Channels,
@@ -1760,6 +1938,7 @@ void FReplicationSystem::HandleReliableAcknowledged(
         {
             return Candidate.State == EActorChannelState::Closed;
         });
+    RebuildChannelIndex(*Impl);
     const bool bStillHasChannel = std::any_of(
         Impl->Channels.begin(), Impl->Channels.end(),
         [ClosedNetId](const FImpl::FChannel& Candidate)
@@ -1788,6 +1967,7 @@ void FReplicationSystem::HandleConnectionClosed(
         {
             return Channel.ConnectionId == ConnectionId;
         });
+    RebuildChannelIndex(*Impl);
     std::erase_if(Impl->Ownership,
         [ConnectionId](const FImpl::FOwnership& Ownership)
         {
@@ -1862,6 +2042,15 @@ FReplicationSystem::GetChannelSnapshots() const
 FReplicationStatistics FReplicationSystem::GetStatistics() const
 {
     FReplicationStatistics Result = Statistics;
+    if (Impl != nullptr)
+    {
+        Result.SchemaCacheHits = Impl->SchemaCacheHits;
+        Result.SchemaCacheMisses = Impl->SchemaCacheMisses;
+        Result.ChannelIndexHits = Impl->ChannelIndexHits;
+        Result.ChannelIndexMisses = Impl->ChannelIndexMisses;
+    }
+    Result.NetObjectIndexHits = ObjectRegistry.GetIndexHits();
+    Result.NetObjectIndexMisses = ObjectRegistry.GetIndexMisses();
     Result.ChannelCount = Impl != nullptr ? Impl->Channels.size() : 0;
     Result.NetObjectCount = ObjectRegistry.Num();
     Result.UnresolvedReferenceCount =
@@ -1875,20 +2064,43 @@ void FReplicationSystem::PublishMemoryStatistics() const
     if (!Tracker.IsEnabled()) return;
     if (Impl == nullptr)
     {
+        Tracker.Report(EMemoryTag::ReplicationSchema, 0, 0, 0);
         Tracker.Report(EMemoryTag::ReplicationChannels, 0, 0, 0);
         return;
     }
+
+    std::size_t SchemaCurrentBytes = Impl->SchemaCache.size()
+        * sizeof(decltype(Impl->SchemaCache)::value_type);
+    std::size_t SchemaReservedBytes = SchemaCurrentBytes
+        + Impl->SchemaCache.bucket_count() * sizeof(void*);
+    std::size_t SchemaFieldCount = 0;
+    for (const auto& [Class, Schema] : Impl->SchemaCache)
+    {
+        (void)Class;
+        SchemaCurrentBytes += Schema.GetStorageBytes();
+        SchemaReservedBytes += Schema.GetReservedStorageBytes();
+        SchemaFieldCount += Schema.GetFields().size();
+    }
+    Tracker.Report(EMemoryTag::ReplicationSchema,
+        SchemaCurrentBytes, SchemaReservedBytes, SchemaFieldCount);
 
     std::size_t CurrentBytes = Impl->Channels.size()
         * sizeof(FImpl::FChannel)
         + Impl->PendingReferences.size() * sizeof(FPendingReference)
         + Impl->Ownership.size() * sizeof(FImpl::FOwnership)
-        + Impl->RpcFrameCounts.size() * sizeof(FImpl::FRpcFrameCount);
+        + Impl->RpcFrameCounts.size() * sizeof(FImpl::FRpcFrameCount)
+        + Impl->ChannelIndex.size()
+            * sizeof(decltype(Impl->ChannelIndex)::value_type)
+        + ObjectRegistry.GetStorageBytes();
     std::size_t ReservedBytes = Impl->Channels.capacity()
         * sizeof(FImpl::FChannel)
         + Impl->PendingReferences.capacity() * sizeof(FPendingReference)
         + Impl->Ownership.capacity() * sizeof(FImpl::FOwnership)
-        + Impl->RpcFrameCounts.capacity() * sizeof(FImpl::FRpcFrameCount);
+        + Impl->RpcFrameCounts.capacity() * sizeof(FImpl::FRpcFrameCount)
+        + Impl->ChannelIndex.size()
+            * sizeof(decltype(Impl->ChannelIndex)::value_type)
+        + Impl->ChannelIndex.bucket_count() * sizeof(void*)
+        + ObjectRegistry.GetReservedStorageBytes();
     for (const FImpl::FChannel& Channel : Impl->Channels)
     {
         CurrentBytes += Channel.Baseline.size() * sizeof(FFieldValue)

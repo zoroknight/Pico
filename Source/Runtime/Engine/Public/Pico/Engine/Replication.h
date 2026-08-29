@@ -10,6 +10,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace Pico
@@ -25,6 +26,12 @@ enum class EActorChannelState : uint8
     Open,
     PendingClose,
     Closed
+};
+
+enum class EReplicationDirtyMode : uint8
+{
+    PushModel,
+    FullPollingValidation
 };
 
 struct FReplicationFieldDescriptor
@@ -72,6 +79,10 @@ public:
     bool RemoveByNetId(FNetObjectId NetId);
     void Reset();
     std::size_t Num() const { return Entries.size(); }
+    uint64 GetIndexHits() const { return IndexHits; }
+    uint64 GetIndexMisses() const { return IndexMisses; }
+    std::size_t GetStorageBytes() const;
+    std::size_t GetReservedStorageBytes() const;
 
 private:
     struct FEntry
@@ -81,7 +92,11 @@ private:
     };
 
     std::vector<FEntry> Entries;
+    std::unordered_map<uint64, FNetObjectId> HandleIndex;
+    std::unordered_map<uint32, FObjectHandle> NetIdIndex;
     FNetObjectId NextAuthorityId {1};
+    mutable uint64 IndexHits = 0;
+    mutable uint64 IndexMisses = 0;
 };
 
 struct FActorChannelSnapshot
@@ -112,6 +127,24 @@ struct FReplicationStatistics
     uint64 CharacterCorrectionsReceived = 0;
     uint64 CharacterSnapshotsSent = 0;
     uint64 CharacterSnapshotsReceived = 0;
+    uint64 SchemaCacheHits = 0;
+    uint64 SchemaCacheMisses = 0;
+    uint64 ChannelIndexHits = 0;
+    uint64 ChannelIndexMisses = 0;
+    uint64 NetObjectIndexHits = 0;
+    uint64 NetObjectIndexMisses = 0;
+    uint64 ActorsConsidered = 0;
+    uint64 DirtyActors = 0;
+    uint64 ActorsSkippedUnchanged = 0;
+    uint64 DirtyProperties = 0;
+    uint64 DirtyValidationMisses = 0;
+    uint64 PropertiesCompared = 0;
+    uint64 PropertiesEncoded = 0;
+    uint64 BytesQueued = 0;
+    uint64 GatherNanoseconds = 0;
+    uint64 CompareNanoseconds = 0;
+    uint64 SerializeNanoseconds = 0;
+    uint64 QueueNanoseconds = 0;
     std::size_t ChannelCount = 0;
     std::size_t NetObjectCount = 0;
     std::size_t UnresolvedReferenceCount = 0;
@@ -132,6 +165,8 @@ public:
 
     void SetWorld(PWorld* InWorld);
     void BeginNetworkFrame();
+    void SetDirtyMode(EReplicationDirtyMode Mode);
+    EReplicationDirtyMode GetDirtyMode() const;
     void Reset();
     void ReplicateServerConnection(
         FNetConnectionId ConnectionId,

@@ -133,7 +133,25 @@ FAgentRunResult FAgentRuntime::Run(
         Request.RepairAttempt = Counters.RepairAttempts;
         ContextBytes += MeasureRequestContextBytes(Request);
         FActiveSpan ModelSpan = BeginSpan("Model.Generate", TurnSpan.Id);
-        FAgentProviderResponse Response = Provider.Generate(Request, CancellationToken);
+        FAgentProviderResponse Response;
+        const bool bInjectedProviderTimeout = ConsumeFailureInjection(
+            EAgentFailureInjectionPoint::ProviderTimeout);
+        if (bInjectedProviderTimeout)
+        {
+            Response.Error = "Injected provider timeout";
+            Response.FailureClass = EAgentFailureClass::Infrastructure;
+        }
+        else
+        {
+            Response = Provider.Generate(Request, CancellationToken);
+        }
+        if (!bInjectedProviderTimeout && ConsumeFailureInjection(
+                EAgentFailureInjectionPoint::ProviderInvalidJson))
+        {
+            Response = {};
+            Response.Error = "Injected invalid provider JSON";
+            Response.FailureClass = EAgentFailureClass::ModelProtocol;
+        }
         const bool bProviderCancelled = IsCancelled(CancellationToken)
             || Response.Error == "Cancelled";
         EndSpan(ModelSpan, Response.bSucceeded && !bProviderCancelled,
@@ -342,7 +360,25 @@ FAgentRunResult FAgentRuntime::Run(
                         ++Counters.ToolCalls;
                         if (bReadOnly) ++Counters.ReadOnlyToolCalls;
                         else ++Counters.MutationToolCalls;
+                        if (ConsumeFailureInjection(
+                                EAgentFailureInjectionPoint::CrashBeforeExecute))
+                        {
+                            EndSpan(ToolSpan, false,
+                                "Injected crash before tool execution");
+                            return Finish(EAgentStatus::Failed,
+                                "Injected crash before tool execution",
+                                EAgentFailureClass::Infrastructure);
+                        }
                         Result = ToolExecutor.Execute(Call, CancellationToken);
+                        if (ConsumeFailureInjection(
+                                EAgentFailureInjectionPoint::CrashAfterSideEffect))
+                        {
+                            EndSpan(ToolSpan, false,
+                                "Injected crash after tool side effect");
+                            return Finish(EAgentStatus::Failed,
+                                "Injected crash after tool side effect",
+                                EAgentFailureClass::Infrastructure);
+                        }
                         Result.CallId = Call.Id;
                         NormalizeAgentToolResult(Result);
                         if (Result.bSucceeded)
@@ -385,6 +421,15 @@ FAgentRunResult FAgentRuntime::Run(
                         "Could not persist Tool Result artifact: " + Error,
                         EAgentFailureClass::Infrastructure);
                 }
+                if (ConsumeFailureInjection(
+                        EAgentFailureInjectionPoint::CrashBeforePersist))
+                {
+                    EndSpan(ToolSpan, false,
+                        "Injected crash before Tool Result persistence");
+                    return Finish(EAgentStatus::Failed,
+                        "Injected crash before Tool Result persistence",
+                        EAgentFailureClass::Infrastructure);
+                }
                 ResultEvent.PayloadJson = Result.OutputJson;
                 ResultEvent.StructuredResultJson = SerializeAgentToolResult(Result);
                 ResultEvent.TraceJson = bSemanticCacheHit
@@ -395,7 +440,19 @@ FAgentRunResult FAgentRuntime::Run(
                 ResultEvent.bReused = Result.bReused;
                 ResultEvent.FailureClass = Result.FailureClass;
                 ResultEvent.RecoveryAction = Result.RecoveryAction;
-                if (!Session.Append(std::move(ResultEvent), &Error))
+                Error.clear();
+                if (ConsumeFailureInjection(
+                        EAgentFailureInjectionPoint::SessionAppendFailure))
+                {
+                    Error = "Injected session append failure";
+                }
+                else if (!Session.Append(std::move(ResultEvent), &Error))
+                {
+                    EndSpan(ToolSpan, false, Error);
+                    return Finish(EAgentStatus::Failed, std::move(Error),
+                        EAgentFailureClass::Infrastructure);
+                }
+                if (!Error.empty())
                 {
                     EndSpan(ToolSpan, false, Error);
                     return Finish(EAgentStatus::Failed, std::move(Error),
@@ -599,6 +656,17 @@ bool FAgentRuntime::CheckBudget(std::string& OutError) const
         OutError = "Agent elapsed-time budget exhausted";
         return false;
     }
+    return true;
+}
+
+bool FAgentRuntime::ConsumeFailureInjection(
+    EAgentFailureInjectionPoint Point)
+{
+    const auto It = std::find(
+        Context.FailureInjections.begin(),
+        Context.FailureInjections.end(), Point);
+    if (It == Context.FailureInjections.end()) return false;
+    Context.FailureInjections.erase(It);
     return true;
 }
 

@@ -70,7 +70,12 @@ class PBenchmarkActor final : public Pico::PActor
     PICO_DECLARE_CLASS(PBenchmarkActor, Pico::PActor)
 
 public:
-    void SetValue(Pico::int32 InValue) { Value = InValue; }
+    void SetValue(Pico::int32 InValue)
+    {
+        if (Value == InValue) return;
+        Value = InValue;
+        MarkReplicatedPropertyDirty(Pico::FName("Value"));
+    }
 
 protected:
     explicit PBenchmarkActor(const Pico::FObjectConstructionParams& Params)
@@ -113,6 +118,30 @@ struct FBenchmarkRecord
     std::string Parameters;
     std::vector<std::uint64_t> SamplesMicroseconds;
     std::vector<std::size_t> BytesPerFrame;
+    struct FRuntimeMetrics
+    {
+        std::uint64_t ActorsSkipped = 0;
+        std::uint64_t DirtyActors = 0;
+        std::uint64_t DirtyProperties = 0;
+        std::uint64_t EncodedProperties = 0;
+        std::uint64_t SchemaCacheHits = 0;
+        std::uint64_t SchemaCacheMisses = 0;
+        std::uint64_t ChannelIndexHits = 0;
+        std::uint64_t GatherNanoseconds = 0;
+        std::uint64_t CompareNanoseconds = 0;
+        std::uint64_t SerializeNanoseconds = 0;
+        std::uint64_t QueueNanoseconds = 0;
+        std::uint64_t GCRootScanNanoseconds = 0;
+        std::uint64_t GCMarkNanoseconds = 0;
+        std::uint64_t GCUnreachableSortNanoseconds = 0;
+        std::uint64_t GCDestroyNanoseconds = 0;
+        std::uint64_t GCStrongReferenceLayouts = 0;
+        std::uint64_t GCStrongReferenceProperties = 0;
+        std::uint64_t GCScratchPeakBytes = 0;
+        std::uint64_t GCScratchReservedBytes = 0;
+        std::uint64_t GCScratchGrowthCount = 0;
+    };
+    std::vector<FRuntimeMetrics> RuntimeMetrics;
 };
 
 std::uint64_t Percentile(
@@ -137,7 +166,8 @@ public:
         std::size_t Operations,
         std::uint64_t DurationMicroseconds,
         std::string Parameters = {},
-        std::size_t BytesPerFrame = 0)
+        std::size_t BytesPerFrame = 0,
+        FBenchmarkRecord::FRuntimeMetrics RuntimeMetrics = {})
     {
         auto Existing = std::find_if(Records.begin(), Records.end(),
             [&](const FBenchmarkRecord& Record)
@@ -150,11 +180,12 @@ public:
         {
             Records.push_back({std::move(Suite), std::move(Case), Scale,
                 Operations, std::move(Parameters), {DurationMicroseconds},
-                {BytesPerFrame}});
+                {BytesPerFrame}, {RuntimeMetrics}});
             return;
         }
         Existing->SamplesMicroseconds.push_back(DurationMicroseconds);
         Existing->BytesPerFrame.push_back(BytesPerFrame);
+        Existing->RuntimeMetrics.push_back(RuntimeMetrics);
     }
 
     bool Write(
@@ -175,7 +206,7 @@ public:
             std::ios::binary | std::ios::trunc);
         if (!Json || !Csv || !MemoryCsv) return false;
         FJson JsonRecords = FJson::array();
-        Csv << "format_version,preset,suite,case,scale,operations,samples,p50_us,p95_us,max_us,mean_us,ns_per_operation,bytes_per_frame,parameters\n";
+        Csv << "format_version,preset,suite,case,scale,operations,samples,p50_us,p95_us,max_us,mean_us,ns_per_operation,bytes_per_frame,actors_skipped,dirty_actors,dirty_properties,encoded_properties,schema_cache_hits,schema_cache_misses,channel_index_hits,gather_p50_ns,compare_p50_ns,serialize_p50_ns,queue_p50_ns,gc_root_scan_p50_ns,gc_mark_p50_ns,gc_unreachable_sort_p50_ns,gc_destroy_p50_ns,gc_strong_reference_layouts,gc_strong_reference_properties,gc_scratch_peak_bytes,gc_scratch_reserved_bytes,gc_scratch_growth_count,parameters\n";
         for (const FBenchmarkRecord& Record : Records)
         {
             const std::uint64_t P50 = Percentile(Record.SamplesMicroseconds, 0.50);
@@ -191,18 +222,92 @@ public:
             const std::size_t Bytes = Record.BytesPerFrame.empty() ? 0
                 : *std::max_element(Record.BytesPerFrame.begin(),
                     Record.BytesPerFrame.end());
+            const auto MetricValues = [&Record](auto Member)
+            {
+                std::vector<std::uint64_t> Values;
+                Values.reserve(Record.RuntimeMetrics.size());
+                for (const auto& Metrics : Record.RuntimeMetrics)
+                    Values.push_back(Metrics.*Member);
+                return Values;
+            };
+            const auto MetricP50 = [&](auto Member)
+            {
+                return Percentile(MetricValues(Member), 0.50);
+            };
+            const FJson RuntimeMetrics = {
+                {"actors_skipped", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::ActorsSkipped)},
+                {"dirty_actors", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::DirtyActors)},
+                {"dirty_properties", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::DirtyProperties)},
+                {"encoded_properties", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::EncodedProperties)},
+                {"schema_cache_hits", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::SchemaCacheHits)},
+                {"schema_cache_misses", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::SchemaCacheMisses)},
+                {"channel_index_hits", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::ChannelIndexHits)},
+                {"gather_p50_ns", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::GatherNanoseconds)},
+                {"compare_p50_ns", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::CompareNanoseconds)},
+                {"serialize_p50_ns", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::SerializeNanoseconds)},
+                {"queue_p50_ns", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::QueueNanoseconds)},
+                {"gc_root_scan_p50_ns", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::GCRootScanNanoseconds)},
+                {"gc_mark_p50_ns", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::GCMarkNanoseconds)},
+                {"gc_unreachable_sort_p50_ns", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::GCUnreachableSortNanoseconds)},
+                {"gc_destroy_p50_ns", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::GCDestroyNanoseconds)},
+                {"gc_strong_reference_layouts", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::GCStrongReferenceLayouts)},
+                {"gc_strong_reference_properties", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::GCStrongReferenceProperties)},
+                {"gc_scratch_peak_bytes", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::GCScratchPeakBytes)},
+                {"gc_scratch_reserved_bytes", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::GCScratchReservedBytes)},
+                {"gc_scratch_growth_count", MetricP50(
+                    &FBenchmarkRecord::FRuntimeMetrics::GCScratchGrowthCount)}};
             JsonRecords.push_back({{"suite", Record.Suite}, {"case", Record.Case},
                 {"scale", Record.Scale}, {"operations", Record.Operations},
                 {"sample_count", Record.SamplesMicroseconds.size()},
                 {"p50_us", P50}, {"p95_us", P95}, {"max_us", Max},
                 {"mean_us", Mean}, {"ns_per_operation", NanosecondsPerOperation},
-                {"bytes_per_frame", Bytes}, {"parameters", Record.Parameters}});
+                {"bytes_per_frame", Bytes}, {"parameters", Record.Parameters},
+                {"runtime_metrics", RuntimeMetrics}});
             Csv << "3," << (bFull ? "full" : "quick") << ','
                 << Record.Suite << ',' << Record.Case << ',' << Record.Scale
                 << ',' << Record.Operations << ',' << Record.SamplesMicroseconds.size()
                 << ',' << P50 << ',' << P95 << ',' << Max << ',' << Mean
                 << ',' << std::fixed << std::setprecision(3)
                 << NanosecondsPerOperation << ',' << Bytes << ','
+                << RuntimeMetrics["actors_skipped"] << ','
+                << RuntimeMetrics["dirty_actors"] << ','
+                << RuntimeMetrics["dirty_properties"] << ','
+                << RuntimeMetrics["encoded_properties"] << ','
+                << RuntimeMetrics["schema_cache_hits"] << ','
+                << RuntimeMetrics["schema_cache_misses"] << ','
+                << RuntimeMetrics["channel_index_hits"] << ','
+                << RuntimeMetrics["gather_p50_ns"] << ','
+                << RuntimeMetrics["compare_p50_ns"] << ','
+                << RuntimeMetrics["serialize_p50_ns"] << ','
+                << RuntimeMetrics["queue_p50_ns"] << ','
+                << RuntimeMetrics["gc_root_scan_p50_ns"] << ','
+                << RuntimeMetrics["gc_mark_p50_ns"] << ','
+                << RuntimeMetrics["gc_unreachable_sort_p50_ns"] << ','
+                << RuntimeMetrics["gc_destroy_p50_ns"] << ','
+                << RuntimeMetrics["gc_strong_reference_layouts"] << ','
+                << RuntimeMetrics["gc_strong_reference_properties"] << ','
+                << RuntimeMetrics["gc_scratch_peak_bytes"] << ','
+                << RuntimeMetrics["gc_scratch_reserved_bytes"] << ','
+                << RuntimeMetrics["gc_scratch_growth_count"] << ','
                 << Record.Parameters << '\n';
         }
         FJson ProfileScopes = FJson::array();
@@ -483,7 +588,19 @@ void RunGarbageCollectionBenchmark(
         "survival=" + std::to_string(SurvivalPercent)
             + ";density=" + std::to_string(ReferenceDensity)
             + ";outer_depth=" + std::to_string(OuterDepth)
-            + ";collected=" + std::to_string(Result.CollectedObjectCount));
+            + ";collected=" + std::to_string(Result.CollectedObjectCount),
+        0,
+        {.GCRootScanNanoseconds = Result.RootScanNanoseconds,
+            .GCMarkNanoseconds = Result.MarkNanoseconds,
+            .GCUnreachableSortNanoseconds =
+                Result.UnreachableSortNanoseconds,
+            .GCDestroyNanoseconds = Result.DestroyNanoseconds,
+            .GCStrongReferenceLayouts = Result.StrongReferenceLayoutCount,
+            .GCStrongReferenceProperties =
+                Result.StrongReferencePropertyVisitCount,
+            .GCScratchPeakBytes = Result.ScratchPeakBytes,
+            .GCScratchReservedBytes = Result.ScratchReservedBytes,
+            .GCScratchGrowthCount = Result.ScratchGrowthCount});
     for (std::size_t Index = 0; Index < SurvivorCount; ++Index)
         if (Pico::ResolveObject(Objects[Index]->GetHandle()) == Objects[Index])
             Pico::RemoveFromRoot(Objects[Index]);
@@ -535,6 +652,7 @@ void RunReplicationBenchmarks(
             BytesQueued += Payload.size();
             return true;
         };
+        Replication.BeginNetworkFrame();
         Replication.ReplicateServerConnection(Connection, Queue);
         Replication.PublishMemoryStatistics();
         for (const Pico::uint32 Id : ReliableIds)
@@ -550,13 +668,47 @@ void RunReplicationBenchmarks(
             for (std::size_t Index = 0; Index < DirtyCount; ++Index)
                 Actors[Index]->SetValue(static_cast<Pico::int32>(
                     DirtyPercent * 100000 + Index));
+            Replication.BeginNetworkFrame();
+            const Pico::FReplicationStatistics Before =
+                Replication.GetStatistics();
             const std::uint64_t Duration = MeasureMicroseconds([&]()
             {
                 Replication.ReplicateServerConnection(Connection, Queue);
             });
+            const Pico::FReplicationStatistics After =
+                Replication.GetStatistics();
             Replication.PublishMemoryStatistics();
+            const auto Delta = [](Pico::uint64 NewValue, Pico::uint64 OldValue)
+            {
+                return NewValue - OldValue;
+            };
+            FBenchmarkRecord::FRuntimeMetrics RuntimeMetrics;
+            RuntimeMetrics.ActorsSkipped = Delta(
+                After.ActorsSkippedUnchanged,
+                Before.ActorsSkippedUnchanged);
+            RuntimeMetrics.DirtyActors = Delta(
+                After.DirtyActors, Before.DirtyActors);
+            RuntimeMetrics.DirtyProperties = Delta(
+                After.DirtyProperties, Before.DirtyProperties);
+            RuntimeMetrics.EncodedProperties = Delta(
+                After.PropertiesEncoded, Before.PropertiesEncoded);
+            RuntimeMetrics.SchemaCacheHits = Delta(
+                After.SchemaCacheHits, Before.SchemaCacheHits);
+            RuntimeMetrics.SchemaCacheMisses = Delta(
+                After.SchemaCacheMisses, Before.SchemaCacheMisses);
+            RuntimeMetrics.ChannelIndexHits = Delta(
+                After.ChannelIndexHits, Before.ChannelIndexHits);
+            RuntimeMetrics.GatherNanoseconds = Delta(
+                After.GatherNanoseconds, Before.GatherNanoseconds);
+            RuntimeMetrics.CompareNanoseconds = Delta(
+                After.CompareNanoseconds, Before.CompareNanoseconds);
+            RuntimeMetrics.SerializeNanoseconds = Delta(
+                After.SerializeNanoseconds, Before.SerializeNanoseconds);
+            RuntimeMetrics.QueueNanoseconds = Delta(
+                After.QueueNanoseconds, Before.QueueNanoseconds);
             Report.Add("Replication", "DirtyScan", Scale, Scale, Duration,
-                "dirty_percent=" + std::to_string(DirtyPercent), BytesQueued);
+                "dirty_percent=" + std::to_string(DirtyPercent),
+                BytesQueued, RuntimeMetrics);
             for (const Pico::uint32 Id : ReliableIds)
                 Replication.HandleReliableAcknowledged(Connection, Id);
         }

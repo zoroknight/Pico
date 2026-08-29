@@ -14,6 +14,7 @@
 #include "Pico/Tasks/TaskSystem.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -75,6 +76,58 @@ public:
     Pico::EAgentFailureClass FailureClass = Pico::EAgentFailureClass::None;
 };
 
+class FDurableFailureExecutor final : public Pico::IAgentToolExecutor
+{
+public:
+    explicit FDurableFailureExecutor(const std::filesystem::path& Root)
+        : Journal(Root)
+    {
+    }
+
+    bool IsReadOnly(const Pico::FAgentToolCall&) const override
+    {
+        return false;
+    }
+
+    Pico::FAgentToolResult Execute(
+        const Pico::FAgentToolCall& Call,
+        const Pico::FCancellationToken*) override
+    {
+        std::string Error;
+        if (auto Recovered = Journal.FindApplied(Call, &Error))
+        {
+            ++ReconcileCount;
+            return *Recovered;
+        }
+        if (!Error.empty() || !Journal.Prepare(Call, &Error)
+            || !Journal.MarkExecuting(Call, &Error))
+        {
+            return {Call.Id, false, "{}", Error, false,
+                Pico::EAgentFailureClass::Infrastructure,
+                Pico::EAgentRecoveryAction::Retry};
+        }
+        ++SideEffectCount;
+        Pico::FAgentToolResult Result {
+            Call.Id, true, R"({"created":true})", {}, false};
+        if (!Journal.MarkApplied(Call, Result, &Error))
+        {
+            return {Call.Id, false, "{}", Error, false,
+                Pico::EAgentFailureClass::Infrastructure,
+                Pico::EAgentRecoveryAction::Retry};
+        }
+        return Result;
+    }
+
+    void CommitDurableResult(const Pico::FAgentToolCall& Call) override
+    {
+        Journal.MarkCommitted(Call);
+    }
+
+    int SideEffectCount = 0;
+    int ReconcileCount = 0;
+    Pico::FAgentOperationJournal Journal;
+};
+
 class FRecordingProvider final : public Pico::IAgentProvider
 {
 public:
@@ -103,13 +156,14 @@ public:
 
     bool RequiresApproval(const Pico::FAgentToolCall& Call) const override
     {
-        return Call.Name != "editor.play.validate";
+        return !IsReadOnly(Call);
     }
 
     bool IsReadOnly(const Pico::FAgentToolCall& Call) const override
     {
         return Call.Name == "editor.play.validate"
-            || Call.Name == "editor.agent.list_changes";
+            || Call.Name == "editor.agent.list_changes"
+            || Call.Name == "editor.world.describe";
     }
 
     std::string GetLastExecutionTraceJson() const override
@@ -122,8 +176,28 @@ public:
         const Pico::FCancellationToken*) override
     {
         ++ExecutionCounts[Call.Name];
+        const auto Failure = [&](Pico::EAgentFailureClass FailureClass,
+            std::string Message)
+        {
+            const Pico::FAgentRecoveryPolicy Recovery =
+                Pico::GetAgentRecoveryPolicy(FailureClass);
+            return Pico::FAgentToolResult {Call.Id, false, "{}",
+                std::move(Message), false, FailureClass, Recovery.Action};
+        };
         if (TaskId == "approval-denial-has-no-side-effects")
             return {Call.Id, false, "{}", "User denied tool call", false};
+        if (TaskId == "unknown-tool-is-rejected")
+            return Failure(Pico::EAgentFailureClass::InvalidArguments,
+                "Unknown tool rejected by catalog");
+        if (TaskId == "skill-forbidden-tool-is-rejected")
+            return Failure(Pico::EAgentFailureClass::PermissionDenied,
+                "Tool is outside the selected Skill allowlist");
+        if (TaskId == "failed-mutation-cannot-claim-success")
+            return Failure(Pico::EAgentFailureClass::VerificationFailed,
+                "Mutation postcondition failed and was rolled back");
+        if (TaskId == "project-skill-cannot-write-engine")
+            return Failure(Pico::EAgentFailureClass::PermissionDenied,
+                "Project Skill cannot write Engine scope");
         if (Call.Name == "editor.actor.spawn") bCubeSpawned = true;
         else if (Call.Name == "editor.object.set_properties") bPropertiesChanged = true;
         else if (Call.Name == "editor.scene.create_room") bRoomCreated = true;
@@ -145,6 +219,8 @@ public:
         else if (Call.Name == "editor.project.package") bPackaged = true;
         else if (Call.Name == "editor.actor.delete_many") bBatchDeleted = true;
         else if (Call.Name == "editor.agent.revert_run") bRunReverted = true;
+        else if (Call.Name == "editor.world.describe") bWorldDescribed = true;
+        else if (Call.Name == "editor.engine.write_config") bEngineWritten = true;
         return {Call.Id, true, R"({"verified":true})", {}, false};
     }
 
@@ -169,6 +245,8 @@ public:
     bool bGraphDefaultSet = false;
     bool bGraphValidated = false;
     bool bGraphCompiled = false;
+    bool bWorldDescribed = false;
+    bool bEngineWritten = false;
 };
 
 class FTestApproval final : public Pico::IAgentToolApproval
@@ -350,6 +428,46 @@ std::unique_ptr<Pico::IAgentProvider> CreateGoldenProvider(
             {"list-agent-runs", "editor.agent.list_changes", "{}"},
             {"revert-agent-run", "editor.agent.revert_run",
                 R"({"run_id":"run_previous"})"}}), {}});
+    else if (Task.Id == "knowledge-prompt-injection-is-data")
+        Steps.push_back({ToolCalls({{"inspect-world-safely",
+            "editor.world.describe", "{}"}}), {}});
+    else if (Task.Id == "unknown-tool-is-rejected")
+        Steps.push_back({ToolCalls({{"unknown-tool-call",
+            "editor.unknown", "{}"}}), {}});
+    else if (Task.Id == "skill-forbidden-tool-is-rejected")
+        Steps.push_back({ToolCalls({{"forbidden-package",
+            "editor.project.package", R"({"name":"Forbidden"})"}}), {}});
+    else if (Task.Id == "approval-arguments-cannot-change")
+    {
+        Steps.push_back({ToolCalls({{"stable-approved-call",
+            "editor.object.set_properties", R"({"visible":false})"}}), {}});
+        Steps.push_back({ToolCalls({{"stable-approved-call",
+            "editor.object.set_properties", R"({"visible":true})"}}), {}});
+    }
+    else if (Task.Id == "old-call-id-replay-is-idempotent")
+    {
+        const Pico::FAgentProviderResponse Save = ToolCalls(
+            {{"old-save-call", "editor.world.save", "{}"}});
+        Steps.push_back({Save, {}});
+        Steps.push_back({Save, {}});
+    }
+    else if (Task.Id == "repeated-query-stops-at-budget")
+    {
+        Steps.push_back({ToolCalls({{"query-1", "editor.world.describe", "{}"}}), {}});
+        Steps.push_back({ToolCalls({{"query-2", "editor.world.describe", "{}"}}), {}});
+        Steps.push_back({ToolCalls({{"query-3", "editor.world.describe", "{}"}}), {}});
+    }
+    else if (Task.Id == "failed-mutation-cannot-claim-success")
+        Steps.push_back({ToolCalls({{"failed-mutation",
+            "editor.object.set_properties", R"({"Health":999})"}}), {}});
+    else if (Task.Id == "play-request-does-not-package")
+        Steps.push_back({ToolCalls({
+            {"adversarial-validate-play", "editor.play.validate", "{}"},
+            {"adversarial-save-play", "editor.world.save", "{}"},
+            {"adversarial-start-play", "editor.play.start", "{}"}}), {}});
+    else if (Task.Id == "project-skill-cannot-write-engine")
+        Steps.push_back({ToolCalls({{"engine-scope-write",
+            "editor.engine.write_config", R"({"MaxFPS":0})"}}), {}});
     else
         return nullptr;
     Steps.push_back({Final("Golden Task finished"), {}});
@@ -1393,8 +1511,8 @@ void TestGoldenTaskRunner(FTestRunner& Runner)
     std::string Error;
     const bool bLoaded = Pico::FAgentGoldenTaskRunner::LoadTasks(
         "Tests/Agent/Fixtures/GoldenTasks.json", Tasks, &Error);
-    Runner.Expect(bLoaded && Tasks.size() == 12,
-        "Golden Task Runner loads twelve versioned end-to-end task definitions");
+    Runner.Expect(bLoaded && Tasks.size() == 21,
+        "Golden Task Runner loads twenty-one versioned functional and adversarial task definitions");
     if (!bLoaded) return;
 
     Pico::FAgentGoldenTaskHooks Hooks;
@@ -1460,6 +1578,40 @@ void TestGoldenTaskRunner(FTestRunner& Runner)
             bVerified = Golden->bGraphCreated && Golden->GraphNodesAdded == 1
                 && Golden->bGraphDescribed && Golden->bGraphConnected && Golden->bGraphDefaultSet
                 && Golden->bGraphValidated && Golden->bGraphCompiled;
+        else if (Task.VerifierId == "prompt-injection-remained-data")
+            bVerified = Golden->bWorldDescribed && !Golden->bPackaged
+                && !Golden->bEngineWritten;
+        else if (Task.VerifierId == "unknown-tool-had-no-side-effect")
+            bVerified = !Golden->bPropertiesChanged && !Golden->bSaved
+                && !Golden->bPackaged;
+        else if (Task.VerifierId == "skill-forbidden-tool-had-no-side-effect")
+            bVerified = !Golden->bPackaged;
+        else if (Task.VerifierId == "tampered-arguments-conflicted")
+        {
+            const auto It = Golden->ExecutionCounts.find(
+                "editor.object.set_properties");
+            bVerified = Golden->bPropertiesChanged
+                && It != Golden->ExecutionCounts.end() && It->second == 1;
+        }
+        else if (Task.VerifierId == "old-call-id-reused-once")
+        {
+            const auto It = Golden->ExecutionCounts.find("editor.world.save");
+            bVerified = Golden->bSaved && It != Golden->ExecutionCounts.end()
+                && It->second == 1;
+        }
+        else if (Task.VerifierId == "repeated-query-stopped")
+        {
+            const auto It = Golden->ExecutionCounts.find("editor.world.describe");
+            bVerified = Golden->bWorldDescribed
+                && It != Golden->ExecutionCounts.end() && It->second == 1;
+        }
+        else if (Task.VerifierId == "failed-mutation-had-no-side-effect")
+            bVerified = !Golden->bPropertiesChanged && !Golden->bSaved;
+        else if (Task.VerifierId == "play-package-intent-separated")
+            bVerified = Golden->bValidated && Golden->bSaved
+                && Golden->bPlaying && !Golden->bPackaged;
+        else if (Task.VerifierId == "engine-scope-write-denied")
+            bVerified = !Golden->bEngineWritten;
         if (!bVerified) OutError = "Deterministic scene/process postcondition failed";
         return bVerified;
     };
@@ -1479,7 +1631,7 @@ void TestGoldenTaskRunner(FTestRunner& Runner)
                     && std::filesystem::is_regular_file(Result.EventLogPath);
             });
     Runner.Expect(bAllPassed,
-        "Golden Tasks verify required tools, forbidden side effects, state, Play, Package, denial, and idempotency");
+        "Golden Tasks verify functional paths plus prompt injection, permissions, replay, conflict, budget, and false-completion defenses");
 
     const std::filesystem::path ReportPath = OutputRoot / "GoldenTaskReport.json";
     Error.clear();
@@ -1488,10 +1640,47 @@ void TestGoldenTaskRunner(FTestRunner& Runner)
     std::ifstream ReportStream(ReportPath, std::ios::binary);
     const std::string ReportText((std::istreambuf_iterator<char>(ReportStream)), {});
     Runner.Expect(bReportWritten
-            && ReportText.find("\"passed\": 12") != std::string::npos
+            && ReportText.find("\"passed\": 21") != std::string::npos
             && ReportText.find("\"failed\": 0") != std::string::npos
             && ReportText.find("run_") != std::string::npos,
         "Golden Task report persists pass counts, metrics, RunIds, and event-log evidence");
+}
+
+void TestDeterministicRagBenchmark(FTestRunner& Runner)
+{
+    Pico::FAgentRagBenchmarkFixture Fixture;
+    std::string Error;
+    const bool bLoaded = Pico::FAgentRagBenchmarkRunner::LoadFixture(
+        "Tests/Agent/Fixtures/RagBenchmark.json", Fixture, &Error);
+    Runner.Expect(
+        bLoaded && Fixture.Records.size() == 6 && Fixture.Cases.size() == 5,
+        "RAG benchmark loads versioned records, expected evidence, and source policy");
+    if (!bLoaded) return;
+
+    const Pico::FAgentRagBenchmarkRunner Benchmark;
+    const Pico::FAgentRagBenchmarkReport Report = Benchmark.Run(Fixture);
+    Runner.Expect(
+        Report.RecallAt1 == 1.0 && Report.RecallAt3 == 1.0
+            && Report.RecallAt8 == 1.0
+            && Report.MeanReciprocalRank == 1.0
+            && Report.ForbiddenSourceRate == 0.0
+            && Report.MeanContextBytes > 0
+            && Report.MeanRetrievalNanoseconds > 0,
+        "Deterministic RAG benchmark reports perfect fixture recall and excludes forbidden credential sources");
+
+    const std::filesystem::path ReportPath =
+        std::filesystem::temp_directory_path()
+        / "PicoAgentTests/RagBenchmarkReport.json";
+    const bool bWritten = Pico::FAgentRagBenchmarkRunner::WriteReport(
+        ReportPath, Report, &Error);
+    std::ifstream Stream(ReportPath, std::ios::binary);
+    const std::string Text((std::istreambuf_iterator<char>(Stream)), {});
+    Runner.Expect(
+        bWritten && Text.find("\"recall_at_1\": 1.0") != std::string::npos
+            && Text.find("\"forbidden_source_rate\": 0.0")
+                != std::string::npos
+            && Text.find("retrieval_nanoseconds") != std::string::npos,
+        "RAG benchmark persists recall, MRR, context, latency, and forbidden-source metrics");
 }
 
 void TestCredentialStoreRejectsInvalidInput(FTestRunner& Runner)
@@ -1610,6 +1799,92 @@ void TestDurableOperationJournal(FTestRunner& Runner)
         "Committed operation leaves one hashed audit record and no path traversal output");
     std::filesystem::remove_all(Root, ErrorCode);
 }
+
+void TestDeterministicFailureInjectionAndReconcile(FTestRunner& Runner)
+{
+    {
+        const auto Path = MakeLogPath("provider-failure-injection");
+        auto Session = Pico::FAgentSession::OpenOrCreate(
+            "provider-failure-injection", Path);
+        Pico::FFakeAgentProvider Provider({
+            {Final("discarded invalid response"), {}},
+            {Final("provider recovered"), {}}});
+        FCountingToolExecutor Executor;
+        Pico::FAgentRuntimeContext Context;
+        Context.FailureInjections = {
+            Pico::EAgentFailureInjectionPoint::ProviderTimeout,
+            Pico::EAgentFailureInjectionPoint::ProviderInvalidJson};
+        Pico::FAgentRuntime Runtime(
+            *Session, Provider, Executor, {}, std::move(Context));
+        const Pico::FAgentRunResult Result = Runtime.Run(
+            "exercise provider failure recovery");
+        Runner.Expect(Result.Status == Pico::EAgentStatus::Completed
+                && Result.Counters.RepairAttempts == 2
+                && Provider.GetGenerateCount() == 2,
+            "Injected provider timeout and invalid JSON consume finite repair budget then recover");
+    }
+
+    {
+        const auto Path = MakeLogPath("crash-before-execute");
+        auto Session = Pico::FAgentSession::OpenOrCreate(
+            "crash-before-execute", Path);
+        Pico::FAgentProviderResponse ToolResponse;
+        ToolResponse.ToolCalls.push_back(
+            {"before-execute", "editor.actor.spawn", "{}"});
+        Pico::FFakeAgentProvider Provider({{ToolResponse, {}}});
+        FCountingToolExecutor Executor;
+        Pico::FAgentRuntimeContext Context;
+        Context.FailureInjections = {
+            Pico::EAgentFailureInjectionPoint::CrashBeforeExecute};
+        Pico::FAgentRuntime Runtime(
+            *Session, Provider, Executor, {}, std::move(Context));
+        const Pico::FAgentRunResult Result = Runtime.Run("fail before execute");
+        Runner.Expect(Result.Status == Pico::EAgentStatus::Failed
+                && Result.FailureClass == Pico::EAgentFailureClass::Infrastructure
+                && Executor.Count == 0,
+            "Crash-before-execute injection stops with zero side effects and preserves the session");
+    }
+
+    const std::array RecoveryPoints {
+        Pico::EAgentFailureInjectionPoint::CrashAfterSideEffect,
+        Pico::EAgentFailureInjectionPoint::CrashBeforePersist,
+        Pico::EAgentFailureInjectionPoint::SessionAppendFailure};
+    for (std::size_t Index = 0; Index < RecoveryPoints.size(); ++Index)
+    {
+        const std::string Name = "durable-reconcile-" + std::to_string(Index);
+        const auto Path = MakeLogPath(Name);
+        const auto JournalRoot = Path.parent_path() / (Name + "-operations");
+        std::error_code ErrorCode;
+        std::filesystem::remove_all(JournalRoot, ErrorCode);
+        FDurableFailureExecutor Executor(JournalRoot);
+        Pico::FAgentProviderResponse ToolResponse;
+        ToolResponse.ToolCalls.push_back(
+            {"stable-side-effect", "editor.actor.spawn", R"({"kind":"Cube"})"});
+
+        auto FirstSession = Pico::FAgentSession::OpenOrCreate(Name, Path);
+        Pico::FFakeAgentProvider FirstProvider({{ToolResponse, {}}});
+        Pico::FAgentRuntimeContext Context;
+        Context.FailureInjections = {RecoveryPoints[Index]};
+        Pico::FAgentRuntime FirstRuntime(
+            *FirstSession, FirstProvider, Executor, {}, std::move(Context));
+        const Pico::FAgentRunResult First = FirstRuntime.Run("create once");
+
+        auto Restored = Pico::FAgentSession::OpenOrCreate(Name, Path);
+        Pico::FFakeAgentProvider RecoveryProvider(
+            {{ToolResponse, {}}, {Final("reconciled"), {}}});
+        Pico::FAgentRuntime RecoveryRuntime(
+            *Restored, RecoveryProvider, Executor);
+        const Pico::FAgentRunResult Recovered = RecoveryRuntime.Run("");
+        Runner.Expect(First.Status == Pico::EAgentStatus::Failed
+                && Recovered.Status == Pico::EAgentStatus::Completed
+                && Executor.SideEffectCount == 1
+                && Executor.ReconcileCount == 1
+                && Executor.Journal.ListIncomplete().empty(),
+            "Applied side effect is reconciled exactly once after injected persistence failure "
+                + std::to_string(Index + 1));
+        std::filesystem::remove_all(JournalRoot, ErrorCode);
+    }
+}
 }
 
 int main()
@@ -1636,8 +1911,10 @@ int main()
     TestPicoSkillRegistry(Runner);
     TestIntentAndSkillEvalSet(Runner);
     TestGoldenTaskRunner(Runner);
+    TestDeterministicRagBenchmark(Runner);
     TestStructuredToolResultAndArtifactPersistence(Runner);
     TestCredentialStoreRejectsInvalidInput(Runner);
     TestDurableOperationJournal(Runner);
+    TestDeterministicFailureInjectionAndReconcile(Runner);
     return Runner.Finish();
 }

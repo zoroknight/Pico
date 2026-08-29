@@ -135,6 +135,49 @@ void TestCollectionRequests(FTestRunner& Runner)
             && !Pico::CollectGarbageIfRequested(),
         "a successful collection consumes pending requests exactly once");
 }
+
+void TestCachedReferenceLayoutAndScratchReuse(FTestRunner& Runner)
+{
+    const auto StrongProperties =
+        PGCNode::StaticClass()->GetStrongReferenceProperties();
+    Runner.Expect(
+        StrongProperties.size() == 1
+            && StrongProperties.front()->GetName() == Pico::FName("Strong"),
+        "PClass caches the inherited strong-reference property layout once");
+
+    PGCNode* Root = Pico::NewObject<PGCNode>(nullptr, "GCScratchRoot");
+    Pico::AddToRoot(Root);
+    for (int Index = 0; Index < 256; ++Index)
+    {
+        Root->AddNativeStrong(Pico::NewObject<PGCNode>(
+            nullptr, "GCScratchNode_" + std::to_string(Index)));
+    }
+
+    const Pico::FGarbageCollectionResult First = Pico::CollectGarbage();
+    const Pico::FGarbageCollectionResult Second = Pico::CollectGarbage();
+    Runner.Expect(
+        First.bSucceeded && Second.bSucceeded
+            && First.CollectedObjectCount == 0
+            && Second.CollectedObjectCount == 0
+            && Second.StrongReferenceLayoutCount >= 257
+            && Second.StrongReferencePropertyVisitCount >= 257,
+        "GC mark uses the cached reference layout without changing reachability");
+    Runner.Expect(
+        First.ScratchReservedBytes == Second.ScratchReservedBytes
+            && First.ScratchGrowthCount == Second.ScratchGrowthCount
+            && Second.ScratchPeakBytes <= Second.ScratchReservedBytes,
+        "Repeated equivalent GC reuses Mark, WorkStack, reference, and unreachable scratch capacity");
+    Runner.Expect(
+        Second.RootScanNanoseconds + Second.MarkNanoseconds
+            + Second.UnreachableSortNanoseconds
+            + Second.DestroyNanoseconds > 0,
+        "GC result separates RootScan, Mark, UnreachableSort, and Destroy timing");
+
+    Pico::RemoveFromRoot(Root);
+    Runner.Expect(
+        Pico::CollectGarbage().CollectedObjectCount == 257,
+        "GC scratch reuse fixture is fully collected after its root is removed");
+}
 }
 
 int main()
@@ -154,6 +197,7 @@ int main()
         TestCollectionGuard(Runner);
         TestWorldGraph(Runner);
         TestCollectionRequests(Runner);
+        TestCachedReferenceLayoutAndScratchReuse(Runner);
         std::string NameIndexError;
         Runner.Expect(Pico::FObjectRegistry::ValidateNameIndex(&NameIndexError),
             "GC mark/sweep leaves the object name index consistent");

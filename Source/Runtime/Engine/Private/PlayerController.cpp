@@ -71,7 +71,9 @@ bool PPlayerController::SetPlayerState(PPlayerState* InPlayerState)
     {
         return false;
     }
+    if (PlayerState.Get() == InPlayerState) return true;
     PlayerState = InPlayerState;
+    MarkReplicatedPropertyDirty(FName("PlayerState"));
     return true;
 }
 

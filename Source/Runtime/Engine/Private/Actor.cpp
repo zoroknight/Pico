@@ -6,6 +6,7 @@
 #include "Pico/Engine/World.h"
 #include "Pico/Object/Class.h"
 #include "Pico/Object/ObjectGlobals.h"
+#include "Pico/Object/Property.h"
 #include "Pico/Object/ReferenceCollector.h"
 
 #include <algorithm>
@@ -60,7 +61,9 @@ bool PActor::GetIsReplicated() const
 
 void PActor::SetReplicates(bool bInReplicates)
 {
+    if (bReplicates == bInReplicates) return;
     bReplicates = bInReplicates;
+    if (bReplicates) MarkReplicationDirty();
 }
 
 FNetObjectId PActor::GetNetObjectId() const
@@ -72,6 +75,114 @@ ENetRole PActor::GetLocalRole() const { return LocalRole; }
 ENetRole PActor::GetRemoteRole() const { return RemoteRole; }
 bool PActor::IsOnlyRelevantToOwner() const { return bOnlyRelevantToOwner; }
 void PActor::SetOnlyRelevantToOwner(bool bValue) { bOnlyRelevantToOwner = bValue; }
+
+uint64 PActor::GetReplicationGeneration() const
+{
+    return ReplicationGeneration;
+}
+
+uint64 PActor::GetReplicationDirtyMask() const
+{
+    return ReplicationDirtyMask;
+}
+
+void PActor::MarkReplicationDirty()
+{
+    RecordReplicationDirty(~uint64 {0}, true);
+}
+
+bool PActor::MarkReplicatedPropertyDirty(FName PropertyName)
+{
+    if (PropertyName.IsNone() || GetClass() == nullptr) return false;
+    std::vector<const PClass*> Hierarchy;
+    for (const PClass* Current = GetClass(); Current != nullptr;
+        Current = Current->GetSuperClass())
+    {
+        Hierarchy.push_back(Current);
+    }
+    std::reverse(Hierarchy.begin(), Hierarchy.end());
+
+    uint16 FieldIndex = 0;
+    for (const PClass* Current : Hierarchy)
+    {
+        for (const PProperty& Property : Current->GetProperties())
+        {
+            if (!Property.HasAnyFlags(EPropertyFlags::Replicated)
+                || Property.GetType() == EPropertyType::DynamicMulticastDelegate)
+            {
+                continue;
+            }
+            if (FieldIndex >= 64) return false;
+            if (Property.GetName() == PropertyName)
+            {
+                RecordReplicationDirty(
+                    uint64 {1} << FieldIndex, false);
+                return true;
+            }
+            ++FieldIndex;
+        }
+    }
+    return false;
+}
+
+void PActor::GetReplicationDirtyStateSince(
+    uint64 LastObservedGeneration,
+    uint64& OutDirtyMask,
+    bool& OutTransformDirty) const
+{
+    OutDirtyMask = 0;
+    OutTransformDirty = false;
+    if (LastObservedGeneration == ReplicationGeneration) return;
+    if (LastObservedGeneration > ReplicationGeneration
+        || ReplicationGeneration - LastObservedGeneration
+            > ReplicationDirtyHistorySize)
+    {
+        OutDirtyMask = ~uint64 {0};
+        OutTransformDirty = true;
+        return;
+    }
+
+    std::size_t FoundCount = 0;
+    for (const FReplicationDirtyRecord& Record : ReplicationDirtyHistory)
+    {
+        if (Record.Generation > LastObservedGeneration
+            && Record.Generation <= ReplicationGeneration)
+        {
+            OutDirtyMask |= Record.DirtyMask;
+            OutTransformDirty |= Record.bTransformDirty;
+            ++FoundCount;
+        }
+    }
+    if (FoundCount != ReplicationGeneration - LastObservedGeneration)
+    {
+        OutDirtyMask = ~uint64 {0};
+        OutTransformDirty = true;
+    }
+}
+
+void PActor::RecordReplicationDirty(uint64 DirtyMask, bool bTransformDirty)
+{
+    if (++ReplicationGeneration == 0)
+    {
+        ReplicationGeneration = 1;
+        ReplicationDirtyHistory = {};
+        ReplicationDirtyHistoryWriteIndex = 0;
+    }
+    ReplicationDirtyMask = DirtyMask;
+    bReplicationTransformDirty = bTransformDirty;
+    ReplicationDirtyHistory[ReplicationDirtyHistoryWriteIndex] = {
+        ReplicationGeneration, DirtyMask, bTransformDirty};
+    ReplicationDirtyHistoryWriteIndex =
+        (ReplicationDirtyHistoryWriteIndex + 1)
+        % ReplicationDirtyHistorySize;
+}
+
+void PActor::PostEditChangeProperty(const FPropertyChangedEvent& Event)
+{
+    PObject::PostEditChangeProperty(Event);
+    if (Event.Property != nullptr)
+        MarkReplicatedPropertyDirty(Event.Property->GetName());
+}
 
 bool PActor::HasBegunPlay() const
 {
@@ -340,6 +451,7 @@ bool PActor::SetActorTransform(const FTransform& Transform)
     }
 
     RootComponent->SetWorldTransform(Transform);
+    RecordReplicationDirty(0, true);
     return true;
 }
 

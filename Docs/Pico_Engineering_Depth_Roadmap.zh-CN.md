@@ -363,10 +363,21 @@ Benchmark v3 输出 `memory_categories` 与 `PicoRuntimeMemory.csv`，Debug/Rele
 Bounded Trace 的必要性。实现、口径和原始数据见
 [第 5 周 Memory Observability Gate](EngineeringDepthWeek05_MemoryObservabilityGate.zh-CN.md)。
 
+Replication Scaling 验收状态：已完成。Schema、Channel 与 NetObject 查询已建立缓存或索引；Actor 使用
+ReplicationGeneration、Property Dirty Mask 和每连接 LastObservedGeneration 跳过未变化属性。固定 8 条 Dirty
+历史保证进度不同的多个连接不会互相消费状态，历史不足时保守退回全量字段。Release Full、5 样本、1K Actor
+下，1%/10%/100% Dirty 的 P50 为 `144/179/846 us`，相对单样本前置门约提升 `7.2x/5.9x/1.6x`。
+完整实现、内存代价和原始报告见
+[第 5 周 Replication Scaling 与 Agent 故障注入](EngineeringDepthWeek05_ReplicationScalingAndFailureInjection.zh-CN.md)。
+
 ### Agent
 
 实现可控 Failure Injection：Provider Timeout/Invalid JSON、Crash Before Execute、Crash After Side Effect、
 Crash Before Persist、Duplicate ToolCall、Approval Rejection、Verification Failure 和 Session Append Failure。
+
+验收状态：已完成。Runtime 可一次性注入 Provider、执行与持久化边界故障；使用真实 Operation Journal 的重启
+测试证明 Crash After Side Effect、Crash Before Persist 和 Session Append Failure 均通过 Reconcile 恢复，
+副作用执行次数保持为 1。
 
 ### 周末验收
 
@@ -378,6 +389,13 @@ Crash Before Persist、Duplicate ToolCall、Approval Rejection、Verification Fa
 - 不可恢复错误停止并保留 Journal、Trace 和现场。
 
 ## 第 6 周：GC 深化与对抗评测
+
+验收状态：已完成。`PClass` 在 Metadata Finalize 时缓存继承后的强引用属性布局，GC 复用 Mark、WorkStack、
+Unreachable 和 ReferenceCollector Scratch，并分别报告 RootScan/Mark/UnreachableSort/Destroy。Release Full
+数据显示优化主要作用于 Mark-heavy 场景：10K、90% 存活、密度 8 的 P50 从 `2432 us` 降至 `812 us`；
+Destroy-heavy Case 收益较小，已如实保留。Agent Golden Tasks 从 12 扩至 21，确定性 RAG Benchmark 的
+5 个 Case 达到 Recall@1/3/8 与 MRR `1.0`、ForbiddenSourceRate `0.0`，因此当前继续延期 Embedding。
+详见[第 6 周 GC 深化与 Agent 对抗评测](EngineeringDepthWeek06_GcAndAdversarialEvaluation.zh-CN.md)。
 
 ### Runtime
 

@@ -46,12 +46,15 @@ Pico::int32 PSandboxReplicationLabActor::GetRepNotifyCount() const
 
 void PSandboxReplicationLabActor::SetAuthoritySpawnMarker(Pico::int32 Marker)
 {
+    if (InitialSpawnMarker == Marker) return;
     InitialSpawnMarker = Marker;
+    MarkReplicatedPropertyDirty(Pico::FName("InitialSpawnMarker"));
 }
 
 void PSandboxReplicationLabActor::AdvanceRevision()
 {
     ++LabRevision;
+    MarkReplicatedPropertyDirty(Pico::FName("LabRevision"));
     ApplyVisualState();
 }
 
@@ -65,8 +68,10 @@ bool PSandboxReplicationLabActor::ToggleDoor()
 {
     if (GetLocalRole() != Pico::ENetRole::Authority) return false;
     bDoorOpen = !bDoorOpen;
+    MarkReplicatedPropertyDirty(Pico::FName("bDoorOpen"));
     ++DoorUseCount;
     ++LabRevision;
+    MarkReplicatedPropertyDirty(Pico::FName("LabRevision"));
     SetActorLocation({180.0f, bDoorOpen ? 220.0f : 0.0f, 130.0f});
     ApplyVisualState();
     return true;

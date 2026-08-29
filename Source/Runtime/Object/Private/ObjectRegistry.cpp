@@ -11,6 +11,7 @@
 #include "Pico/Object/ReferenceCollector.h"
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <numeric>
 #include <unordered_map>
@@ -26,6 +27,61 @@ struct FObjectSlot
     FObjectPtr Object;
     uint32 Serial = 0;
 };
+
+struct FUnreachableObject
+{
+    FObjectHandle Handle;
+    std::size_t OuterDepth = 0;
+};
+
+struct FGarbageCollectionScratch
+{
+    std::vector<bool> Marked;
+    std::vector<FObjectHandle> WorkStack;
+    std::vector<FUnreachableObject> Unreachable;
+    FReferenceCollector References;
+    std::uint64_t GrowthCount = 0;
+
+    void Begin(std::size_t SlotCount)
+    {
+        const std::size_t MarkedCapacity = Marked.capacity();
+        Marked.assign(SlotCount, false);
+        if (Marked.capacity() > MarkedCapacity) ++GrowthCount;
+        WorkStack.clear();
+        Unreachable.clear();
+        References.Reset();
+    }
+
+    std::size_t GetReservedBytes() const
+    {
+        return (Marked.capacity() + 7) / 8
+            + WorkStack.capacity() * sizeof(FObjectHandle)
+            + Unreachable.capacity() * sizeof(FUnreachableObject)
+            + References.GetReservedBytes();
+    }
+
+    void End()
+    {
+        Marked.clear();
+        WorkStack.clear();
+        Unreachable.clear();
+        References.Reset();
+    }
+};
+
+FGarbageCollectionScratch& GetGarbageCollectionScratch()
+{
+    static FGarbageCollectionScratch Scratch;
+    return Scratch;
+}
+
+std::uint64_t ElapsedNanoseconds(
+    std::chrono::steady_clock::time_point StartedAt)
+{
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<
+        std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - StartedAt).count());
+}
 
 struct FObjectNameKey
 {
@@ -713,138 +769,151 @@ FGarbageCollectionResult FObjectRegistry::CollectGarbage()
     IsCollectingGarbage() = true;
     const auto ResetCollecting = MakeScopeExit([]() { IsCollectingGarbage() = false; });
     FMemoryTracker& MemoryTracker = FMemoryTracker::Get();
-    const auto ResetScratchMemory = MakeScopeExit([&MemoryTracker]()
-    {
-        MemoryTracker.Report(EMemoryTag::GCScratch, 0, 0, 0);
-    });
-    FProfileScopeToken MarkScope = FProfiler::Get().BeginScope("GC.Mark");
     std::vector<FObjectSlot>& Slots = GetObjectSlots();
-    std::vector<bool> Marked(Slots.size(), false);
-    std::vector<FObjectHandle> WorkStack;
-    std::size_t WorkStackPeakSize = 0;
-    std::size_t ReferencePeakBytes = 0;
+    FGarbageCollectionScratch& Scratch = GetGarbageCollectionScratch();
+    const std::size_t WorkStackCapacityBefore = Scratch.WorkStack.capacity();
+    const std::size_t UnreachableCapacityBefore = Scratch.Unreachable.capacity();
+    const std::size_t ReferenceCapacityBefore = Scratch.References.GetReservedBytes();
+    Scratch.Begin(Slots.size());
+    std::size_t ScratchPeakBytes = (Scratch.Marked.size() + 7) / 8;
 
-    for (const FObjectSlot& Slot : Slots)
     {
-        if (Slot.Object != nullptr
-            && HasAnyFlags(Slot.Object->GetFlags(), EObjectFlags::RootSet))
+        PICO_PROFILE_SCOPE("GC.RootScan");
+        const auto StartedAt = std::chrono::steady_clock::now();
+        for (const FObjectSlot& Slot : Slots)
         {
-            WorkStack.push_back(Slot.Object->GetHandle());
-            WorkStackPeakSize = std::max(WorkStackPeakSize, WorkStack.size());
-            ++Result.RootCount;
+            if (Slot.Object != nullptr
+                && HasAnyFlags(Slot.Object->GetFlags(), EObjectFlags::RootSet))
+            {
+                Scratch.WorkStack.push_back(Slot.Object->GetHandle());
+                ++Result.RootCount;
+            }
         }
+        Result.RootScanNanoseconds = ElapsedNanoseconds(StartedAt);
     }
 
-    while (!WorkStack.empty())
     {
-        const FObjectHandle Handle = WorkStack.back();
-        WorkStack.pop_back();
-        PObject* Object = ResolveObject(Handle);
-        if (Object == nullptr || Marked[Handle.Index])
+        PICO_PROFILE_SCOPE("GC.Mark");
+        const auto StartedAt = std::chrono::steady_clock::now();
+        while (!Scratch.WorkStack.empty())
         {
-            continue;
-        }
-
-        Marked[Handle.Index] = true;
-        ++Result.ReachableObjectCount;
-
-        FReferenceCollector Collector;
-        Object->AddReferencedObjects(Collector);
-        ReferencePeakBytes = std::max(
-            ReferencePeakBytes, Collector.GetReservedBytes());
-        for (const FObjectHandle Reference : Collector.GetReferences())
-        {
-            WorkStack.push_back(Reference);
-        }
-
-        for (const PClass* Class = Object->GetClass(); Class != nullptr; Class = Class->GetSuperClass())
-        {
-            for (const PProperty& Property : Class->GetProperties())
+            const FObjectHandle Handle = Scratch.WorkStack.back();
+            Scratch.WorkStack.pop_back();
+            PObject* Object = ResolveObject(Handle);
+            if (Object == nullptr || Scratch.Marked[Handle.Index])
             {
-                if (Property.GetObjectReferenceKind() == EObjectReferenceKind::Strong)
+                continue;
+            }
+
+            Scratch.Marked[Handle.Index] = 1;
+            ++Result.ReachableObjectCount;
+
+            Scratch.References.Reset();
+            Object->AddReferencedObjects(Scratch.References);
+            for (const FObjectHandle Reference
+                : Scratch.References.GetReferences())
+            {
+                Scratch.WorkStack.push_back(Reference);
+            }
+
+            const PClass* Class = Object->GetClass();
+            if (Class != nullptr)
+            {
+                ++Result.StrongReferenceLayoutCount;
+                for (const PProperty* Property
+                    : Class->GetStrongReferenceProperties())
                 {
-                    if (PObject* Referenced = Property.GetReferencedObject(Object))
+                    ++Result.StrongReferencePropertyVisitCount;
+                    if (PObject* Referenced =
+                        Property->GetReferencedObject(Object))
                     {
-                        WorkStack.push_back(Referenced->GetHandle());
+                        Scratch.WorkStack.push_back(Referenced->GetHandle());
                     }
                 }
             }
+            ScratchPeakBytes = std::max(ScratchPeakBytes,
+                (Scratch.Marked.size() + 7) / 8
+                    + Scratch.WorkStack.size() * sizeof(FObjectHandle)
+                    + Scratch.References.GetCurrentBytes());
         }
-        WorkStackPeakSize = std::max(WorkStackPeakSize, WorkStack.size());
+        Result.MarkNanoseconds = ElapsedNanoseconds(StartedAt);
     }
 
-    const std::size_t MarkedCurrentBytes = (Marked.size() + 7) / 8;
-    const std::size_t MarkedReservedBytes = (Marked.capacity() + 7) / 8;
-    const std::size_t MarkCurrentBytes = MarkedCurrentBytes
-        + WorkStackPeakSize * sizeof(FObjectHandle) + ReferencePeakBytes;
-    const std::size_t MarkReservedBytes = MarkedReservedBytes
-        + WorkStack.capacity() * sizeof(FObjectHandle) + ReferencePeakBytes;
+    {
+        PICO_PROFILE_SCOPE("GC.UnreachableSort");
+        const auto StartedAt = std::chrono::steady_clock::now();
+        for (std::size_t Index = 0; Index < Slots.size(); ++Index)
+        {
+            PObject* Object = Slots[Index].Object.get();
+            if (Object == nullptr || Scratch.Marked[Index])
+            {
+                continue;
+            }
+            std::size_t Depth = 0;
+            for (const PObject* Outer = Object->GetOuter(); Outer != nullptr;
+                Outer = Outer->GetOuter())
+            {
+                ++Depth;
+            }
+            Scratch.Unreachable.push_back({Object->GetHandle(), Depth});
+        }
+        std::sort(
+            Scratch.Unreachable.begin(),
+            Scratch.Unreachable.end(),
+            [](const FUnreachableObject& Left,
+                const FUnreachableObject& Right)
+            {
+                return Left.OuterDepth > Right.OuterDepth;
+            });
+        Result.UnreachableSortNanoseconds = ElapsedNanoseconds(StartedAt);
+    }
+
+    ScratchPeakBytes = std::max(ScratchPeakBytes,
+        (Scratch.Marked.size() + 7) / 8
+            + Scratch.Unreachable.size() * sizeof(FUnreachableObject));
+    {
+        PICO_PROFILE_SCOPE("GC.Destroy");
+        const auto StartedAt = std::chrono::steady_clock::now();
+        for (const FUnreachableObject& Entry : Scratch.Unreachable)
+        {
+            CallBeginDestroy(ResolveObject(Entry.Handle));
+        }
+        for (const FUnreachableObject& Entry : Scratch.Unreachable)
+        {
+            PObject* Object = ResolveObject(Entry.Handle);
+            if (Object == nullptr)
+            {
+                continue;
+            }
+            FObjectSlot& Slot = Slots[Entry.Handle.Index];
+            Object->LifecycleState = PObject::ELifecycleState::Destroying;
+            RemoveObjectNameIndexEntry(Object);
+            RemoveObjectHierarchyIndexEntry(Object);
+            FObjectPtr OwnedObject = std::move(Slot.Object);
+            OwnedObject->HandlePrivate = {};
+            Slot.Serial = 0;
+            OwnedObject.reset();
+            GetFreeObjectIndices().push_back(Entry.Handle.Index);
+            ++Result.CollectedObjectCount;
+        }
+        Result.DestroyNanoseconds = ElapsedNanoseconds(StartedAt);
+    }
+
+    if (Scratch.WorkStack.capacity() > WorkStackCapacityBefore)
+        ++Scratch.GrowthCount;
+    if (Scratch.Unreachable.capacity() > UnreachableCapacityBefore)
+        ++Scratch.GrowthCount;
+    if (Scratch.References.GetReservedBytes() > ReferenceCapacityBefore)
+        ++Scratch.GrowthCount;
+    Result.ScratchPeakBytes = ScratchPeakBytes;
+    Result.ScratchReservedBytes = Scratch.GetReservedBytes();
+    Result.ScratchGrowthCount = Scratch.GrowthCount;
     MemoryTracker.Report(EMemoryTag::GCScratch,
-        MarkCurrentBytes, MarkReservedBytes,
-        Marked.size() + WorkStackPeakSize);
-
-    FProfiler::Get().EndScope(MarkScope);
-    PICO_PROFILE_SCOPE("GC.Sweep");
-    struct FUnreachableObject
-    {
-        FObjectHandle Handle;
-        std::size_t OuterDepth = 0;
-    };
-    std::vector<FUnreachableObject> Unreachable;
-    for (std::size_t Index = 0; Index < Slots.size(); ++Index)
-    {
-        PObject* Object = Slots[Index].Object.get();
-        if (Object == nullptr || Marked[Index])
-        {
-            continue;
-        }
-        std::size_t Depth = 0;
-        for (const PObject* Outer = Object->GetOuter(); Outer != nullptr; Outer = Outer->GetOuter())
-        {
-            ++Depth;
-        }
-        Unreachable.push_back({Object->GetHandle(), Depth});
-    }
-    std::sort(
-        Unreachable.begin(),
-        Unreachable.end(),
-        [](const FUnreachableObject& Left, const FUnreachableObject& Right)
-        {
-            return Left.OuterDepth > Right.OuterDepth;
-        });
-
-    const std::size_t SweepCurrentBytes = MarkedCurrentBytes
-        + Unreachable.size() * sizeof(FUnreachableObject);
-    const std::size_t SweepReservedBytes = MarkedReservedBytes
-        + WorkStack.capacity() * sizeof(FObjectHandle)
-        + Unreachable.capacity() * sizeof(FUnreachableObject)
-        + ReferencePeakBytes;
+        Result.ScratchPeakBytes, Result.ScratchReservedBytes,
+        Scratch.Marked.size() + Scratch.Unreachable.size());
+    Scratch.End();
     MemoryTracker.Report(EMemoryTag::GCScratch,
-        SweepCurrentBytes, SweepReservedBytes,
-        Marked.size() + Unreachable.size());
-
-    for (const FUnreachableObject& Entry : Unreachable)
-    {
-        CallBeginDestroy(ResolveObject(Entry.Handle));
-    }
-    for (const FUnreachableObject& Entry : Unreachable)
-    {
-        PObject* Object = ResolveObject(Entry.Handle);
-        if (Object == nullptr)
-        {
-            continue;
-        }
-        FObjectSlot& Slot = Slots[Entry.Handle.Index];
-        Object->LifecycleState = PObject::ELifecycleState::Destroying;
-        RemoveObjectNameIndexEntry(Object);
-        RemoveObjectHierarchyIndexEntry(Object);
-        FObjectPtr OwnedObject = std::move(Slot.Object);
-        OwnedObject->HandlePrivate = {};
-        Slot.Serial = 0;
-        OwnedObject.reset();
-        GetFreeObjectIndices().push_back(Entry.Handle.Index);
-        ++Result.CollectedObjectCount;
-    }
+        0, Result.ScratchReservedBytes, 0);
 
     Result.ObjectCountAfter = GetObjectCount();
     Result.bSucceeded = true;

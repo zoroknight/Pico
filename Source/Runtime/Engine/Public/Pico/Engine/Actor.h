@@ -9,6 +9,7 @@
 #include "Pico/Object/ReflectionMacros.h"
 
 #include <string_view>
+#include <array>
 #include <cstddef>
 #include <type_traits>
 #include <vector>
@@ -41,6 +42,14 @@ public:
     ENetRole GetRemoteRole() const;
     bool IsOnlyRelevantToOwner() const;
     void SetOnlyRelevantToOwner(bool bValue);
+    uint64 GetReplicationGeneration() const;
+    uint64 GetReplicationDirtyMask() const;
+    void MarkReplicationDirty();
+    bool MarkReplicatedPropertyDirty(FName PropertyName);
+    void GetReplicationDirtyStateSince(
+        uint64 LastObservedGeneration,
+        uint64& OutDirtyMask,
+        bool& OutTransformDirty) const;
     bool HasBegunPlay() const;
     bool IsPendingDestroy() const;
     bool Destroy();
@@ -89,6 +98,7 @@ public:
 
 protected:
     explicit PActor(const FObjectConstructionParams& Params);
+    void PostEditChangeProperty(const FPropertyChangedEvent& Event) override;
     void BeginDestroy() override;
     void AddReferencedObjects(FReferenceCollector& Collector) const override;
     bool OnDefaultSubobjectCreated(PObject* Subobject) override;
@@ -107,6 +117,7 @@ private:
     void SetOwner(PActor* InOwner);
     void SetNetObjectId(FNetObjectId InNetObjectId);
     void SetNetRoles(ENetRole InLocalRole, ENetRole InRemoteRole);
+    void RecordReplicationDirty(uint64 DirtyMask, bool bTransformDirty);
     PActorComponent* ResolveComponent(FObjectHandle Handle) const;
     bool OwnsComponent(const PActorComponent* Component) const;
     friend class PWorld;
@@ -127,6 +138,19 @@ private:
     bool bOnlyRelevantToOwner = false;
     ENetRole LocalRole = ENetRole::Authority;
     ENetRole RemoteRole = ENetRole::SimulatedProxy;
+    struct FReplicationDirtyRecord
+    {
+        uint64 Generation = 0;
+        uint64 DirtyMask = 0;
+        bool bTransformDirty = false;
+    };
+    static constexpr std::size_t ReplicationDirtyHistorySize = 8;
+    uint64 ReplicationGeneration = 1;
+    uint64 ReplicationDirtyMask = ~uint64 {0};
+    bool bReplicationTransformDirty = true;
+    std::array<FReplicationDirtyRecord, ReplicationDirtyHistorySize>
+        ReplicationDirtyHistory {};
+    std::size_t ReplicationDirtyHistoryWriteIndex = 0;
     bool bDestroyedEventBroadcast = false;
 };
 }

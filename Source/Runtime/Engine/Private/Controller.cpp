@@ -189,11 +189,13 @@ bool PController::SetPawn(PPawn* InPawn)
         OldPawn->RefreshMovementTickPrerequisites();
     }
     Pawn = InPawn;
+    MarkReplicatedPropertyDirty(FName("Pawn"));
     if (InPawn != nullptr)
     {
         if (PController* OldController = InPawn->GetController())
         {
             OldController->Pawn.Reset();
+            OldController->MarkReplicatedPropertyDirty(FName("Pawn"));
         }
         InPawn->SetController(this);
         InPawn->RefreshMovementTickPrerequisites();

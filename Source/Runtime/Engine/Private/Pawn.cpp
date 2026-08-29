@@ -125,7 +125,9 @@ void PPawn::BeginDestroy()
 
 void PPawn::SetController(PController* InController)
 {
+    if (Controller.Get() == InController) return;
     Controller = InController;
+    MarkReplicatedPropertyDirty(FName("Controller"));
 }
 
 void PPawn::RefreshMovementTickPrerequisites()

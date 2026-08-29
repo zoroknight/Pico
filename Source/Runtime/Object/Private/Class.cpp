@@ -285,6 +285,24 @@ bool PClass::FinalizeMetadata() const
         return false;
     }
 
+    StrongReferenceProperties.clear();
+    std::vector<const PClass*> Hierarchy;
+    for (const PClass* Current = this; Current != nullptr;
+        Current = Current->GetSuperClass())
+    {
+        Hierarchy.push_back(Current);
+    }
+    for (auto It = Hierarchy.rbegin(); It != Hierarchy.rend(); ++It)
+    {
+        for (const PProperty& Property : (*It)->Properties)
+        {
+            if (Property.GetObjectReferenceKind()
+                == EObjectReferenceKind::Strong)
+            {
+                StrongReferenceProperties.push_back(&Property);
+            }
+        }
+    }
     bMetadataFinalized = true;
     return true;
 }
@@ -362,6 +380,11 @@ const PProperty* PClass::FindProperty(FName PropertyName) const
 const std::deque<PProperty>& PClass::GetProperties() const
 {
     return Properties;
+}
+
+std::span<const PProperty* const> PClass::GetStrongReferenceProperties() const
+{
+    return StrongReferenceProperties;
 }
 
 const PFunction* PClass::FindFunction(FName FunctionName) const

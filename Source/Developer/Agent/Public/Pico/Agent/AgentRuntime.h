@@ -13,11 +13,22 @@
 
 namespace Pico
 {
+enum class EAgentFailureInjectionPoint
+{
+    ProviderTimeout,
+    ProviderInvalidJson,
+    CrashBeforeExecute,
+    CrashAfterSideEffect,
+    CrashBeforePersist,
+    SessionAppendFailure
+};
+
 struct FAgentRuntimeContext
 {
     std::string KnowledgeContextJson = "{}";
     std::string SkillContextJson = "[]";
     std::function<void(std::string_view)> OnAssistantDelta;
+    std::vector<EAgentFailureInjectionPoint> FailureInjections;
 };
 
 class FAgentRuntime
@@ -68,6 +79,7 @@ private:
     void EndSpan(FActiveSpan& Span, bool bSucceeded, std::string Error = {});
     void BeginTurn();
     void EndTurn(bool bSucceeded, std::string Error = {});
+    bool ConsumeFailureInjection(EAgentFailureInjectionPoint Point);
 
     FAgentSession& Session;
     IAgentProvider& Provider;

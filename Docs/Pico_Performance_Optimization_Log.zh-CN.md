@@ -43,14 +43,66 @@
 | Tick Scheduler | 依赖顺序和 Group 重复重建 | 每帧缺少 Generation 驱动的稳定 Schedule Cache，RegistrationId 线性查找放大拓扑成本 | `Tick.Schedule` / `Tick.Execute` Scope、Tick Benchmark | 已处理 | 第 4 周完成 |
 | Frame Pacing | Release Game 约 28 FPS，关闭软件 MaxFPS 后约 59.2 FPS | `WaitForMaxFPS(60)` 在 Render/Present 前等待，随后 GLFW VSync 再次等待 | Runtime FPS/Frame Time 状态窗口、`-maxfps=0` A/B 测试 | 已处理 | 第 4 周收尾门完成 |
 | Memory Observability | 只有局部结构估算，无法按子系统解释 Current/Reserved/Peak 和增长次数 | 尚无统一轻量内存分类与机器可读 Benchmark 字段 | 现有 Hierarchy 估算边界、Profiler Trace 大文件、代码路径审计 | 已处理 | 第 5 周前置门完成 |
-| Replication | Actor、Schema 和字段存在重复遍历或编码 | 每连接查找、Schema 构建、Dirty 状态缺少足够缓存 | Replication Benchmark、BytesPerFrame、分项 Scope | 中高 | 第 5 周 |
-| GC | 标记和清扫存在重复反射筛选与临时分配 | 强引用布局未缓存，Mark/WorkStack/Unreachable/Reference Scratch 尚未复用 | `GC.Mark` / `GC.Sweep` Scope、GC Benchmark、Memory Tracker | 中 | 第 6 周低风险优化 |
+| Replication | Actor、Schema 和字段存在重复遍历或编码 | 每连接查找、Schema 构建、Dirty 状态缺少足够缓存 | Replication Benchmark、BytesPerFrame、分项 Scope | 已处理 | 第 5 周完成 |
+| GC | 标记和清扫存在重复反射筛选与临时分配 | 强引用布局未缓存，Mark/WorkStack/Unreachable/Reference Scratch 尚未复用 | 分阶段 GC Scope、GC Benchmark、Memory Tracker | 已处理 | 第 6 周完成；Destroy-heavy 场景继续观察 |
 | Profiler Memory | Full Trace 随事件数量持续增长，长 Benchmark 曾产生超大 Trace | 逐事件历史无默认容量上限，聚合统计与完整 Trace 未分模式 | Trace 文件大小、Profiler.Events Peak/Reserved Bytes | 中 | 第 7 周有界化 |
 | Runtime Capacity | Slot 和子系统 Scratch 可能长期保留历史峰值 | 缺少只在生命周期安全点执行的显式 Trim 策略 | 地图切换前后 Reserved/Peak、真实项目复测 | 中低 | 第 7 周安全点 Trim |
 | Object Hierarchy Storage | 嵌套 `unordered_*` 节点存在未计入估算的分配头和指针跳转 | 当前实现优先解决复杂度，尚无真实保留容量与 Child 分布数据 | Memory Tracker、Parent Child 分布、A/B Benchmark | 观察 | 第 8 周只做决策 |
 | Task System | 是否值得并行仍无证据 | 工作负载和 Game Thread 边界尚未证明存在稳定并行收益 | 后续任务基准与帧预算 | 低 | 暂不预设实现 |
 
 ## 已完成优化记录
+
+### 6. GC 强引用布局缓存与 Scratch 复用
+
+状态：已完成低风险部分
+
+基线：第 5、6 周 Release Full，1K/10K Object，10%/50%/90% 存活与 0/2/8 引用密度，均为 5 样本。
+
+瓶颈与根因：每个可达对象重复遍历 PClass 继承链并筛选 Strong Property；四个临时容器每轮重建。旧 Scope 无法
+区分 Root Scan、Unreachable Sort 和 Destroy。
+
+优化方法：Metadata Finalize 时缓存 Strong Property 指针；Game Thread 复用 Mark、WorkStack、Unreachable 与
+ReferenceCollector 容量；结束时清除全部 Handle 和 Mark 内容；新增四阶段纳秒计时与 Scratch 指标。
+
+结果：10K、90% 存活、密度 8 的 P50/P95 从 `2432/2875 us` 降至 `812/1168 us`，P50 约 `3.00x`；
+1K 同类 Case 从 `496/1147 us` 降至 `214/228 us`。10K、10% 存活 Case 从 `1285/1486 us` 变为
+`1030/1507 us`，P50 约提升 `1.25x`，但 P95 仍有约 1.4% 波动，说明 Destroy-heavy 路径收益有限。
+
+内存代价：Scratch Peak `156501 B`、Reserved `352440 B`、GrowthCount `6`；Current 在 GC 后为 0。旧版本清空
+Reserved 报告，无法做同口径保留容量比较。
+
+结论：缓存与复用合入；不宣称全面提速。增量/并行 GC 继续延期，Destroy 优化必须先拆分索引移除和析构成本。
+
+相关文档：[第 6 周 GC 深化与 Agent 对抗评测](EngineeringDepthWeek06_GcAndAdversarialEvaluation.zh-CN.md)。
+
+### 5. Replication Schema/Channel Index 与 Push Dirty
+
+状态：已完成
+
+基线：Release Full，1000 Actor，1%/10%/100% Dirty；新基线 5 样本，旧 Memory Gate 参照仅 1 样本。
+
+瓶颈现象：旧路径即使只有 1% Actor 变化，也会按连接重建 Schema、线性定位对象和 Channel，并捕获比较全部属性。
+1% 与 100% Dirty 的 CPU 差距远小于实际编码字段差距。
+
+根因与监控：新增 Gather/Compare/Serialize/Queue 分项，以及 Cache Hit、Skipped Actor、Dirty/Encoded Property
+计数后，确认稀疏更新的主要浪费发生在编码之前。
+
+优化方法：按 `PClass` 缓存 Schema，建立 Channel 与 NetObject 双索引，FieldId 直接定位；Actor 使用
+ReplicationGeneration 与 Dirty Mask，每条连接独立记录 LastObservedGeneration。固定 8 条历史解决多连接进度差，
+超出窗口时保守全量同步。
+
+正确性保护：保留 `FullPollingValidation` 检测漏标 Dirty；反射编辑、Transform 和内置复制 Setter 自动标脏；
+测试覆盖两连接延迟观察、值回到 Baseline、直接写漏标与 Channel ACK。
+
+结果：1%/10%/100% Dirty 的新 P50/P95 为 `144/173`、`179/274`、`846/1278 us`；旧 P50 为
+`1032/1052/1367 us`，P50 约提升 `7.2x/5.9x/1.6x`。Bytes/Frame 保持 `230/2300/23000 B`。
+
+代价：Replication Schema/Channels 结构 Peak 从前置门的 `24/200000 B` 增至 `72/272000 B`。该数据为主动
+报告的结构估算，不含标准库节点分配器额外开销。
+
+结论：合入。未来 Replication Graph 只负责相关性筛选，不能替代当前单 Actor Dirty/Generation 层。
+
+相关文档：[第 5 周 Replication Scaling 与 Agent 故障注入](EngineeringDepthWeek05_ReplicationScalingAndFailureInjection.zh-CN.md)。
 
 ### 1. Object Name Index
 
@@ -324,5 +376,6 @@ Index 只要求形成有数据支撑的“保留、延期或采用”结论，�
 - 第 2 周建立了 Debug/Release 基线和热点排序；
 - 第 3 周 Object Name Index 与第 4 周 Tick Schedule Cache 均已完成相同合约下的前后对比；
 - Frame Pacing 已完成版本化节拍与真实 Game 进程复测；`28 -> 59.2 FPS` 仍明确标记为人工 A/B；
-- Object Hierarchy Index 已完成同合约前后对比；Replication Scaling 和 GC 深化完成前不能提前声称收益；
+- Object Hierarchy Index、Replication Scaling 与 GC 深化已完成同合约前后对比；GC 的 Mark-heavy Case
+  收益明显，Destroy-heavy Case 的较小收益与 P95 波动继续保留；
 - 后续任何“变快”的结论都必须同时说明是否牺牲了内存、生命周期安全、可维护性或正确性。

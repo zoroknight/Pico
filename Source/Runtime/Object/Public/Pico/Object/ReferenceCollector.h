@@ -36,6 +36,11 @@ public:
     }
 
     const std::vector<FObjectHandle>& GetReferences() const { return References; }
+    void Reset() { References.clear(); }
+    std::size_t GetCurrentBytes() const
+    {
+        return References.size() * sizeof(FObjectHandle);
+    }
     std::size_t GetReservedBytes() const
     {
         return References.capacity() * sizeof(FObjectHandle);

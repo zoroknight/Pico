@@ -39,6 +39,15 @@ struct FGarbageCollectionResult
     std::size_t ReachableObjectCount = 0;
     std::size_t CollectedObjectCount = 0;
     std::size_t ObjectCountAfter = 0;
+    std::uint64_t RootScanNanoseconds = 0;
+    std::uint64_t MarkNanoseconds = 0;
+    std::uint64_t UnreachableSortNanoseconds = 0;
+    std::uint64_t DestroyNanoseconds = 0;
+    std::size_t StrongReferenceLayoutCount = 0;
+    std::size_t StrongReferencePropertyVisitCount = 0;
+    std::size_t ScratchPeakBytes = 0;
+    std::size_t ScratchReservedBytes = 0;
+    std::uint64_t ScratchGrowthCount = 0;
     bool bSucceeded = false;
 };
 

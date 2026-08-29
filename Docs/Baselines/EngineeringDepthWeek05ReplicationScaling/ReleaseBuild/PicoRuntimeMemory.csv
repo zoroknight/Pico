@@ -1,0 +1,8 @@
+format_version,category,current_bytes,reserved_bytes,peak_bytes,element_count,growth_count
+3,Object.Slots,1600048,2212080,1600048,100003,3
+3,Object.NameIndex,40,1048616,2000060,2,30
+3,Object.HierarchyIndex,80,131216,800152,1,19
+3,GC.Scratch,0,0,156501,0,120
+3,Profiler.Events,602337912,701574544,602337912,6844749,40
+3,Replication.Schema,0,64,72,0,10
+3,Replication.Channels,0,190872,272000,0,40

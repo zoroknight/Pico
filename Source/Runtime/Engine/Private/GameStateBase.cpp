@@ -105,6 +105,7 @@ void PGameStateBase::Tick(float DeltaSeconds)
     if (IsMatchInProgress())
     {
         ElapsedMatchTime += DeltaSeconds;
+        MarkReplicatedPropertyDirty(FName("ElapsedMatchTime"));
     }
 }
 
@@ -116,9 +117,11 @@ bool PGameStateBase::SetMatchState(EMatchState NewState)
         return false;
     }
     MatchStateValue = static_cast<int32>(NewState);
+    MarkReplicatedPropertyDirty(FName("MatchStateValue"));
     if (NewState == EMatchState::InProgress)
     {
         ElapsedMatchTime = 0.0f;
+        MarkReplicatedPropertyDirty(FName("ElapsedMatchTime"));
     }
     MatchStateChangedEvent.Broadcast(OldState, NewState);
     return true;

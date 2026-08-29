@@ -576,6 +576,8 @@ private:
 - [工程深度第 4 周收尾：Frame Pacing Correctness](Docs/EngineeringDepthWeek04_FramePacingCorrectness.zh-CN.md)
 - [工程深度第 4 周后置门：Object Hierarchy Index](Docs/EngineeringDepthWeek04_ObjectHierarchyIndex.zh-CN.md)
 - [工程深度第 5 周前置门：Memory Observability Gate](Docs/EngineeringDepthWeek05_MemoryObservabilityGate.zh-CN.md)
+- [工程深度第 5 周：Replication Scaling 与 Agent 故障注入](Docs/EngineeringDepthWeek05_ReplicationScalingAndFailureInjection.zh-CN.md)
+- [工程深度第 6 周：GC 深化与 Agent 对抗评测](Docs/EngineeringDepthWeek06_GcAndAdversarialEvaluation.zh-CN.md)
 - [PicoTasks 与 Game Thread Dispatcher](Docs/AIPhase01_PicoTasksAndGameThreadDispatcher.md)
 - [Pico Agent Core 与可恢复 Session](Docs/AIPhase02_PicoAgentCoreAndSessions.md)
 - [Agent Tool 安全管线与编辑器事务](Docs/AIPhase03_AgentToolPipeline.md)

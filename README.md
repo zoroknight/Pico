@@ -744,6 +744,8 @@ See:
 - [Engineering Depth Week 4 Gate: Frame Pacing Correctness (Chinese)](Docs/EngineeringDepthWeek04_FramePacingCorrectness.zh-CN.md)
 - [Engineering Depth Week 4 Gate: Object Hierarchy Index (Chinese)](Docs/EngineeringDepthWeek04_ObjectHierarchyIndex.zh-CN.md)
 - [Engineering Depth Week 5 Gate: Memory Observability (Chinese)](Docs/EngineeringDepthWeek05_MemoryObservabilityGate.zh-CN.md)
+- [Engineering Depth Week 5: Replication Scaling and Agent Failure Injection (Chinese)](Docs/EngineeringDepthWeek05_ReplicationScalingAndFailureInjection.zh-CN.md)
+- [Engineering Depth Week 6: GC and Adversarial Evaluation (Chinese)](Docs/EngineeringDepthWeek06_GcAndAdversarialEvaluation.zh-CN.md)
 - [Agent Game Creation Pipeline and Six-Week Plan (Chinese)](Docs/AgentGameCreationPipeline.zh-CN.md)
 - [PicoTasks and Game Thread Dispatcher (Chinese)](Docs/AIPhase01_PicoTasksAndGameThreadDispatcher.md)
 - [Pico Agent Core and Recoverable Sessions (Chinese)](Docs/AIPhase02_PicoAgentCoreAndSessions.md)

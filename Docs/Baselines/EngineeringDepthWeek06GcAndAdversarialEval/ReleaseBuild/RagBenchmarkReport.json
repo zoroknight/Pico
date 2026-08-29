@@ -1,0 +1,77 @@
+{
+  "cases": [
+    {
+      "context_bytes": 420,
+      "forbidden_source_hits": 0,
+      "id": "movement-control",
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_8": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieval_nanoseconds": 9000,
+      "retrieved_record_ids": [
+        "docs-movement"
+      ]
+    },
+    {
+      "context_bytes": 417,
+      "forbidden_source_hits": 0,
+      "id": "package-windows",
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_8": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieval_nanoseconds": 6300,
+      "retrieved_record_ids": [
+        "docs-packaging"
+      ]
+    },
+    {
+      "context_bytes": 443,
+      "forbidden_source_hits": 0,
+      "id": "gas-projectiles",
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_8": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieval_nanoseconds": 7500,
+      "retrieved_record_ids": [
+        "schema-gas"
+      ]
+    },
+    {
+      "context_bytes": 433,
+      "forbidden_source_hits": 0,
+      "id": "graph-delay",
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_8": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieval_nanoseconds": 6600,
+      "retrieved_record_ids": [
+        "schema-graph"
+      ]
+    },
+    {
+      "context_bytes": 446,
+      "forbidden_source_hits": 0,
+      "id": "gc-phases",
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_8": 1.0,
+      "reciprocal_rank": 1.0,
+      "retrieval_nanoseconds": 6600,
+      "retrieved_record_ids": [
+        "docs-gc"
+      ]
+    }
+  ],
+  "forbidden_source_rate": 0.0,
+  "format_version": 1,
+  "mean_context_bytes": 431,
+  "mean_retrieval_nanoseconds": 7200,
+  "mrr": 1.0,
+  "recall_at_1": 1.0,
+  "recall_at_3": 1.0,
+  "recall_at_8": 1.0
+}
