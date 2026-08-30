@@ -1,0 +1,6 @@
+{
+  "format_version": 1,
+  "recoverable_failure_cases": 4,
+  "recovered_failure_cases": 4,
+  "recoverable_failure_recovery_rate": 1
+}

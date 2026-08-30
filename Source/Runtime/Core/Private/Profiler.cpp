@@ -83,6 +83,10 @@ struct FProfiler::FImpl
     std::chrono::steady_clock::time_point Origin = std::chrono::steady_clock::now();
     mutable std::mutex Mutex;
     std::vector<FProfileEvent> Events;
+    std::size_t TraceCapacity = 0;
+    std::size_t RingStart = 0;
+    std::uint64_t DroppedEventCount = 0;
+    std::map<std::string, FProfileAggregate> Aggregates;
 };
 
 FProfiler::FProfiler()
@@ -103,13 +107,79 @@ FProfiler& FProfiler::Get()
 
 void FProfiler::SetEnabled(bool bInEnabled)
 {
-    bEnabled.store(bInEnabled, std::memory_order_release);
-    if (!bInEnabled) ActiveScopeIds.clear();
+    SetStorageMode(
+        bInEnabled ? EProfileStorageMode::BoundedTrace
+                   : EProfileStorageMode::Disabled);
 }
 
 bool FProfiler::IsEnabled() const
 {
     return bEnabled.load(std::memory_order_relaxed);
+}
+
+void FProfiler::SetStorageMode(
+    EProfileStorageMode Mode,
+    std::size_t TraceCapacity)
+{
+    if (Mode == EProfileStorageMode::BoundedTrace && TraceCapacity == 0)
+        TraceCapacity = 1;
+    {
+        std::lock_guard Lock(Impl->Mutex);
+        Impl->Events.clear();
+        Impl->RingStart = 0;
+        Impl->DroppedEventCount = 0;
+        Impl->TraceCapacity = Mode == EProfileStorageMode::BoundedTrace
+            ? TraceCapacity : 0;
+        if (Impl->TraceCapacity > 0)
+            Impl->Events.reserve(Impl->TraceCapacity);
+        FMemoryTracker::Get().Report(EMemoryTag::ProfilerEvents,
+            0, Impl->Events.capacity() * sizeof(FProfileEvent), 0);
+    }
+    StorageMode.store(Mode, std::memory_order_release);
+    bEnabled.store(
+        Mode != EProfileStorageMode::Disabled, std::memory_order_release);
+    ActiveScopeIds.clear();
+}
+
+EProfileStorageMode FProfiler::GetStorageMode() const
+{
+    return StorageMode.load(std::memory_order_acquire);
+}
+
+FProfilerStorageStats FProfiler::GetStorageStats() const
+{
+    std::lock_guard Lock(Impl->Mutex);
+    return {GetStorageMode(), Impl->TraceCapacity, Impl->Events.size(),
+        Impl->DroppedEventCount, Impl->Aggregates.size()};
+}
+
+void FProfiler::Compact()
+{
+    std::lock_guard Lock(Impl->Mutex);
+    if (GetStorageMode() != EProfileStorageMode::BoundedTrace)
+    {
+        std::vector<FProfileEvent>().swap(Impl->Events);
+        Impl->RingStart = 0;
+    }
+    else if (Impl->Events.capacity() > Impl->TraceCapacity)
+    {
+        std::vector<FProfileEvent> CompactEvents;
+        CompactEvents.reserve(Impl->Events.size());
+        if (Impl->RingStart == 0 || Impl->Events.size() < Impl->TraceCapacity)
+            CompactEvents = Impl->Events;
+        else
+        {
+            CompactEvents.insert(CompactEvents.end(),
+                Impl->Events.begin() + Impl->RingStart, Impl->Events.end());
+            CompactEvents.insert(CompactEvents.end(), Impl->Events.begin(),
+                Impl->Events.begin() + Impl->RingStart);
+        }
+        Impl->Events.swap(CompactEvents);
+        Impl->RingStart = 0;
+    }
+    FMemoryTracker::Get().Report(EMemoryTag::ProfilerEvents,
+        Impl->Events.size() * sizeof(FProfileEvent),
+        Impl->Events.capacity() * sizeof(FProfileEvent), Impl->Events.size());
 }
 
 void FProfiler::BeginFrame()
@@ -169,14 +239,26 @@ void FProfiler::EndScope(FProfileScopeToken& Token)
     Event.Name = Token.Name;
     {
         std::lock_guard Lock(Impl->Mutex);
-        const std::size_t PreviousCapacity = Impl->Events.capacity();
-        Impl->Events.push_back(std::move(Event));
-        if (Impl->Events.capacity() != PreviousCapacity)
+        FProfileAggregate& Aggregate = Impl->Aggregates[Event.Name];
+        Aggregate.Name = Event.Name;
+        ++Aggregate.Count;
+        Aggregate.TotalMicroseconds += Event.DurationMicroseconds;
+        Aggregate.MinMicroseconds = Aggregate.Count == 1
+            ? Event.DurationMicroseconds
+            : std::min(Aggregate.MinMicroseconds, Event.DurationMicroseconds);
+        Aggregate.MaxMicroseconds = std::max(
+            Aggregate.MaxMicroseconds, Event.DurationMicroseconds);
+
+        if (GetStorageMode() == EProfileStorageMode::BoundedTrace)
         {
-            FMemoryTracker::Get().Report(EMemoryTag::ProfilerEvents,
-                Impl->Events.size() * sizeof(FProfileEvent),
-                Impl->Events.capacity() * sizeof(FProfileEvent),
-                Impl->Events.size());
+            if (Impl->Events.size() < Impl->TraceCapacity)
+                Impl->Events.push_back(std::move(Event));
+            else
+            {
+                Impl->Events[Impl->RingStart] = std::move(Event);
+                Impl->RingStart = (Impl->RingStart + 1) % Impl->TraceCapacity;
+                ++Impl->DroppedEventCount;
+            }
         }
     }
     Token = {};
@@ -186,6 +268,9 @@ void FProfiler::Reset()
 {
     std::lock_guard Lock(Impl->Mutex);
     Impl->Events.clear();
+    Impl->RingStart = 0;
+    Impl->DroppedEventCount = 0;
+    Impl->Aggregates.clear();
     FMemoryTracker::Get().Report(EMemoryTag::ProfilerEvents,
         0, Impl->Events.capacity() * sizeof(FProfileEvent), 0);
     Impl->Origin = std::chrono::steady_clock::now();
@@ -197,30 +282,26 @@ void FProfiler::Reset()
 std::vector<FProfileEvent> FProfiler::GetEvents() const
 {
     std::lock_guard Lock(Impl->Mutex);
-    return Impl->Events;
+    if (Impl->RingStart == 0 || Impl->Events.size() < Impl->TraceCapacity)
+        return Impl->Events;
+    std::vector<FProfileEvent> Result;
+    Result.reserve(Impl->Events.size());
+    Result.insert(Result.end(), Impl->Events.begin() + Impl->RingStart,
+        Impl->Events.end());
+    Result.insert(Result.end(), Impl->Events.begin(),
+        Impl->Events.begin() + Impl->RingStart);
+    return Result;
 }
 
 std::vector<FProfileAggregate> FProfiler::GetAggregates() const
 {
-    std::map<std::string, FProfileAggregate> ByName;
-    for (const FProfileEvent& Event : GetEvents())
-    {
-        FProfileAggregate& Aggregate = ByName[Event.Name];
-        Aggregate.Name = Event.Name;
-        ++Aggregate.Count;
-        Aggregate.TotalMicroseconds += Event.DurationMicroseconds;
-        Aggregate.MinMicroseconds = Aggregate.Count == 1
-            ? Event.DurationMicroseconds
-            : std::min(Aggregate.MinMicroseconds, Event.DurationMicroseconds);
-        Aggregate.MaxMicroseconds = std::max(
-            Aggregate.MaxMicroseconds, Event.DurationMicroseconds);
-    }
+    std::lock_guard Lock(Impl->Mutex);
     std::vector<FProfileAggregate> Result;
-    Result.reserve(ByName.size());
-    for (auto& [Name, Aggregate] : ByName)
+    Result.reserve(Impl->Aggregates.size());
+    for (const auto& [Name, Aggregate] : Impl->Aggregates)
     {
         (void)Name;
-        Result.push_back(std::move(Aggregate));
+        Result.push_back(Aggregate);
     }
     return Result;
 }

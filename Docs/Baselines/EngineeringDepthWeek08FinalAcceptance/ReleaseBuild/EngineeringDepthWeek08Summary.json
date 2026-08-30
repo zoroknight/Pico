@@ -1,0 +1,54 @@
+﻿{
+    "format_version":  1,
+    "generated_utc":  "2026-08-30T03:20:21.9450634Z",
+    "configuration":  "Release",
+    "samples":  5,
+    "gates":  {
+                  "build":  "reused",
+                  "tests":  "passed",
+                  "test_count":  24,
+                  "runtime_fixed_matrix":  "passed",
+                  "fake_provider_evaluation":  "passed",
+                  "real_provider_evaluation":  "not_run_requires_api_key_and_explicit_cost_approval",
+                  "generic_agent_hardcode_audit":  "passed",
+                  "real_package_smoke":  "passed",
+                  "real_editor_smoke":  "passed",
+                  "interactive_editor_play":  "manual_pending"
+              },
+    "evidence":  {
+                     "runtime_report":  "E:\\UnrealSourceCode\\Pico\\BuildCodex\\EngineeringDepthWeek08\\Runtime\\RuntimeBaseline.json",
+                     "runtime_record_count":  55,
+                     "hierarchy_ab_record_count":  18,
+                     "golden_report":  "E:\\UnrealSourceCode\\Pico\\BuildCodex\\EngineeringDepthWeek08\\Agent\\GoldenTaskReport.json",
+                     "golden_passed":  21,
+                     "golden_failed":  0,
+                     "fake_provider_metrics":  {
+                                                   "evaluated_runs":  21,
+                                                   "verification_completion_rate":  1,
+                                                   "turns":  41,
+                                                   "tool_calls":  39,
+                                                   "repair_count":  1,
+                                                   "repair_rate_per_turn":  0.024390243902439025,
+                                                   "context_bytes":  43052,
+                                                   "provider_latency_us":  11,
+                                                   "forbidden_tool_attempts":  0,
+                                                   "forbidden_side_effects":  0,
+                                                   "failure_distribution":  {
+                                                                                "None":  15,
+                                                                                "InvalidArguments":  1,
+                                                                                "PermissionDenied":  2,
+                                                                                "Conflict":  1,
+                                                                                "BudgetExceeded":  1,
+                                                                                "VerificationFailed":  1
+                                                                            },
+                                                   "recoverable_failure_recovery_rate":  1
+                                               },
+                     "rag_report":  "E:\\UnrealSourceCode\\Pico\\BuildCodex\\EngineeringDepthWeek08\\Agent\\RagBenchmarkReport.json",
+                     "failure_injection_report":  "E:\\UnrealSourceCode\\Pico\\BuildCodex\\EngineeringDepthWeek08\\Agent\\FailureInjectionReport.json",
+                     "stage_root":  "E:\\UnrealSourceCode\\Pico\\BuildCodex\\EngineeringDepthWeek08\\Package\\PicoSandbox-Week08",
+                     "ctest_log":  "E:\\UnrealSourceCode\\Pico\\BuildCodex\\EngineeringDepthWeek08\\Logs\\CTest.txt"
+                 },
+    "generic_agent_hardcodes":  [
+
+                                ]
+}

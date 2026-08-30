@@ -226,6 +226,11 @@ float PSandboxPawn::GetReplicatedFreezeCooldownRemaining() const
 
 Pico::int32 PSandboxPawn::GetAbilityLoadoutBits() const { return AbilityLoadoutBits; }
 
+void PSandboxPawn::OnRep_AbilityLoadout()
+{
+    SetAbilityLoadoutBits(AbilityLoadoutBits);
+}
+
 void PSandboxPawn::SanitizeAbilityProfile()
 {
     const auto NonNegative = [](float Value, float Fallback)
@@ -301,7 +306,10 @@ void PSandboxPawn::ApplyAbilitySpecOverrides()
 bool PSandboxPawn::SetAbilityLoadoutBits(Pico::int32 Bits)
 {
     if (Bits < 0 || Bits > 7) return false;
+    const bool bLoadoutChanged = AbilityLoadoutBits != Bits;
     AbilityLoadoutBits = Bits;
+    if (bLoadoutChanged)
+        MarkReplicatedPropertyDirty(Pico::FName("AbilityLoadoutBits"));
     bGravityShotEnabled = (Bits & 1) != 0;
     bBurnShotEnabled = (Bits & 2) != 0;
     bFreezeShotEnabled = (Bits & 4) != 0;
@@ -548,27 +556,47 @@ void PSandboxPawn::RefreshReplicatedGameplayState()
         else if (Active.Spec.StackingKey == "Cooldown.PSandboxStunAbility")
             StunCooldown = std::max(StunCooldown, Active.RemainingDuration);
     }
-    const bool bChanged = std::abs(ReplicatedHealth - Health) > 0.001f
-        || std::abs(ReplicatedMana - Mana) > 0.001f
-        || std::abs(ReplicatedMoveSpeed - MoveSpeed) > 0.001f
-        || ReplicatedTagBits != TagBits
-        || std::abs(ReplicatedStunRemaining - StunRemaining) > 0.05f
-        || std::abs(ReplicatedBurnRemaining - BurnRemaining) > 0.05f
-        || std::abs(ReplicatedGravityRemaining - GravityRemaining) > 0.05f
-        || std::abs(ReplicatedDashCooldownRemaining - DashCooldown) > 0.05f
-        || std::abs(ReplicatedFireballCooldownRemaining - FireballCooldown) > 0.05f
-        || std::abs(ReplicatedStunCooldownRemaining - StunCooldown) > 0.05f;
-    ReplicatedHealth = Health;
-    ReplicatedMana = Mana;
-    ReplicatedMoveSpeed = MoveSpeed;
-    ReplicatedTagBits = TagBits;
-    ReplicatedStunRemaining = StunRemaining;
-    ReplicatedBurnRemaining = BurnRemaining;
-    ReplicatedGravityRemaining = GravityRemaining;
-    ReplicatedDashCooldownRemaining = DashCooldown;
-    ReplicatedFireballCooldownRemaining = FireballCooldown;
-    ReplicatedStunCooldownRemaining = StunCooldown;
-    if (bChanged) ++GameplayStateRevision;
+    bool bChanged = false;
+    const auto UpdateFloat = [this, &bChanged](
+        float& Field, float Value, float Tolerance, const char* PropertyName)
+    {
+        if (std::abs(Field - Value) <= Tolerance) return;
+        Field = Value;
+        bChanged = true;
+        MarkReplicatedPropertyDirty(Pico::FName(PropertyName));
+    };
+    const auto UpdateInt = [this, &bChanged](
+        Pico::int32& Field, Pico::int32 Value, const char* PropertyName)
+    {
+        if (Field == Value) return;
+        Field = Value;
+        bChanged = true;
+        MarkReplicatedPropertyDirty(Pico::FName(PropertyName));
+    };
+    UpdateFloat(ReplicatedHealth, Health, 0.001f, "ReplicatedHealth");
+    UpdateFloat(ReplicatedMana, Mana, 0.001f, "ReplicatedMana");
+    UpdateFloat(ReplicatedMoveSpeed, MoveSpeed, 0.001f, "ReplicatedMoveSpeed");
+    UpdateInt(ReplicatedTagBits, TagBits, "ReplicatedTagBits");
+
+    // Keep countdown replication bounded while allowing sub-threshold frame
+    // deltas to accumulate against the last published value.
+    UpdateFloat(ReplicatedStunRemaining, StunRemaining, 0.05f,
+        "ReplicatedStunRemaining");
+    UpdateFloat(ReplicatedBurnRemaining, BurnRemaining, 0.05f,
+        "ReplicatedBurnRemaining");
+    UpdateFloat(ReplicatedGravityRemaining, GravityRemaining, 0.05f,
+        "ReplicatedGravityRemaining");
+    UpdateFloat(ReplicatedDashCooldownRemaining, DashCooldown, 0.05f,
+        "ReplicatedDashCooldownRemaining");
+    UpdateFloat(ReplicatedFireballCooldownRemaining, FireballCooldown, 0.05f,
+        "ReplicatedFireballCooldownRemaining");
+    UpdateFloat(ReplicatedStunCooldownRemaining, StunCooldown, 0.05f,
+        "ReplicatedStunCooldownRemaining");
+    if (bChanged)
+    {
+        ++GameplayStateRevision;
+        MarkReplicatedPropertyDirty(Pico::FName("GameplayStateRevision"));
+    }
 }
 
 void PSandboxPawn::ApplyReplicatedGameplayState()

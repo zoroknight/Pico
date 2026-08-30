@@ -5,6 +5,7 @@
 #include "Pico/Core/Time.h"
 #include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Object/ObjectTypes.h"
+#include "Pico/Object/GarbageCollection.h"
 
 #include <filesystem>
 #include <functional>
@@ -40,8 +41,11 @@ public:
 
     bool ShouldExit() const;
     float GetDeltaSeconds() const;
+    double GetTotalSeconds() const;
     double GetAverageFrameTimeMS() const;
     double GetAverageFPS() const;
+    FFrameTimeStatistics GetFrameTimeStatistics() const;
+    const FGarbageCollectionResult& GetLastGarbageCollectionResult() const;
     const FFramePacingSettings& GetFramePacingSettings() const;
     EFramePacingMode GetFramePacingMode(bool bPresentationCanVSync) const;
     void WaitForFrameLimit(bool bPresentationCanVSync);
@@ -63,6 +67,7 @@ private:
     FFramePacingSettings FramePacingSettings;
     double GarbageCollectionIntervalSeconds = 60.0;
     double GarbageCollectionElapsedSeconds = 0.0;
+    FGarbageCollectionResult LastGarbageCollectionResult;
     bool bPreInitialized = false;
     bool bObjectSystemInitialized = false;
     bool bInitialized = false;

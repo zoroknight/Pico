@@ -81,14 +81,17 @@ void DrawGameplayStatusOverlay(Pico::FGameEngine& GameEngine)
 {
     Pico::PGameInstance* GameInstance = GameEngine.GetGameInstance();
     std::vector<std::string> Lines;
+    std::vector<Pico::FPlayerAbilityStatus> AbilityPlayers;
     if (GameInstance != nullptr) GameInstance->AppendGameplayStatusLines(Lines);
-    if (Lines.empty()) return;
+    if (GameInstance != nullptr)
+        GameInstance->AppendGameplayAbilityStatus(AbilityPlayers);
+    if (Lines.empty() && AbilityPlayers.empty()) return;
     const ImGuiViewport* Viewport = ImGui::GetMainViewport();
     const ImVec2 Position(
         Viewport->WorkPos.x + Viewport->WorkSize.x - 14.0f,
         Viewport->WorkPos.y + 14.0f);
     const float PanelWidth = std::clamp(Viewport->WorkSize.x * 0.38f, 420.0f, 560.0f);
-    const float PanelHeight = std::clamp(Viewport->WorkSize.y * 0.58f, 260.0f, 560.0f);
+    const float PanelHeight = std::clamp(Viewport->WorkSize.y * 0.30f, 200.0f, 360.0f);
     const float PanelMaxWidth = std::max(360.0f, Viewport->WorkSize.x - 28.0f);
     const float PanelMaxHeight = std::max(220.0f, Viewport->WorkSize.y - 28.0f);
     ImGui::SetNextWindowPos(Position, ImGuiCond_FirstUseEver, ImVec2(1.0f, 0.0f));
@@ -99,49 +102,102 @@ void DrawGameplayStatusOverlay(Pico::FGameEngine& GameEngine)
         ImVec2(360.0f, 180.0f), ImVec2(PanelMaxWidth, PanelMaxHeight));
     ImGui::SetNextWindowBgAlpha(0.88f);
     constexpr ImGuiWindowFlags Flags = ImGuiWindowFlags_None;
-    if (ImGui::Begin("Mini GAS Status", nullptr, Flags))
+    if (ImGui::Begin("Gameplay Status", nullptr, Flags))
     {
         const Pico::FEngineLoop& EngineLoop = GameEngine.GetEngineLoop();
         ImGui::Text(
             "Performance  FPS %.1f  |  Frame %.2f ms",
             EngineLoop.GetAverageFPS(),
             EngineLoop.GetAverageFrameTimeMS());
-        const Pico::EFramePacingMode PacingMode =
-            EngineLoop.GetFramePacingMode(true);
-        if (PacingMode == Pico::EFramePacingMode::Software)
-        {
-            ImGui::Text(
-                "Pacing  %s  |  Target %.0f FPS",
-                Pico::ToString(PacingMode),
-                EngineLoop.GetFramePacingSettings().MaxFPS);
-        }
-        else
-        {
-            ImGui::Text(
-                "Pacing  %s  |  %s",
-                Pico::ToString(PacingMode),
-                PacingMode == Pico::EFramePacingMode::VSync
-                    ? "Target display refresh" : "No frame limit");
-        }
+        const unsigned long long TotalSeconds = static_cast<unsigned long long>(
+            std::max(0.0, EngineLoop.GetTotalSeconds()));
+        const unsigned long long Hours = TotalSeconds / 3600ULL;
+        const unsigned long long Minutes = (TotalSeconds / 60ULL) % 60ULL;
+        const unsigned long long Seconds = TotalSeconds % 60ULL;
+        ImGui::Text("Game Time  %02llu:%02llu:%02llu", Hours, Minutes, Seconds);
         ImGui::Separator();
         for (const std::string& Line : Lines)
         {
             if (Line == "---") ImGui::Separator();
             else
             {
-                const bool bGraphHeading = Line.rfind("Graph  ", 0) == 0;
-                const bool bGraphState = Line.rfind("State ", 0) == 0;
+                const bool bStatus = Line.rfind("Status  ", 0) == 0;
                 const bool bGraphMessage = Line.rfind("Message  ", 0) == 0;
-                if (bGraphHeading)
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.42f, 0.78f, 1.0f, 1.0f));
-                else if (bGraphState)
+                if (bStatus)
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.82f, 0.36f, 1.0f));
                 else if (bGraphMessage)
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 1.0f, 0.55f, 1.0f));
                 ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
                 ImGui::TextUnformatted(Line.c_str());
                 ImGui::PopTextWrapPos();
-                if (bGraphHeading || bGraphState || bGraphMessage) ImGui::PopStyleColor();
+                if (bStatus || bGraphMessage) ImGui::PopStyleColor();
+            }
+        }
+        for (const Pico::FPlayerAbilityStatus& Player : AbilityPlayers)
+        {
+            if (!Player.bIsLocalPlayer) continue;
+            ImGui::Separator();
+            ImGui::Text("%s Local Abilities", Player.PlayerLabel.c_str());
+            constexpr ImGuiTableFlags TableFlags = ImGuiTableFlags_Borders
+                | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
+            if (ImGui::BeginTable("LocalAbilities", 4, TableFlags))
+            {
+                ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthFixed, 42.0f);
+                ImGui::TableSetupColumn("Ability");
+                ImGui::TableSetupColumn("State");
+                ImGui::TableSetupColumn("Cooldown");
+                ImGui::TableHeadersRow();
+                for (const Pico::FGameplayAbilityStatus& Ability : Player.Abilities)
+                {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(Ability.InputLabel.c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(Ability.AbilityName.c_str());
+                    ImGui::TableSetColumnIndex(2);
+                    const char* State = Ability.bActive ? "Active"
+                        : Ability.CooldownRemaining > 0.05f ? "Cooldown" : "Ready";
+                    ImGui::TextUnformatted(State);
+                    ImGui::TableSetColumnIndex(3);
+                    if (Ability.CooldownRemaining > 0.05f)
+                        ImGui::Text("%.1f s", Ability.CooldownRemaining);
+                    else
+                        ImGui::TextUnformatted("-");
+                }
+                ImGui::EndTable();
+            }
+        }
+        bool bHasRemotePlayers = false;
+        for (const Pico::FPlayerAbilityStatus& Player : AbilityPlayers)
+            bHasRemotePlayers |= !Player.bIsLocalPlayer;
+        if (bHasRemotePlayers)
+        {
+            ImGui::Separator();
+            ImGui::TextUnformatted("Other Player Abilities");
+            constexpr ImGuiTableFlags TableFlags = ImGuiTableFlags_Borders
+                | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
+            if (ImGui::BeginTable("RemoteAbilities", 2, TableFlags))
+            {
+                ImGui::TableSetupColumn("Player", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                ImGui::TableSetupColumn("Abilities");
+                ImGui::TableHeadersRow();
+                for (const Pico::FPlayerAbilityStatus& Player : AbilityPlayers)
+                {
+                    if (Player.bIsLocalPlayer) continue;
+                    std::string Names;
+                    for (const Pico::FGameplayAbilityStatus& Ability : Player.Abilities)
+                    {
+                        if (!Names.empty()) Names += ", ";
+                        Names += Ability.AbilityName;
+                    }
+                    if (Names.empty()) Names = "None";
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(Player.PlayerLabel.c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(Names.c_str());
+                }
+                ImGui::EndTable();
             }
         }
     }
@@ -757,7 +813,7 @@ struct FGameplayDebugPanel
         ImGui::End();
     }
 
-    bool bVisible = true;
+    bool bVisible = false;
     bool bLastRaycastHit = false;
     Pico::FHitResult LastRaycastHit;
 

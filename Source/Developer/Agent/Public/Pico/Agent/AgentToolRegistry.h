@@ -158,6 +158,10 @@ public:
 
     bool RequiresApproval(const FAgentToolCall& Call) const override;
     bool IsReadOnly(const FAgentToolCall& Call) const override;
+    std::vector<std::string> GetRevisionReadSet(
+        const FAgentToolCall& Call) const override;
+    std::vector<std::string> GetRevisionWriteSet(
+        const FAgentToolCall& Call) const override;
     void PrepareApproval(const FAgentToolCall& Call) override;
     std::string GetLastExecutionTraceJson() const override;
     FAgentToolResult Execute(

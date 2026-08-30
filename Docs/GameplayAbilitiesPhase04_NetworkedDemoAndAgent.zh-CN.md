@@ -57,12 +57,18 @@ Fast Array、Replication Mode、Aggregator 或 GameplayCue 的替代品。
 
 ## 固定状态面板
 
-运行窗口右上角始终显示 `Mini GAS Status`，不需要打开 F1：
+运行窗口右上角始终显示 `Gameplay Status`，不需要打开 F1：
 
-- 顶部固定显示 `1 PURPLE Gravity | 2 RED Burn | 3 BLUE Freeze`；
-- 每个 Pawn 显示 NetId、网络角色，客户端自身带 `[LOCAL]`；
-- 只显示 HP、Mana、三种 Effect 剩余时间和三个技能冷却；
-- 独立服务器列出两个权威 Pawn，两个客户端分别列出本地与远端副本，便于直接比较三端结果。
+- 顶部显示 FPS、帧耗时和 `HH:MM:SS` 游戏进行时间；
+- 每个 Pawn 只显示 HP、Mana 和当前 Burning、Gravity、Frozen 状态；
+- 本地玩家技能表显示按键、技能种类、`Ready/Active/Cooldown` 和剩余冷却；
+- 其他玩家表只显示其技能种类，不暴露激活状态和冷却时间；
+- `AbilityLoadoutBits` 作为公开信息复制，三个冷却字段使用 `OwnerOnly`，从网络层落实信息选择性；
+- 即时投射物 Ability 通常由 `Ready` 直接进入 `Cooldown`；只有持续执行的 Ability 才会保持 `Active`。
+- 玩家顺序以当前窗口视角为准：本地占有的 Pawn 固定为 `P1 [LOCAL]`，远端 Pawn 再按 NetId 排序；
+- 独立服务器没有 LocalPlayer。地图中用于 Standalone 预览的 Auto Possess Pawn 会在服务器世界初始化时清理，
+  两位联网玩家只由各自连接的 `NetPlayer -> PlayerController -> GameMode` 链路生成，因此不会出现第三个
+  无 Controller 的角色干扰碰撞、最近目标选择和 GAS 验收。
 
 F1 仍保留完整网络、对象链、物理和动画诊断，不承担日常 GAS 验收。
 
@@ -82,7 +88,8 @@ F1 仍保留完整网络、对象链、物理和动画诊断，不承担日常 G
 1. 按 `1`，三端看到紫色投射物；命中后目标轻微起飞，Gravity 约 2.5 秒归零。
 2. 按 `2`，三端看到红色投射物；Burn 显示约 8 秒，HP 每秒减少 5。
 3. 按 `3`，三端看到蓝色投射物；Freeze 显示约 6 秒，目标期间不能移动、跳跃或施放能力。
-4. 比较三端右上角面板，最终 HP、Mana、Effect 和 Cooldown 应一致；冷却期重复按键应被拒绝。
+4. 比较三端右上角面板，最终 HP、Mana 和 Effect 应一致；操作端自己的技能表进入 Cooldown，
+   其他客户端只看见该玩家拥有的技能种类，冷却期重复按键应被拒绝。
 
 ## Agent 安全接入
 

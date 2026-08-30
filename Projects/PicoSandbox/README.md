@@ -174,7 +174,8 @@ Run `PicoSandboxGame` and use these controls:
 | `W/A/S/D` | The Sandbox PlayerController moves its possessed Pawn relative to the active game camera |
 | `Space` | CharacterMovement jumps, falls under gravity, and returns to Walking after landing |
 | `R` | GameMode restarts the same player with a new Pawn at PlayerStart |
-| `F1` | Show or hide the `Gameplay Debug` panel |
+| `F1` | Show or hide the full `Gameplay Debug` panel, which starts hidden |
+| `1/2/3` | Request the enabled Gravity/Burn/Freeze projectile ability on the server |
 | `UnPossess` | Keep the Pawn but detach it from the Controller |
 | `Possess Last Pawn` | Reattach the last live Pawn |
 | `Destroy Pawn` | Destroy only the current Pawn |
@@ -188,6 +189,22 @@ independent. Select the playable character's `CameraBoom` in PicoEditor to toggl
 or change `Probe Size`; with collision enabled, placing a wall between the character and camera
 retracts the arm instead of letting the wall hide the character. `View -> Frame Rate` toggles the
 editor's FPS/frame-time readout.
+
+The compact `Gameplay Status` window stays visible and contains FPS/frame time, elapsed game time
+(`HH:MM:SS`), each Pawn's replicated HP/Mana and active Burning/Gravity/Frozen state, plus current
+PicoGraph `Print String` messages. A local-player table shows equipped abilities, activation state,
+and remaining cooldown; the remote-player table deliberately exposes ability names only. Ability
+loadouts replicate publicly while cooldown fields use `OwnerOnly`, matching that information policy
+in both UI and network data. Detailed object, network, movement, physics, and lifecycle diagnostics
+remain in the F1 panel and do not open by default. Gameplay attributes and effect countdowns use
+Push Model dirty marks, so authority changes propagate instead of relying on polling.
+
+Player rows are view-relative: each client lists its locally possessed Pawn as `P1 [LOCAL]`, followed
+by remote Pawns in stable NetId order. In Separate Server mode, Pico removes unpossessed Sandbox Pawns
+authored with `AutoPossessPlayerIndex` during server world initialization. Those actors are useful for
+Standalone/editor preview, but a dedicated server has no LocalPlayer to possess them; connected players
+are spawned through `NetPlayer -> PlayerController -> GameMode -> DefaultPawnClass`. This prevents a
+preview Pawn from becoming a replicated third character, collision obstacle, or GAS target.
 
 To verify persistent dynamic events, select a PlayerStart Actor in PicoEditor and bind
 `OnPlayerSpawnedEvent` to that PlayerStart's `RecordPlayerSpawn` function under

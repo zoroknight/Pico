@@ -425,6 +425,12 @@ Golden Tasks 增加：Knowledge Prompt Injection、未知 Tool、Skill Forbidden
 
 ## 第 7 周：Revision、上下文与可视化
 
+验收状态：主体已完成。实现与数据见
+[工程深度第 7 周总结](EngineeringDepthWeek07_RevisionContextAndVisualization.zh-CN.md)。Profiler 三模式、
+AggregateOnly Full 基准、显式安全点 Compact、多域 Revision、跨轮次 Revision 恢复、有界 Message History、
+Development Metrics 与 Agent Metrics 已落地。Present/Idle 独立分项、后台降频和不可见预览暂停保留到第 8 周
+真实场景复测后决策。
+
 ### Runtime
 
 在 PicoInspector 或独立开发面板显示 Frame P50/P95、Top CPU Scopes、Object/Tick 数、Schedule Rebuild、最近
@@ -455,6 +461,14 @@ Physics、Network、GC、Render、Runtime UI、Present/VSync、Idle/Pacing 分�
 - 安全点 Trim 不破坏 Object Handle、GC 引用、网络 Channel、资产缓存或编辑器事务。
 
 ## 第 8 周：综合验收与工程报告
+
+验收状态：自动化部分已完成。新增统一 `Scripts/RunEngineeringDepthWeek08.ps1`，Release 24/24 CTest、5 样本
+固定 Runtime Matrix、21/21 Fake Golden、4/4 可恢复故障、真实 PicoEditor 初始化与 PicoSandbox Package/Runtime
+Smoke 均通过。真实 Provider 因 API Key、网络与费用边界保持显式未运行，交互式 Play 保持人工验收。
+
+Hierarchy A/B 最终决定为“延期采用”：连续 Child + Slot 位置索引在多 Parent 合成负载上明显更省、更快，但真实
+100K 宽层级端到端销毁中 Remove 差值不足以支持现在修改 Object Slot ABI。完整数据与采用条件见
+[第 8 周综合报告](EngineeringDepthWeek08_FinalAcceptance.zh-CN.md)。
 
 ### Runtime 固定验收
 

@@ -54,6 +54,11 @@ void PGameInstance::AppendGameplayStatusLines(std::vector<std::string>&) const
 {
 }
 
+void PGameInstance::AppendGameplayAbilityStatus(
+    std::vector<FPlayerAbilityStatus>&) const
+{
+}
+
 FGameEngine* PGameInstance::GetGameEngine() const
 {
     return OwningGameEngine;

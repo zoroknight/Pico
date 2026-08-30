@@ -6,6 +6,8 @@
 #include "Pico/Core/Paths.h"
 #include "Pico/Core/Config.h"
 #include "Pico/Core/Log.h"
+#include "Pico/Core/MemoryTracker.h"
+#include "Pico/Core/Profiler.h"
 #include "Pico/Core/PlatformProcess.h"
 #include "Pico/Core/Math/MathUtility.h"
 #include "Pico/Editor/EditorProjectManager.h"
@@ -16,6 +18,7 @@
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/NetDriver.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerController.h"
 #include "Pico/Engine/SceneComponent.h"
@@ -28,6 +31,7 @@
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "Pico/Object/ObjectName.h"
+#include "Pico/Object/ObjectRegistry.h"
 #include "Pico/Object/Property.h"
 
 #include <GLFW/glfw3.h>
@@ -183,6 +187,7 @@ void BuildDefaultDockLayout(ImGuiID DockspaceId, const ImVec2& DockspaceSize)
     ImGui::DockBuilderDockWindow("Content Browser", ContentBrowserNodeId);
     ImGui::DockBuilderDockWindow("Message Log", ContentBrowserNodeId);
     ImGui::DockBuilderDockWindow("AI Chat", DetailsNodeId);
+    ImGui::DockBuilderDockWindow("Development Metrics", DetailsNodeId);
     ImGui::DockBuilderFinish(DockspaceId);
 }
 
@@ -269,6 +274,9 @@ FPicoEditorApp::FPicoEditorApp(
             ViewportPanel.InvalidateStaticMesh(AssetPath);
         })
 {
+    if (!FProfiler::Get().IsEnabled())
+        FProfiler::Get().SetStorageMode(EProfileStorageMode::AggregateOnly);
+    FMemoryTracker::Get().SetEnabled(true);
     if (!TaskSystem.Initialize())
     {
         throw std::runtime_error("Pico task system initialization failed");
@@ -595,6 +603,7 @@ void FPicoEditorApp::Draw()
     ImGui::End();
 
     DrawMessageLog();
+    DrawDevelopmentMetrics();
 
     if (ImGui::Begin(
             "Viewport",
@@ -1411,7 +1420,101 @@ void FPicoEditorApp::DrawViewMenu()
     ImGui::MenuItem("Message Log", nullptr, &bMessageLogOpen);
     ImGui::MenuItem("AI Chat", nullptr, &bAgentChatOpen);
     ImGui::MenuItem("Frame Rate", nullptr, &bShowFrameRate);
+    ImGui::MenuItem("Development Metrics", nullptr, &bDevelopmentMetricsOpen);
     ImGui::EndMenu();
+}
+
+void FPicoEditorApp::DrawDevelopmentMetrics()
+{
+    if (!bDevelopmentMetricsOpen || EngineLoop == nullptr) return;
+    if (!ImGui::Begin("Development Metrics", &bDevelopmentMetricsOpen))
+    {
+        ImGui::End();
+        return;
+    }
+
+    const FFrameTimeStatistics Frame = EngineLoop->GetFrameTimeStatistics();
+    ImGui::Text("Frame P50 %.2f ms | P95 %.2f ms | P99 %.2f ms",
+        Frame.P50Milliseconds, Frame.P95Milliseconds, Frame.P99Milliseconds);
+    ImGui::Text("Long frames (>16.67 ms): %llu | samples: %zu",
+        static_cast<unsigned long long>(Frame.LongFrameCount), Frame.SampleCount);
+
+    PWorld* World = EngineLoop->GetWorld();
+    const std::size_t TickCount = World != nullptr
+        ? World->GetTickTaskManager().GetRegisteredTickFunctionCount() : 0;
+    std::uint64_t ScheduleBuilds = 0;
+    if (World != nullptr)
+        for (int Group = 0; Group < 4; ++Group)
+            ScheduleBuilds += World->GetTickTaskManager().GetScheduleBuildCount(
+                static_cast<ETickGroup>(Group));
+    ImGui::Text("Objects %zu | Tick functions %zu | Schedule rebuilds %llu",
+        FObjectRegistry::GetObjectCount(), TickCount,
+        static_cast<unsigned long long>(ScheduleBuilds));
+    ImGui::Text("Task workers %zu | queued %zu",
+        TaskSystem.GetWorkerCount(), TaskSystem.GetQueuedTaskCount());
+
+    const FGarbageCollectionResult& GC =
+        EngineLoop->GetLastGarbageCollectionResult();
+    ImGui::Text("Last GC: before %zu | collected %zu | after %zu | %.3f ms",
+        GC.ObjectCountBefore, GC.CollectedObjectCount, GC.ObjectCountAfter,
+        static_cast<double>(GC.RootScanNanoseconds + GC.MarkNanoseconds
+            + GC.UnreachableSortNanoseconds + GC.DestroyNanoseconds) / 1000000.0);
+
+    if (World != nullptr && World->GetNetDriver() != nullptr)
+    {
+        const FReplicationStatistics Net =
+            World->GetNetDriver()->GetReplicationStatistics();
+        ImGui::Text("Replication: actors %llu | dirty %llu | fields %llu | bytes %llu",
+            static_cast<unsigned long long>(Net.ActorsConsidered),
+            static_cast<unsigned long long>(Net.DirtyActors),
+            static_cast<unsigned long long>(Net.DirtyProperties),
+            static_cast<unsigned long long>(Net.BytesQueued));
+    }
+    else ImGui::TextDisabled("Replication: inactive");
+
+    if (ImGui::CollapsingHeader("Top CPU Scopes", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        std::vector<FProfileAggregate> Aggregates = FProfiler::Get().GetAggregates();
+        std::sort(Aggregates.begin(), Aggregates.end(),
+            [](const FProfileAggregate& A, const FProfileAggregate& B)
+            { return A.TotalMicroseconds > B.TotalMicroseconds; });
+        const std::size_t Count = std::min<std::size_t>(Aggregates.size(), 8);
+        for (std::size_t Index = 0; Index < Count; ++Index)
+            ImGui::BulletText("%s  %.3f ms | %llu calls",
+                Aggregates[Index].Name.c_str(),
+                static_cast<double>(Aggregates[Index].TotalMicroseconds) / 1000.0,
+                static_cast<unsigned long long>(Aggregates[Index].Count));
+    }
+
+    if (ImGui::CollapsingHeader("Memory", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        for (const FMemorySnapshot& Snapshot : FMemoryTracker::Get().GetSnapshots())
+            ImGui::Text("%.*s  current %.2f MB | reserved %.2f MB | peak %.2f MB",
+                static_cast<int>(GetMemoryTagName(Snapshot.Tag).size()),
+                GetMemoryTagName(Snapshot.Tag).data(),
+                static_cast<double>(Snapshot.CurrentBytes) / (1024.0 * 1024.0),
+                static_cast<double>(Snapshot.ReservedBytes) / (1024.0 * 1024.0),
+                static_cast<double>(Snapshot.PeakBytes) / (1024.0 * 1024.0));
+    }
+
+    const FProfilerStorageStats Storage = FProfiler::Get().GetStorageStats();
+    ImGui::Separator();
+    ImGui::Text("Profiler mode %d | events %zu/%zu | overwritten %llu",
+        static_cast<int>(Storage.Mode), Storage.StoredEventCount,
+        Storage.TraceCapacity,
+        static_cast<unsigned long long>(Storage.DroppedEventCount));
+    if (ImGui::Button("Compact At Safe Point"))
+    {
+        FProfiler::Get().Compact();
+        std::string CompactError;
+        const bool bCompacted = FObjectRegistry::CompactStorage(&CompactError);
+        SetStatus(
+            bCompacted
+                ? "Runtime storage compacted at editor safe point"
+                : "Runtime storage compact failed: " + CompactError,
+            !bCompacted);
+    }
+    ImGui::End();
 }
 
 void FPicoEditorApp::LoadProjectSettings()

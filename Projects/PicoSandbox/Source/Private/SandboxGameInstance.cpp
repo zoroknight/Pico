@@ -9,14 +9,50 @@
 #include "Pico/Input/InputSystem.h"
 #include "Pico/Object/ObjectGlobals.h"
 #include "PicoSandbox/SandboxReplicationLabActor.h"
+#include "PicoSandbox/SandboxGameplayAbilities.h"
 #include "PicoSandbox/SandboxPlayerController.h"
 #include "PicoSandbox/SandboxPawn.h"
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
+#include <utility>
 
 namespace PicoSandbox
 {
+namespace
+{
+std::vector<const PSandboxPawn*> CollectOrderedSandboxPawns(
+    Pico::PWorld* World,
+    const Pico::PPawn* LocalPawn)
+{
+    std::vector<const PSandboxPawn*> Pawns;
+    if (World == nullptr) return Pawns;
+    for (Pico::PLevel* Level : World->GetLevels())
+    {
+        if (Level == nullptr) continue;
+        for (Pico::PActor* Actor : Level->GetActors())
+        {
+            if (Actor != nullptr && !Actor->IsPendingDestroy()
+                && Actor->IsA(PSandboxPawn::StaticClass()))
+                Pawns.push_back(static_cast<const PSandboxPawn*>(Actor));
+        }
+    }
+    std::stable_sort(Pawns.begin(), Pawns.end(), [LocalPawn](
+        const PSandboxPawn* Left, const PSandboxPawn* Right)
+    {
+        if (Left == LocalPawn) return Right != LocalPawn;
+        if (Right == LocalPawn) return false;
+        const Pico::FNetObjectId LeftId = Left->GetNetObjectId();
+        const Pico::FNetObjectId RightId = Right->GetNetObjectId();
+        if (LeftId.IsValid() != RightId.IsValid()) return LeftId.IsValid();
+        if (LeftId.IsValid() && LeftId != RightId) return LeftId.Value < RightId.Value;
+        return Left->GetPathName() < Right->GetPathName();
+    });
+    return Pawns;
+}
+}
+
 PICO_DEFINE_CLASS_NO_PROPERTIES(PSandboxGameInstance)
 
 PSandboxGameInstance::PSandboxGameInstance(
@@ -30,11 +66,14 @@ bool PSandboxGameInstance::Init(Pico::FGameEngine& GameEngine)
     return Pico::PGameInstance::Init(GameEngine);
 }
 
-void PSandboxGameInstance::OnWorldInitialized(Pico::PWorld*)
+void PSandboxGameInstance::OnWorldInitialized(Pico::PWorld* World)
 {
     ReplicationLabActorHandle = {};
     ReplicationLabMoveStep = 0;
     const Pico::FGameEngine* GameEngine = GetGameEngine();
+    if (GameEngine != nullptr
+        && GameEngine->GetNetDriver().GetNetMode() == Pico::ENetMode::Server)
+        RemoveUnpossessedServerPreviewPawns(World);
     if (GameEngine != nullptr
         && GameEngine->GetNetDriver().GetNetMode() != Pico::ENetMode::Client)
     {
@@ -228,72 +267,130 @@ void PSandboxGameInstance::AppendGameplayStatusLines(
     const Pico::PPawn* LocalPawn = LocalPlayer != nullptr
             && LocalPlayer->GetPlayerController() != nullptr
         ? LocalPlayer->GetPlayerController()->GetPawn() : nullptr;
-    OutLines.emplace_back("1 PURPLE Gravity  |  2 RED Burn  |  3 BLUE Freeze");
+    const std::vector<const PSandboxPawn*> Pawns =
+        CollectOrderedSandboxPawns(World, LocalPawn);
     Pico::int32 PawnIndex = 0;
+    for (const PSandboxPawn* Pawn : Pawns)
+    {
+        ++PawnIndex;
+        OutLines.emplace_back("---");
+        std::ostringstream Attributes;
+        Attributes << std::fixed << std::setprecision(0)
+            << "P" << PawnIndex << (Pawn == LocalPawn ? " [LOCAL]" : "")
+            << "  HP " << Pawn->GetReplicatedHealth()
+            << "  Mana " << Pawn->GetReplicatedMana();
+        OutLines.push_back(Attributes.str());
+
+        std::ostringstream Status;
+        Status << std::fixed << std::setprecision(1) << "Status  ";
+        bool bHasStatus = false;
+        const auto AppendStatus = [&Status, &bHasStatus](
+            const char* Name, float Remaining)
+        {
+            if (Remaining <= 0.05f) return;
+            if (bHasStatus) Status << " | ";
+            Status << Name << " " << Remaining << "s";
+            bHasStatus = true;
+        };
+        AppendStatus("Burning", Pawn->GetReplicatedBurnRemaining());
+        AppendStatus("Gravity", Pawn->GetReplicatedGravityRemaining());
+        AppendStatus("Frozen", Pawn->GetReplicatedFreezeRemaining());
+        if (!bHasStatus) Status << "Normal";
+        OutLines.push_back(Status.str());
+
+        for (Pico::PActorComponent* Component : Pawn->GetComponents())
+        {
+            if (Component == nullptr
+                || !Component->IsA(Pico::PScriptComponent::StaticClass()))
+                continue;
+            const auto* Script = static_cast<const Pico::PScriptComponent*>(Component);
+            for (const Pico::FScriptScreenMessage& Message : Script->GetScreenMessages())
+            {
+                OutLines.emplace_back("Message  " + Message.Text);
+            }
+        }
+    }
+    if (PawnIndex == 0) OutLines.emplace_back("Waiting for replicated players...");
+}
+
+void PSandboxGameInstance::AppendGameplayAbilityStatus(
+    std::vector<Pico::FPlayerAbilityStatus>& OutPlayers) const
+{
+    Pico::PWorld* World = GetWorld();
+    if (World == nullptr) return;
+    const Pico::PLocalPlayer* LocalPlayer = GetPrimaryLocalPlayer();
+    const Pico::PPawn* LocalPawn = LocalPlayer != nullptr
+            && LocalPlayer->GetPlayerController() != nullptr
+        ? LocalPlayer->GetPlayerController()->GetPawn() : nullptr;
+    const std::vector<const PSandboxPawn*> Pawns =
+        CollectOrderedSandboxPawns(World, LocalPawn);
+    Pico::int32 PawnIndex = 0;
+    for (const PSandboxPawn* Pawn : Pawns)
+    {
+        Pico::FPlayerAbilityStatus Player;
+        Player.PlayerLabel = "P" + std::to_string(++PawnIndex);
+        Player.bIsLocalPlayer = Pawn == LocalPawn;
+        const Pico::int32 Loadout = Pawn->GetAbilityLoadoutBits();
+        const auto* AbilitySystem = Pawn->GetAbilitySystemComponent();
+        const auto AppendAbility = [&Player, AbilitySystem](
+                Pico::int32 Bit,
+                Pico::int32 LoadoutBits,
+                const char* Input,
+                const char* Name,
+                const Pico::PClass* AbilityClass,
+                float Cooldown)
+            {
+                if ((LoadoutBits & Bit) == 0) return;
+                Pico::FGameplayAbilityStatus Status;
+                Status.InputLabel = Input;
+                Status.AbilityName = Name;
+                Status.CooldownRemaining = std::max(0.0f, Cooldown);
+                if (AbilitySystem != nullptr)
+                {
+                    for (const Pico::FGameplayAbilitySpec& Spec
+                        : AbilitySystem->GetActivatableAbilities())
+                    {
+                        if (Spec.AbilityClass == AbilityClass)
+                        {
+                            Status.bActive = Spec.IsActive();
+                            break;
+                        }
+                    }
+                }
+                Player.Abilities.push_back(std::move(Status));
+        };
+        AppendAbility(1, Loadout, "1", "Gravity",
+            PSandboxDashAbility::StaticClass(),
+            Pawn->GetReplicatedGravityCooldownRemaining());
+        AppendAbility(2, Loadout, "2", "Burn",
+            PSandboxFireballAbility::StaticClass(),
+            Pawn->GetReplicatedBurnCooldownRemaining());
+        AppendAbility(4, Loadout, "3", "Freeze",
+            PSandboxStunAbility::StaticClass(),
+            Pawn->GetReplicatedFreezeCooldownRemaining());
+        OutPlayers.push_back(std::move(Player));
+    }
+}
+
+void PSandboxGameInstance::RemoveUnpossessedServerPreviewPawns(Pico::PWorld* World)
+{
+    if (World == nullptr) return;
+    std::vector<PSandboxPawn*> PreviewPawns;
     for (Pico::PLevel* Level : World->GetLevels())
     {
         if (Level == nullptr) continue;
         for (Pico::PActor* Actor : Level->GetActors())
         {
-            if (Actor == nullptr || Actor->IsPendingDestroy()
-                || !Actor->IsA(PSandboxPawn::StaticClass())) continue;
-            const auto* Pawn = static_cast<const PSandboxPawn*>(Actor);
-            ++PawnIndex;
-            OutLines.emplace_back("---");
-            std::ostringstream Identity;
-            Identity << "P" << PawnIndex
-                << (Pawn == LocalPawn ? " [LOCAL]" : "")
-                << "  NetId " << Pawn->GetNetObjectId().Value
-                << "  " << Pico::ToString(Pawn->GetLocalRole());
-            OutLines.push_back(Identity.str());
-            std::ostringstream BeginPlayMode;
-            BeginPlayMode << std::fixed << std::setprecision(1)
-                << "bDelayBeginPlayAction="
-                << (Pawn->GetDelayBeginPlayAction() ? "true" : "false")
-                << " | delayed path=10.0s";
-            OutLines.push_back(BeginPlayMode.str());
-            for (Pico::PActorComponent* Component : Pawn->GetComponents())
-            {
-                if (Component == nullptr
-                    || !Component->IsA(Pico::PScriptComponent::StaticClass()))
-                    continue;
-                const auto* Script = static_cast<const Pico::PScriptComponent*>(Component);
-                OutLines.emplace_back("Graph  " + Component->GetName().ToString());
-                std::ostringstream ScriptState;
-                ScriptState << "State "
-                    << Pico::ToString(Script->GetLastExecutionReport().Result)
-                    << " | latent " << Pico::ToString(Script->GetActiveLatentAction());
-                if (Script->GetActiveLatentAction() == Pico::EScriptLatentAction::Delay)
-                    ScriptState << " | remaining " << std::fixed << std::setprecision(1)
-                        << Script->GetLatentRemainingSeconds() << "s";
-                ScriptState << " | instructions "
-                    << Script->GetLastExecutionReport().InstructionsExecuted;
-                OutLines.push_back(ScriptState.str());
-                for (const Pico::FScriptScreenMessage& Message : Script->GetScreenMessages())
-                {
-                    OutLines.emplace_back("Message  " + Message.Text);
-                }
-            }
-            std::ostringstream Attributes;
-            Attributes << std::fixed << std::setprecision(0)
-                << "HP " << Pawn->GetReplicatedHealth()
-                << "    Mana " << Pawn->GetReplicatedMana();
-            OutLines.push_back(Attributes.str());
-            std::ostringstream Effects;
-            Effects << std::fixed << std::setprecision(1)
-                << "Effects  Burn " << Pawn->GetReplicatedBurnRemaining() << "s"
-                << " | Gravity " << Pawn->GetReplicatedGravityRemaining() << "s"
-                << " | Freeze " << Pawn->GetReplicatedFreezeRemaining() << "s";
-            OutLines.push_back(Effects.str());
-            std::ostringstream Cooldowns;
-            Cooldowns << std::fixed << std::setprecision(1)
-                << "CD  [1] " << Pawn->GetReplicatedGravityCooldownRemaining() << "s"
-                << " | [2] " << Pawn->GetReplicatedBurnCooldownRemaining() << "s"
-                << " | [3] " << Pawn->GetReplicatedFreezeCooldownRemaining() << "s";
-            OutLines.push_back(Cooldowns.str());
+            auto* Pawn = Actor != nullptr && Actor->IsA(PSandboxPawn::StaticClass())
+                ? static_cast<PSandboxPawn*>(Actor) : nullptr;
+            if (Pawn != nullptr && !Pawn->IsPendingDestroy()
+                && Pawn->GetController() == nullptr
+                && Pawn->GetAutoPossessPlayerIndex() >= 0)
+                PreviewPawns.push_back(Pawn);
         }
     }
-    if (PawnIndex == 0) OutLines.emplace_back("Waiting for replicated players...");
+    for (PSandboxPawn* Pawn : PreviewPawns)
+        World->DestroyActor(Pawn);
 }
 
 PSandboxReplicationLabActor* PSandboxGameInstance::ResolveReplicationLabActor() const

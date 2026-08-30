@@ -1,11 +1,11 @@
 [ActorDefaults]
 AbilityLoadoutBits=6
 AutoPossessPlayerIndex=0
-BurnCooldownSeconds=0.5
+BurnCooldownSeconds=5
 FreezeCooldownSeconds=0.5
+FreezeEffectDuration=10
 InitialHealth=400
 InitialMana=400
-bGravityShotEnabled=false
 
 [Blueprint]
 Components=CollisionCapsule;CharacterMovement;SandboxPlayerMesh;SandboxAnimatedMesh;AbilitySystem;CameraBoom;FollowCamera;ScriptComponent_1

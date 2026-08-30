@@ -10,6 +10,7 @@
 #include "Pico/Agent/AgentSkill.h"
 #include "Pico/Agent/FakeAgentProvider.h"
 #include "Pico/Agent/OpenAICompatibleProvider.h"
+#include "Pico/Core/Config.h"
 #include "Pico/Core/Paths.h"
 #include "Pico/Editor/EditorAgentTools.h"
 #include "Pico/Tasks/GameThreadDispatcher.h"
@@ -36,6 +37,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -127,6 +129,17 @@ const char* ProviderSessionSlug(EChatProvider Provider)
     return "unknown";
 }
 
+const char* DefaultModelForProvider(EChatProvider Provider)
+{
+    switch (Provider)
+    {
+    case EChatProvider::DeepSeek: return "deepseek-v4-flash";
+    case EChatProvider::Kimi: return "kimi-k2.6";
+    case EChatProvider::Fake: return "offline-fake";
+    }
+    return "offline-fake";
+}
+
 std::optional<EChatProvider> ParseProviderSessionSlug(std::string_view Provider)
 {
     if (Provider == "fake") return EChatProvider::Fake;
@@ -165,11 +178,24 @@ void ClearSecret(std::string& Text)
     Text.clear();
 }
 
+struct FChatToolEntry
+{
+    std::string CallId;
+    std::string ToolName;
+    std::string ArgumentsJson = "{}";
+    std::string ResultMarkdown;
+    bool bHasResult = false;
+    bool bSucceeded = false;
+    bool bReused = false;
+};
+
 struct FChatLine
 {
     std::string Label;
     std::string Text;
     ImVec4 Color {0.82f, 0.84f, 0.88f, 1.0f};
+    bool bToolSummary = false;
+    std::vector<FChatToolEntry> Tools;
 };
 
 std::string JsonCodeBlock(std::string_view JsonText)
@@ -184,11 +210,6 @@ std::string JsonCodeBlock(std::string_view JsonText)
         // Tool errors may deliberately carry plain text instead of JSON.
     }
     return "```json\n" + Formatted + "\n```";
-}
-
-std::string ToolCallMarkdown(const FAgentEvent& Event)
-{
-    return "`" + Event.ToolName + "`\n\n" + JsonCodeBlock(Event.PayloadJson);
 }
 
 std::string ToolResultMarkdown(const FAgentEvent& Event)
@@ -296,6 +317,102 @@ bool CopyIconButton(const char* Id, const char* Tooltip)
     return bPressed;
 }
 
+std::string BuildToolSummaryText(const std::vector<FChatToolEntry>& Tools)
+{
+    std::size_t Succeeded = 0;
+    std::size_t Failed = 0;
+    std::size_t Pending = 0;
+    for (const FChatToolEntry& Tool : Tools)
+    {
+        if (!Tool.bHasResult) ++Pending;
+        else if (Tool.bSucceeded) ++Succeeded;
+        else ++Failed;
+    }
+    std::ostringstream Text;
+    Text << "工具调用摘要：共 " << Tools.size() << " 个，成功 "
+         << Succeeded << "，失败 " << Failed;
+    if (Pending > 0) Text << "，等待 " << Pending;
+    Text << "。\n\n| # | 工具 | 结果 |\n|---:|---|---|\n";
+    for (std::size_t Index = 0; Index < Tools.size(); ++Index)
+    {
+        const FChatToolEntry& Tool = Tools[Index];
+        const char* Status = !Tool.bHasResult ? "等待"
+            : Tool.bSucceeded ? (Tool.bReused ? "成功（复用）" : "成功")
+                              : "失败";
+        Text << "| " << Index + 1 << " | `" << Tool.ToolName
+             << "` | " << Status << " |\n";
+    }
+    return Text.str();
+}
+
+void DrawToolSummary(const FChatLine& Line)
+{
+    std::size_t Succeeded = 0;
+    std::size_t Failed = 0;
+    for (const FChatToolEntry& Tool : Line.Tools)
+    {
+        Succeeded += Tool.bHasResult && Tool.bSucceeded ? 1U : 0U;
+        Failed += Tool.bHasResult && !Tool.bSucceeded ? 1U : 0U;
+    }
+    ImGui::TextColored(Line.Color, "工具调用摘要");
+    const float CopyButtonX = std::max(ImGui::GetCursorPosX() + 8.0f,
+        ImGui::GetWindowContentRegionMax().x - ImGui::GetFrameHeight());
+    ImGui::SameLine(CopyButtonX);
+    if (CopyIconButton("##CopyToolSummary", "复制工具调用摘要"))
+        ImGui::SetClipboardText(Line.Text.c_str());
+
+    const std::string Header = "调用 " + std::to_string(Line.Tools.size())
+        + " 个工具 | 成功 " + std::to_string(Succeeded)
+        + " | 失败 " + std::to_string(Failed) + "##ToolSummary";
+    if (!ImGui::CollapsingHeader(Header.c_str())) return;
+
+    constexpr ImGuiTableFlags Flags = ImGuiTableFlags_Borders
+        | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
+    if (ImGui::BeginTable("##ToolSummaryTable", 3, Flags))
+    {
+        ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 34.0f);
+        ImGui::TableSetupColumn("工具");
+        ImGui::TableSetupColumn("结果", ImGuiTableColumnFlags_WidthFixed, 88.0f);
+        ImGui::TableHeadersRow();
+        for (std::size_t Index = 0; Index < Line.Tools.size(); ++Index)
+        {
+            const FChatToolEntry& Tool = Line.Tools[Index];
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("%zu", Index + 1);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(Tool.ToolName.c_str());
+            ImGui::TableSetColumnIndex(2);
+            if (!Tool.bHasResult) ImGui::TextDisabled("等待");
+            else if (Tool.bSucceeded)
+                ImGui::TextColored(ImVec4(0.42f, 0.88f, 0.55f, 1.0f),
+                    "%s", Tool.bReused ? "成功/复用" : "成功");
+            else
+                ImGui::TextColored(ImVec4(1.0f, 0.42f, 0.36f, 1.0f), "失败");
+        }
+        ImGui::EndTable();
+    }
+    for (std::size_t Index = 0; Index < Line.Tools.size(); ++Index)
+    {
+        const FChatToolEntry& Tool = Line.Tools[Index];
+        ImGui::PushID(static_cast<int>(Index));
+        const std::string DetailLabel = std::to_string(Index + 1) + ". "
+            + Tool.ToolName + "##ToolDetail";
+        if (ImGui::TreeNode(DetailLabel.c_str()))
+        {
+            ImGui::TextDisabled("参数");
+            DrawMarkdown(JsonCodeBlock(Tool.ArgumentsJson));
+            if (Tool.bHasResult)
+            {
+                ImGui::TextDisabled("结果与执行轨迹");
+                DrawMarkdown(Tool.ResultMarkdown);
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+}
+
 class FInteractiveApproval final : public IAgentToolApproval
 {
 public:
@@ -397,6 +514,20 @@ public:
     bool IsReadOnly(const FAgentToolCall& Call) const override
     {
         return EditorTools && EditorTools->IsReadOnly(Call);
+    }
+
+    std::vector<std::string> GetRevisionReadSet(
+        const FAgentToolCall& Call) const override
+    {
+        return EditorTools ? EditorTools->GetRevisionReadSet(Call)
+            : std::vector<std::string>{"State.Revision"};
+    }
+
+    std::vector<std::string> GetRevisionWriteSet(
+        const FAgentToolCall& Call) const override
+    {
+        return EditorTools ? EditorTools->GetRevisionWriteSet(Call)
+            : std::vector<std::string>{"State.Revision"};
     }
 
     void PrepareApproval(const FAgentToolCall& Call) override
@@ -724,6 +855,7 @@ struct FAgentChatWorkspace::FImpl
         , RequestProjectOpen(std::move(InRequestProjectOpen))
     {
         std::snprintf(Model.data(), Model.size(), "%s", "offline-fake");
+        LoadChatPreferences();
         std::string StartupError;
         if (!KnowledgeStore.Load(&StartupError)) Status = StartupError;
         std::string SkillError;
@@ -747,6 +879,7 @@ struct FAgentChatWorkspace::FImpl
                 if (!Handoff->Model.empty())
                     std::snprintf(Model.data(), Model.size(), "%s",
                         Handoff->Model.c_str());
+                SaveChatPreferences();
                 Status = "Project handoff restored this conversation";
             }
             else
@@ -858,6 +991,43 @@ struct FAgentChatWorkspace::FImpl
         ClearSecret(ApiKey);
     }
 
+    std::filesystem::path GetChatSettingsPath() const
+    {
+        const std::filesystem::path& EngineRoot = FPaths::GetEngineRootDir();
+        return EngineRoot.empty() ? std::filesystem::path {}
+            : EngineRoot / "Saved/Editor/Agent/ChatSettings.ini";
+    }
+
+    void LoadChatPreferences()
+    {
+        const std::filesystem::path Path = GetChatSettingsPath();
+        FConfigFile Config;
+        if (Path.empty() || !Config.Load(Path)) return;
+        const std::optional<EChatProvider> SavedProvider =
+            ParseProviderSessionSlug(
+                Config.GetString("Chat", "LastProvider", "fake"));
+        if (SavedProvider) Provider = *SavedProvider;
+        const std::string SavedModel = Config.GetString("Models",
+            ProviderSessionSlug(Provider), DefaultModelForProvider(Provider));
+        std::snprintf(Model.data(), Model.size(), "%s", SavedModel.c_str());
+    }
+
+    void SaveChatPreferences()
+    {
+        const std::filesystem::path Path = GetChatSettingsPath();
+        if (Path.empty()) return;
+        FConfigFile Config;
+        std::error_code FileError;
+        if (std::filesystem::exists(Path, FileError) && !FileError)
+            Config.Load(Path);
+        Config.SetString("Chat", "LastProvider", ProviderSessionSlug(Provider));
+        Config.SetString("Models", ProviderSessionSlug(Provider), Model.data());
+        if (!Config.Save(Path))
+            PreferenceError = "Could not save editor-local AI Chat preferences";
+        else
+            PreferenceError.clear();
+    }
+
     void RefreshSessionView()
     {
         if (SessionPath.empty()) return;
@@ -870,8 +1040,104 @@ struct FAgentChatWorkspace::FImpl
             return;
         }
         std::vector<FChatLine> NewLines;
-        for (const FAgentEvent& Event : Session->GetEvents())
+        const std::vector<FAgentEvent>& Events = Session->GetEvents();
+        std::size_t Index = 0;
+        while (Index < Events.size())
         {
+            const FAgentEvent& Event = Events[Index];
+            if (Event.Type == EAgentEventType::Message
+                && Event.Role == EAgentRole::User)
+            {
+                NewLines.push_back({"You", Event.Content,
+                    ImVec4(0.45f, 0.78f, 1.0f, 1.0f)});
+                std::size_t End = Index + 1;
+                while (End < Events.size()
+                    && !(Events[End].Type == EAgentEventType::Message
+                        && Events[End].Role == EAgentRole::User))
+                    ++End;
+
+                std::string AssistantText;
+                std::vector<std::pair<std::string, std::size_t>> Errors;
+                std::vector<FChatToolEntry> Tools;
+                std::unordered_map<std::string, std::size_t> ToolIndices;
+                for (std::size_t Cursor = Index + 1; Cursor < End; ++Cursor)
+                {
+                    const FAgentEvent& RunEvent = Events[Cursor];
+                    if (RunEvent.Type == EAgentEventType::Message
+                        && RunEvent.Role == EAgentRole::Assistant
+                        && !RunEvent.Content.empty())
+                    {
+                        if (!AssistantText.empty()) AssistantText += "\n\n";
+                        AssistantText += RunEvent.Content;
+                    }
+                    else if (RunEvent.Type == EAgentEventType::ToolCall)
+                    {
+                        ToolIndices[RunEvent.CallId] = Tools.size();
+                        Tools.push_back({RunEvent.CallId, RunEvent.ToolName,
+                            RunEvent.PayloadJson});
+                    }
+                    else if (RunEvent.Type == EAgentEventType::ToolResult)
+                    {
+                        auto Tool = ToolIndices.find(RunEvent.CallId);
+                        if (Tool == ToolIndices.end())
+                        {
+                            ToolIndices[RunEvent.CallId] = Tools.size();
+                            Tools.push_back({RunEvent.CallId, RunEvent.ToolName});
+                            Tool = ToolIndices.find(RunEvent.CallId);
+                        }
+                        FChatToolEntry& Entry = Tools[Tool->second];
+                        if (Entry.ToolName.empty()) Entry.ToolName = RunEvent.ToolName;
+                        Entry.ResultMarkdown = ToolResultMarkdown(RunEvent);
+                        Entry.bHasResult = true;
+                        Entry.bSucceeded = RunEvent.bSucceeded;
+                        Entry.bReused = RunEvent.bReused;
+                    }
+                    else if (RunEvent.Type == EAgentEventType::Error
+                        && !RunEvent.Content.empty())
+                    {
+                        auto Existing = std::find_if(Errors.begin(), Errors.end(),
+                            [&RunEvent](const auto& Item)
+                            {
+                                return Item.first == RunEvent.Content;
+                            });
+                        if (Existing == Errors.end())
+                            Errors.emplace_back(RunEvent.Content, 1U);
+                        else
+                            ++Existing->second;
+                    }
+                }
+                if (!AssistantText.empty())
+                {
+                    NewLines.push_back({"Assistant", std::move(AssistantText),
+                        ImVec4(0.72f, 0.90f, 0.74f, 1.0f)});
+                }
+                if (!Errors.empty())
+                {
+                    std::string ErrorText;
+                    for (const auto& [Message, Count] : Errors)
+                    {
+                        if (!ErrorText.empty()) ErrorText += "\n\n";
+                        ErrorText += Message;
+                        if (Count > 1)
+                            ErrorText += "\n\n（相同错误重复 "
+                                + std::to_string(Count) + " 次）";
+                    }
+                    NewLines.push_back({"Error", std::move(ErrorText),
+                        ImVec4(1.0f, 0.42f, 0.36f, 1.0f)});
+                }
+                if (!Tools.empty())
+                {
+                    FChatLine Summary;
+                    Summary.Label = "工具调用摘要";
+                    Summary.Text = BuildToolSummaryText(Tools);
+                    Summary.Color = ImVec4(0.68f, 0.84f, 0.72f, 1.0f);
+                    Summary.bToolSummary = true;
+                    Summary.Tools = std::move(Tools);
+                    NewLines.push_back(std::move(Summary));
+                }
+                Index = End;
+                continue;
+            }
             if (Event.Type == EAgentEventType::Message)
             {
                 const bool bUser = Event.Role == EAgentRole::User;
@@ -879,23 +1145,12 @@ struct FAgentChatWorkspace::FImpl
                     bUser ? ImVec4(0.45f, 0.78f, 1.0f, 1.0f)
                           : ImVec4(0.72f, 0.90f, 0.74f, 1.0f)});
             }
-            else if (Event.Type == EAgentEventType::ToolCall)
-            {
-                NewLines.push_back({"Tool Call", ToolCallMarkdown(Event),
-                    ImVec4(0.92f, 0.78f, 0.38f, 1.0f)});
-            }
-            else if (Event.Type == EAgentEventType::ToolResult)
-            {
-                NewLines.push_back({Event.bSucceeded ? "Tool Result" : "Tool Error",
-                    ToolResultMarkdown(Event),
-                    Event.bSucceeded ? ImVec4(0.68f, 0.84f, 0.72f, 1.0f)
-                                     : ImVec4(1.0f, 0.42f, 0.36f, 1.0f)});
-            }
             else if (Event.Type == EAgentEventType::Error)
             {
                 NewLines.push_back({"Error", Event.Content,
                     ImVec4(1.0f, 0.42f, 0.36f, 1.0f)});
             }
+            ++Index;
         }
         std::lock_guard Lock(ViewMutex);
         Lines = std::move(NewLines);
@@ -928,6 +1183,8 @@ struct FAgentChatWorkspace::FImpl
             "For scene assembly, search assets before referencing them, create structural room geometry before gameplay Actors, then validate and save before packaging. "
             "After creating a project from the third-person template, finish the current answer concisely; Pico will open a clean editor process and restore this conversation in the new project. "
             "Before editing reflected properties, call editor.object.describe and use the exact component object path, property name, current compound value, units, semantic, and range it returns. "
+            "Use plain Markdown without Emoji; the editor deliberately omits unsupported color Emoji. "
+            "Do not repeat raw tool arguments, Tool Results, or execution traces in assistant prose; the editor provides one expandable tool summary after the turn. "
             "Never invent object paths or claim a tool succeeded before receiving its result.";
         Settings.TimeoutMilliseconds = static_cast<std::uint32_t>(TimeoutSeconds * 1000);
         Settings.MaxRetries = static_cast<std::size_t>(MaxRetries);
@@ -1152,6 +1409,9 @@ struct FAgentChatWorkspace::FImpl
                     Status = SelectedProviderName + " / " + SelectedModel
                         + ": " + std::string(ToString(Result.Status));
                     if (!Result.Error.empty()) Status += ": " + Result.Error;
+                    LastRunCounters = Result.Counters;
+                    LastRunContextBytes = Result.ContextBytes;
+                    LastRunId = Result.RunId;
                 }
                 bRunning.store(false);
                 if (ProjectToOpen && Dispatcher && RequestProjectOpen)
@@ -1192,9 +1452,15 @@ struct FAgentChatWorkspace::FImpl
         if (ImGui::Combo("Provider", &ProviderIndex, ProviderNames, 3))
         {
             Provider = static_cast<EChatProvider>(ProviderIndex);
-            const char* DefaultModel = Provider == EChatProvider::DeepSeek
-                ? "deepseek-v4-flash" : (Provider == EChatProvider::Kimi ? "kimi-k2.6" : "offline-fake");
-            std::snprintf(Model.data(), Model.size(), "%s", DefaultModel);
+            FConfigFile Config;
+            std::string ModelName = DefaultModelForProvider(Provider);
+            if (Config.Load(GetChatSettingsPath()))
+            {
+                ModelName = Config.GetString("Models",
+                    ProviderSessionSlug(Provider), ModelName);
+            }
+            std::snprintf(Model.data(), Model.size(), "%s", ModelName.c_str());
+            SaveChatPreferences();
             ApiKeyInput.fill('\0');
             SessionId.clear();
             SessionPath.clear();
@@ -1219,6 +1485,7 @@ struct FAgentChatWorkspace::FImpl
             ImGui::SetNextItemWidth(240.0f);
             ImGui::BeginDisabled(bRunning.load());
             ImGui::InputText("Model", Model.data(), Model.size());
+            if (ImGui::IsItemDeactivatedAfterEdit()) SaveChatPreferences();
             ImGui::EndDisabled();
 
             if (ImGui::CollapsingHeader(
@@ -1320,6 +1587,11 @@ struct FAgentChatWorkspace::FImpl
         }
         ImGui::TextDisabled("Provider: %s | File: %s",
             ProviderDisplayName(Provider), SessionPath.filename().string().c_str());
+        if (!PreferenceError.empty())
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.42f, 0.36f, 1.0f),
+                "%s", PreferenceError.c_str());
+        }
         if (ImGui::CollapsingHeader("Request Settings"))
         {
             ImGui::SliderInt("Timeout (seconds)", &TimeoutSeconds, 5, 120);
@@ -1353,6 +1625,26 @@ struct FAgentChatWorkspace::FImpl
             for (const FAgentKnowledgeHit& Hit : CurrentKnowledgeHits)
                 ImGui::BulletText("[K:%s] %.1f  %s",
                     Hit.Record.Id.c_str(), Hit.Score, Hit.Record.Title.c_str());
+        }
+        if (ImGui::CollapsingHeader("Agent Metrics", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            FAgentCounters MetricsCounters;
+            std::uint64_t MetricsContextBytes = 0;
+            std::string MetricsRunId;
+            {
+                std::lock_guard Lock(ViewMutex);
+                MetricsCounters = LastRunCounters;
+                MetricsContextBytes = LastRunContextBytes;
+                MetricsRunId = LastRunId;
+            }
+            ImGui::Text("Steps %zu | tools %zu | cache hits %zu",
+                MetricsCounters.Steps, MetricsCounters.ToolCalls,
+                MetricsCounters.SemanticCacheHits);
+            ImGui::Text("Context messages %zu | trimmed %zu | cumulative %.1f KB",
+                MetricsCounters.ContextMessages,
+                MetricsCounters.TrimmedContextMessages,
+                static_cast<double>(MetricsContextBytes) / 1024.0);
+            if (!MetricsRunId.empty()) ImGui::TextDisabled("Run: %s", MetricsRunId.c_str());
         }
         const std::vector<FAgentOperationRecord> IncompleteOperations =
             GameThreadTools.ListIncompleteOperations();
@@ -1401,6 +1693,31 @@ struct FAgentChatWorkspace::FImpl
         {
             const FChatLine& Line = CurrentLines[Index];
             ImGui::PushID(static_cast<int>(Index));
+            const bool bUserMessage = Line.Label == "You";
+            const bool bAssistantMessage = Line.Label == "Assistant";
+            const bool bErrorMessage = Line.Label == "Error";
+            const bool bMessagePanel = bUserMessage || bAssistantMessage
+                || bErrorMessage;
+            if (bMessagePanel && Index > 0)
+                ImGui::Dummy(ImVec2(0.0f, 8.0f));
+            if (Line.bToolSummary)
+            {
+                DrawToolSummary(Line);
+                ImGui::Dummy(ImVec2(0.0f, 8.0f));
+                ImGui::PopID();
+                continue;
+            }
+
+            ImDrawList* DrawList = ImGui::GetWindowDrawList();
+            ImVec2 MessagePanelMin {};
+            if (bMessagePanel)
+            {
+                MessagePanelMin = ImGui::GetCursorScreenPos();
+                DrawList->ChannelsSplit(2);
+                DrawList->ChannelsSetCurrent(1);
+                ImGui::Dummy(ImVec2(0.0f, 5.0f));
+                ImGui::Indent(12.0f);
+            }
             ImGui::TextColored(Line.Color, "%s", Line.Label.c_str());
             const float CopyButtonX = std::max(ImGui::GetCursorPosX() + 8.0f,
                 ImGui::GetWindowContentRegionMax().x - ImGui::GetFrameHeight());
@@ -1412,7 +1729,8 @@ struct FAgentChatWorkspace::FImpl
             {
                 const float TextWidth = std::max(
                     80.0f, ImGui::GetContentRegionAvail().x - 8.0f);
-                std::string WrappedText = WrapSelectableText(Line.Text, TextWidth);
+                const std::string DisplayText = MakeMarkdownDisplayText(Line.Text);
+                std::string WrappedText = WrapSelectableText(DisplayText, TextWidth);
                 std::vector<char> Buffer(WrappedText.begin(), WrappedText.end());
                 Buffer.push_back('\0');
                 const std::size_t LineCount = static_cast<std::size_t>(
@@ -1439,7 +1757,33 @@ struct FAgentChatWorkspace::FImpl
             {
                 SelectableMessageIndex = Index;
             }
-            ImGui::Separator();
+            if (bMessagePanel)
+            {
+                ImGui::Unindent(12.0f);
+                ImGui::Dummy(ImVec2(0.0f, 5.0f));
+                const ImVec2 MessagePanelMax(
+                    ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x,
+                    ImGui::GetCursorScreenPos().y);
+                DrawList->ChannelsSetCurrent(0);
+                const ImU32 PanelColor = bUserMessage
+                    ? IM_COL32(39, 51, 66, 210)
+                    : bErrorMessage ? IM_COL32(76, 42, 43, 225)
+                                    : IM_COL32(45, 70, 53, 225);
+                const ImU32 AccentColor = bUserMessage
+                    ? IM_COL32(86, 156, 214, 255)
+                    : bErrorMessage ? IM_COL32(226, 92, 86, 255)
+                                    : IM_COL32(104, 200, 130, 255);
+                DrawList->AddRectFilled(MessagePanelMin, MessagePanelMax,
+                    PanelColor, 4.0f);
+                DrawList->AddRectFilled(MessagePanelMin,
+                    ImVec2(MessagePanelMin.x + 3.0f, MessagePanelMax.y),
+                    AccentColor, 4.0f);
+                DrawList->ChannelsMerge();
+            }
+            else
+            {
+                ImGui::Dummy(ImVec2(0.0f, 6.0f));
+            }
             ImGui::PopID();
         }
         if (!CurrentStreamingText.empty())
@@ -1447,7 +1791,9 @@ struct FAgentChatWorkspace::FImpl
             ImGui::PushID("StreamingAssistant");
             ImGui::TextColored(ImVec4(0.72f, 0.90f, 0.74f, 1.0f),
                 "Assistant (streaming)");
-            ImGui::TextWrapped("%s", CurrentStreamingText.c_str());
+            const std::string DisplayStreamingText =
+                MakeMarkdownDisplayText(CurrentStreamingText);
+            ImGui::TextWrapped("%s", DisplayStreamingText.c_str());
             ImGui::Separator();
             ImGui::PopID();
         }
@@ -1499,6 +1845,9 @@ struct FAgentChatWorkspace::FImpl
     std::vector<FAgentKnowledgeHit> LastKnowledgeHits;
     std::vector<std::string> LastActiveSkillIds;
     std::string Status = "Idle";
+    FAgentCounters LastRunCounters;
+    std::uint64_t LastRunContextBytes = 0;
+    std::string LastRunId;
     std::array<char, 2048> Input {};
     std::array<char, 128> Model {};
     std::array<char, 640> ApiKeyInput {};
@@ -1510,6 +1859,7 @@ struct FAgentChatWorkspace::FImpl
     std::atomic<bool> bScrollToBottom {true};
     bool bStoredCredential = false;
     std::string CredentialError;
+    std::string PreferenceError;
     std::function<void(const std::filesystem::path&)> RequestProjectOpen;
 };
 

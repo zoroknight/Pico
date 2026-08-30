@@ -1,6 +1,7 @@
 #include "MarkdownRenderer.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <md4c.h>
 
 #include <algorithm>
@@ -14,6 +15,65 @@
 
 namespace Pico
 {
+namespace
+{
+bool IsAllowedStatusSymbol(unsigned int Codepoint)
+{
+    return Codepoint == 0x2611 || Codepoint == 0x2612
+        || Codepoint == 0x2705
+        || (Codepoint >= 0x2713 && Codepoint <= 0x2718)
+        || Codepoint == 0x274C || Codepoint == 0x274E;
+}
+
+bool IsDecorativeSymbol(unsigned int Codepoint)
+{
+    return ((Codepoint >= 0x2600 && Codepoint <= 0x27BF)
+            || (Codepoint >= 0x2B00 && Codepoint <= 0x2BFF))
+        && !IsAllowedStatusSymbol(Codepoint);
+}
+}
+
+std::string MakeMarkdownDisplayText(std::string_view Text)
+{
+    std::string Result;
+    Result.reserve(Text.size());
+    const char* Cursor = Text.data();
+    const char* End = Cursor + Text.size();
+    while (Cursor < End)
+    {
+        unsigned int Codepoint = 0;
+        const int Length = ImTextCharFromUtf8(&Codepoint, Cursor, End);
+        if (Length <= 0)
+        {
+            ++Cursor;
+            continue;
+        }
+        if (Codepoint == IM_UNICODE_CODEPOINT_INVALID
+            || Codepoint == 0x200D || Codepoint == 0xFE0E
+            || Codepoint == 0xFE0F
+            || (Codepoint >= 0x1F3FB && Codepoint <= 0x1F3FF))
+        {
+            // ImGui's 16-bit atlas reports supplementary-plane characters as
+            // U+FFFD before drawing. Omit that marker together with ZWJ,
+            // variation selectors, and skin-tone modifiers.
+        }
+        else if (IsDecorativeSymbol(Codepoint)
+            || (Codepoint >= 0x1F000 && Codepoint <= 0x1FAFF)
+            || (Codepoint >= 0x1FC00 && Codepoint <= 0x1FFFF))
+        {
+            // Keep the chat visually stable by omitting decorative symbols and
+            // Emoji. Check/cross status marks remain available through the
+            // explicit allowlist above. Persisted and copied text is unchanged.
+        }
+        else
+        {
+            Result.append(Cursor, static_cast<std::size_t>(Length));
+        }
+        Cursor += Length;
+    }
+    return Result;
+}
+
 namespace
 {
 enum class EBlockKind
@@ -386,8 +446,9 @@ void DrawInline(const FBlock& Block, const ImVec4& BaseColor)
     }
     for (const FFragment& Fragment : Block.Fragments)
     {
-        const char* Cursor = Fragment.Text.data();
-        const char* End = Cursor + Fragment.Text.size();
+        const std::string DisplayText = MakeMarkdownDisplayText(Fragment.Text);
+        const char* Cursor = DisplayText.data();
+        const char* End = Cursor + DisplayText.size();
         while (Cursor < End)
         {
             if (*Cursor == '\n')
@@ -450,7 +511,7 @@ void DrawCodeBlock(const FBlock& Block)
             ImGui::SetTooltip(bExpanded ? "Collapse code" : "Expand code");
     }
 
-    std::string VisibleCode = Code;
+    std::string VisibleCode = MakeMarkdownDisplayText(Code);
     if (bCanCollapse && !bExpanded)
     {
         std::size_t Cursor = 0;

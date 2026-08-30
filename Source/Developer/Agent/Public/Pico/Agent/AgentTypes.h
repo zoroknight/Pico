@@ -155,6 +155,8 @@ struct FAgentBudget
     std::size_t ReservedFinalSteps = 1;
     std::size_t MaxRepairAttempts = 2;
     std::uint64_t MaxElapsedMilliseconds = 30000;
+    std::size_t MaxContextMessages = 48;
+    std::uint64_t MaxContextBytesPerRequest = 256 * 1024;
 };
 
 struct FAgentCounters
@@ -166,6 +168,8 @@ struct FAgentCounters
     std::size_t SemanticCacheHits = 0;
     std::size_t ConsecutiveNoProgressSteps = 0;
     std::size_t RepairAttempts = 0;
+    std::size_t ContextMessages = 0;
+    std::size_t TrimmedContextMessages = 0;
 };
 
 struct FAgentRunResult

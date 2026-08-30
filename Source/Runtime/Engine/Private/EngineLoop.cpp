@@ -47,6 +47,7 @@
 #include "Pico/Engine/WorldSerialization.h"
 #include "Pico/Object/GarbageCollection.h"
 #include "Pico/Object/ObjectGlobals.h"
+#include "Pico/Object/ObjectRegistry.h"
 #include "Pico/Object/ObjectSystem.h"
 
 #include <algorithm>
@@ -83,11 +84,11 @@ int FEngineLoop::PreInit(
             FCommandLine::GetValue("profiletrace"))
     {
         ProfileTracePath = *TraceArgument;
-        FProfiler::Get().SetEnabled(true);
+        FProfiler::Get().SetStorageMode(EProfileStorageMode::BoundedTrace);
     }
     else if (FCommandLine::HasSwitch("profile"))
     {
-        FProfiler::Get().SetEnabled(true);
+        FProfiler::Get().SetStorageMode(EProfileStorageMode::AggregateOnly);
     }
 
     std::filesystem::path RequestedProjectFile = ProjectFile;
@@ -410,6 +411,7 @@ int FEngineLoop::Init()
 
     FrameTimer.Reset();
     GarbageCollectionElapsedSeconds = 0.0;
+    LastGarbageCollectionResult = {};
     bInitialized = true;
 
     if (MaxFrameCount == 0)
@@ -507,6 +509,10 @@ void FEngineLoop::Exit()
     {
         RequestGarbageCollection(EGarbageCollectionReason::EngineExit);
         RunGarbageCollectionSafePoint();
+        std::string CompactError;
+        if (!FObjectRegistry::CompactStorage(&CompactError))
+            PICO_LOG(LogObject, Warning, "Exit storage compact failed: {}", CompactError);
+        FProfiler::Get().Compact();
     }
     AssetManager.Clear();
     AssetRegistry.Clear();
@@ -656,6 +662,11 @@ bool FEngineLoop::ReplaceWorld(
     DestroyObjectTree(OldWorld);
     RequestGarbageCollection(EGarbageCollectionReason::WorldTransition);
     RunGarbageCollectionSafePoint();
+    std::string CompactError;
+    if (!FObjectRegistry::CompactStorage(&CompactError))
+        PICO_LOG(LogObject, Warning,
+            "World-transition storage compact failed: {}", CompactError);
+    FProfiler::Get().Compact();
     return true;
 }
 
@@ -675,6 +686,7 @@ void FEngineLoop::RunGarbageCollectionSafePoint()
     }
 
     GarbageCollectionElapsedSeconds = 0.0;
+    LastGarbageCollectionResult = Result;
     PICO_LOG(
         LogObject,
         Info,
@@ -697,6 +709,11 @@ float FEngineLoop::GetDeltaSeconds() const
     return static_cast<float>(FrameTimer.GetDeltaSeconds());
 }
 
+double FEngineLoop::GetTotalSeconds() const
+{
+    return FrameTimer.GetTotalSeconds();
+}
+
 double FEngineLoop::GetAverageFrameTimeMS() const
 {
     return FrameTimer.GetAverageFrameTimeMS();
@@ -705,6 +722,16 @@ double FEngineLoop::GetAverageFrameTimeMS() const
 double FEngineLoop::GetAverageFPS() const
 {
     return FrameTimer.GetAverageFPS();
+}
+
+FFrameTimeStatistics FEngineLoop::GetFrameTimeStatistics() const
+{
+    return FrameTimer.GetStatistics();
+}
+
+const FGarbageCollectionResult& FEngineLoop::GetLastGarbageCollectionResult() const
+{
+    return LastGarbageCollectionResult;
 }
 
 const FFramePacingSettings& FEngineLoop::GetFramePacingSettings() const

@@ -3,6 +3,7 @@
 #include "Pico/Core/Platform.h"
 
 #include <algorithm>
+#include <vector>
 #include <thread>
 
 #if PICO_PLATFORM_WINDOWS
@@ -105,6 +106,10 @@ void FFrameTimer::Reset()
     TotalSeconds = 0.0;
     AverageFrameTimeMS = 0.0;
     AverageFPS = 0.0;
+    FrameSamplesMS.fill(0.0);
+    FrameSampleCount = 0;
+    NextFrameSample = 0;
+    LongFrameCount = 0;
 }
 
 void FFrameTimer::Tick()
@@ -121,6 +126,10 @@ void FFrameTimer::Tick()
         : AverageFrameTimeMS * 0.9 + FrameTimeMS * 0.1;
 
     AverageFPS = AverageFrameTimeMS > 0.0 ? 1000.0 / AverageFrameTimeMS : 0.0;
+    FrameSamplesMS[NextFrameSample] = FrameTimeMS;
+    NextFrameSample = (NextFrameSample + 1) % SampleCapacity;
+    FrameSampleCount = std::min(FrameSampleCount + 1, SampleCapacity);
+    if (FrameTimeMS > 16.67) ++LongFrameCount;
 }
 
 void FFrameTimer::WaitForMaxFPS(double MaxFPS)
@@ -167,5 +176,26 @@ double FFrameTimer::GetAverageFrameTimeMS() const
 double FFrameTimer::GetAverageFPS() const
 {
     return AverageFPS;
+}
+
+FFrameTimeStatistics FFrameTimer::GetStatistics() const
+{
+    FFrameTimeStatistics Result;
+    Result.LongFrameCount = LongFrameCount;
+    Result.SampleCount = FrameSampleCount;
+    if (FrameSampleCount == 0) return Result;
+    std::vector<double> Sorted(
+        FrameSamplesMS.begin(), FrameSamplesMS.begin() + FrameSampleCount);
+    std::sort(Sorted.begin(), Sorted.end());
+    const auto Percentile = [&Sorted](double Value)
+    {
+        const std::size_t Index = static_cast<std::size_t>(
+            Value * static_cast<double>(Sorted.size() - 1));
+        return Sorted[Index];
+    };
+    Result.P50Milliseconds = Percentile(0.50);
+    Result.P95Milliseconds = Percentile(0.95);
+    Result.P99Milliseconds = Percentile(0.99);
+    return Result;
 }
 }

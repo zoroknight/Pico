@@ -37,6 +37,7 @@ public:
     static bool ValidateHierarchyIndex(std::string* OutError = nullptr);
     static FObjectHierarchyIndexStats GetHierarchyIndexStats();
     static void PublishMemoryStatistics();
+    static bool CompactStorage(std::string* OutError = nullptr);
     static bool AddToRoot(PObject* Object);
     static bool RemoveFromRoot(PObject* Object);
     static bool IsRooted(const PObject* Object);

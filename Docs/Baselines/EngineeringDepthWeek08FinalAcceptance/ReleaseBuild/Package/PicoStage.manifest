@@ -1,0 +1,10 @@
+[Stage]
+EngineRelativePath=Engine
+EngineVersion=0.1.0
+LayoutVersion=1
+Profile=Development
+ProjectName=PicoSandbox
+ProjectRelativePath=PicoSandbox/PicoSandbox.pico
+TargetName=PicoSandboxGame
+TargetType=Game
+

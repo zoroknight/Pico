@@ -1876,6 +1876,26 @@ void TestShutdownAndReinitialize(FTestRunner& Runner)
         Pico::DestroyObject(MacroObject);
     }
 }
+
+void TestObjectStorageCompaction(FTestRunner& Runner)
+{
+    PTestObject* Root = Pico::NewObject<PTestObject>(nullptr, "CompactRoot");
+    PTestDerivedObject* Child = Root != nullptr
+        ? Pico::NewObject<PTestDerivedObject>(Root, "CompactChild") : nullptr;
+    const Pico::FObjectHandle RootHandle = Root != nullptr
+        ? Root->GetHandle() : Pico::FObjectHandle {};
+    const Pico::FObjectHandle ChildHandle = Child != nullptr
+        ? Child->GetHandle() : Pico::FObjectHandle {};
+    std::string Error;
+    const bool bCompacted = Pico::FObjectRegistry::CompactStorage(&Error);
+    Runner.Expect(bCompacted && Error.empty()
+            && Pico::ResolveObject(RootHandle) == Root
+            && Pico::ResolveObject(ChildHandle) == Child
+            && Pico::FObjectRegistry::ValidateNameIndex(&Error)
+            && Pico::FObjectRegistry::ValidateHierarchyIndex(&Error),
+        "Safe-point compaction preserves handles and registry indexes");
+    if (Root != nullptr) Pico::DestroyObjectTree(Root);
+}
 }
 
 int main()
@@ -1898,6 +1918,7 @@ int main()
         TestReflectionObservation(Runner);
         TestAssetPathSerialization(Runner);
         TestObjectSerialization(Runner);
+        TestObjectStorageCompaction(Runner);
         TestShutdownAndReinitialize(Runner);
         Pico::PObjectSystem::Shutdown();
     }

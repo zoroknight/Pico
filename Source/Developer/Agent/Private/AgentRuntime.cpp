@@ -55,6 +55,7 @@ FAgentRuntime::FAgentRuntime(
     , ToolExecutor(InToolExecutor)
     , Budget(InBudget)
     , Context(std::move(InContext))
+    , Revisions(InSession.BuildRevisionSnapshot())
     , Counters(InSession.GetStatus() == EAgentStatus::Planning
             || InSession.GetStatus() == EAgentStatus::AwaitingApproval
             || InSession.GetStatus() == EAgentStatus::ExecutingTool
@@ -124,7 +125,13 @@ FAgentRunResult FAgentRuntime::Run(
         ++Counters.Steps;
         BeginTurn();
         FAgentProviderRequest Request;
-        Request.Messages = Session.BuildMessageHistory();
+        std::size_t TrimmedMessages = 0;
+        Request.Messages = Session.BuildBoundedMessageHistory(
+            Budget.MaxContextMessages,
+            Budget.MaxContextBytesPerRequest,
+            &TrimmedMessages);
+        Counters.ContextMessages = Request.Messages.size();
+        Counters.TrimmedContextMessages = TrimmedMessages;
         Request.ProgressLedgerJson = BuildProgressLedgerJson();
         Request.KnowledgeContextJson = Context.KnowledgeContextJson;
         Request.SkillContextJson = Context.SkillContextJson;
@@ -388,12 +395,19 @@ FAgentRunResult FAgentRuntime::Run(
                                 ReadOnlyCache[SemanticKey] = Result;
                             else
                             {
-                                const std::uint64_t BeforeRevision = StateRevision;
-                                ++StateRevision;
+                                std::vector<std::string> WriteSet =
+                                    ToolExecutor.GetRevisionWriteSet(Call);
+                                if (Result.RevisionChanges.empty())
+                                    for (const std::string& Domain : WriteSet)
+                                        Result.RevisionChanges.push_back({Domain, 0, 0});
                                 for (FAgentRevisionChange& Change : Result.RevisionChanges)
                                 {
-                                    Change.Before = BeforeRevision;
-                                    Change.After = StateRevision;
+                                    const std::string Domain = Change.Domain.empty()
+                                        ? "State.Revision" : Change.Domain;
+                                    std::uint64_t& Revision = Revisions[Domain];
+                                    Change.Domain = Domain;
+                                    Change.Before = Revision;
+                                    Change.After = ++Revision;
                                 }
                             }
                         }
@@ -404,7 +418,7 @@ FAgentRunResult FAgentRuntime::Run(
                 {
                     ProgressActions.push_back(
                         {Call.Name, bReadOnly, Existing.has_value() || bSemanticCacheHit,
-                            StateRevision});
+                            Result.RevisionChanges});
                     if (ProgressActions.size() > 12)
                         ProgressActions.erase(ProgressActions.begin());
                 }
@@ -565,8 +579,16 @@ std::string FAgentRuntime::MakeSemanticKey(const FAgentToolCall& Call) const
     {
         // Schema validation still owns malformed input diagnostics.
     }
-    return std::to_string(StateRevision) + "\n" + Call.Name + "\n"
-        + CanonicalArguments;
+    std::vector<std::string> ReadSet = ToolExecutor.GetRevisionReadSet(Call);
+    std::sort(ReadSet.begin(), ReadSet.end());
+    std::string RevisionKey;
+    for (const std::string& Domain : ReadSet)
+    {
+        const auto Found = Revisions.find(Domain);
+        RevisionKey += Domain + "=" + std::to_string(
+            Found == Revisions.end() ? 0 : Found->second) + ";";
+    }
+    return RevisionKey + "\n" + Call.Name + "\n" + CanonicalArguments;
 }
 
 std::string FAgentRuntime::BuildProgressLedgerJson() const
@@ -574,13 +596,19 @@ std::string FAgentRuntime::BuildProgressLedgerJson() const
     FJson Actions = FJson::array();
     for (const FProgressAction& Action : ProgressActions)
     {
+        FJson RevisionChanges = FJson::array();
+        for (const FAgentRevisionChange& Change : Action.RevisionChanges)
+            RevisionChanges.push_back({{"domain", Change.Domain},
+                {"before", Change.Before}, {"after", Change.After}});
         Actions.push_back({{"tool", Action.ToolName},
             {"kind", Action.bReadOnly ? "read" : "mutation"},
             {"reused", Action.bReused},
-            {"state_revision", Action.StateRevision}});
+            {"revision_changes", std::move(RevisionChanges)}});
     }
     return FJson {{"goal", CurrentGoal},
-        {"state_revision", StateRevision},
+        {"revisions", Revisions},
+        {"recent_failure", Session.GetMostRecentError()},
+        {"pending_approval", Session.GetStatus() == EAgentStatus::AwaitingApproval},
         {"completed_actions", std::move(Actions)},
         {"budget", {{"steps_used", Counters.Steps},
             {"steps_remaining", Counters.Steps < Budget.MaxSteps
@@ -595,9 +623,11 @@ std::string FAgentRuntime::BuildProgressLedgerJson() const
                 ? Budget.MaxMutationToolCalls - Counters.MutationToolCalls : 0},
             {"semantic_cache_hits", Counters.SemanticCacheHits},
             {"consecutive_no_progress_steps",
-                Counters.ConsecutiveNoProgressSteps}}},
+                Counters.ConsecutiveNoProgressSteps},
+            {"context_messages", Counters.ContextMessages},
+            {"trimmed_context_messages", Counters.TrimmedContextMessages}}},
         {"next_action_rule",
-            "Do not repeat a completed read at the same state revision. Mutate once "
+            "Do not repeat a completed read at the same relevant revision. Mutate once "
             "arguments are known, ask for missing information, or finish."}}.dump();
 }
 
@@ -614,14 +644,14 @@ FAgentToolResult FAgentRuntime::MakeSemanticCacheResult(
         if (Output.is_object())
         {
             Output["_pico_harness"] = {{"semantic_cache_hit", true},
-                {"state_revision", StateRevision},
+                {"revisions", Revisions},
                 {"guidance", "Use this existing result; do not issue the same read again."}};
         }
         else
         {
             Output = {{"cached_result", std::move(Output)},
                 {"_pico_harness", {{"semantic_cache_hit", true},
-                    {"state_revision", StateRevision},
+                    {"revisions", Revisions},
                     {"guidance", "Use this existing result; do not issue the same read again."}}}};
         }
         Result.OutputJson = Output.dump();
@@ -630,7 +660,7 @@ FAgentToolResult FAgentRuntime::MakeSemanticCacheResult(
     {
         Result.OutputJson = FJson {{"cached_result", Result.OutputJson},
             {"_pico_harness", {{"semantic_cache_hit", true},
-            {"state_revision", StateRevision}}}}.dump();
+            {"revisions", Revisions}}}}.dump();
     }
     Result.FactsJson = Result.OutputJson;
     NormalizeAgentToolResult(Result);

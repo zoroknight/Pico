@@ -49,6 +49,10 @@ public:
     virtual void EndRun(std::string_view RunId, EAgentStatus Status);
     virtual bool RequiresApproval(const FAgentToolCall& Call) const;
     virtual bool IsReadOnly(const FAgentToolCall& Call) const;
+    virtual std::vector<std::string> GetRevisionReadSet(
+        const FAgentToolCall& Call) const;
+    virtual std::vector<std::string> GetRevisionWriteSet(
+        const FAgentToolCall& Call) const;
     virtual void PrepareApproval(const FAgentToolCall& Call);
     virtual void CommitDurableResult(const FAgentToolCall& Call);
     virtual std::string GetLastExecutionTraceJson() const;

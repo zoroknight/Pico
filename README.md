@@ -52,7 +52,13 @@ The current implementation can:
 - Keep provider-isolated multi-chat histories with create/delete/recovery, newest-message scrolling,
   per-bubble copy, and MD4C-backed Markdown with GFM tables plus formatted JSON code blocks whose
   expansion does not steal the transcript's mouse wheel; merge common Symbol/Dingbats glyphs for
-  check marks, arrows, and related status text.
+  check marks, arrows, and related status text. Keep each Agent turn readable by merging its progress
+  prose and replacing interleaved Tool Call/Result bubbles with one final expandable summary table;
+  user turns use a restrained blue-gray panel while Assistant prose uses a subtler neutral panel. Unsupported
+  Emoji and decorative symbol glyphs are omitted only while drawing, except for check/cross status
+  marks, without changing persisted or copied UTF-8.
+- Restore the last selected AI Provider and its model across projects from the Git-ignored,
+  editor-local `Saved/Editor/Agent/ChatSettings.ini`; project handoff settings take precedence.
 - Stream OpenAI-compatible text and Tool Call fragments over SSE while persisting only aggregate
   messages; ground turns through an audited project Knowledge Store and bounded cited RAG Lite, then
   narrow both advertised and executable tools with versioned Pico Skills.
@@ -69,7 +75,7 @@ The current implementation can:
 - Hand an Agent-created project to a clean editor process only after the current result and checkpoint
   are durable, restoring its Provider, model, and JSONL conversation while all projects share an
   editor-local, Git-ignored API key store that Agent tools cannot read. Bound repeated planning with
-  StateRevision-aware read caching, a structured progress ledger,
+  resource-domain Revision-aware read caching, bounded message context, a structured progress ledger,
   categorized budgets, a reserved final-answer step, and consecutive no-progress detection.
 - Launch a standalone `PicoGame` runtime with frame-based input, configurable Action/Axis mappings,
   and a project default map or command-line map override.
@@ -84,6 +90,8 @@ The current implementation can:
   data, and follow-up decisions in [`Docs/Pico_Performance_Optimization_Log.zh-CN.md`](Docs/Pico_Performance_Optimization_Log.zh-CN.md).
 - Track fixed-tag Object, GC, Profiler, and Replication structural memory through a lightweight
   `PicoMemoryTracker`; Runtime Benchmark v3 exports Current/Reserved/Peak/Element/Growth values to JSON and CSV.
+- Keep long editor sessions observable through AggregateOnly profiling, opt-in bounded trace rings,
+  explicit lifecycle-safe compaction, Frame P50/P95/P99, and dockable Runtime/Agent metrics panels.
 - Schedule Actor and ActorComponent updates through `FTickFunction`, four ordered TickGroups,
   same-World prerequisites, runtime enable/disable, and tick intervals.
 - Construct a rooted `PGameInstance` through `PClass/NewObject` and notify it across Init, map load,
@@ -746,6 +754,8 @@ See:
 - [Engineering Depth Week 5 Gate: Memory Observability (Chinese)](Docs/EngineeringDepthWeek05_MemoryObservabilityGate.zh-CN.md)
 - [Engineering Depth Week 5: Replication Scaling and Agent Failure Injection (Chinese)](Docs/EngineeringDepthWeek05_ReplicationScalingAndFailureInjection.zh-CN.md)
 - [Engineering Depth Week 6: GC and Adversarial Evaluation (Chinese)](Docs/EngineeringDepthWeek06_GcAndAdversarialEvaluation.zh-CN.md)
+- [Engineering Depth Week 7: Revision, Context, and Visualization (Chinese)](Docs/EngineeringDepthWeek07_RevisionContextAndVisualization.zh-CN.md)
+- [Engineering Depth Week 8: Final Acceptance and Engineering Decisions (Chinese)](Docs/EngineeringDepthWeek08_FinalAcceptance.zh-CN.md)
 - [Agent Game Creation Pipeline and Six-Week Plan (Chinese)](Docs/AgentGameCreationPipeline.zh-CN.md)
 - [PicoTasks and Game Thread Dispatcher (Chinese)](Docs/AIPhase01_PicoTasksAndGameThreadDispatcher.md)
 - [Pico Agent Core and Recoverable Sessions (Chinese)](Docs/AIPhase02_PicoAgentCoreAndSessions.md)

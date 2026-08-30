@@ -67,6 +67,14 @@ struct FGarbageCollectionScratch
         Unreachable.clear();
         References.Reset();
     }
+
+    void Compact()
+    {
+        std::vector<bool>().swap(Marked);
+        std::vector<FObjectHandle>().swap(WorkStack);
+        std::vector<FUnreachableObject>().swap(Unreachable);
+        References = FReferenceCollector {};
+    }
 };
 
 FGarbageCollectionScratch& GetGarbageCollectionScratch()
@@ -712,6 +720,37 @@ void FObjectRegistry::PublishMemoryStatistics()
     Tracker.Report(EMemoryTag::ObjectHierarchyIndex,
         HierarchyPayloadBytes, HierarchyStats.EstimatedStorageBytes,
         HierarchyStats.ChildRelationCount);
+}
+
+bool FObjectRegistry::CompactStorage(std::string* OutError)
+{
+    if (OutError) OutError->clear();
+    if (IsGarbageCollecting())
+    {
+        if (OutError) *OutError = "Object storage cannot compact during GC";
+        return false;
+    }
+
+    GetObjectSlots().shrink_to_fit();
+    GetFreeObjectIndices().shrink_to_fit();
+    GetObjectNameIndex().rehash(0);
+    FObjectHierarchyIndex& Hierarchy = GetObjectHierarchyIndex();
+    for (auto& [Parent, Children] : Hierarchy)
+    {
+        (void)Parent;
+        Children.rehash(0);
+    }
+    Hierarchy.rehash(0);
+    GetGarbageCollectionScratch().Compact();
+    PublishMemoryStatistics();
+
+    std::string Error;
+    if (!ValidateNameIndex(&Error) || !ValidateHierarchyIndex(&Error))
+    {
+        if (OutError) *OutError = Error;
+        return false;
+    }
+    return true;
 }
 
 bool FObjectRegistry::AddToRoot(PObject* Object)

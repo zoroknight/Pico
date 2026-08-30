@@ -1,0 +1,53 @@
+﻿Test project E:/UnrealSourceCode/Pico/BuildCodex
+      Start  1: PicoHeaderToolTests
+ 1/24 Test  #1: PicoHeaderToolTests ..............   Passed    1.12 sec
+      Start  2: PicoCoreTests
+ 2/24 Test  #2: PicoCoreTests ....................   Passed    0.12 sec
+      Start  3: PicoTaskTests
+ 3/24 Test  #3: PicoTaskTests ....................   Passed    0.04 sec
+      Start  4: PicoAgentTests
+ 4/24 Test  #4: PicoAgentTests ...................   Passed    1.58 sec
+      Start  5: PicoRuntimeBenchmarksSmoke
+ 5/24 Test  #5: PicoRuntimeBenchmarksSmoke .......   Passed    0.25 sec
+      Start  6: PicoPackagingTests
+ 6/24 Test  #6: PicoPackagingTests ...............   Passed    0.21 sec
+      Start  7: PicoAssetTests
+ 7/24 Test  #7: PicoAssetTests ...................   Passed    0.04 sec
+      Start  8: PicoGraphTests
+ 8/24 Test  #8: PicoGraphTests ...................   Passed    0.04 sec
+      Start  9: PicoAssetImportTests
+ 9/24 Test  #9: PicoAssetImportTests .............   Passed    0.04 sec
+      Start 10: PicoObjectTests
+10/24 Test #10: PicoObjectTests ..................   Passed    0.02 sec
+      Start 11: PicoGarbageCollectionTests
+11/24 Test #11: PicoGarbageCollectionTests .......   Passed    0.02 sec
+      Start 12: PicoDynamicDelegateTests
+12/24 Test #12: PicoDynamicDelegateTests .........   Passed    0.01 sec
+      Start 13: PicoEngineTests
+13/24 Test #13: PicoEngineTests ..................   Passed    0.05 sec
+      Start 14: PicoGameplayAbilitiesTests
+14/24 Test #14: PicoGameplayAbilitiesTests .......   Passed    0.02 sec
+      Start 15: PicoNetCoreTests
+15/24 Test #15: PicoNetCoreTests .................   Passed    0.49 sec
+      Start 16: PicoReplicationTests
+16/24 Test #16: PicoReplicationTests .............   Passed    0.02 sec
+      Start 17: PicoGameTests
+17/24 Test #17: PicoGameTests ....................   Passed    0.08 sec
+      Start 18: PicoMovementTests
+18/24 Test #18: PicoMovementTests ................   Passed    0.02 sec
+      Start 19: PicoPhysicsTests
+19/24 Test #19: PicoPhysicsTests .................   Passed    0.01 sec
+      Start 20: PicoCharacterMovementTests
+20/24 Test #20: PicoCharacterMovementTests .......   Passed    0.17 sec
+      Start 21: PicoAnimationTests
+21/24 Test #21: PicoAnimationTests ...............   Passed    0.04 sec
+      Start 22: PicoEditorTests
+22/24 Test #22: PicoEditorTests ..................   Passed    0.22 sec
+      Start 23: PicoEditorAssetTests
+23/24 Test #23: PicoEditorAssetTests .............   Passed    0.16 sec
+      Start 24: PicoSandboxTests
+24/24 Test #24: PicoSandboxTests .................   Passed    0.13 sec
+
+100% tests passed out of 24
+
+Total Test time (real) =   4.91 sec

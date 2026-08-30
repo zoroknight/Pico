@@ -21,12 +21,15 @@ public:
     void Shutdown() override;
     void AppendGameplayDebugLines(std::vector<std::string>& OutLines) const override;
     void AppendGameplayStatusLines(std::vector<std::string>& OutLines) const override;
+    void AppendGameplayAbilityStatus(
+        std::vector<Pico::FPlayerAbilityStatus>& OutPlayers) const override;
 
 private:
     explicit PSandboxGameInstance(const Pico::FObjectConstructionParams& Params);
     PSandboxReplicationLabActor* ResolveReplicationLabActor() const;
     PSandboxReplicationLabActor* FindReplicationLabActor() const;
     bool SpawnReplicationLabActor();
+    void RemoveUnpossessedServerPreviewPawns(Pico::PWorld* World);
 
     Pico::FObjectHandle ReplicationLabActorHandle;
     std::string ReplicationLabLastAction = "waiting for world";

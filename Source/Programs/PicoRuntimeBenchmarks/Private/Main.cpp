@@ -30,6 +30,8 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #ifndef PICO_BENCHMARK_BUILD_CONFIG
@@ -372,8 +374,168 @@ std::uint64_t MeasureMicroseconds(const std::function<void()>& Function)
             std::chrono::steady_clock::now() - Start).count());
 }
 
+struct FHierarchyWorkload
+{
+    std::string Name;
+    std::size_t ParentCount = 0;
+    std::size_t ChildrenPerParent = 0;
+};
+
+using FHashedChildIndex = std::unordered_map<
+    std::uint32_t, std::unordered_set<std::uint32_t>>;
+using FCompactChildIndex = std::unordered_map<
+    std::uint32_t, std::vector<std::uint32_t>>;
+
+std::size_t EstimateHashedHierarchyBytes(const FHashedChildIndex& Index)
+{
+    std::size_t Bytes = Index.bucket_count() * sizeof(void*)
+        + Index.size() * (sizeof(std::uint32_t)
+            + sizeof(std::unordered_set<std::uint32_t>));
+    for (const auto& [Parent, Children] : Index)
+    {
+        (void)Parent;
+        Bytes += Children.bucket_count() * sizeof(void*)
+            + Children.size() * sizeof(std::uint32_t);
+    }
+    return Bytes;
+}
+
+std::size_t EstimateCompactHierarchyBytes(
+    const FCompactChildIndex& Index,
+    const std::vector<std::size_t>& ChildPositions)
+{
+    std::size_t Bytes = Index.bucket_count() * sizeof(void*)
+        + Index.size() * (sizeof(std::uint32_t)
+            + sizeof(std::vector<std::uint32_t>))
+        + ChildPositions.capacity() * sizeof(std::size_t);
+    for (const auto& [Parent, Children] : Index)
+    {
+        (void)Parent;
+        Bytes += Children.capacity() * sizeof(std::uint32_t);
+    }
+    return Bytes;
+}
+
+void RunHierarchyLayoutBenchmarks(FBenchmarkReport& Report, bool bFull)
+{
+    const std::vector<FHierarchyWorkload> Workloads = bFull
+        ? std::vector<FHierarchyWorkload> {
+            {"wide", 1, 100000},
+            {"typical", 10000, 10},
+            {"deep", 100000, 1}}
+        : std::vector<FHierarchyWorkload> {{"typical", 1000, 10}};
+
+    for (const FHierarchyWorkload& Workload : Workloads)
+    {
+        const std::size_t Relations =
+            Workload.ParentCount * Workload.ChildrenPerParent;
+        FHashedChildIndex Hashed;
+        const std::uint64_t HashedBuild = MeasureMicroseconds([&]()
+        {
+            Hashed.reserve(Workload.ParentCount);
+            std::uint32_t Child = 1;
+            for (std::uint32_t Parent = 1;
+                 Parent <= Workload.ParentCount; ++Parent)
+            {
+                auto& Children = Hashed[Parent];
+                Children.reserve(Workload.ChildrenPerParent);
+                for (std::size_t Index = 0;
+                     Index < Workload.ChildrenPerParent; ++Index)
+                    Children.insert(Child++);
+            }
+        });
+        const std::size_t HashedBytes = EstimateHashedHierarchyBytes(Hashed);
+        const std::string HashedParameters = "layout=hashed;distribution="
+            + Workload.Name + ";parents="
+            + std::to_string(Workload.ParentCount) + ";estimated_reserved_bytes="
+            + std::to_string(HashedBytes);
+        Report.Add("HierarchyLayoutAB", "Build", Relations, Relations,
+            HashedBuild, HashedParameters);
+        volatile std::uint64_t HashedChecksum = 0;
+        const std::uint64_t HashedTraverse = MeasureMicroseconds([&]()
+        {
+            for (const auto& [Parent, Children] : Hashed)
+                for (const std::uint32_t Child : Children)
+                    HashedChecksum += Parent + Child;
+        });
+        Report.Add("HierarchyLayoutAB", "Traverse", Relations, Relations,
+            HashedTraverse, HashedParameters);
+        const std::uint64_t HashedRemove = MeasureMicroseconds([&]()
+        {
+            for (auto& [Parent, Children] : Hashed)
+            {
+                (void)Parent;
+                while (!Children.empty()) Children.erase(Children.begin());
+            }
+            Hashed.clear();
+        });
+        Report.Add("HierarchyLayoutAB", "Remove", Relations, Relations,
+            HashedRemove, HashedParameters);
+
+        FCompactChildIndex Compact;
+        std::vector<std::size_t> ChildPositions(Relations + 1);
+        const std::uint64_t CompactBuild = MeasureMicroseconds([&]()
+        {
+            Compact.reserve(Workload.ParentCount);
+            std::uint32_t Child = 1;
+            for (std::uint32_t Parent = 1;
+                 Parent <= Workload.ParentCount; ++Parent)
+            {
+                auto& Children = Compact[Parent];
+                Children.reserve(Workload.ChildrenPerParent);
+                for (std::size_t Index = 0;
+                     Index < Workload.ChildrenPerParent; ++Index)
+                {
+                    ChildPositions[Child] = Children.size();
+                    Children.push_back(Child++);
+                }
+            }
+        });
+        const std::size_t CompactBytes = EstimateCompactHierarchyBytes(
+            Compact, ChildPositions);
+        const std::string CompactParameters = "layout=compact;distribution="
+            + Workload.Name + ";parents="
+            + std::to_string(Workload.ParentCount) + ";estimated_reserved_bytes="
+            + std::to_string(CompactBytes) + ";child_slot_position_bytes="
+            + std::to_string(ChildPositions.capacity() * sizeof(std::size_t));
+        Report.Add("HierarchyLayoutAB", "Build", Relations, Relations,
+            CompactBuild, CompactParameters);
+        volatile std::uint64_t CompactChecksum = 0;
+        const std::uint64_t CompactTraverse = MeasureMicroseconds([&]()
+        {
+            for (const auto& [Parent, Children] : Compact)
+                for (const std::uint32_t Child : Children)
+                    CompactChecksum += Parent + Child;
+        });
+        Report.Add("HierarchyLayoutAB", "Traverse", Relations, Relations,
+            CompactTraverse, CompactParameters);
+        const std::uint64_t CompactRemove = MeasureMicroseconds([&]()
+        {
+            for (std::uint32_t Child = 1; Child <= Relations; ++Child)
+            {
+                const std::uint32_t Parent = 1 + (Child - 1)
+                    / static_cast<std::uint32_t>(Workload.ChildrenPerParent);
+                auto& Children = Compact[Parent];
+                const std::size_t Position = ChildPositions[Child];
+                const std::uint32_t MovedChild = Children.back();
+                Children[Position] = MovedChild;
+                ChildPositions[MovedChild] = Position;
+                Children.pop_back();
+            }
+            Compact.clear();
+        });
+        Report.Add("HierarchyLayoutAB", "Remove", Relations, Relations,
+            CompactRemove, CompactParameters);
+
+        if (HashedChecksum != CompactChecksum)
+            std::cerr << "Hierarchy A/B checksum mismatch for "
+                << Workload.Name << '\n';
+    }
+}
+
 bool ValidateMemorySnapshots(
     const std::vector<Pico::FMemorySnapshot>& Snapshots,
+    bool bExpectTraceEvents,
     std::string& OutError)
 {
     const std::size_t ExpectedCount =
@@ -397,7 +559,10 @@ bool ValidateMemorySnapshots(
             OutError = "Memory snapshot current bytes exceed reserved bytes";
             return false;
         }
-        if (Snapshot.PeakBytes == 0 || Snapshot.GrowthCount == 0)
+        const bool bAggregateOnlyProfiler = !bExpectTraceEvents
+            && Snapshot.Tag == Pico::EMemoryTag::ProfilerEvents;
+        if (!bAggregateOnlyProfiler
+            && (Snapshot.PeakBytes == 0 || Snapshot.GrowthCount == 0))
         {
             OutError = "Memory snapshot did not observe category activity: "
                 + std::string(Pico::GetMemoryTagName(Snapshot.Tag));
@@ -618,6 +783,7 @@ void RunGarbageCollectionBenchmarks(FBenchmarkReport& Report, bool bFull)
         RunGarbageCollectionBenchmark(Report, 10000, 10, 0, 0);
         RunGarbageCollectionBenchmark(Report, 10000, 50, 2, 4);
         RunGarbageCollectionBenchmark(Report, 10000, 90, 8, 16);
+        RunGarbageCollectionBenchmark(Report, 100000, 50, 2, 4);
     }
 }
 
@@ -639,29 +805,41 @@ void RunReplicationBenchmarks(
 
         Pico::FReplicationSystem Replication;
         Replication.SetWorld(&World);
-        const Pico::FNetConnectionId Connection {1};
-        Pico::uint32 NextReliableId = 1;
-        std::vector<Pico::uint32> ReliableIds;
+        const std::array Connections {
+            Pico::FNetConnectionId {1}, Pico::FNetConnectionId {2}};
+        std::array<Pico::uint32, 2> NextReliableIds {1, 1};
+        std::array<std::vector<Pico::uint32>, 2> ReliableIds;
         std::size_t BytesQueued = 0;
-        const auto Queue = [&](std::span<const Pico::uint8> Payload,
-            Pico::uint32* OutReliableId)
+        const auto MakeQueue = [&](std::size_t ConnectionIndex)
         {
-            const Pico::uint32 Id = NextReliableId++;
-            if (OutReliableId) *OutReliableId = Id;
-            ReliableIds.push_back(Id);
-            BytesQueued += Payload.size();
-            return true;
+            return [&, ConnectionIndex](std::span<const Pico::uint8> Payload,
+                Pico::uint32* OutReliableId)
+            {
+                const Pico::uint32 Id = NextReliableIds[ConnectionIndex]++;
+                if (OutReliableId) *OutReliableId = Id;
+                ReliableIds[ConnectionIndex].push_back(Id);
+                BytesQueued += Payload.size();
+                return true;
+            };
         };
         Replication.BeginNetworkFrame();
-        Replication.ReplicateServerConnection(Connection, Queue);
+        for (std::size_t ConnectionIndex = 0;
+             ConnectionIndex < Connections.size(); ++ConnectionIndex)
+        {
+            Replication.ReplicateServerConnection(
+                Connections[ConnectionIndex], MakeQueue(ConnectionIndex));
+        }
         Replication.PublishMemoryStatistics();
-        for (const Pico::uint32 Id : ReliableIds)
-            Replication.HandleReliableAcknowledged(Connection, Id);
+        for (std::size_t ConnectionIndex = 0;
+             ConnectionIndex < Connections.size(); ++ConnectionIndex)
+            for (const Pico::uint32 Id : ReliableIds[ConnectionIndex])
+                Replication.HandleReliableAcknowledged(
+                    Connections[ConnectionIndex], Id);
 
         for (const std::size_t DirtyPercent :
             std::array<std::size_t, 3> {1, 10, 100})
         {
-            ReliableIds.clear();
+            for (auto& Ids : ReliableIds) Ids.clear();
             BytesQueued = 0;
             const std::size_t DirtyCount = std::max<std::size_t>(
                 1, Scale * DirtyPercent / 100);
@@ -673,7 +851,13 @@ void RunReplicationBenchmarks(
                 Replication.GetStatistics();
             const std::uint64_t Duration = MeasureMicroseconds([&]()
             {
-                Replication.ReplicateServerConnection(Connection, Queue);
+                for (std::size_t ConnectionIndex = 0;
+                     ConnectionIndex < Connections.size(); ++ConnectionIndex)
+                {
+                    Replication.ReplicateServerConnection(
+                        Connections[ConnectionIndex],
+                        MakeQueue(ConnectionIndex));
+                }
             });
             const Pico::FReplicationStatistics After =
                 Replication.GetStatistics();
@@ -706,11 +890,15 @@ void RunReplicationBenchmarks(
                 After.SerializeNanoseconds, Before.SerializeNanoseconds);
             RuntimeMetrics.QueueNanoseconds = Delta(
                 After.QueueNanoseconds, Before.QueueNanoseconds);
-            Report.Add("Replication", "DirtyScan", Scale, Scale, Duration,
-                "dirty_percent=" + std::to_string(DirtyPercent),
+            Report.Add("Replication", "DirtyScanTwoClients", Scale,
+                Scale * Connections.size(), Duration,
+                "clients=2;dirty_percent=" + std::to_string(DirtyPercent),
                 BytesQueued, RuntimeMetrics);
-            for (const Pico::uint32 Id : ReliableIds)
-                Replication.HandleReliableAcknowledged(Connection, Id);
+            for (std::size_t ConnectionIndex = 0;
+                 ConnectionIndex < Connections.size(); ++ConnectionIndex)
+                for (const Pico::uint32 Id : ReliableIds[ConnectionIndex])
+                    Replication.HandleReliableAcknowledged(
+                        Connections[ConnectionIndex], Id);
         }
         Replication.Reset();
         for (PBenchmarkActor* Actor : Actors) World.DestroyActor(Actor);
@@ -756,12 +944,15 @@ int main(int Argc, char** Argv)
     Pico::FMemoryTracker::Get().SetEnabled(true);
     Pico::FMemoryTracker::Get().Reset();
     Pico::FProfiler::Get().Reset();
-    Pico::FProfiler::Get().SetEnabled(true);
+    Pico::FProfiler::Get().SetStorageMode(
+        bWriteTrace ? Pico::EProfileStorageMode::BoundedTrace
+                    : Pico::EProfileStorageMode::AggregateOnly);
     Pico::FProfiler::Get().BeginFrame();
     FBenchmarkReport Report;
     for (std::size_t Sample = 0; Sample < SampleCount; ++Sample)
     {
         RunObjectBenchmarks(Report, bFull);
+        RunHierarchyLayoutBenchmarks(Report, bFull);
         RunTickBenchmarks(Report, bFull);
         RunGarbageCollectionBenchmarks(Report, bFull);
         RunReplicationBenchmarks(Report, *EngineLoop.GetWorld(), bFull);
@@ -772,7 +963,7 @@ int main(int Argc, char** Argv)
         Pico::FMemoryTracker::Get().GetSnapshots();
     std::string MemoryValidationError;
     const bool bMemorySnapshotsValid = ValidateMemorySnapshots(
-        MemorySnapshots, MemoryValidationError);
+        MemorySnapshots, bWriteTrace, MemoryValidationError);
     const bool bReportWritten = Report.Write(OutputRoot, bFull,
         Pico::FProfiler::Get().GetAggregates(),
         MemorySnapshots);

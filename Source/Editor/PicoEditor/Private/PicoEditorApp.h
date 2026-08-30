@@ -101,6 +101,7 @@ private:
     void DrawViewport(float Width, float Height);
     void DrawStatusBar();
     void DrawMessageLog();
+    void DrawDevelopmentMetrics();
     void PumpCoreLogMessages();
     void DrawPlayValidationPopup();
     void DrawPlaySettingsPopup();
@@ -251,6 +252,7 @@ private:
     bool bMessageLogOpen = true;
     bool bAgentChatOpen = true;
     bool bShowFrameRate = true;
+    bool bDevelopmentMetricsOpen = true;
     bool bFocusMessageLog = false;
     bool bOpenPlayValidationPopup = false;
     bool bOpenPlaySettingsPopup = false;

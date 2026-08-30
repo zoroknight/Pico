@@ -3167,6 +3167,18 @@ bool FEditorAgentToolExecutor::IsReadOnly(const FAgentToolCall& Call) const
 {
     return Impl && Impl->Registry.IsReadOnly(Call);
 }
+std::vector<std::string> FEditorAgentToolExecutor::GetRevisionReadSet(
+    const FAgentToolCall& Call) const
+{
+    return Impl ? Impl->Registry.GetRevisionReadSet(Call)
+        : std::vector<std::string>{"State.Revision"};
+}
+std::vector<std::string> FEditorAgentToolExecutor::GetRevisionWriteSet(
+    const FAgentToolCall& Call) const
+{
+    return Impl ? Impl->Registry.GetRevisionWriteSet(Call)
+        : std::vector<std::string>{"State.Revision"};
+}
 void FEditorAgentToolExecutor::PrepareApproval(const FAgentToolCall& Call)
 {
     if (Impl) Impl->Registry.PrepareApproval(Call);

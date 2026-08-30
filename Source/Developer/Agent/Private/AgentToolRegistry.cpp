@@ -242,6 +242,22 @@ bool FAgentToolRegistry::IsReadOnly(const FAgentToolCall& Call) const
     return Definition && Definition->Permission == EAgentToolPermission::ReadOnly;
 }
 
+std::vector<std::string> FAgentToolRegistry::GetRevisionReadSet(
+    const FAgentToolCall& Call) const
+{
+    const FAgentToolDefinition* Definition = Find(Call.Name);
+    return Definition != nullptr && !Definition->RevisionReadSet.empty()
+        ? Definition->RevisionReadSet : std::vector<std::string>{"State.Revision"};
+}
+
+std::vector<std::string> FAgentToolRegistry::GetRevisionWriteSet(
+    const FAgentToolCall& Call) const
+{
+    const FAgentToolDefinition* Definition = Find(Call.Name);
+    return Definition != nullptr && !Definition->RevisionWriteSet.empty()
+        ? Definition->RevisionWriteSet : std::vector<std::string>{"State.Revision"};
+}
+
 void FAgentToolRegistry::PrepareApproval(const FAgentToolCall& Call)
 {
     const FAgentToolDefinition* Definition = Find(Call.Name);

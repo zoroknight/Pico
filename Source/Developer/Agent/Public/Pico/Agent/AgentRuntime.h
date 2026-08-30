@@ -51,7 +51,7 @@ private:
         std::string ToolName;
         bool bReadOnly = false;
         bool bReused = false;
-        std::size_t StateRevision = 0;
+        std::vector<FAgentRevisionChange> RevisionChanges;
     };
 
     struct FActiveSpan
@@ -88,7 +88,7 @@ private:
     FAgentRuntimeContext Context;
     FAgentCounters Counters;
     std::string CurrentGoal;
-    std::size_t StateRevision = 0;
+    std::unordered_map<std::string, std::uint64_t> Revisions;
     std::unordered_map<std::string, FAgentToolResult> ReadOnlyCache;
     std::vector<FProgressAction> ProgressActions;
     std::chrono::steady_clock::time_point StartTime;

@@ -83,6 +83,9 @@ private:
     PFUNCTION()
     void OnRep_GameplayState();
 
+    PFUNCTION()
+    void OnRep_AbilityLoadout();
+
     PPROPERTY()
     Pico::int32 MovementReferenceValue =
         static_cast<Pico::int32>(EMovementReference::ControlRotation);
@@ -90,7 +93,7 @@ private:
     PPROPERTY(Asset=ThirdPersonControlProfile)
     Pico::FAssetPath ThirdPersonControlProfileAsset;
 
-    PPROPERTY(ReadOnly)
+    PPROPERTY(Replicated, ReadOnly, RepNotify=OnRep_AbilityLoadout)
     Pico::int32 AbilityLoadoutBits = 7;
 
     // PicoGraph instance-input demo. These are normal reflected Actor properties.
@@ -201,13 +204,13 @@ private:
     PPROPERTY(Replicated, Transient, NotSerializable, ReadOnly, RepNotify=OnRep_GameplayState)
     float ReplicatedGravityRemaining = 0.0f;
 
-    PPROPERTY(Replicated, Transient, NotSerializable, ReadOnly, RepNotify=OnRep_GameplayState)
+    PPROPERTY(Replicated, OwnerOnly, Transient, NotSerializable, ReadOnly, RepNotify=OnRep_GameplayState)
     float ReplicatedDashCooldownRemaining = 0.0f;
 
-    PPROPERTY(Replicated, Transient, NotSerializable, ReadOnly, RepNotify=OnRep_GameplayState)
+    PPROPERTY(Replicated, OwnerOnly, Transient, NotSerializable, ReadOnly, RepNotify=OnRep_GameplayState)
     float ReplicatedFireballCooldownRemaining = 0.0f;
 
-    PPROPERTY(Replicated, Transient, NotSerializable, ReadOnly, RepNotify=OnRep_GameplayState)
+    PPROPERTY(Replicated, OwnerOnly, Transient, NotSerializable, ReadOnly, RepNotify=OnRep_GameplayState)
     float ReplicatedStunCooldownRemaining = 0.0f;
 
     PPROPERTY(Replicated, Transient, NotSerializable, ReadOnly, RepNotify=OnRep_GameplayState)

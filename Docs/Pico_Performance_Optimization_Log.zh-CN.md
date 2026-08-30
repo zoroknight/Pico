@@ -45,8 +45,8 @@
 | Memory Observability | 只有局部结构估算，无法按子系统解释 Current/Reserved/Peak 和增长次数 | 尚无统一轻量内存分类与机器可读 Benchmark 字段 | 现有 Hierarchy 估算边界、Profiler Trace 大文件、代码路径审计 | 已处理 | 第 5 周前置门完成 |
 | Replication | Actor、Schema 和字段存在重复遍历或编码 | 每连接查找、Schema 构建、Dirty 状态缺少足够缓存 | Replication Benchmark、BytesPerFrame、分项 Scope | 已处理 | 第 5 周完成 |
 | GC | 标记和清扫存在重复反射筛选与临时分配 | 强引用布局未缓存，Mark/WorkStack/Unreachable/Reference Scratch 尚未复用 | 分阶段 GC Scope、GC Benchmark、Memory Tracker | 已处理 | 第 6 周完成；Destroy-heavy 场景继续观察 |
-| Profiler Memory | Full Trace 随事件数量持续增长，长 Benchmark 曾产生超大 Trace | 逐事件历史无默认容量上限，聚合统计与完整 Trace 未分模式 | Trace 文件大小、Profiler.Events Peak/Reserved Bytes | 中 | 第 7 周有界化 |
-| Runtime Capacity | Slot 和子系统 Scratch 可能长期保留历史峰值 | 缺少只在生命周期安全点执行的显式 Trim 策略 | 地图切换前后 Reserved/Peak、真实项目复测 | 中低 | 第 7 周安全点 Trim |
+| Profiler Memory | Full Trace 随事件数量持续增长，长 Benchmark 曾产生超大 Trace | 逐事件历史无默认容量上限，聚合统计与完整 Trace 未分模式 | Trace 文件大小、Profiler.Events Peak/Reserved Bytes | 已处理 | 第 7 周三模式与 Ring Buffer |
+| Runtime Capacity | Slot 和子系统 Scratch 可能长期保留历史峰值 | 缺少只在生命周期安全点执行的显式 Trim 策略 | 地图切换前后 Reserved/Peak、真实项目复测 | 已处理 | 第 7 周显式安全点 Compact |
 | Object Hierarchy Storage | 嵌套 `unordered_*` 节点存在未计入估算的分配头和指针跳转 | 当前实现优先解决复杂度，尚无真实保留容量与 Child 分布数据 | Memory Tracker、Parent Child 分布、A/B Benchmark | 观察 | 第 8 周只做决策 |
 | Task System | 是否值得并行仍无证据 | 工作负载和 Game Thread 边界尚未证明存在稳定并行收益 | 后续任务基准与帧预算 | 低 | 暂不预设实现 |
 
@@ -349,6 +349,53 @@ Index 只要求形成有数据支撑的“保留、延期或采用”结论，�
 自定义通用 Allocator、完整 Binned 分配器、全局 `new/delete` 替换、全面 SoA/ECS 和每帧自动容器收缩均延期。
 只有完成第 8 周综合报告后，且分配次数、碎片或 Cache Miss 被证明为剩余主瓶颈，才允许规划局部 Pool/Arena 或
 紧凑 Child List 实验。
+
+### 7. Profiler 有界存储与 Runtime 安全点 Compact
+
+状态：已完成
+
+瓶颈现象：Release Full 连续样本会随 Scope 数量线性积累 `FProfileEvent`。第 6 周 5 样本达到
+`602,348,472 B current / 701,574,544 B reserved`，继续运行只会增长。
+
+根因：原 Profiler 同时把“长期聚合统计”和“完整逐事件 Trace”绑定在一个无上限 `vector` 中；即使使用
+`--no-trace` 不写 Trace 文件，内存事件仍全部保存。
+
+优化方法：引入 `Disabled/AggregateOnly/BoundedTrace`；AggregateOnly 直接更新聚合项；BoundedTrace 使用固定
+容量 Ring Buffer；World 切换、Engine Exit 和显式按钮才执行 Compact。Object Slot 不重排，索引容器压缩后执行
+一致性校验。
+
+结果：第 7 周相同 Release Full、5 样本中 `Profiler.Events current/reserved/peak` 均为 0，12 个聚合 Scope
+仍进入报告。关键 Case 为 100K Destroy P50/P95 `30.926/31.853 ms`、10K StaticSchedule
+`2.772/3.210 ms`、1K Replication 1% Dirty `145/211 us`。本项主要收益是内存有界和消除长会话退化，不能把
+不同机器时刻的 CPU 数字直接归因于该改动。
+
+正确性保护：Core 覆盖三模式与 Ring 顺序，Object 覆盖 Compact 后 Handle、Name Index、Hierarchy Index；完整
+报告见[第 7 周总结](EngineeringDepthWeek07_RevisionContextAndVisualization.zh-CN.md)及
+`Docs/Baselines/EngineeringDepthWeek07RevisionContextVisualization/ReleaseBuild/`。
+
+代价：Aggregate Map 仍为每个唯一 Scope 名保存一项；BoundedTrace 只能导出最近窗口。需要完整 Trace 时必须显式
+开启并选择合理容量。
+
+### 8. 综合固定矩阵与 Hierarchy 紧凑布局决策
+
+状态：验收完成，Runtime 替换延期
+
+基线：Release、5 样本。固定规模覆盖 100K Object Create/Find/Destroy/GC、10K Tick、1K Replicated Actor 与两个
+Connection。完整输出位于 `Docs/Baselines/EngineeringDepthWeek08FinalAcceptance/ReleaseBuild/Runtime/`。
+
+监控证据：100K Find P50/P95 `51.198/57.191 ms`，Destroy `35.819/48.244 ms`，50% 存活 GC
+`45.826/53.753 ms`；10K Tick Static `2.875/3.401 ms`；双客户端 1% Dirty Replication
+`382/410 us`、`460 B/frame`。Profiler AggregateOnly 的 Event Current/Reserved 保持 0。
+
+A/B 方法：对 Wide、Typical、Deep 三种 100K Parent/Child 分布比较 Hashed Child Set 与连续 Child Array。Compact
+原型把 Child Position 计入容量，并用 swap-remove 模拟任意对象销毁。它在 Typical 分布把估算容量从 2.49 MB
+降到 1.61 MB，Traverse P95 从 `870 us` 降到 `96 us`；但 Wide Remove P95 仅从 `1461 us` 降到
+`1448 us`，而真实 HierarchyDestroy P95 为 `51.809 ms`。
+
+结论：保留当前实现，延期替换。只有多 Parent 分布成为真实常态、Hierarchy Reserved 成为主要内存项或 Child
+遍历进入帧热点时，才接受 Object Slot ABI 和索引校验复杂度。该结论避免把合成微基准优势误写成端到端收益。
+
+相关文档：[第 8 周综合报告](EngineeringDepthWeek08_FinalAcceptance.zh-CN.md)。
 
 ## 后续优化记录模板
 

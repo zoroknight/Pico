@@ -20,6 +20,18 @@ bool IAgentToolExecutor::IsReadOnly(const FAgentToolCall&) const
     return false;
 }
 
+std::vector<std::string> IAgentToolExecutor::GetRevisionReadSet(
+    const FAgentToolCall&) const
+{
+    return {"State.Revision"};
+}
+
+std::vector<std::string> IAgentToolExecutor::GetRevisionWriteSet(
+    const FAgentToolCall&) const
+{
+    return {"State.Revision"};
+}
+
 void IAgentToolExecutor::PrepareApproval(const FAgentToolCall&)
 {
 }

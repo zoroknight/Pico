@@ -8,6 +8,22 @@
 
 namespace Pico
 {
+enum class EProfileStorageMode : std::uint8_t
+{
+    Disabled,
+    AggregateOnly,
+    BoundedTrace
+};
+
+struct FProfilerStorageStats
+{
+    EProfileStorageMode Mode = EProfileStorageMode::Disabled;
+    std::size_t TraceCapacity = 0;
+    std::size_t StoredEventCount = 0;
+    std::uint64_t DroppedEventCount = 0;
+    std::size_t AggregateCount = 0;
+};
+
 struct FProfileEvent
 {
     std::uint64_t Id = 0;
@@ -53,6 +69,12 @@ public:
 
     void SetEnabled(bool bInEnabled);
     bool IsEnabled() const;
+    void SetStorageMode(
+        EProfileStorageMode Mode,
+        std::size_t TraceCapacity = 65536);
+    EProfileStorageMode GetStorageMode() const;
+    FProfilerStorageStats GetStorageStats() const;
+    void Compact();
     void BeginFrame();
     void EndFrame();
     FProfileScopeToken BeginScope(const char* Name);
@@ -75,6 +97,7 @@ private:
     struct FImpl;
     FImpl* Impl = nullptr;
     std::atomic<bool> bEnabled {false};
+    std::atomic<EProfileStorageMode> StorageMode {EProfileStorageMode::Disabled};
     std::atomic<std::uint64_t> CurrentFrameId {0};
     std::atomic<std::uint64_t> NextEventId {1};
 };

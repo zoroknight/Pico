@@ -42,7 +42,9 @@ FJson ToJson(const FAgentEvent& Event, std::string_view SessionId)
         {"mutation_tool_calls", Event.Counters.MutationToolCalls},
         {"semantic_cache_hits", Event.Counters.SemanticCacheHits},
         {"consecutive_no_progress_steps", Event.Counters.ConsecutiveNoProgressSteps},
-        {"repair_attempts", Event.Counters.RepairAttempts}
+        {"repair_attempts", Event.Counters.RepairAttempts},
+        {"context_messages", Event.Counters.ContextMessages},
+        {"trimmed_context_messages", Event.Counters.TrimmedContextMessages}
     };
 }
 
@@ -98,6 +100,9 @@ bool FromJson(const FJson& Json, std::string_view SessionId, FAgentEvent& Out, s
         Out.Counters.ConsecutiveNoProgressSteps =
             Json.value("consecutive_no_progress_steps", 0U);
         Out.Counters.RepairAttempts = Json.value("repair_attempts", 0U);
+        Out.Counters.ContextMessages = Json.value("context_messages", 0U);
+        Out.Counters.TrimmedContextMessages =
+            Json.value("trimmed_context_messages", 0U);
         return true;
     }
     catch (const std::exception& Exception)
@@ -248,6 +253,68 @@ std::vector<FAgentMessage> FAgentSession::BuildMessageHistory() const
         }
     }
     return Result;
+}
+
+std::vector<FAgentMessage> FAgentSession::BuildBoundedMessageHistory(
+    std::size_t MaxMessages,
+    std::uint64_t MaxBytes,
+    std::size_t* OutTrimmedMessages) const
+{
+    std::vector<FAgentMessage> History = BuildMessageHistory();
+    const std::size_t OriginalCount = History.size();
+    std::uint64_t UsedBytes = 0;
+    std::size_t FirstKept = History.size();
+    while (FirstKept > 0 && History.size() - FirstKept < MaxMessages)
+    {
+        const FAgentMessage& Message = History[FirstKept - 1];
+        std::uint64_t MessageBytes = Message.Content.size()
+            + Message.ToolCallId.size();
+        for (const FAgentToolCall& Call : Message.ToolCalls)
+            MessageBytes += Call.Id.size() + Call.Name.size()
+                + Call.ArgumentsJson.size();
+        if (UsedBytes + MessageBytes > MaxBytes)
+            break;
+        UsedBytes += MessageBytes;
+        --FirstKept;
+    }
+    if (FirstKept > 0)
+        History.erase(History.begin(), History.begin() + FirstKept);
+    // OpenAI-compatible providers require every Tool message to follow the
+    // Assistant message that declared its tool_call_id. If the byte/message
+    // boundary split that group, discard the orphaned old results.
+    while (!History.empty() && History.front().Role == EAgentRole::Tool)
+        History.erase(History.begin());
+    if (OutTrimmedMessages)
+        *OutTrimmedMessages = OriginalCount - History.size();
+    return History;
+}
+
+std::string FAgentSession::GetMostRecentError() const
+{
+    for (auto It = Events.rbegin(); It != Events.rend(); ++It)
+    {
+        if (It->Type == EAgentEventType::Error && !It->Content.empty())
+            return It->Content;
+    }
+    return {};
+}
+
+std::unordered_map<std::string, std::uint64_t>
+FAgentSession::BuildRevisionSnapshot() const
+{
+    std::unordered_map<std::string, std::uint64_t> Revisions;
+    for (const FAgentEvent& Event : Events)
+    {
+        if (Event.Type != EAgentEventType::ToolResult
+            || Event.StructuredResultJson.empty()) continue;
+        FAgentToolResult Result;
+        if (!DeserializeAgentToolResult(Event.StructuredResultJson, Result))
+            continue;
+        for (const FAgentRevisionChange& Change : Result.RevisionChanges)
+            Revisions[Change.Domain] = std::max(
+                Revisions[Change.Domain], Change.After);
+    }
+    return Revisions;
 }
 
 std::optional<FAgentToolResult> FAgentSession::FindToolResult(std::string_view CallId) const

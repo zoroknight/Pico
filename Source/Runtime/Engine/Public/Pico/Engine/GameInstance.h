@@ -16,6 +16,21 @@ class PLocalPlayer;
 class PNetPlayer;
 class PWorld;
 
+struct FGameplayAbilityStatus
+{
+    std::string InputLabel;
+    std::string AbilityName;
+    bool bActive = false;
+    float CooldownRemaining = 0.0f;
+};
+
+struct FPlayerAbilityStatus
+{
+    std::string PlayerLabel;
+    bool bIsLocalPlayer = false;
+    std::vector<FGameplayAbilityStatus> Abilities;
+};
+
 class PGameInstance : public PObject
 {
     PICO_DECLARE_CLASS(PGameInstance, PObject)
@@ -28,6 +43,8 @@ public:
     virtual void Shutdown();
     virtual void AppendGameplayDebugLines(std::vector<std::string>& OutLines) const;
     virtual void AppendGameplayStatusLines(std::vector<std::string>& OutLines) const;
+    virtual void AppendGameplayAbilityStatus(
+        std::vector<FPlayerAbilityStatus>& OutPlayers) const;
 
     FGameEngine* GetGameEngine() const;
     PWorld* GetWorld() const;

@@ -590,6 +590,11 @@ void TestFrameTimer(FTestRunner& Runner)
     Runner.Expect(Timer.GetTotalSeconds() >= 0.0, "Frame timer produces a non-negative total time");
     Runner.Expect(Timer.GetAverageFrameTimeMS() >= 0.0, "Frame timer produces a non-negative average frame time");
     Runner.Expect(Timer.GetAverageFPS() >= 0.0, "Frame timer produces a non-negative average FPS");
+    const Pico::FFrameTimeStatistics Statistics = Timer.GetStatistics();
+    Runner.Expect(Statistics.SampleCount == 1
+            && Statistics.P50Milliseconds >= 0.0
+            && Statistics.P95Milliseconds >= Statistics.P50Milliseconds,
+        "Frame timer exposes bounded percentile statistics");
 
     Pico::FFramePacingSettings Settings;
     Runner.Expect(
@@ -785,6 +790,39 @@ void TestProfiler(FTestRunner& Runner)
         WorkerEvent != Events.end() && Root != Events.end()
             && WorkerEvent->ThreadId != Root->ThreadId,
         "Profiler distinguishes worker-thread events");
+
+    Profiler.Reset();
+    Profiler.SetStorageMode(Pico::EProfileStorageMode::AggregateOnly);
+    { PICO_PROFILE_SCOPE("Aggregate.Scope"); }
+    Runner.Expect(
+        Profiler.GetEvents().empty()
+            && Profiler.GetAggregates().size() == 1,
+        "Aggregate-only profiler retains summaries without event history");
+
+    Profiler.Reset();
+    Profiler.SetStorageMode(Pico::EProfileStorageMode::BoundedTrace, 2);
+    { PICO_PROFILE_SCOPE("Bounded.First"); }
+    { PICO_PROFILE_SCOPE("Bounded.Second"); }
+    { PICO_PROFILE_SCOPE("Bounded.Third"); }
+    const Pico::FProfilerStorageStats BoundedStats = Profiler.GetStorageStats();
+    const std::vector<Pico::FProfileEvent> BoundedEvents = Profiler.GetEvents();
+    Runner.Expect(
+        BoundedEvents.size() == 2
+            && BoundedEvents.front().Name == "Bounded.Second"
+            && BoundedEvents.back().Name == "Bounded.Third"
+            && BoundedStats.DroppedEventCount == 1,
+        "Bounded profiler keeps the newest events in chronological order");
+    Profiler.SetStorageMode(Pico::EProfileStorageMode::AggregateOnly);
+    Profiler.Compact();
+    Runner.Expect(Profiler.GetStorageStats().StoredEventCount == 0
+            && Profiler.GetStorageStats().TraceCapacity == 0,
+        "Profiler compacts retained trace storage at an explicit safe point");
+
+    Profiler.Reset();
+    Profiler.SetEnabled(true);
+    Profiler.BeginFrame();
+    { PICO_PROFILE_SCOPE("Export.Scope"); }
+    Profiler.EndFrame();
 
     const std::filesystem::path RootPath =
         std::filesystem::temp_directory_path() / "PicoProfilerTests";

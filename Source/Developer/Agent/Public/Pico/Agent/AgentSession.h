@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace Pico
@@ -61,6 +62,12 @@ public:
     EAgentStatus GetStatus() const;
     const FAgentCounters& GetCounters() const;
     std::vector<FAgentMessage> BuildMessageHistory() const;
+    std::vector<FAgentMessage> BuildBoundedMessageHistory(
+        std::size_t MaxMessages,
+        std::uint64_t MaxBytes,
+        std::size_t* OutTrimmedMessages = nullptr) const;
+    std::string GetMostRecentError() const;
+    std::unordered_map<std::string, std::uint64_t> BuildRevisionSnapshot() const;
     std::optional<FAgentToolCall> FindToolCall(std::string_view CallId) const;
     bool MatchesToolCall(const FAgentToolCall& Call) const;
     std::optional<FAgentToolResult> FindToolResult(std::string_view CallId) const;

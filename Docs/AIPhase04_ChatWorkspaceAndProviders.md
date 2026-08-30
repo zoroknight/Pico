@@ -29,14 +29,25 @@ HTTP 和模型规划在 Worker 执行。创建对象、读取或修改 World、�
 PicoEditor 默认把 `AI Chat` 停靠在 `Details` 一侧，也可以通过 `View -> AI Chat` 重新打开。窗口包括：
 
 - Provider 与模型选择。
+- 上次使用的 Provider 与各 Provider 的 Model 保存到源码检出目录下、Git 忽略的
+  `Saved/Editor/Agent/ChatSettings.ini`，重启编辑器或打开其他项目时自动恢复；项目交接参数优先。
 - 当前 Provider、模型、会话名称和独立 Session 文件诊断。
 - 请求超时和有限重试设置。
-- 可恢复的 User、Assistant、Tool Call、Tool Result 和 Trace 历史。
+- 可恢复且可审计的 User、Assistant、Tool Call、Tool Result 和 Trace 历史。底层 JSONL 仍逐事件保存，聊天正文
+  将同一用户请求中的 Assistant 操作描述合并为连续内容，并在该轮末尾只显示一个默认折叠的工具调用摘要。
+- 工具摘要折叠时显示调用、成功和失败数量；展开后显示工具表格，每个工具还能单独展开参数、结构化结果和 Trace。
 - 同一 Provider 下可新建、切换和删除多个会话；删除前必须确认，当前会话删除后自动选择剩余会话或创建空会话。
 - 打开窗口、切换会话或收到新消息时自动定位到最新记录。
 - 每个消息气泡都有复制图标；双击气泡可进入只读文本选择视图并使用 `Ctrl+C`，无需全局 `Selectable` 开关。
+- 用户消息与 Agent 输出保持左对齐：用户轮次使用低饱和蓝灰背景和蓝色强调线，Agent 输出使用更明亮的浅绿色
+  背景和绿色强调线；错误消息使用低饱和深红背景和红色强调线。三者保留额外轮次留白，并维持适合长
+  Markdown、表格和代码的宽布局。
 - 使用 MD4C 解析 Markdown；标题、列表、引用、链接、行内代码和围栏代码具有独立样式，JSON 工具参数、结果和
   Trace 会先格式化再作为 `json` 代码块呈现。
+- 当前 ImGui 字体图集不可靠支持彩色 Emoji。Provider 会被要求使用无 Emoji 的普通 Markdown；旧会话或未遵守
+  约束的输出在绘制时省略补充平面 Emoji、变体符、连接符，以及闪电、雪花、星形等装饰性符号，只保留
+  对号/叉号状态标记。对于 16 位 ImGui 字形范围在解码阶段产生的 `U+FFFD` 替代码点也会直接省略，因此不会显示
+  问号乱码；这些过滤均不修改 Session 原文与复制内容。
 - 代码块提供独立复制按钮；超过 12 行时默认折叠并可展开，代码块本身不建立滚轮区域，由外层聊天记录统一滚动。
 - 修改工具的 Approve/Reject 面板。
 - Send、Cancel 和运行状态。
@@ -117,7 +128,8 @@ Pico 工具使用带点的稳定名称，例如 `editor.actor.spawn`。Provider 
 4. 出现 `editor.actor.spawn` 审批时点击 Approve，验证修改前必须获得用户批准。
 5. 出现 `editor.actor.set_location` 审批时点击 Approve，验证第二次修改拥有独立参数和事务。
 6. 在 Scene Outliner 和 Viewport 中确认新增 `AI_Cube_*` 位于 `(150, 0, 100)`。
-7. 查看 Tool Result 中的 Trace，确认存在 Validate、Permission、Approval、Transaction、Execute、Verify 和 Commit。
+7. 展开该轮末尾的工具调用摘要，再展开对应 Tool，确认 Trace 包含 Validate、Permission、Approval、Transaction、
+   Execute、Verify 和 Commit；主时间线中不应再夹杂独立 Tool Call/Result 气泡。
 8. 连续执行两次 `Ctrl+Z`：第一次撤销移动，第二次删除 Cube，验证 Agent 复用普通编辑器 Undo。
 9. 再运行一次并在任一修改审批点击 Reject，确认场景无该次副作用。
 10. 重启编辑器，确认对话、Tool Call、结果和 Trace 从 Session 文件恢复。
@@ -131,6 +143,13 @@ Pico 工具使用带点的稳定名称，例如 `editor.actor.spawn`。Provider 
 5. 让 Provider 返回列表和 JSON，确认 JSON 以格式化代码块显示；展开长代码块并滚动，确认滚轮仍控制聊天记录。
 6. 让 Provider 返回 GFM 表格，确认它显示为带表头、边框和交替行底色的真实行列布局，并在窄窗口内自动换行。
 7. 让 Provider 返回 `✓ ✗ ☑ ☐ → ← ★`，确认编辑器合并的 Segoe UI Symbol 字形能够直接显示，不出现问号或空框。
+8. 让 Provider 返回包含 Emoji、闪电、雪花和星形的旧式内容，确认界面省略这些装饰符号且中文连续显示，同时
+   `✓/✗` 等状态符号仍可见；复制气泡时 Clipboard 仍包含原始字符。
+9. 执行一次包含多个查询和修改工具的任务，确认 Assistant 操作描述连续显示，最后只有一个工具摘要；展开摘要
+   查看总表，再逐项展开参数、结果和 Trace。
+10. 连续发送两轮消息，确认用户消息仍然左对齐且拥有蓝灰背景和蓝色强调线；Assistant 使用浅绿色底纹和
+    绿色强调线，表格和代码块宽度没有受到不必要限制。触发一次 Provider 或工具错误，确认错误消息具有深红
+    底纹和红色强调线。
 
 真实 Provider 流程相同，在编辑器本地保存密钥或设置相应环境变量后选择 DeepSeek 或 Kimi。真实 API 会产生外部
 请求和可能的计费，因此自动化测试不会默认调用。

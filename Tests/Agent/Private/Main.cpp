@@ -43,6 +43,22 @@ public:
             && Call.Name == ReadOnlyToolName);
     }
 
+    std::vector<std::string> GetRevisionReadSet(
+        const Pico::FAgentToolCall& Call) const override
+    {
+        const auto It = ReadSets.find(Call.Name);
+        return It == ReadSets.end()
+            ? Pico::IAgentToolExecutor::GetRevisionReadSet(Call) : It->second;
+    }
+
+    std::vector<std::string> GetRevisionWriteSet(
+        const Pico::FAgentToolCall& Call) const override
+    {
+        const auto It = WriteSets.find(Call.Name);
+        return It == WriteSets.end()
+            ? Pico::IAgentToolExecutor::GetRevisionWriteSet(Call) : It->second;
+    }
+
     void PrepareApproval(const Pico::FAgentToolCall&) override
     {
         ++PrepareApprovalCount;
@@ -73,6 +89,8 @@ public:
     bool bRequiresApproval = false;
     bool bReadOnly = false;
     std::string ReadOnlyToolName;
+    std::unordered_map<std::string, std::vector<std::string>> ReadSets;
+    std::unordered_map<std::string, std::vector<std::string>> WriteSets;
     Pico::EAgentFailureClass FailureClass = Pico::EAgentFailureClass::None;
 };
 
@@ -784,6 +802,99 @@ void TestSemanticReadCacheAndNoProgressGuard(FTestRunner& Runner)
             && RevisionResult.Counters.MutationToolCalls == 1
             && RevisionResult.Counters.SemanticCacheHits == 0,
         "A successful mutation advances StateRevision and invalidates read cache keys");
+
+    auto DomainSession = Pico::FAgentSession::OpenOrCreate(
+        "cache-domain", MakeLogPath("cache-domain"));
+    Pico::FFakeAgentProvider DomainProvider({
+        {ToolCalls({{"asset-read-1", "asset.describe", "{}"}}), {}},
+        {ToolCalls({{"graph-write", "graph.change", "{}"}}), {}},
+        {ToolCalls({{"asset-read-2", "asset.describe", "{}"}}), {}},
+        {Final("done"), {}}});
+    FCountingToolExecutor DomainExecutor;
+    DomainExecutor.ReadOnlyToolName = "asset.describe";
+    DomainExecutor.ReadSets["asset.describe"] = {"Asset.Revision"};
+    DomainExecutor.WriteSets["graph.change"] = {"Graph.Revision"};
+    Pico::FAgentRuntime DomainRuntime(
+        *DomainSession, DomainProvider, DomainExecutor);
+    const Pico::FAgentRunResult DomainResult =
+        DomainRuntime.Run("change graph without invalidating asset cache");
+    Runner.Expect(DomainResult.Status == Pico::EAgentStatus::Completed
+            && DomainExecutor.Count == 2
+            && DomainResult.Counters.SemanticCacheHits == 1,
+        "Graph revision changes do not invalidate unrelated Asset reads");
+    const auto PersistedRevisions = DomainSession->BuildRevisionSnapshot();
+    Runner.Expect(PersistedRevisions.contains("Graph.Revision")
+            && PersistedRevisions.at("Graph.Revision") == 1,
+        "Domain revisions rebuild from durable Tool Results across turns");
+
+    auto ContextSession = Pico::FAgentSession::OpenOrCreate(
+        "bounded-context", MakeLogPath("bounded-context"));
+    for (int Index = 0; Index < 10; ++Index)
+    {
+        Pico::FAgentEvent Message;
+        Message.Type = Pico::EAgentEventType::Message;
+        Message.Role = Index % 2 == 0
+            ? Pico::EAgentRole::User : Pico::EAgentRole::Assistant;
+        Message.Content = "history-" + std::to_string(Index);
+        ContextSession->Append(std::move(Message));
+    }
+    std::size_t TrimmedMessages = 0;
+    const auto BoundedHistory = ContextSession->BuildBoundedMessageHistory(
+        4, 1024, &TrimmedMessages);
+    Runner.Expect(BoundedHistory.size() == 4 && TrimmedMessages == 6
+            && BoundedHistory.front().Content == "history-6"
+            && BoundedHistory.back().Content == "history-9",
+        "Agent context retains a bounded newest-message window");
+    const auto ByteBoundedHistory = ContextSession->BuildBoundedMessageHistory(
+        10, 5, &TrimmedMessages);
+    Runner.Expect(ByteBoundedHistory.empty() && TrimmedMessages == 10,
+        "Agent context byte budget is a hard upper bound");
+
+    auto ProtocolSession = Pico::FAgentSession::OpenOrCreate(
+        "bounded-tool-protocol", MakeLogPath("bounded-tool-protocol"));
+    Pico::FAgentEvent OldUser;
+    OldUser.Type = Pico::EAgentEventType::Message;
+    OldUser.Role = Pico::EAgentRole::User;
+    OldUser.Content = "inspect first";
+    ProtocolSession->Append(std::move(OldUser));
+    Pico::FAgentEvent Assistant;
+    Assistant.Type = Pico::EAgentEventType::Message;
+    Assistant.Role = Pico::EAgentRole::Assistant;
+    Assistant.Content = "I will inspect";
+    ProtocolSession->Append(std::move(Assistant));
+    Pico::FAgentEvent ToolCall;
+    ToolCall.Type = Pico::EAgentEventType::ToolCall;
+    ToolCall.CallId = "protocol-call";
+    ToolCall.ToolName = "scene.describe";
+    ProtocolSession->Append(std::move(ToolCall));
+    Pico::FAgentEvent ToolResult;
+    ToolResult.Type = Pico::EAgentEventType::ToolResult;
+    ToolResult.Role = Pico::EAgentRole::Tool;
+    ToolResult.CallId = "protocol-call";
+    ToolResult.ToolName = "scene.describe";
+    ToolResult.bSucceeded = true;
+    ToolResult.PayloadJson = R"({"world":"test"})";
+    ProtocolSession->Append(std::move(ToolResult));
+    Pico::FAgentEvent NewUser;
+    NewUser.Type = Pico::EAgentEventType::Message;
+    NewUser.Role = Pico::EAgentRole::User;
+    NewUser.Content = "describe again";
+    ProtocolSession->Append(std::move(NewUser));
+
+    const auto SplitHistory = ProtocolSession->BuildBoundedMessageHistory(
+        2, 4096, &TrimmedMessages);
+    Runner.Expect(SplitHistory.size() == 1
+            && SplitHistory.front().Role == Pico::EAgentRole::User
+            && SplitHistory.front().Content == "describe again",
+        "Context trimming removes orphan Tool Results when a tool group is split");
+    const auto CompleteToolHistory = ProtocolSession->BuildBoundedMessageHistory(
+        3, 4096, &TrimmedMessages);
+    Runner.Expect(CompleteToolHistory.size() == 3
+            && CompleteToolHistory[0].Role == Pico::EAgentRole::Assistant
+            && CompleteToolHistory[0].ToolCalls.size() == 1
+            && CompleteToolHistory[1].Role == Pico::EAgentRole::Tool
+            && CompleteToolHistory[1].ToolCallId == "protocol-call",
+        "Context trimming retains complete Assistant ToolCall and Tool Result groups");
 
     auto LoopSession = Pico::FAgentSession::OpenOrCreate(
         "no-progress", MakeLogPath("no-progress"));
@@ -1802,6 +1913,8 @@ void TestDurableOperationJournal(FTestRunner& Runner)
 
 void TestDeterministicFailureInjectionAndReconcile(FTestRunner& Runner)
 {
+    std::size_t RecoverableCaseCount = 0;
+    std::size_t RecoveredCaseCount = 0;
     {
         const auto Path = MakeLogPath("provider-failure-injection");
         auto Session = Pico::FAgentSession::OpenOrCreate(
@@ -1818,9 +1931,12 @@ void TestDeterministicFailureInjectionAndReconcile(FTestRunner& Runner)
             *Session, Provider, Executor, {}, std::move(Context));
         const Pico::FAgentRunResult Result = Runtime.Run(
             "exercise provider failure recovery");
-        Runner.Expect(Result.Status == Pico::EAgentStatus::Completed
+        const bool bRecovered = Result.Status == Pico::EAgentStatus::Completed
                 && Result.Counters.RepairAttempts == 2
-                && Provider.GetGenerateCount() == 2,
+                && Provider.GetGenerateCount() == 2;
+        ++RecoverableCaseCount;
+        RecoveredCaseCount += bRecovered ? 1 : 0;
+        Runner.Expect(bRecovered,
             "Injected provider timeout and invalid JSON consume finite repair budget then recover");
     }
 
@@ -1875,15 +1991,36 @@ void TestDeterministicFailureInjectionAndReconcile(FTestRunner& Runner)
         Pico::FAgentRuntime RecoveryRuntime(
             *Restored, RecoveryProvider, Executor);
         const Pico::FAgentRunResult Recovered = RecoveryRuntime.Run("");
-        Runner.Expect(First.Status == Pico::EAgentStatus::Failed
+        const bool bRecovered = First.Status == Pico::EAgentStatus::Failed
                 && Recovered.Status == Pico::EAgentStatus::Completed
                 && Executor.SideEffectCount == 1
                 && Executor.ReconcileCount == 1
-                && Executor.Journal.ListIncomplete().empty(),
+                && Executor.Journal.ListIncomplete().empty();
+        ++RecoverableCaseCount;
+        RecoveredCaseCount += bRecovered ? 1 : 0;
+        Runner.Expect(bRecovered,
             "Applied side effect is reconciled exactly once after injected persistence failure "
                 + std::to_string(Index + 1));
         std::filesystem::remove_all(JournalRoot, ErrorCode);
     }
+
+    const std::filesystem::path ReportPath =
+        std::filesystem::temp_directory_path()
+        / "PicoAgentTests/FailureInjectionReport.json";
+    std::error_code ErrorCode;
+    std::filesystem::create_directories(ReportPath.parent_path(), ErrorCode);
+    std::ofstream Report(ReportPath, std::ios::binary | std::ios::trunc);
+    const double RecoveryRate = RecoverableCaseCount == 0 ? 0.0
+        : static_cast<double>(RecoveredCaseCount)
+            / static_cast<double>(RecoverableCaseCount);
+    Report << "{\n"
+        << "  \"format_version\": 1,\n"
+        << "  \"recoverable_failure_cases\": " << RecoverableCaseCount << ",\n"
+        << "  \"recovered_failure_cases\": " << RecoveredCaseCount << ",\n"
+        << "  \"recoverable_failure_recovery_rate\": "
+        << RecoveryRate << "\n}\n";
+    Runner.Expect(static_cast<bool>(Report),
+        "Failure-injection evaluation persists its recovery-rate metric");
 }
 }
 
