@@ -10,6 +10,9 @@ namespace Pico
 {
 namespace
 {
+constexpr float WalkSpeedThreshold = 5.0f;
+constexpr float WalkStopDelaySeconds = 0.12f;
+
 float MontageDuration(const FAnimationMontageData& Montage)
 {
     return Montage.Segments.empty() ? 0.0f : Montage.Segments.back().EndTime;
@@ -101,6 +104,7 @@ void PAnimInstance::SetAnimationSet(
     JumpClip = std::move(InJump);
     CurrentState = EAnimationState::Idle;
     PlaybackTime = 0.0f;
+    LowGroundSpeedTime = 0.0f;
     PendingRootMotion = FTransform::Identity;
     if (Skeleton != nullptr)
     {
@@ -184,9 +188,27 @@ void PAnimInstance::Update(float DeltaSeconds, float GroundSpeed, bool bFalling)
 
 void PAnimInstance::UpdateLocomotion(float DeltaSeconds, float GroundSpeed, bool bFalling)
 {
-    const EAnimationState DesiredState = bFalling
-        ? EAnimationState::Jump
-        : (GroundSpeed > 5.0f ? EAnimationState::Walk : EAnimationState::Idle);
+    EAnimationState DesiredState = EAnimationState::Idle;
+    if (bFalling)
+    {
+        LowGroundSpeedTime = 0.0f;
+        DesiredState = EAnimationState::Jump;
+    }
+    else if (GroundSpeed > WalkSpeedThreshold)
+    {
+        LowGroundSpeedTime = 0.0f;
+        DesiredState = EAnimationState::Walk;
+    }
+    else if (CurrentState == EAnimationState::Walk)
+    {
+        LowGroundSpeedTime += DeltaSeconds;
+        DesiredState = LowGroundSpeedTime < WalkStopDelaySeconds
+            ? EAnimationState::Walk : EAnimationState::Idle;
+    }
+    else
+    {
+        LowGroundSpeedTime = 0.0f;
+    }
     if (DesiredState != CurrentState)
     {
         CurrentState = DesiredState;

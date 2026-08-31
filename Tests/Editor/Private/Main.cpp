@@ -1073,14 +1073,55 @@ void TestEditorCommandService(FTestRunner& Runner)
                 != std::string::npos
             && DescribeAgentCube.OutputJson.find("Extent") != std::string::npos
             && DescribeAgentCube.OutputJson.find("Color") != std::string::npos
+            && DescribeAgentCube.OutputJson.find("CollisionProfileValue")
+                != std::string::npos
+            && DescribeAgentCube.OutputJson.find("CollisionProfile")
+                != std::string::npos
             && DescribeAgentCube.OutputJson.find("BoxExtent") != std::string::npos,
         "Generic object description exposes component paths, inherited properties, values, and semantics");
+
+    const Pico::FAgentToolCall SetReplicationPolicy {
+        "agent-set-replication", "editor.object.set_properties",
+        "{\"object_path\":\"" + AgentCubePath
+            + "\",\"properties\":{\"bReplicates\":true,"
+              "\"bReplicateMovement\":true}}"
+    };
+    AgentTools.PrepareApproval(SetReplicationPolicy);
+    const auto SetReplicationResult =
+        AgentTools.Execute(SetReplicationPolicy, nullptr);
+    Runner.Expect(
+        SetReplicationResult.bSucceeded && AgentCube != nullptr
+            && AgentCube->GetIsReplicated()
+            && AgentCube->GetReplicateMovement(),
+        "Agent configures Actor replication and movement replication through generic reflected properties");
+    Runner.Expect(Commands.Undo().bSucceeded,
+        "Replication policy edit participates in the normal editor transaction");
+    AgentCube = dynamic_cast<Pico::PActor*>(
+        Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), AgentCubePath));
+    AgentCubeComponent = AgentCube != nullptr
+        ? dynamic_cast<Pico::PCubeComponent*>(AgentCube->GetRootComponent()) : nullptr;
+    const auto DescribeInvalidReplication = AgentCube != nullptr
+        ? ([&AgentTools, &AgentCubePath, AgentCube]()
+        {
+            AgentCube->SetReplicateMovement(true);
+            return AgentTools.Execute(
+                {"agent-describe-invalid-replication", "editor.object.describe",
+                    "{\"object_path\":\"" + AgentCubePath + "\"}"}, nullptr);
+        })()
+        : Pico::FAgentToolResult {};
+    Runner.Expect(
+        DescribeInvalidReplication.bSucceeded
+            && DescribeInvalidReplication.OutputJson.find(
+                "Replicate Movement requires Replicates") != std::string::npos,
+        "Agent object description reports an invalid replication dependency");
+    if (AgentCube != nullptr) AgentCube->SetReplicateMovement(false);
 
     const Pico::FAgentToolCall SetReflectedProperties {
         "agent-set-properties", "editor.object.set_properties",
         "{\"object_path\":\"" + AgentCubeComponentPath
             + "\",\"properties\":{\"Extent\":{\"x\":80,\"y\":60,\"z\":40},"
-              "\"Color\":{\"x\":1,\"y\":0.25,\"z\":0.1}}}"
+              "\"Color\":{\"x\":1,\"y\":0.25,\"z\":0.1},"
+              "\"CollisionProfileValue\":6,\"PhysicsBodyTypeValue\":2}}"
     };
     AgentTools.PrepareApproval(SetReflectedProperties);
     const auto SetReflectedResult =
@@ -1088,8 +1129,12 @@ void TestEditorCommandService(FTestRunner& Runner)
     Runner.Expect(
         SetReflectedResult.bSucceeded && AgentCubeComponent != nullptr
             && AgentCubeComponent->GetExtent().Equals(Pico::FVector3(80.0f, 60.0f, 40.0f))
-            && AgentCubeComponent->GetColor().Equals(Pico::FVector3(1.0f, 0.25f, 0.1f)),
-        "One approved generic property call changes multiple reflected component properties");
+            && AgentCubeComponent->GetColor().Equals(Pico::FVector3(1.0f, 0.25f, 0.1f))
+            && AgentCubeComponent->GetCollisionProfile()
+                == Pico::ECollisionProfile::PhysicsActor
+            && AgentCubeComponent->GetPhysicsBodyType()
+                == Pico::EPhysicsBodyType::Dynamic,
+        "One approved generic property call configures reflected visual, collision, and physics properties");
     Runner.Expect(
         Commands.Undo().bSucceeded,
         "One normal editor Undo reverts the complete reflected property batch");

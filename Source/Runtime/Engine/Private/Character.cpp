@@ -39,11 +39,23 @@ bool PCharacter::DefineDefaultSubobjects(FObjectInitializer& Initializer)
         return false;
     }
 
-    Capsule->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    Capsule->SetCollisionProfile(ECollisionProfile::Pawn);
     Capsule->SetPhysicsBodyType(EPhysicsBodyType::Kinematic);
-    Capsule->SetSensor(false);
+    Capsule->SetPhysicsContactEnabled(false);
     Capsule->SetGravityEnabled(false);
     return Initializer.SetRootSubobject(Capsule);
+}
+
+bool PCharacter::OnDefaultSubobjectCreated(PObject* Subobject)
+{
+    if (!PActor::OnDefaultSubobjectCreated(Subobject)) return false;
+    if (Subobject->IsA(PCapsuleComponent::StaticClass())
+        && Subobject->GetName() == FName("CollisionCapsule"))
+    {
+        static_cast<PCapsuleComponent*>(Subobject)
+            ->SetPhysicsContactEnabled(false);
+    }
+    return true;
 }
 
 PCapsuleComponent* PCharacter::GetCapsuleComponent() const

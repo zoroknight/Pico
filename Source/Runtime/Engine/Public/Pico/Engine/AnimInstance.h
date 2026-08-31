@@ -83,6 +83,7 @@ private:
     FTransform PendingRootMotion;
     EAnimationState CurrentState = EAnimationState::Idle;
     float PlaybackTime = 0.0f;
+    float LowGroundSpeedTime = 0.0f;
     bool bExtractRootMotion = false;
 
     std::shared_ptr<const FAnimationMontageData> ActiveMontage;

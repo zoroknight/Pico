@@ -22,12 +22,22 @@ The current implementation can:
 - Replicate explicitly enabled Actors through per-connection ActorChannels, server-assigned NetObjectIds,
   stable reflection schemas, acknowledged property baselines, Spawn/Delta/Destroy, Transform state,
   InitialOnly conditions, zero-argument OnRep calls, and deferred type-checked Actor references.
+- Configure `Replicates` and `Replicate Movement` on every Actor-derived type. Non-Character Actors can
+  stream unreliable server-authoritative root movement; dynamic root bodies carry linear/angular velocity
+  and become kinematic network proxies on clients, while Character keeps its prediction/replay path.
+- Configure compact UE-style Collision Profiles (`Pawn`, `Pawn (Ignore Pawns)`, `Physics Actor`,
+  `Trigger`, and `Projectile`) through Details or the generic Agent property tools. Pico resolves bilateral
+  Ignore/Overlap/Block responses above Jolt's stable Moving/NonMoving broad phase; network Pawn capsules
+  block without pushing while the server remains authoritative.
+- Keep query-only blocking bodies distinct from explicit Trigger sensors in Jolt. Character capsules remain
+  blocking sweep targets without solver contacts. The server owns final physics-interaction results, the local
+  AutonomousProxy predicts immediate pushes, and SimulatedProxy characters cannot move observer-local bodies.
 - Run server-authoritative Character movement with bounded SavedMove redundancy, ownership and control-policy
   validation, autonomous-proxy prediction/correction/replay, plus Disabled, Linear, Exponential, and
   Snapshot Interpolation modes that smooth the visual Mesh without delaying the authoritative capsule.
-- Validate that path in the PicoSandbox Replication Lab: an authority-spawned cube exposes matching
-  NetId/InitialOnly state in three F1 panels, while server keys exercise Transform Delta, OnRep,
-  Destroy, and fresh Spawn across two clients.
+- Validate that path with the editor-authored `NetworkDoor` in PicoSandbox: the persistent scene Actor
+  is spawned by ActorChannel on clients, replicates its open and collision state, and applies the same
+  authoritative transform and blocking result to two independent clients.
 - Run the same Windows Development Stage across two physical Windows PCs on a LAN: PC A hosts the
   separate server and client 1, while PC B runs client 2; movement, jumping, and Gameplay RPCs stay
   synchronized through the authoritative UDP path.
@@ -521,10 +531,11 @@ three-process acceptance matrix is documented in
 A dirty or untitled World still requires explicit `Save & Play`. Listen Server and a truly headless
 Dedicated Server remain reserved until the replication/runtime split is ready.
 
-PicoSandbox's Week 2 Replication Lab starts automatically in Standalone or Server mode. In a visible
-server plus two clients, use `Y` to move the authority Actor, `U` to change its replicated revision and
-color, `I` to destroy it, and `T` to spawn it again. F1 Project Debug shows the shared NetId, location,
-InitialOnly marker, revision, and endpoint-local OnRep count.
+PicoSandbox now stores the replication lab door as the persistent `NetworkDoor` Actor in
+`StarterWorld.pworld`; it is no longer synthesized by `GameInstance`. Select it in Scene Outliner to
+configure `Door Open` and `Door Collision Enabled`. In a visible server plus two clients, press `F` near
+the door from either client. The server authoritatively opens or closes it, both clients receive the same
+transform and state, opening disables blocking collision, and closing restores collision when enabled.
 
 ## Editor Controls
 
@@ -774,6 +785,8 @@ See:
 - [Network Risk Register (Chinese)](Docs/NetworkRiskRegister.zh-CN.md)
 - [Network Transport, Connection, and Frame Phases (Chinese)](Docs/Month09_1_NetTransportAndConnection.md)
 - [Actor and Property Replication with Visual Lab (Chinese)](Docs/Month09_2_ActorReplication.md)
+- [Pico Collision System Guide (Chinese)](Docs/CollisionSystemGuide.zh-CN.md)
+- [Collision Profiles and Network Pawn Blocking (Chinese)](Docs/CollisionProfilesAndNetworkPawnBlocking.zh-CN.md)
 - [Reusable Third-Person Control Baseline (Chinese)](Docs/Month09_3_5_ThirdPersonControlBaseline.md)
 - [Character Network Movement, Prediction, and Interpolation (Chinese)](Docs/Month09_4_CharacterNetworkMovement.md)
 - [Reflection Authoring Guide](Docs/ReflectionAuthoringGuide.md)
@@ -860,7 +873,8 @@ The network stack now includes UDP connections, reliable ordered messages, per-c
 Spawn/Delta/Destroy replication, ownership-aware roles, and reflected Server/Client/Multicast RPC. PicoSandbox
 contains a client-to-server door interaction whose durable state is replicated while Client and Multicast RPCs
 provide directed and transient feedback. Runtime F1 diagnostics expose roles, NetIds, channels, RPC rejection,
-and reliable/unreliable message counters.
+and reliable/unreliable message counters. The authored `PhysicsCrate` now opts into generic Actor movement
+replication, so Jolt simulation is authoritative on the server instead of diverging independently per client.
 
 Project month 6 is complete for the learning MVP. Character movement now adds ordered SavedMoves,
 autonomous-proxy prediction, server replay and validation, Ack/Correction with unacknowledged-move replay,

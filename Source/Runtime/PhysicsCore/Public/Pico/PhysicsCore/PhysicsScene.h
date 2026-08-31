@@ -22,6 +22,9 @@ public:
     virtual bool GetBodyState(
         FPhysicsBodyHandle Handle,
         FPhysicsBodyState& OutState) const = 0;
+    virtual bool SetBodyState(
+        FPhysicsBodyHandle Handle,
+        const FPhysicsBodyState& State) = 0;
     virtual bool AddImpulse(
         FPhysicsBodyHandle Handle,
         const FVector3& Impulse) = 0;

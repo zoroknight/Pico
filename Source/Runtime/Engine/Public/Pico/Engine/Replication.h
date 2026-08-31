@@ -127,6 +127,8 @@ struct FReplicationStatistics
     uint64 CharacterCorrectionsReceived = 0;
     uint64 CharacterSnapshotsSent = 0;
     uint64 CharacterSnapshotsReceived = 0;
+    uint64 ActorMovementSnapshotsSent = 0;
+    uint64 ActorMovementSnapshotsReceived = 0;
     uint64 SchemaCacheHits = 0;
     uint64 SchemaCacheMisses = 0;
     uint64 ChannelIndexHits = 0;

@@ -53,6 +53,21 @@ PendingOpen -> Open -> PendingClose -> Closed
 当前 Delta 发送变化字段的最终值，而不是依赖旧值的二进制补丁。这样可靠重发后可以直接收敛，并为未来高频
 Transform 改成不可靠快照保留边界。
 
+## 通用 Actor 移动与根刚体复制
+
+`PActor` 现在反射并持久化 `Replicates` 与 `Replicate Movement`。前者决定服务器是否建立 ActorChannel，后者决定
+非 Character Actor 是否在 Channel 打开后发送不可靠移动快照。快照携带 ServerTick、根 Transform、线速度、角速度、
+物理标记和激活状态；客户端按 ServerTick 丢弃乱序旧快照。
+
+若根组件是 Dynamic `PPrimitiveComponent`，Jolt 在服务器产生最终权威结果。客户端首次收到物理快照后把同一根
+刚体标记为 Dynamic Network Physics Proxy，允许 AutonomousProxy 在两次快照之间预测即时推动，再由服务器位置与
+速度覆盖预测误差。SimulatedProxy 不得推动观察端刚体，客户端本地碰撞也不会成为最终权威运动来源。`PCharacter`
+明确排除在该通用快照路径外，继续使用 SavedMove、Correction/Replay 和 SimulatedProxy Snapshot。
+
+这与 UE 的 `bReplicates + bReplicateMovement + FRepMovement` 分层一致，但 Pico 首版只处理 Actor 根运动：双方仍须
+加载相同 Actor 类、Mesh、Collision 和 Component 配置，网络只同步运行状态，不传输整份资产或 Component 树。
+`PhysicsCrate` 已在 `StarterWorld.pworld` 中启用两个开关；默认 Starter Content 生成器也会为动态箱子自动启用。
+
 ## Spawn、引用与 Destroy
 
 Spawn 包含 NetId、类名、Actor 名、Schema Hash、初始 Transform 和属性。客户端先验证完整消息、类、Schema、字段
@@ -90,41 +105,41 @@ TickFlush
 
 ## 可视化验收场
 
-`PicoSandbox` 会在 Standalone 或 Server World 中自动创建一个绿色的
-`PSandboxReplicationLabActor`。Client 不会自行创建它，只能通过服务器的 Spawn 消息取得对象。该 Actor 使用
-PHT 生成的反射代码，包含 `InitialOnly` 标记和带 `OnRep_LabRevision` 的普通复制属性；它的 Transform 走 Actor
-内建复制路径。
+`PicoSandbox` 当前在 `StarterWorld.pworld` 中持久化一个名为 `NetworkDoor` 的
+`PSandboxReplicationLabActor`。服务器从地图加载权威实例；Client 不会从自己的地图保留一份独立权威对象，而是
+通过服务器 ActorChannel 的 Spawn 取得网络实例。该 Actor 使用 PHT 生成的反射代码，包含 `InitialOnly`、
+`bDoorOpen`、`bDoorCollisionEnabled` 及对应 RepNotify；门的 Transform 走 Actor 内建复制路径。
 
-运行编辑器并在 Play Settings 中选择一个服务器和两个客户端后，分别在三个窗口按 `F1` 打开 Gameplay Debug。
-操作键只在服务器窗口生效：
+运行编辑器并在 Play Settings 中选择一个服务器和两个客户端后，任一客户端靠近门按 `F`：
 
 | 操作 | 预期现象 | 验证内容 |
 |---|---|---|
-| 启动并连接 | 三个窗口出现同一方块，Project Debug 的 NetId、位置、marker `6202` 一致 | Spawn、网络身份和 `InitialOnly` |
-| `Y` | 三个窗口中的方块移到相同位置 | Actor Transform Delta |
-| `U` | 方块在三个窗口同步变色且 revision 同步增加；客户端 local OnRep calls 增加 | 反射属性 Delta 和 RepNotify |
-| `I` | 两个客户端中的方块随服务器对象一起消失 | 可靠 Destroy 和 Channel 清理 |
-| `T` | 三个窗口重新出现新方块，并取得新的 NetId | 重新 Spawn 和网络身份不复用 |
+| 编辑态 | Scene Outliner 中存在 `NetworkDoor`，可配置 `Door Open` 与 `Door Collision Enabled` | 地图持久化、反射 Details 与序列化 |
+| 启动并连接 | 三个窗口出现同一扇门，Project Debug 的 NetId、位置、marker `6202` 一致 | Spawn、网络身份和 `InitialOnly` |
+| 客户端靠近后按 `F` | 三端门移动到相同的开启位置，门板变蓝且不再阻挡 | Server RPC、属性 Delta、Transform 与 RepNotify |
+| 再按 `F` | 三端门回到地图记录的关闭位置；启用碰撞时重新阻挡 | 持久化基准 Transform 与碰撞恢复 |
+| 关闭 `Door Collision Enabled` | 门关闭时也不阻挡，配置经保存后重新打开仍保留 | 碰撞配置序列化和复制 |
 
 服务器窗口的 `local OnRep calls` 保持为 `0` 是正确行为：权威端直接修改本地值，不需要用 OnRep 通知自己；客户端
 通过网络应用值时才调用 OnRep。若方块现象与数字不一致，以 F1 的 Project Debug 和 Network 计数作为定位依据。
 
 ### 人工验收记录
 
-2026-08-18 已使用编辑器 Play 的一个可视化服务器和两个客户端完成上述全流程验收。三个窗口的初始 Spawn、NetId、
-位置与 marker `6202` 一致；`Y` 后 Transform 同步，`U` 后 revision 与颜色同步且客户端 OnRep 计数增加，`I` 后
-三端对象消失，`T` 后使用新 NetId 重新生成。该结果与自动化测试共同满足第 2 周进入 RPC 阶段的准入条件。
+2026-08-18 的原始临时 Spawn/Destroy 实验已完成一个服务器加两个客户端人工验收。后续工程化改造把同一测试对象
+迁移为地图中的 `NetworkDoor`，并移除 `T/Y/U/I` 调试控制。自动化测试现在额外建立一个服务器 World 和两个独立
+客户端 World，验证门的开启状态、Transform 与碰撞状态分别向两条连接收敛。
 
 ## 自动化验收
 
 `PicoReplicationTests` 创建两个独立 World，模拟可靠消息交付与确认，覆盖 Spawn、Transform、RepNotify、乱序 Spawn
 引用修复、ACK 后基线提交、未变化零 Delta、`InitialOnly`、双连接独立基线、断线、Destroy，以及截断 Spawn 在创建
-Actor 前被拒绝。PHT 测试同时验证 RepNotify 和复制条件代码生成。
+Actor 前被拒绝。测试还建立两端同配置的动态根刚体，验证 Replicate Movement 策略随 Spawn 到达、移动快照经过
+不可靠通道、客户端切换为网络物理代理，并收敛到服务器位置和线速度。PHT 测试同时验证 RepNotify 和复制条件代码生成。
 
 ## 当前边界
 
 - `PGameStateBase` 默认启用复制，其他 Actor 必须显式调用 `SetReplicates(true)`。
-- Actor Transform 当前通过可靠 Channel 直接应用，适合证明权威同步，不是 Character 的最终网络移动方案。
+- 普通 Actor 可启用不可靠根移动快照；未启用时仍保留低频可靠 Transform Dirty 路径以兼容既有工具。
 - PlayerController Ownership、PlayerState/Pawn 可见性、RPC 方向与权限在第 3 周完成。
 - 模拟代理插值、自主代理 SavedMove/Correction/Replay 在第 4 周完成。
-- 暂不支持 Component/Subobject、数组、Dormancy、分片、热更 Schema、动态刚体预测或 Root Motion 预测。
+- 暂不支持 Component/Subobject、数组、Dormancy、分片、热更 Schema、动态刚体客户端预测或 Root Motion 预测。

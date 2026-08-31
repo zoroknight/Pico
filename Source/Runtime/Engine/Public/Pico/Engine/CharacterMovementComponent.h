@@ -132,6 +132,8 @@ public:
     void SetMaxSimulationIterations(int32 Value);
     float GetPushImpulse() const;
     void SetPushImpulse(float Value);
+    bool IsPhysicsInteractionEnabled() const;
+    void SetPhysicsInteractionEnabled(bool bValue);
     bool ShouldOrientRotationToMovement() const;
     void SetOrientRotationToMovement(bool bValue);
     bool UsesControllerDesiredRotation() const;
@@ -218,6 +220,7 @@ private:
     float MaxSimulationDeltaTime = 1.0f / 30.0f;
     int32 MaxSimulationIterations = 4;
     float PushImpulse = 250.0f;
+    bool bEnablePhysicsInteraction = true;
     bool bOrientRotationToMovement = true;
     bool bUseControllerDesiredRotation = false;
     float RotationRate = 540.0f;

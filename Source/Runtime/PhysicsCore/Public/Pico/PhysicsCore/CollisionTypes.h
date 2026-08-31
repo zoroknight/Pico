@@ -6,6 +6,7 @@
 #include "Pico/Core/Types.h"
 #include "Pico/Object/ObjectTypes.h"
 
+#include <array>
 #include <vector>
 
 namespace Pico
@@ -25,6 +26,61 @@ enum class ECollisionEnabled : uint8
     PhysicsOnly,
     QueryAndPhysics
 };
+
+enum class ECollisionChannel : uint8
+{
+    WorldStatic,
+    WorldDynamic,
+    Pawn,
+    PhysicsBody,
+    Trigger,
+    Projectile,
+    Camera,
+    Count
+};
+
+enum class ECollisionResponse : uint8
+{
+    Ignore,
+    Overlap,
+    Block
+};
+
+enum class ECollisionProfile : uint8
+{
+    Custom,
+    NoCollision,
+    BlockAll,
+    Pawn,
+    PawnNoPawnCollision,
+    CharacterMesh,
+    PhysicsActor,
+    Trigger,
+    Projectile
+};
+
+enum class EPhysicsBodyType : uint8;
+
+struct FCollisionFilterData
+{
+    ECollisionChannel ObjectType = ECollisionChannel::WorldStatic;
+    std::array<ECollisionResponse,
+        static_cast<std::size_t>(ECollisionChannel::Count)> Responses {};
+
+    FCollisionFilterData();
+    ECollisionResponse GetResponse(ECollisionChannel Channel) const;
+    void SetResponse(ECollisionChannel Channel, ECollisionResponse Response);
+    void SetAllResponses(ECollisionResponse Response);
+};
+
+ECollisionResponse ResolveCollisionResponse(
+    const FCollisionFilterData& Left,
+    const FCollisionFilterData& Right);
+FCollisionFilterData MakeCollisionFilter(
+    ECollisionProfile Profile,
+    EPhysicsBodyType BodyType);
+ECollisionEnabled GetCollisionProfileEnabled(ECollisionProfile Profile);
+bool IsCollisionProfileSensor(ECollisionProfile Profile);
 
 constexpr bool HasQueryCollision(ECollisionEnabled CollisionEnabled)
 {
@@ -109,12 +165,14 @@ struct FPhysicsBodyDesc
     float Mass = 1.0f;
     bool bUseGravity = true;
     bool bSensor = false;
+    FCollisionFilterData CollisionFilter;
 };
 
 struct FPhysicsBodyState
 {
     FTransform Transform;
     FVector3 LinearVelocity = FVector3::ZeroVector;
+    FVector3 AngularVelocity = FVector3::ZeroVector;
     bool bActive = false;
 };
 

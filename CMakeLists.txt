@@ -698,12 +698,15 @@ target_include_directories(glad
 set_target_properties(glad glfw PROPERTIES FOLDER "ThirdParty")
 
 add_library(PicoRender STATIC
+    Source/Runtime/Render/Private/EditorIconImageLoader.cpp
     Source/Runtime/Render/Private/SceneViewportRenderer.cpp
 )
 
 target_include_directories(PicoRender
     PUBLIC
         Source/Runtime/Render/Public
+    PRIVATE
+        ThirdParty/stb
 )
 
 target_link_libraries(PicoRender

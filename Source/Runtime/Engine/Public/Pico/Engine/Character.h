@@ -24,6 +24,7 @@ public:
 protected:
     explicit PCharacter(const FObjectConstructionParams& Params);
     bool DefineDefaultSubobjects(FObjectInitializer& Initializer) override;
+    bool OnDefaultSubobjectCreated(PObject* Subobject) override;
 
 private:
     bool bPressedJump = false;

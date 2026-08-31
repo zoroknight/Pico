@@ -181,6 +181,14 @@ int main()
         const bool bIdle = Instance->GetAnimationState() == Pico::EAnimationState::Idle;
         Instance->Update(1.0f / 60.0f, 100.0f, false);
         const bool bWalk = Instance->GetAnimationState() == Pico::EAnimationState::Walk;
+        const float WalkPlaybackTime = Instance->GetPlaybackTime();
+        Instance->Update(1.0f / 60.0f, 0.0f, false);
+        const bool bWalkHeldThroughBriefVelocityDrop =
+            Instance->GetAnimationState() == Pico::EAnimationState::Walk
+            && Instance->GetPlaybackTime() > WalkPlaybackTime;
+        Instance->Update(0.12f, 0.0f, false);
+        const bool bWalkStopsAfterStableIdle =
+            Instance->GetAnimationState() == Pico::EAnimationState::Idle;
         Instance->SetExtractRootMotion(true);
         Instance->Update(0.25f, 100.0f, false);
         const bool bRootLocked = Instance->GetPose().LocalTransforms[0].Translation.IsNearlyZero()
@@ -189,9 +197,10 @@ int main()
         const bool bSeeked = Instance->SetPlaybackTime(0.5f)
             && std::abs(Instance->GetPlaybackTime() - 0.5f) < 0.0001f;
         Runner.Expect(
-            bIdle && bWalk && bRootLocked && bSeeked
+            bIdle && bWalk && bWalkHeldThroughBriefVelocityDrop
+                && bWalkStopsAfterStableIdle && bRootLocked && bSeeked
                 && Instance->GetAnimationState() == Pico::EAnimationState::Jump,
-            "AnimInstance selects states, supports preview seeking, and removes extracted Root Motion from the visual pose");
+            "AnimInstance stabilizes brief network velocity drops, selects states, supports preview seeking, and removes extracted Root Motion from the visual pose");
 
         int CompletedCount = 0;
         int InterruptedCount = 0;

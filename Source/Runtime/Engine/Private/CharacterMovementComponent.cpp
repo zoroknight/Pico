@@ -49,6 +49,12 @@ bool PCharacterMovementComponent::RegisterProperties(PClass& Class)
     PICO_ADD_PROPERTY(Properties, MaxSimulationDeltaTime);
     PICO_ADD_PROPERTY(Properties, MaxSimulationIterations);
     PICO_ADD_PROPERTY(Properties, PushImpulse);
+    FPropertyMetadata PhysicsInteractionMetadata;
+    PhysicsInteractionMetadata.DisplayName = "Enable Physics Interaction";
+    PhysicsInteractionMetadata.Description =
+        "Allow authoritative Character movement to push Dynamic physics bodies";
+    PICO_ADD_PROPERTY_METADATA(
+        Properties, bEnablePhysicsInteraction, PhysicsInteractionMetadata);
     PICO_ADD_PROPERTY(Properties, bOrientRotationToMovement);
     PICO_ADD_PROPERTY(Properties, bUseControllerDesiredRotation);
     PICO_ADD_PROPERTY(Properties, RotationRate);
@@ -203,6 +209,14 @@ float PCharacterMovementComponent::GetPushImpulse() const { return PushImpulse; 
 void PCharacterMovementComponent::SetPushImpulse(float Value)
 {
     if (std::isfinite(Value) && Value >= 0.0f) PushImpulse = Value;
+}
+bool PCharacterMovementComponent::IsPhysicsInteractionEnabled() const
+{
+    return bEnablePhysicsInteraction;
+}
+void PCharacterMovementComponent::SetPhysicsInteractionEnabled(bool bValue)
+{
+    bEnablePhysicsInteraction = bValue;
 }
 bool PCharacterMovementComponent::ShouldOrientRotationToMovement() const
 { return bOrientRotationToMovement; }
@@ -395,7 +409,19 @@ void PCharacterMovementComponent::HandleImpact(
     const FHitResult& Hit,
     const FVector3& MoveDelta)
 {
-    if (!Hit.bBlockingHit || PushImpulse <= 0.0f) return;
+    if (!bEnablePhysicsInteraction || !Hit.bBlockingHit
+        || PushImpulse <= 0.0f)
+    {
+        return;
+    }
+    PCharacter* Character = GetCharacterOwner();
+    PWorld* World = Character != nullptr ? Character->GetWorld() : nullptr;
+    FNetDriver* Driver = World != nullptr ? World->GetNetDriver() : nullptr;
+    if (Driver != nullptr && Driver->GetNetMode() != ENetMode::Standalone
+        && Character->GetLocalRole() == ENetRole::SimulatedProxy)
+    {
+        return;
+    }
     PObject* Object = ResolveObject(Hit.HitObject);
     if (Object == nullptr || !Object->IsA(PPrimitiveComponent::StaticClass())) return;
     auto* Primitive = static_cast<PPrimitiveComponent*>(Object);

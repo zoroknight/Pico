@@ -1548,11 +1548,18 @@ void TestPrimitiveComponentSceneData(FTestRunner& Runner)
         const Pico::PProperty* CollisionProperty =
             Pico::PPrimitiveComponent::StaticClass()->FindProperty(
                 Pico::FName("CollisionEnabledValue"));
+        const Pico::PProperty* CollisionProfileProperty =
+            Pico::PPrimitiveComponent::StaticClass()->FindProperty(
+                Pico::FName("CollisionProfileValue"));
         const Pico::PProperty* BodyTypeProperty =
             Pico::PPrimitiveComponent::StaticClass()->FindProperty(
                 Pico::FName("PhysicsBodyTypeValue"));
         Runner.Expect(
-            CollisionProperty != nullptr
+            CollisionProfileProperty != nullptr
+                && CollisionProfileProperty->GetMetadata().DisplayName
+                    == "Collision Profile"
+                && CollisionProfileProperty->GetMetadata().EnumOptions.size() == 9
+                && CollisionProperty != nullptr
                 && CollisionProperty->GetMetadata().DisplayName
                     == "Collision Enabled"
                 && CollisionProperty->GetMetadata().EnumOptions.size() == 4

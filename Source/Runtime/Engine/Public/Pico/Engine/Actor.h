@@ -37,6 +37,8 @@ public:
     PActor* GetOwner() const;
     bool GetIsReplicated() const;
     void SetReplicates(bool bInReplicates);
+    bool GetReplicateMovement() const;
+    void SetReplicateMovement(bool bInReplicateMovement);
     FNetObjectId GetNetObjectId() const;
     ENetRole GetLocalRole() const;
     ENetRole GetRemoteRole() const;
@@ -135,6 +137,7 @@ private:
     bool bHasEndedPlay = false;
     bool bPendingDestroy = false;
     bool bReplicates = false;
+    bool bReplicateMovement = false;
     bool bOnlyRelevantToOwner = false;
     ENetRole LocalRole = ENetRole::Authority;
     ENetRole RemoteRole = ENetRole::SimulatedProxy;

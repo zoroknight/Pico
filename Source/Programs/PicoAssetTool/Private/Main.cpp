@@ -26,6 +26,8 @@
 #include <string>
 #include <string_view>
 #include <array>
+#include <algorithm>
+#include <utility>
 
 namespace
 {
@@ -100,6 +102,85 @@ int RewriteWorldAssetPath(int Argc, char** Argv)
     }
     Pico::PObjectSystem::Shutdown();
     std::cout << "Replaced " << ReplacedCount << " World asset reference(s)\n";
+    return 0;
+}
+
+int SetWorldActorReplication(int Argc, char** Argv)
+{
+    if (Argc != 6)
+    {
+        std::cerr << "Usage: PicoAssetTool set-world-actor-replication "
+            "<world.pworld> <actor-name> <replicates:0|1> "
+            "<replicate-movement:0|1>\n";
+        return 1;
+    }
+    const std::string_view ReplicatesValue(Argv[4]);
+    const std::string_view MovementValue(Argv[5]);
+    if ((ReplicatesValue != "0" && ReplicatesValue != "1")
+        || (MovementValue != "0" && MovementValue != "1"))
+    {
+        std::cerr << "Replication values must be 0 or 1\n";
+        return 1;
+    }
+    if (!RegisterEngineClasses())
+    {
+        std::cerr << "Could not initialize engine reflection\n";
+        Pico::PObjectSystem::Shutdown();
+        return 1;
+    }
+    Pico::FWorldAssetData Data;
+    Pico::EWorldSerializationError Error = Pico::EWorldSerializationError::None;
+    if (!Pico::LoadWorldAssetDataFromFile(Argv[2], Data, &Error))
+    {
+        std::cerr << "Could not load World: " << Pico::ToString(Error) << '\n';
+        Pico::PObjectSystem::Shutdown();
+        return 1;
+    }
+    const auto SetBool = [](Pico::FSceneObjectRecord& Object,
+        std::string_view Name, bool bValue)
+    {
+        auto It = std::find_if(
+            Object.Properties.begin(), Object.Properties.end(),
+            [Name](const Pico::FSerializedPropertyRecord& Property)
+            {
+                return Property.Name == Name;
+            });
+        if (It == Object.Properties.end())
+        {
+            Pico::FSerializedPropertyRecord Property;
+            Property.Name = Name;
+            Property.Type = Pico::EPropertyType::Bool;
+            Property.BoolValue = bValue;
+            Object.Properties.push_back(std::move(Property));
+        }
+        else
+        {
+            It->Type = Pico::EPropertyType::Bool;
+            It->BoolValue = bValue;
+        }
+    };
+    const auto ActorIt = std::find_if(
+        Data.Objects.begin(), Data.Objects.end(),
+        [Name = std::string_view(Argv[3])](const Pico::FSceneObjectRecord& Object)
+        {
+            return Object.ObjectName == Name;
+        });
+    if (ActorIt == Data.Objects.end())
+    {
+        std::cerr << "Actor was not found in the World\n";
+        Pico::PObjectSystem::Shutdown();
+        return 1;
+    }
+    SetBool(*ActorIt, "bReplicates", ReplicatesValue == "1");
+    SetBool(*ActorIt, "bReplicateMovement", MovementValue == "1");
+    if (!Pico::SaveWorldAssetDataToFile(Argv[2], Data, &Error))
+    {
+        std::cerr << "Could not save World: " << Pico::ToString(Error) << '\n';
+        Pico::PObjectSystem::Shutdown();
+        return 1;
+    }
+    Pico::PObjectSystem::Shutdown();
+    std::cout << "Updated replication policy for " << Argv[3] << '\n';
     return 0;
 }
 
@@ -240,6 +321,11 @@ int CreateStarterContent(int Argc, char** Argv)
         Collision->SetCollisionEnabled(Pico::ECollisionEnabled::QueryAndPhysics);
         Collision->SetPhysicsBodyType(BodyType);
         Collision->SetSimulatePhysics(BodyType == Pico::EPhysicsBodyType::Dynamic);
+        if (BodyType == Pico::EPhysicsBodyType::Dynamic)
+        {
+            Actor->SetReplicates(true);
+            Actor->SetReplicateMovement(true);
+        }
         Mesh->SetStaticMeshAsset(CubeAsset);
         Mesh->SetMaterialAsset(Material);
         return Actor->SetActorTransform(Pico::FTransform(Pico::FRotator {}, Location, Scale));
@@ -293,6 +379,11 @@ int main(int Argc, char** Argv)
     {
         return RewriteWorldAssetPath(Argc, Argv);
     }
+    if (Argc >= 2
+        && std::string_view(Argv[1]) == "set-world-actor-replication")
+    {
+        return SetWorldActorReplication(Argc, Argv);
+    }
     if (Argc >= 2 && std::string_view(Argv[1]) == "import-skeletal")
     {
         return ImportSkeletal(Argc, Argv);
@@ -310,6 +401,9 @@ int main(int Argc, char** Argv)
             "<destination.pskeletalmesh> <animation-directory>\n"
             "  PicoAssetTool rewrite-world-asset-path "
             "<world.pworld> <old-path> <new-path>\n"
+            "  PicoAssetTool set-world-actor-replication "
+            "<world.pworld> <actor-name> <replicates:0|1> "
+            "<replicate-movement:0|1>\n"
             "  PicoAssetTool create-starter-content <project-root>\n";
         return 1;
     }

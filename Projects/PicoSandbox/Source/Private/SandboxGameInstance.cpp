@@ -69,7 +69,6 @@ bool PSandboxGameInstance::Init(Pico::FGameEngine& GameEngine)
 void PSandboxGameInstance::OnWorldInitialized(Pico::PWorld* World)
 {
     ReplicationLabActorHandle = {};
-    ReplicationLabMoveStep = 0;
     const Pico::FGameEngine* GameEngine = GetGameEngine();
     if (GameEngine != nullptr
         && GameEngine->GetNetDriver().GetNetMode() == Pico::ENetMode::Server)
@@ -77,9 +76,12 @@ void PSandboxGameInstance::OnWorldInitialized(Pico::PWorld* World)
     if (GameEngine != nullptr
         && GameEngine->GetNetDriver().GetNetMode() != Pico::ENetMode::Client)
     {
-        ReplicationLabLastAction = SpawnReplicationLabActor()
-            ? "authority spawned the lab actor"
-            : "authority failed to spawn the lab actor";
+        PSandboxReplicationLabActor* Door = FindReplicationLabActor();
+        ReplicationLabActorHandle = Door != nullptr
+            ? Door->GetHandle() : Pico::FObjectHandle {};
+        ReplicationLabLastAction = Door != nullptr
+            ? "authority bound the authored NetworkDoor"
+            : "authored NetworkDoor is missing from the World";
     }
     else
     {
@@ -112,43 +114,8 @@ void PSandboxGameInstance::Tick(float)
         return;
     }
 
-    Pico::FInputSystem& Input = GameEngine->GetInputSystem();
-    if (Input.WasKeyPressed(Pico::EKey::T) && Actor == nullptr)
-    {
-        ReplicationLabLastAction = SpawnReplicationLabActor()
-            ? "T: spawned the lab actor"
-            : "T: spawn failed";
-        Actor = ResolveReplicationLabActor();
-    }
-    if (Actor == nullptr)
-    {
-        return;
-    }
-
-    if (Input.WasKeyPressed(Pico::EKey::Y))
-    {
-        static constexpr Pico::FVector3 Positions[] = {
-            {180.0f, 0.0f, 130.0f},
-            {180.0f, 180.0f, 200.0f},
-            {180.0f, -180.0f, 90.0f},
-            {360.0f, 0.0f, 160.0f}
-        };
-        ReplicationLabMoveStep =
-            (ReplicationLabMoveStep + 1) % static_cast<Pico::int32>(std::size(Positions));
-        Actor->SetActorLocation(Positions[ReplicationLabMoveStep]);
-        ReplicationLabLastAction = "Y: changed authority Transform";
-    }
-    if (Input.WasKeyPressed(Pico::EKey::U))
-    {
-        Actor->AdvanceRevision();
-        ReplicationLabLastAction = "U: changed replicated revision and color";
-    }
-    if (Input.WasKeyPressed(Pico::EKey::I))
-    {
-        Actor->Destroy();
-        ReplicationLabActorHandle = {};
-        ReplicationLabLastAction = "I: destroyed the authority actor";
-    }
+    if (Actor == nullptr) ReplicationLabLastAction =
+        "authored NetworkDoor is missing from the World";
 }
 
 void PSandboxGameInstance::OnWorldCleanup(Pico::PWorld*)
@@ -173,7 +140,7 @@ void PSandboxGameInstance::AppendGameplayDebugLines(
     OutLines.emplace_back(std::string("Replication Lab | endpoint: ")
         + Pico::ToString(Mode));
     OutLines.emplace_back(
-        "Authority: T Spawn | Y Move | U Change State | I Destroy | Client: F Use Door");
+        "Authored NetworkDoor | Client: F toggles the server-authoritative door");
     OutLines.emplace_back(
         "Movement networking: SavedMove prediction + authority replay + simulated proxy interpolation; the separate server has no local input.");
     OutLines.emplace_back(
@@ -427,28 +394,6 @@ PSandboxReplicationLabActor* PSandboxGameInstance::FindReplicationLabActor() con
         }
     }
     return nullptr;
-}
-
-bool PSandboxGameInstance::SpawnReplicationLabActor()
-{
-    Pico::PWorld* World = GetWorld();
-    if (World == nullptr || FindReplicationLabActor() != nullptr)
-    {
-        return false;
-    }
-    Pico::FActorSpawnParameters SpawnParameters;
-    SpawnParameters.Name = Pico::FName("ReplicationLabActor");
-    SpawnParameters.ObjectFlags = Pico::EObjectFlags::Transient;
-    PSandboxReplicationLabActor* Actor =
-        World->SpawnActor<PSandboxReplicationLabActor>(SpawnParameters);
-    if (Actor == nullptr)
-    {
-        return false;
-    }
-    Actor->SetAuthoritySpawnMarker(6202);
-    Actor->SetActorLocation({180.0f, 0.0f, 130.0f});
-    ReplicationLabActorHandle = Actor->GetHandle();
-    return true;
 }
 
 }

@@ -143,3 +143,15 @@ Pico 当前采用与 UE5 常规 Gameplay 相同方向的服务器权威状态同
 
 人工操作与指标解释见
 [`Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md`](Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md)。
+
+### Pawn 碰撞加固
+
+角色胶囊现使用 `Pawn` Collision Profile。服务器、AutonomousProxy 和 SimulatedProxy 都创建相同的 Kinematic
+Pawn 胶囊；CharacterMovement Sweep 因此会阻挡另一名玩家。后续隔离加固进一步把 Query 与 Simulation Contact
+分开：Pawn 胶囊仍是 Blocking Sweep Target，但网络快照不会通过 Jolt Contact 推动客户端本地刚体；
+`Enable Physics Interaction` 控制显式冲量：网络会话中 Authority 产生最终结果，AutonomousProxy 对 Dynamic
+Network Physics Proxy 做本地即时预测，SimulatedProxy 不得推动观察端刚体。需要穿过玩家的玩法可选择
+`Pawn (Ignore Pawns)`，同时保留对地面和墙壁的阻挡。三 World 自动化测试验证两个客户端各自的所属玩家都被远端
+代理阻挡，并验证 SimulatedProxy 不能推动客户端本地非复制 Dynamic Body；服务器权威重演与 Correction 边界
+保持不变。完整设计见
+[`CollisionProfilesAndNetworkPawnBlocking.zh-CN.md`](CollisionProfilesAndNetworkPawnBlocking.zh-CN.md)。

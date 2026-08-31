@@ -9,6 +9,7 @@
 #include "Pico/Engine/Character.h"
 #include "Pico/Engine/GameStateBase.h"
 #include "Pico/Engine/Level.h"
+#include "Pico/Engine/PrimitiveComponent.h"
 #include "Pico/Engine/World.h"
 #include "Pico/Net/NetPacket.h"
 #include "Pico/Object/Class.h"
@@ -32,7 +33,7 @@ namespace
 {
 constexpr uint32 MaxRpcCallsPerConnectionPerFrame = 32;
 constexpr uint16 ReplicationMagic = 0x5052;
-constexpr uint8 ReplicationVersion = 2;
+constexpr uint8 ReplicationVersion = 3;
 constexpr std::size_t MaxReplicatedFields = 64;
 constexpr std::size_t MaxReplicationStringBytes = 255;
 constexpr std::size_t MaxPendingObjectReferences = 256;
@@ -66,7 +67,18 @@ enum class EReplicationMessageType : uint8
     Rpc = 4,
     CharacterMove = 5,
     CharacterCorrection = 6,
-    CharacterSnapshot = 7
+    CharacterSnapshot = 7,
+    ActorMovementSnapshot = 8
+};
+
+struct FActorMovementState
+{
+    FTransform Transform;
+    FVector3 LinearVelocity = FVector3::ZeroVector;
+    FVector3 AngularVelocity = FVector3::ZeroVector;
+    uint32 ServerTick = 0;
+    bool bRepPhysics = false;
+    bool bActive = false;
 };
 
 struct FFieldValue
@@ -699,6 +711,68 @@ bool BuildCharacterStateMessage(
     return true;
 }
 
+bool BuildActorMovementMessage(
+    FNetObjectId NetId,
+    const FActorMovementState& State,
+    std::vector<uint8>& OutMessage)
+{
+    FNetByteWriter Writer;
+    if (!WriteMessageHeader(
+            Writer, EReplicationMessageType::ActorMovementSnapshot)
+        || !Writer.WriteUInt32(NetId.Value)
+        || !Writer.WriteUInt32(State.ServerTick)
+        || !Writer.WriteUInt8(State.bRepPhysics ? 1 : 0)
+        || !Writer.WriteUInt8(State.bActive ? 1 : 0)
+        || !WriteTransform(Writer, State.Transform)
+        || !WriteVector(Writer, State.LinearVelocity)
+        || !WriteVector(Writer, State.AngularVelocity))
+    {
+        return false;
+    }
+    OutMessage = Writer.GetBytes();
+    return true;
+}
+
+bool ReadActorMovementState(
+    FNetByteReader& Reader,
+    FActorMovementState& OutState)
+{
+    uint8 RepPhysics = 0;
+    uint8 Active = 0;
+    if (!Reader.ReadUInt32(OutState.ServerTick)
+        || OutState.ServerTick == 0
+        || !Reader.ReadUInt8(RepPhysics) || RepPhysics > 1
+        || !Reader.ReadUInt8(Active) || Active > 1
+        || !ReadTransform(Reader, OutState.Transform)
+        || !ReadVector(Reader, OutState.LinearVelocity)
+        || !ReadVector(Reader, OutState.AngularVelocity))
+    {
+        return false;
+    }
+    OutState.bRepPhysics = RepPhysics != 0;
+    OutState.bActive = Active != 0;
+    const auto IsFiniteVector = [](const FVector3& Value)
+    {
+        return std::isfinite(Value.X)
+            && std::isfinite(Value.Y)
+            && std::isfinite(Value.Z);
+    };
+    const FQuat& Rotation = OutState.Transform.Rotation;
+    if (!IsFiniteVector(OutState.Transform.Translation)
+        || !IsFiniteVector(OutState.Transform.Scale)
+        || !IsFiniteVector(OutState.LinearVelocity)
+        || !IsFiniteVector(OutState.AngularVelocity)
+        || !std::isfinite(Rotation.X)
+        || !std::isfinite(Rotation.Y)
+        || !std::isfinite(Rotation.Z)
+        || !std::isfinite(Rotation.W)
+        || !OutState.Transform.Rotation.Normalize())
+    {
+        return false;
+    }
+    return true;
+}
+
 PActor* FindUnboundStartupActor(
     PWorld* World,
     const PClass* Class,
@@ -901,6 +975,7 @@ struct FReplicationSystem::FImpl
         EReplicationMessageType PendingType = EReplicationMessageType::Spawn;
         uint64 LastObservedGeneration = 0;
         uint64 PendingGeneration = 0;
+        uint32 LastActorMovementServerTick = 0;
     };
 
     std::vector<FChannel> Channels;
@@ -1061,6 +1136,7 @@ bool QueueSpawn(
         || !WriteString(Writer, Actor->GetClass()->GetName().ToString())
         || !WriteString(Writer, Actor->GetName().ToString())
         || !Writer.WriteUInt8(bIsOwner ? 1 : 0)
+        || !Writer.WriteUInt8(Actor->GetReplicateMovement() ? 1 : 0)
         || !Writer.WriteUInt32(Schema.GetHash())
         || !Writer.WriteUInt16(static_cast<uint16>(Transform.size()))
         || !Writer.WriteBytes(Transform)
@@ -1112,7 +1188,8 @@ bool QueueDelta(
         }
     }
     Statistics.CompareNanoseconds += ElapsedNanoseconds(CompareStart);
-    const bool bCaptureTransform = bValidateDirty || bTransformDirty;
+    const bool bCaptureTransform = !Actor->GetReplicateMovement()
+        && (bValidateDirty || bTransformDirty);
     const std::vector<uint8> Transform = bCaptureTransform
         && Actor->GetRootComponent() != nullptr
         ? EncodeTransform(Actor->GetActorTransform())
@@ -1342,6 +1419,39 @@ void FReplicationSystem::ReplicateServerConnection(
                 }
             }
         }
+        else if (Channel->State == EActorChannelState::Open
+            && QueueUnreliable && Actor->GetReplicateMovement())
+        {
+            FActorMovementState State;
+            State.ServerTick = static_cast<uint32>(World->GetTickCount());
+            if (State.ServerTick == 0) State.ServerTick = 1;
+            State.Transform = Actor->GetActorTransform();
+            PSceneComponent* RootComponent = Actor->GetRootComponent();
+            if (PPrimitiveComponent* Root = RootComponent != nullptr
+                    && RootComponent->IsA(PPrimitiveComponent::StaticClass())
+                ? static_cast<PPrimitiveComponent*>(RootComponent) : nullptr)
+            {
+                if (Root->GetPhysicsBodyType() == EPhysicsBodyType::Dynamic)
+                {
+                    FPhysicsBodyState PhysicsState;
+                    if (Root->GetPhysicsBodyState(PhysicsState))
+                    {
+                        State.Transform = PhysicsState.Transform;
+                        State.Transform.Scale = Root->GetWorldTransform().Scale;
+                        State.LinearVelocity = PhysicsState.LinearVelocity;
+                        State.AngularVelocity = PhysicsState.AngularVelocity;
+                        State.bRepPhysics = true;
+                        State.bActive = PhysicsState.bActive;
+                    }
+                }
+            }
+            std::vector<uint8> Message;
+            if (BuildActorMovementMessage(NetId, State, Message)
+                && QueueUnreliable(Message))
+            {
+                ++Statistics.ActorMovementSnapshotsSent;
+            }
+        }
     }
 
     for (FImpl::FChannel& Channel : Impl->Channels)
@@ -1485,6 +1595,55 @@ bool FReplicationSystem::HandleMessage(
         return true;
     }
 
+    if (Type == EReplicationMessageType::ActorMovementSnapshot)
+    {
+        if (bReliable) return Reject();
+        PActor* Target = ObjectRegistry.ResolveActor(NetId);
+        FActorMovementState State;
+        if (Target == nullptr || Target->IsA(PCharacter::StaticClass())
+            || Target->GetLocalRole() == ENetRole::Authority
+            || !Target->GetReplicateMovement()
+            || !ReadActorMovementState(Reader, State)
+            || Reader.GetRemainingBytes() != 0)
+        {
+            return Reject();
+        }
+        FImpl::FChannel* Channel = FindChannel(*Impl, ConnectionId, NetId);
+        if (Channel == nullptr) return Reject();
+        if (Channel->LastActorMovementServerTick != 0
+            && !IsNetSequenceNewer(
+                State.ServerTick, Channel->LastActorMovementServerTick))
+        {
+            ++Statistics.MessagesReceived;
+            return true;
+        }
+        bool bApplied = false;
+        if (State.bRepPhysics)
+        {
+            PSceneComponent* RootComponent = Target->GetRootComponent();
+            if (PPrimitiveComponent* Root = RootComponent != nullptr
+                    && RootComponent->IsA(PPrimitiveComponent::StaticClass())
+                ? static_cast<PPrimitiveComponent*>(RootComponent) : nullptr)
+            {
+                FPhysicsBodyState PhysicsState;
+                PhysicsState.Transform = State.Transform;
+                PhysicsState.LinearVelocity = State.LinearVelocity;
+                PhysicsState.AngularVelocity = State.AngularVelocity;
+                PhysicsState.bActive = State.bActive;
+                bApplied = Root->ApplyReplicatedPhysicsBodyState(PhysicsState);
+            }
+        }
+        else
+        {
+            bApplied = Target->SetActorTransform(State.Transform);
+        }
+        if (!bApplied) return Reject();
+        Channel->LastActorMovementServerTick = State.ServerTick;
+        ++Statistics.ActorMovementSnapshotsReceived;
+        ++Statistics.MessagesReceived;
+        return true;
+    }
+
     if (Type == EReplicationMessageType::Rpc)
     {
         const auto RejectRpc = [this, &Reject]()
@@ -1597,12 +1756,15 @@ bool FReplicationSystem::HandleMessage(
         std::string ClassName;
         std::string ActorName;
         uint8 OwnedByConnection = 0;
+        uint8 ReplicateMovement = 0;
         uint32 SchemaHash = 0;
         uint16 TransformSize = 0;
         if (!ReadString(Reader, ClassName)
             || !ReadString(Reader, ActorName)
             || !Reader.ReadUInt8(OwnedByConnection)
             || OwnedByConnection > 1
+            || !Reader.ReadUInt8(ReplicateMovement)
+            || ReplicateMovement > 1
             || !Reader.ReadUInt32(SchemaHash)
             || !Reader.ReadUInt16(TransformSize)
             || !Reader.ReadBytes(TransformSize, TransformData)
@@ -1643,6 +1805,7 @@ bool FReplicationSystem::HandleMessage(
                 || !ObjectRegistry.RegisterRemoteObject(NetId, Actor)) return Reject();
             Actor->SetReplicates(true);
         }
+        Actor->SetReplicateMovement(ReplicateMovement != 0);
         Actor->SetNetRoles(
             OwnedByConnection != 0
                 ? ENetRole::AutonomousProxy

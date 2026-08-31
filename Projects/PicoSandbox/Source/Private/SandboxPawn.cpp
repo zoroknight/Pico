@@ -670,9 +670,9 @@ bool PSandboxPawn::DefineDefaultSubobjects(Pico::FObjectInitializer& Initializer
     CameraBoom->SetRelativeRotation({-15.0f, 0.0f, 0.0f});
     CameraBoom->SetUsePawnControlRotation(true);
     FollowCamera->SetActive(true);
-    Root->SetCollisionEnabled(Pico::ECollisionEnabled::QueryOnly);
+    Root->SetCollisionProfile(Pico::ECollisionProfile::Pawn);
     Root->SetPhysicsBodyType(Pico::EPhysicsBodyType::Kinematic);
-    Root->SetSensor(false);
+    Root->SetPhysicsContactEnabled(false);
     Root->SetGravityEnabled(false);
     Movement->SetMaxWalkSpeed(250.0f);
     Movement->SetOrientRotationToMovement(true);

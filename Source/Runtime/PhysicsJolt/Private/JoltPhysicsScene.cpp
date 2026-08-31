@@ -141,23 +141,58 @@ public:
     }
 };
 
+struct FBodyCollisionData
+{
+    FCollisionFilterData Filter;
+    ECollisionEnabled CollisionEnabled = ECollisionEnabled::NoCollision;
+    bool bExplicitSensor = false;
+};
+
 class FQueryBodyFilter final : public JPH::BodyFilter
 {
 public:
-    explicit FQueryBodyFilter(const FCollisionQueryParams& InParams)
+    using FFilterMap = std::unordered_map<uint64, FBodyCollisionData>;
+
+    FQueryBodyFilter(
+        const FCollisionQueryParams& InParams,
+        const FFilterMap& InFilters,
+        bool bInBlockingOnly)
         : Params(InParams)
+        , Filters(InFilters)
+        , bBlockingOnly(bInBlockingOnly)
     {
     }
 
     bool ShouldCollideLocked(const JPH::Body& Body) const override
     {
-        if (Params.bIgnoreSensors && Body.IsSensor()) return false;
         const FObjectHandle Handle = DecodeObjectHandle(Body.GetUserData());
-        return Handle != Params.MovingObject && !Params.IsIgnored(Handle);
+        if (Handle == Params.MovingObject || Params.IsIgnored(Handle)) return false;
+        const auto Moving = Filters.find(EncodeObjectHandle(Params.MovingObject));
+        const auto Target = Filters.find(Body.GetUserData());
+        if (Target != Filters.end())
+        {
+            if (!HasQueryCollision(Target->second.CollisionEnabled)
+                || (Params.bIgnoreSensors && Target->second.bExplicitSensor))
+            {
+                return false;
+            }
+        }
+        else if (Params.bIgnoreSensors && Body.IsSensor())
+        {
+            return false;
+        }
+        if (Moving == Filters.end() || Target == Filters.end()) return true;
+        const ECollisionResponse Response = ResolveCollisionResponse(
+            Moving->second.Filter, Target->second.Filter);
+        return bBlockingOnly
+            ? Response == ECollisionResponse::Block
+            : Response != ECollisionResponse::Ignore;
     }
 
 private:
     const FCollisionQueryParams& Params;
+    const FFilterMap& Filters;
+    bool bBlockingOnly = true;
 };
 
 std::mutex RuntimeMutex;
@@ -310,6 +345,7 @@ public:
             }
         }
         BodyRecords.clear();
+        BodyFilters.clear();
         bValid = false;
     }
 
@@ -388,6 +424,10 @@ public:
         Handle.Serial = NextBodySerial++;
         if (Handle.Serial == 0) Handle.Serial = NextBodySerial++;
         BodyRecords.emplace(Handle.Id, FBodyRecord { BodyId, Handle.Serial, Desc.OwnerObject, Desc.BodyType });
+        BodyFilters[Settings.mUserData] = {
+            Desc.CollisionFilter,
+            Desc.CollisionEnabled,
+            Desc.bSensor};
         return Handle;
     }
 
@@ -398,6 +438,7 @@ public:
         JPH::BodyInterface& Bodies = PhysicsSystem.GetBodyInterface();
         Bodies.RemoveBody(Record->BodyId);
         Bodies.DestroyBody(Record->BodyId);
+        BodyFilters.erase(EncodeObjectHandle(Record->OwnerObject));
         BodyRecords.erase(Handle.Id);
     }
 
@@ -441,7 +482,32 @@ public:
         OutState.LinearVelocity = FromJoltVector(
             Bodies.GetLinearVelocity(Record->BodyId),
             JoltToPicoScale);
+        OutState.AngularVelocity = FromJoltVector(
+            Bodies.GetAngularVelocity(Record->BodyId));
         OutState.bActive = Bodies.IsActive(Record->BodyId);
+        return true;
+    }
+
+    bool SetBodyState(
+        FPhysicsBodyHandle Handle,
+        const FPhysicsBodyState& State) override
+    {
+        FBodyRecord* Record = ResolveBody(Handle);
+        if (Record == nullptr) return false;
+        JPH::BodyInterface& Bodies = PhysicsSystem.GetBodyInterface();
+        Bodies.SetPositionAndRotation(
+            Record->BodyId,
+            ToJoltPosition(State.Transform.Translation),
+            ToJoltQuat(State.Transform.Rotation),
+            State.bActive
+                ? JPH::EActivation::Activate
+                : JPH::EActivation::DontActivate);
+        Bodies.SetLinearAndAngularVelocity(
+            Record->BodyId,
+            ToJoltVector(State.LinearVelocity, PicoToJoltScale),
+            ToJoltVector(State.AngularVelocity));
+        if (State.bActive) Bodies.ActivateBody(Record->BodyId);
+        else Bodies.DeactivateBody(Record->BodyId);
         return true;
     }
 
@@ -464,7 +530,7 @@ public:
         OutHit.Reset(Start, End);
         const FVector3 Delta = End - Start;
         if (Delta.IsNearlyZero()) return false;
-        FQueryBodyFilter Filter(Params);
+        FQueryBodyFilter Filter(Params, BodyFilters, true);
         JPH::RRayCast Ray(ToJoltPosition(Start), ToJoltVector(Delta, PicoToJoltScale));
         JPH::RayCastResult Result;
         if (!PhysicsSystem.GetNarrowPhaseQuery().CastRay(Ray, Result, {}, {}, Filter)) return false;
@@ -500,7 +566,7 @@ public:
         JPH::RefConst<JPH::Shape> JoltShape = CreateShape(Shape);
         if (JoltShape == nullptr) return false;
         const FVector3 Delta = End - Start;
-        FQueryBodyFilter Filter(Params);
+        FQueryBodyFilter Filter(Params, BodyFilters, true);
         JPH::RShapeCast ShapeCast(
             JoltShape,
             JPH::Vec3::sOne(),
@@ -535,7 +601,7 @@ public:
         OutOverlaps.clear();
         JPH::RefConst<JPH::Shape> JoltShape = CreateShape(Shape);
         if (JoltShape == nullptr) return false;
-        FQueryBodyFilter Filter(Params);
+        FQueryBodyFilter Filter(Params, BodyFilters, false);
         JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> Collector;
         PhysicsSystem.GetNarrowPhaseQuery().CollideShape(
             JoltShape,
@@ -568,6 +634,35 @@ public:
     }
 
 private:
+    ECollisionResponse GetBodyPairResponse(
+        const JPH::Body& Body1,
+        const JPH::Body& Body2) const
+    {
+        const auto Left = BodyFilters.find(Body1.GetUserData());
+        const auto Right = BodyFilters.find(Body2.GetUserData());
+        return Left != BodyFilters.end() && Right != BodyFilters.end()
+            ? ResolveCollisionResponse(
+                Left->second.Filter, Right->second.Filter)
+            : ECollisionResponse::Block;
+    }
+
+    bool ShouldCreateBodyPairContact(
+        const JPH::Body& Body1,
+        const JPH::Body& Body2,
+        ECollisionResponse Response) const
+    {
+        const auto Left = BodyFilters.find(Body1.GetUserData());
+        const auto Right = BodyFilters.find(Body2.GetUserData());
+        if (Left == BodyFilters.end() || Right == BodyFilters.end()) return true;
+        if (Left->second.bExplicitSensor || Right->second.bExplicitSensor
+            || Response == ECollisionResponse::Overlap)
+        {
+            return true;
+        }
+        return HasPhysicsCollision(Left->second.CollisionEnabled)
+            && HasPhysicsCollision(Right->second.CollisionEnabled);
+    }
+
     FBodyRecord* ResolveBody(FPhysicsBodyHandle Handle)
     {
         const auto Found = BodyRecords.find(Handle.Id);
@@ -595,13 +690,14 @@ private:
         EPhysicsContactEventType Type,
         const JPH::Body& Body1,
         const JPH::Body& Body2,
-        const JPH::ContactManifold& Manifold)
+        const JPH::ContactManifold& Manifold,
+        bool bSensor)
     {
         FPhysicsContactEvent Event;
         Event.Type = Type;
         Event.ObjectA = DecodeObjectHandle(Body1.GetUserData());
         Event.ObjectB = DecodeObjectHandle(Body2.GetUserData());
-        Event.bSensor = Body1.IsSensor() || Body2.IsSensor();
+        Event.bSensor = bSensor;
         Event.Normal = FromJoltVector(Manifold.mWorldSpaceNormal);
         if (!Manifold.mRelativeContactPointsOn1.empty())
         {
@@ -612,22 +708,43 @@ private:
             Event.ObjectA, Event.ObjectB, Event.bSensor };
     }
 
+    JPH::ValidateResult OnContactValidate(
+        const JPH::Body& Body1,
+        const JPH::Body& Body2,
+        JPH::RVec3Arg,
+        const JPH::CollideShapeResult&) override
+    {
+        const ECollisionResponse Response = GetBodyPairResponse(Body1, Body2);
+        return Response == ECollisionResponse::Ignore
+                || !ShouldCreateBodyPairContact(Body1, Body2, Response)
+            ? JPH::ValidateResult::RejectAllContactsForThisBodyPair
+            : JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
+    }
+
     void OnContactAdded(
         const JPH::Body& Body1,
         const JPH::Body& Body2,
         const JPH::ContactManifold& Manifold,
-        JPH::ContactSettings&) override
+        JPH::ContactSettings& Settings) override
     {
-        QueueContact(EPhysicsContactEventType::Begin, Body1, Body2, Manifold);
+        Settings.mIsSensor = Settings.mIsSensor
+            || GetBodyPairResponse(Body1, Body2)
+                == ECollisionResponse::Overlap;
+        QueueContact(EPhysicsContactEventType::Begin,
+            Body1, Body2, Manifold, Settings.mIsSensor);
     }
 
     void OnContactPersisted(
         const JPH::Body& Body1,
         const JPH::Body& Body2,
         const JPH::ContactManifold& Manifold,
-        JPH::ContactSettings&) override
+        JPH::ContactSettings& Settings) override
     {
-        QueueContact(EPhysicsContactEventType::Persist, Body1, Body2, Manifold);
+        Settings.mIsSensor = Settings.mIsSensor
+            || GetBodyPairResponse(Body1, Body2)
+                == ECollisionResponse::Overlap;
+        QueueContact(EPhysicsContactEventType::Persist,
+            Body1, Body2, Manifold, Settings.mIsSensor);
     }
 
     void OnContactRemoved(const JPH::SubShapeIDPair& Pair) override
@@ -652,6 +769,7 @@ private:
     JPH::TempAllocatorImpl TempAllocator;
     JPH::JobSystemSingleThreaded JobSystem;
     std::unordered_map<uint32, FBodyRecord> BodyRecords;
+    FQueryBodyFilter::FFilterMap BodyFilters;
     std::unordered_map<uint64, FCachedContact> ContactCache;
     std::vector<FPhysicsContactEvent> PendingContactEvents;
     uint32 NextBodyHandle = 1;

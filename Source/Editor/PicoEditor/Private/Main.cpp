@@ -4,6 +4,7 @@
 #include "Pico/Editor/EditorProjectManager.h"
 #include "Pico/Core/Log.h"
 #include "Pico/Core/Paths.h"
+#include "Pico/Core/PlatformTextInput.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/ActorBlueprint.h"
 #include "Pico/Render/SceneViewportRenderer.h"
@@ -29,12 +30,49 @@
 #include <exception>
 #include <filesystem>
 #include <optional>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace
 {
+class FEditorTextInputPolicy
+{
+public:
+    void Apply(bool bTextInputRequested)
+    {
+        std::unordered_set<void*> LiveWindows;
+        ImGuiPlatformIO& PlatformIO = ImGui::GetPlatformIO();
+        for (ImGuiViewport* Viewport : PlatformIO.Viewports)
+        {
+            void* NativeWindow = Viewport != nullptr
+                ? Viewport->PlatformHandleRaw : nullptr;
+            if (NativeWindow == nullptr) continue;
+            LiveWindows.insert(NativeWindow);
+            auto [Found, bInserted] = Contexts.try_emplace(NativeWindow);
+            if (bInserted)
+            {
+                Found->second =
+                    std::make_unique<Pico::FPlatformTextInputContext>(NativeWindow);
+            }
+            Found->second->SetTextInputEnabled(bTextInputRequested);
+        }
+        for (auto It = Contexts.begin(); It != Contexts.end();)
+        {
+            if (!LiveWindows.contains(It->first)) It = Contexts.erase(It);
+            else ++It;
+        }
+    }
+
+private:
+    std::unordered_map<
+        void*,
+        std::unique_ptr<Pico::FPlatformTextInputContext>> Contexts;
+};
+
 bool HasArgument(int Argc, char** Argv, std::string_view Expected)
 {
     for (int Index = 1; Index < Argc; ++Index)
@@ -172,6 +210,7 @@ std::optional<std::filesystem::path> RunProjectBrowser(
     const std::filesystem::path& SettingsFile,
     std::string InitialMessage)
 {
+    FEditorTextInputPolicy TextInputPolicy;
     std::optional<std::filesystem::path> SelectedProject;
     int SelectedRecent = History.GetRecentProjects().empty() ? -1 : 0;
     std::string Message = std::move(InitialMessage);
@@ -297,6 +336,8 @@ std::optional<std::filesystem::path> RunProjectBrowser(
             glfwSetWindowShouldClose(Window, GLFW_TRUE);
         }
         ImGui::End();
+
+        TextInputPolicy.Apply(ImGui::GetIO().WantTextInput);
 
         PresentImGuiFrame(Window, ImGui::GetIO());
     }
@@ -519,6 +560,7 @@ int main(int Argc, char** Argv)
             ProjectHistory.Add(ProjectFile);
             ProjectHistory.Save(EditorSettingsFile);
             Pico::FPicoEditorApp App(&EngineLoop, &ViewportRenderer, Window);
+            FEditorTextInputPolicy TextInputPolicy;
             Pico::FEngineFrameCallbacks FrameCallbacks;
             FrameCallbacks.BeforeWorldTick =
                 [&App](float) { App.PumpGameThreadTasks(); };
@@ -537,6 +579,8 @@ int main(int Argc, char** Argv)
                 ImGui::NewFrame();
 
                 App.Draw();
+
+                TextInputPolicy.Apply(IO.WantTextInput);
 
                 PresentImGuiFrame(Window, IO);
                 const bool bCanPresent =

@@ -105,6 +105,52 @@ int main()
             && Movement->GetCurrentFloor().bWalkableFloor,
         "Character enters Walking when its capsule finds a walkable floor");
 
+    Pico::PCharacter* CollisionMover =
+        World->SpawnActor<Pico::PCharacter>("CollisionMover");
+    Pico::PCharacter* CollisionBlocker =
+        World->SpawnActor<Pico::PCharacter>("CollisionBlocker");
+    if (CollisionMover != nullptr && CollisionBlocker != nullptr)
+    {
+        CollisionMover->SetActorLocation({-100.0f, 300.0f, 96.0f});
+        CollisionBlocker->SetActorLocation({100.0f, 300.0f, 96.0f});
+        CollisionMover->GetCharacterMovement()->SetMovementMode(
+            Pico::EMovementMode::Walking);
+        CollisionBlocker->GetCharacterMovement()->SetMovementMode(
+            Pico::EMovementMode::Walking);
+    }
+    Pico::FCharacterMoveInput PawnCollisionInput;
+    PawnCollisionInput.WorldInput = Pico::FVector3(1.0f, 0.0f, 0.0f);
+    for (int Step = 0; CollisionMover != nullptr && Step < 120; ++Step)
+    {
+        CollisionMover->GetCharacterMovement()->SimulateMovement(
+            PawnCollisionInput, 1.0f / 60.0f);
+    }
+    const float BlockingPawnX = CollisionBlocker != nullptr
+        ? CollisionBlocker->GetActorLocation().X : 0.0f;
+    Runner.Expect(
+        CollisionMover != nullptr && CollisionBlocker != nullptr
+            && CollisionMover->GetActorLocation().X < 30.0f
+            && std::abs(BlockingPawnX - 100.0f) < 0.01f,
+        "CharacterMovement Pawn profile blocks a second Character without pushing it");
+    if (CollisionMover != nullptr && CollisionBlocker != nullptr)
+    {
+        CollisionBlocker->GetCapsuleComponent()->SetCollisionProfile(
+            Pico::ECollisionProfile::PawnNoPawnCollision);
+        Pico::FCharacterMoveState ResetState;
+        ResetState.Transform = Pico::FTransform({-100.0f, 300.0f, 96.0f});
+        ResetState.MovementMode = Pico::EMovementMode::Walking;
+        CollisionMover->GetCharacterMovement()->ApplyMoveState(ResetState);
+        for (int Step = 0; Step < 120; ++Step)
+        {
+            CollisionMover->GetCharacterMovement()->SimulateMovement(
+                PawnCollisionInput, 1.0f / 60.0f);
+        }
+    }
+    Runner.Expect(
+        CollisionMover != nullptr
+            && CollisionMover->GetActorLocation().X > 120.0f,
+        "Pawn Ignore Pawns profile allows CharacterMovement to pass while still using floor collision");
+
     Pico::FHitResult FlatHit;
     FlatHit.bBlockingHit = true;
     FlatHit.ImpactNormal = Pico::FVector3::UpVector;
@@ -252,6 +298,32 @@ int main()
                 Crate->GetPhysicsBodyHandle(), CrateState)
             && CrateState.LinearVelocity.X > 0.0f,
         "Character impact pushes a Dynamic body through the physics interface");
+
+    Pico::PCubeComponent* NoPushCrate = SpawnCube(
+        *World,
+        "NoPushCrate",
+        {180.0f, -180.0f, 45.0f},
+        {45.0f, 45.0f, 45.0f},
+        Pico::EPhysicsBodyType::Dynamic);
+    Movement->SetPhysicsInteractionEnabled(false);
+    PushState.Transform.Translation = {40.0f, -180.0f, 96.0f};
+    PushState.Velocity = Pico::FVector3::ZeroVector;
+    PushState.MovementMode = Pico::EMovementMode::Walking;
+    Movement->ApplyMoveState(PushState);
+    for (int Step = 0; Step < 40; ++Step)
+    {
+        Movement->SimulateMovement(WalkInput, 1.0f / 60.0f);
+    }
+    World->Tick(1.0f / 60.0f);
+    Pico::FPhysicsBodyState NoPushState;
+    Runner.Expect(
+        NoPushCrate != nullptr
+            && !Movement->IsPhysicsInteractionEnabled()
+            && World->GetPhysicsScene()->GetBodyState(
+                NoPushCrate->GetPhysicsBodyHandle(), NoPushState)
+            && std::abs(NoPushState.LinearVelocity.X) < 0.01f,
+        "Disabled physics interaction preserves Sweep blocking without pushing a Dynamic body");
+    Movement->SetPhysicsInteractionEnabled(true);
 
     Pico::FCharacterMoveState NoCollisionStart = Movement->CaptureMoveState();
     NoCollisionStart.Transform.Translation = {200.0f, 0.0f, 96.0f};

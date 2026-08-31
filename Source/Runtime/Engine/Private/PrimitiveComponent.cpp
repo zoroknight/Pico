@@ -25,6 +25,25 @@ bool PPrimitiveComponent::RegisterProperties(PClass& Class)
     ColorMetadata.Minimum = 0.0;
     ColorMetadata.Maximum = 1.0;
     PICO_ADD_PROPERTY_METADATA(Properties, Color, ColorMetadata);
+    FPropertyMetadata ProfileMetadata;
+    ProfileMetadata.DisplayName = "Collision Profile";
+    ProfileMetadata.Description =
+        "Preset object channel and Ignore, Overlap, or Block responses; use Custom for low-level collision settings";
+    ProfileMetadata.Semantic = "CollisionProfile";
+    ProfileMetadata.EnumOptions = {
+        {static_cast<int32>(ECollisionProfile::Custom), "Custom"},
+        {static_cast<int32>(ECollisionProfile::NoCollision), "No Collision"},
+        {static_cast<int32>(ECollisionProfile::BlockAll), "Block All"},
+        {static_cast<int32>(ECollisionProfile::Pawn), "Pawn"},
+        {static_cast<int32>(ECollisionProfile::PawnNoPawnCollision),
+            "Pawn (Ignore Pawns)"},
+        {static_cast<int32>(ECollisionProfile::CharacterMesh), "Character Mesh"},
+        {static_cast<int32>(ECollisionProfile::PhysicsActor), "Physics Actor"},
+        {static_cast<int32>(ECollisionProfile::Trigger), "Trigger"},
+        {static_cast<int32>(ECollisionProfile::Projectile), "Projectile"}
+    };
+    PICO_ADD_PROPERTY_METADATA(
+        Properties, CollisionProfileValue, ProfileMetadata);
     FPropertyMetadata CollisionMetadata;
     CollisionMetadata.DisplayName = "Collision Enabled";
     CollisionMetadata.EnumOptions = {
@@ -86,8 +105,32 @@ ECollisionEnabled PPrimitiveComponent::GetCollisionEnabled() const
 
 void PPrimitiveComponent::SetCollisionEnabled(ECollisionEnabled Value)
 {
+    CollisionProfileValue = static_cast<int32>(ECollisionProfile::Custom);
     CollisionEnabledValue = static_cast<int32>(Value);
     RecreatePhysicsState();
+}
+
+ECollisionProfile PPrimitiveComponent::GetCollisionProfile() const
+{
+    return static_cast<ECollisionProfile>(std::clamp(
+        CollisionProfileValue,
+        static_cast<int32>(ECollisionProfile::Custom),
+        static_cast<int32>(ECollisionProfile::Projectile)));
+}
+
+void PPrimitiveComponent::SetCollisionProfile(ECollisionProfile Profile)
+{
+    CollisionProfileValue = std::clamp(
+        static_cast<int32>(Profile),
+        static_cast<int32>(ECollisionProfile::Custom),
+        static_cast<int32>(ECollisionProfile::Projectile));
+    ApplyCollisionProfile();
+    RecreatePhysicsState();
+}
+
+FCollisionFilterData PPrimitiveComponent::GetCollisionFilterData() const
+{
+    return MakeCollisionFilter(GetCollisionProfile(), GetPhysicsBodyType());
 }
 
 EPhysicsBodyType PPrimitiveComponent::GetPhysicsBodyType() const
@@ -124,7 +167,12 @@ void PPrimitiveComponent::SetSimulatePhysics(bool bValue)
 }
 
 bool PPrimitiveComponent::IsSensor() const { return bSensor; }
-void PPrimitiveComponent::SetSensor(bool bValue) { bSensor = bValue; RecreatePhysicsState(); }
+void PPrimitiveComponent::SetSensor(bool bValue)
+{
+    CollisionProfileValue = static_cast<int32>(ECollisionProfile::Custom);
+    bSensor = bValue;
+    RecreatePhysicsState();
+}
 bool PPrimitiveComponent::IsGravityEnabled() const { return bUseGravity; }
 void PPrimitiveComponent::SetGravityEnabled(bool bValue) { bUseGravity = bValue; RecreatePhysicsState(); }
 float PPrimitiveComponent::GetMass() const { return Mass; }
@@ -138,6 +186,56 @@ void PPrimitiveComponent::SetMass(float InMass)
 FPhysicsBodyHandle PPrimitiveComponent::GetPhysicsBodyHandle() const
 {
     return PhysicsBodyHandle;
+}
+
+bool PPrimitiveComponent::GetPhysicsBodyState(
+    FPhysicsBodyState& OutState) const
+{
+    PWorld* World = GetWorld();
+    IPhysicsScene* Scene = World != nullptr ? World->GetPhysicsScene() : nullptr;
+    return Scene != nullptr && PhysicsBodyHandle.IsValid()
+        && Scene->GetBodyState(PhysicsBodyHandle, OutState);
+}
+
+bool PPrimitiveComponent::ApplyReplicatedPhysicsBodyState(
+    const FPhysicsBodyState& State)
+{
+    SetNetworkPhysicsProxy(true);
+    PWorld* World = GetWorld();
+    IPhysicsScene* Scene = World != nullptr ? World->GetPhysicsScene() : nullptr;
+    if (Scene == nullptr || !PhysicsBodyHandle.IsValid()
+        || !Scene->SetBodyState(PhysicsBodyHandle, State))
+    {
+        return false;
+    }
+    FTransform Transform = State.Transform;
+    Transform.Scale = GetWorldTransform().Scale;
+    SetWorldTransformFromPhysics(Transform);
+    return true;
+}
+
+bool PPrimitiveComponent::IsNetworkPhysicsProxy() const
+{
+    return bNetworkPhysicsProxy;
+}
+
+void PPrimitiveComponent::SetNetworkPhysicsProxy(bool bInNetworkPhysicsProxy)
+{
+    if (bNetworkPhysicsProxy == bInNetworkPhysicsProxy) return;
+    bNetworkPhysicsProxy = bInNetworkPhysicsProxy;
+    RecreatePhysicsState();
+}
+
+bool PPrimitiveComponent::IsPhysicsContactEnabled() const
+{
+    return bPhysicsContactEnabled;
+}
+
+void PPrimitiveComponent::SetPhysicsContactEnabled(bool bEnabled)
+{
+    if (bPhysicsContactEnabled == bEnabled) return;
+    bPhysicsContactEnabled = bEnabled;
+    RecreatePhysicsState();
 }
 
 bool PPrimitiveComponent::AddImpulse(const FVector3& Impulse)
@@ -191,8 +289,15 @@ void PPrimitiveComponent::RecreatePhysicsState()
 
 void PPrimitiveComponent::CreatePhysicsState()
 {
+    ECollisionEnabled EffectiveCollision = GetCollisionEnabled();
+    if (!IsPhysicsContactEnabled())
+    {
+        EffectiveCollision = HasQueryCollision(EffectiveCollision)
+            ? ECollisionEnabled::QueryOnly
+            : ECollisionEnabled::NoCollision;
+    }
     if (PhysicsBodyHandle.IsValid()
-        || GetCollisionEnabled() == ECollisionEnabled::NoCollision)
+        || EffectiveCollision == ECollisionEnabled::NoCollision)
     {
         return;
     }
@@ -203,11 +308,12 @@ void PPrimitiveComponent::CreatePhysicsState()
     Desc.OwnerObject = GetHandle();
     Desc.Shape = GetCollisionShape();
     Desc.Transform = GetWorldTransform();
-    Desc.CollisionEnabled = GetCollisionEnabled();
+    Desc.CollisionEnabled = EffectiveCollision;
     Desc.BodyType = GetPhysicsBodyType();
     Desc.Mass = Mass;
     Desc.bUseGravity = bUseGravity;
     Desc.bSensor = bSensor;
+    Desc.CollisionFilter = GetCollisionFilterData();
     PhysicsBodyHandle = Scene->CreateBody(Desc);
     if (PhysicsBodyHandle.IsValid())
     {
@@ -274,6 +380,18 @@ void PPrimitiveComponent::PostEditChangeProperty(
         Color.Y = std::clamp(Color.Y, 0.0f, 1.0f);
         Color.Z = std::clamp(Color.Z, 0.0f, 1.0f);
     }
+    else if (PropertyName == FName("CollisionProfileValue"))
+    {
+        CollisionProfileValue = std::clamp(
+            CollisionProfileValue,
+            static_cast<int32>(ECollisionProfile::Custom),
+            static_cast<int32>(ECollisionProfile::Projectile));
+        ApplyCollisionProfile();
+    }
+    else if (PropertyName == FName("CollisionEnabledValue"))
+    {
+        CollisionProfileValue = static_cast<int32>(ECollisionProfile::Custom);
+    }
     else if (PropertyName == FName("PhysicsBodyTypeValue"))
     {
         PhysicsBodyTypeValue = std::clamp(
@@ -295,13 +413,18 @@ void PPrimitiveComponent::PostEditChangeProperty(
             PhysicsBodyTypeValue = static_cast<int32>(EPhysicsBodyType::Kinematic);
         }
     }
+    else if (PropertyName == FName("bSensor"))
+    {
+        CollisionProfileValue = static_cast<int32>(ECollisionProfile::Custom);
+    }
 
     CollisionEnabledValue = std::clamp(
         CollisionEnabledValue,
         static_cast<int32>(ECollisionEnabled::NoCollision),
         static_cast<int32>(ECollisionEnabled::QueryAndPhysics));
     Mass = std::isfinite(Mass) && Mass > 0.0f ? Mass : 1.0f;
-    if (PropertyName == FName("CollisionEnabledValue")
+    if (PropertyName == FName("CollisionProfileValue")
+        || PropertyName == FName("CollisionEnabledValue")
         || PropertyName == FName("PhysicsBodyTypeValue")
         || PropertyName == FName("bSimulatePhysics")
         || PropertyName == FName("bSensor")
@@ -315,6 +438,11 @@ void PPrimitiveComponent::PostEditChangeProperty(
 void PPrimitiveComponent::PostLoad()
 {
     PSceneComponent::PostLoad();
+    CollisionProfileValue = std::clamp(
+        CollisionProfileValue,
+        static_cast<int32>(ECollisionProfile::Custom),
+        static_cast<int32>(ECollisionProfile::Projectile));
+    ApplyCollisionProfile();
     CollisionEnabledValue = std::clamp(
         CollisionEnabledValue,
         static_cast<int32>(ECollisionEnabled::NoCollision),
@@ -326,5 +454,14 @@ void PPrimitiveComponent::PostLoad()
     bSimulatePhysics =
         PhysicsBodyTypeValue == static_cast<int32>(EPhysicsBodyType::Dynamic);
     Mass = std::isfinite(Mass) && Mass > 0.0f ? Mass : 1.0f;
+}
+
+void PPrimitiveComponent::ApplyCollisionProfile()
+{
+    const ECollisionProfile Profile = GetCollisionProfile();
+    if (Profile == ECollisionProfile::Custom) return;
+    CollisionEnabledValue = static_cast<int32>(
+        GetCollisionProfileEnabled(Profile));
+    bSensor = IsCollisionProfileSensor(Profile);
 }
 }

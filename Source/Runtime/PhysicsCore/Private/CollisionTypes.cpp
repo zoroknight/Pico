@@ -5,6 +5,134 @@
 
 namespace Pico
 {
+FCollisionFilterData::FCollisionFilterData()
+{
+    SetAllResponses(ECollisionResponse::Block);
+}
+
+ECollisionResponse FCollisionFilterData::GetResponse(
+    ECollisionChannel Channel) const
+{
+    const std::size_t Index = static_cast<std::size_t>(Channel);
+    return Index < Responses.size()
+        ? Responses[Index]
+        : ECollisionResponse::Ignore;
+}
+
+void FCollisionFilterData::SetResponse(
+    ECollisionChannel Channel,
+    ECollisionResponse Response)
+{
+    const std::size_t Index = static_cast<std::size_t>(Channel);
+    if (Index < Responses.size()) Responses[Index] = Response;
+}
+
+void FCollisionFilterData::SetAllResponses(ECollisionResponse Response)
+{
+    Responses.fill(Response);
+}
+
+ECollisionResponse ResolveCollisionResponse(
+    const FCollisionFilterData& Left,
+    const FCollisionFilterData& Right)
+{
+    const ECollisionResponse LeftResponse =
+        Left.GetResponse(Right.ObjectType);
+    const ECollisionResponse RightResponse =
+        Right.GetResponse(Left.ObjectType);
+    if (LeftResponse == ECollisionResponse::Ignore
+        || RightResponse == ECollisionResponse::Ignore)
+    {
+        return ECollisionResponse::Ignore;
+    }
+    return LeftResponse == ECollisionResponse::Overlap
+            || RightResponse == ECollisionResponse::Overlap
+        ? ECollisionResponse::Overlap
+        : ECollisionResponse::Block;
+}
+
+FCollisionFilterData MakeCollisionFilter(
+    ECollisionProfile Profile,
+    EPhysicsBodyType BodyType)
+{
+    FCollisionFilterData Filter;
+    if (Profile == ECollisionProfile::Custom)
+    {
+        Filter.ObjectType = BodyType == EPhysicsBodyType::Static
+            ? ECollisionChannel::WorldStatic
+            : BodyType == EPhysicsBodyType::Dynamic
+                ? ECollisionChannel::PhysicsBody
+                : ECollisionChannel::WorldDynamic;
+        return Filter;
+    }
+
+    switch (Profile)
+    {
+    case ECollisionProfile::NoCollision:
+        Filter.SetAllResponses(ECollisionResponse::Ignore);
+        break;
+    case ECollisionProfile::BlockAll:
+        Filter.ObjectType = ECollisionChannel::WorldStatic;
+        break;
+    case ECollisionProfile::Pawn:
+        Filter.ObjectType = ECollisionChannel::Pawn;
+        break;
+    case ECollisionProfile::PawnNoPawnCollision:
+        Filter.ObjectType = ECollisionChannel::Pawn;
+        Filter.SetResponse(
+            ECollisionChannel::Pawn, ECollisionResponse::Ignore);
+        break;
+    case ECollisionProfile::CharacterMesh:
+        Filter.ObjectType = ECollisionChannel::Pawn;
+        Filter.SetAllResponses(ECollisionResponse::Ignore);
+        break;
+    case ECollisionProfile::PhysicsActor:
+        Filter.ObjectType = ECollisionChannel::PhysicsBody;
+        break;
+    case ECollisionProfile::Trigger:
+        Filter.ObjectType = ECollisionChannel::Trigger;
+        Filter.SetAllResponses(ECollisionResponse::Overlap);
+        break;
+    case ECollisionProfile::Projectile:
+        Filter.ObjectType = ECollisionChannel::Projectile;
+        Filter.SetAllResponses(ECollisionResponse::Ignore);
+        Filter.SetResponse(
+            ECollisionChannel::WorldStatic, ECollisionResponse::Block);
+        Filter.SetResponse(
+            ECollisionChannel::WorldDynamic, ECollisionResponse::Block);
+        Filter.SetResponse(
+            ECollisionChannel::Pawn, ECollisionResponse::Block);
+        Filter.SetResponse(
+            ECollisionChannel::PhysicsBody, ECollisionResponse::Block);
+        break;
+    case ECollisionProfile::Custom:
+        break;
+    }
+    return Filter;
+}
+
+ECollisionEnabled GetCollisionProfileEnabled(ECollisionProfile Profile)
+{
+    switch (Profile)
+    {
+    case ECollisionProfile::NoCollision:
+    case ECollisionProfile::CharacterMesh:
+        return ECollisionEnabled::NoCollision;
+    case ECollisionProfile::Trigger:
+    case ECollisionProfile::Projectile:
+        return ECollisionEnabled::QueryOnly;
+    case ECollisionProfile::Custom:
+        return ECollisionEnabled::NoCollision;
+    default:
+        return ECollisionEnabled::QueryAndPhysics;
+    }
+}
+
+bool IsCollisionProfileSensor(ECollisionProfile Profile)
+{
+    return Profile == ECollisionProfile::Trigger;
+}
+
 FCollisionShape FCollisionShape::MakePoint()
 {
     return {};

@@ -20,18 +20,24 @@ public:
     bool IsDoorOpen() const;
     Pico::int32 GetDoorUseCount() const;
     Pico::int32 GetMulticastPulseCount() const;
+    bool IsDoorCollisionEnabled() const;
+    void SetDoorCollisionEnabled(bool bEnabled);
     bool ToggleDoor();
 
 protected:
     explicit PSandboxReplicationLabActor(
         const Pico::FObjectConstructionParams& Params);
     bool DefineDefaultSubobjects(Pico::FObjectInitializer& Initializer) override;
+    void PostLoad() override;
+    void BeginPlay() override;
+    void PostEditChangeProperty(
+        const Pico::FPropertyChangedEvent& Event) override;
 
 private:
     void ApplyVisualState();
 
     PPROPERTY(Replicated, Transient, NotSerializable, InitialOnly)
-    Pico::int32 InitialSpawnMarker = 202;
+    Pico::int32 InitialSpawnMarker = 6202;
 
     PPROPERTY(Replicated, Transient, NotSerializable, RepNotify=OnRep_LabRevision)
     Pico::int32 LabRevision = 0;
@@ -39,11 +45,17 @@ private:
     PFUNCTION()
     void OnRep_LabRevision();
 
-    PPROPERTY(Replicated, Transient, NotSerializable, RepNotify=OnRep_DoorOpen)
+    PPROPERTY(Replicated, RepNotify=OnRep_DoorOpen)
     bool bDoorOpen = false;
 
     PFUNCTION()
     void OnRep_DoorOpen();
+
+    PPROPERTY(Replicated, RepNotify=OnRep_DoorCollisionEnabled)
+    bool bDoorCollisionEnabled = true;
+
+    PFUNCTION()
+    void OnRep_DoorCollisionEnabled();
 
     PFUNCTION(NetMulticast)
     void MulticastDoorPulse(Pico::int32 Revision);
@@ -51,5 +63,7 @@ private:
     Pico::int32 RepNotifyCount = 0;
     Pico::int32 DoorUseCount = 0;
     Pico::int32 MulticastPulseCount = 0;
+    Pico::FVector3 ClosedLocation = Pico::FVector3::ZeroVector;
+    bool bHasClosedLocation = false;
 };
 }

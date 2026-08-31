@@ -369,6 +369,11 @@ struct FGameplayDebugPanel
                 Replication.CharacterSnapshotsSent),
             static_cast<unsigned long long>(
                 Replication.CharacterSnapshotsReceived));
+        ImGui::Text("Actor movement snapshots: sent %llu  received %llu",
+            static_cast<unsigned long long>(
+                Replication.ActorMovementSnapshotsSent),
+            static_cast<unsigned long long>(
+                Replication.ActorMovementSnapshotsReceived));
         const Pico::FNetworkSimulationSnapshot Simulation =
             NetDriver.GetNetworkSimulationSnapshot();
         ImGui::Text("Net simulation: outgoing %d ms  +/- %d ms  loss %d%%  queued %zu  dropped %llu",

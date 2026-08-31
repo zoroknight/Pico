@@ -1,9 +1,12 @@
 #include "Pico/Render/SceneViewportRenderer.h"
 
+#include "EditorIconImageLoader.h"
+
 #include "Pico/Asset/AssetManager.h"
 #include "Pico/Asset/AssetRegistry.h"
 #include "Pico/Asset/StaticMesh.h"
 #include "Pico/Core/Log.h"
+#include "Pico/Core/Paths.h"
 #include "Pico/Core/Profiler.h"
 #include "Pico/Core/Math/MathUtility.h"
 #include "Pico/Core/Math/Matrix4.h"
@@ -246,6 +249,77 @@ struct FComponentVisualization
     FVector3 Color = FVector3::OneVector;
 };
 
+enum class EComponentIcon : uint8
+{
+    PointLight,
+    DirectionalLight,
+    Camera,
+    PlayerStart,
+    SpringArm,
+    Count,
+    None = Count
+};
+
+constexpr std::size_t ComponentIconCount =
+    static_cast<std::size_t>(EComponentIcon::Count);
+
+EComponentIcon GetComponentIcon(const PSceneComponent* Component)
+{
+    if (Component == nullptr) return EComponentIcon::None;
+    const PActor* Owner = Component->GetOwner();
+    if (Owner != nullptr && Owner->IsA(PPlayerStart::StaticClass()))
+    {
+        return EComponentIcon::PlayerStart;
+    }
+    if (Component->IsA(PCameraComponent::StaticClass()))
+    {
+        return EComponentIcon::Camera;
+    }
+    if (Component->IsA(PDirectionalLightComponent::StaticClass()))
+    {
+        return EComponentIcon::DirectionalLight;
+    }
+    if (Component->IsA(PPointLightComponent::StaticClass()))
+    {
+        return EComponentIcon::PointLight;
+    }
+    if (Component->IsA(PSpringArmComponent::StaticClass()))
+    {
+        return EComponentIcon::SpringArm;
+    }
+    return EComponentIcon::None;
+}
+
+bool IsActiveViewCamera(
+    const PSceneComponent* Component,
+    const FSceneView& View)
+{
+    if (Component == nullptr
+        || !Component->IsA(PCameraComponent::StaticClass()))
+    {
+        return false;
+    }
+    const FTransform Transform = Component->GetWorldTransform();
+    const FVector3 Forward = Transform.Rotation.RotateVector(
+        FVector3::ForwardVector).GetSafeNormal();
+    const FVector3 ViewForward = (View.Target - View.Position).GetSafeNormal();
+    return Transform.Translation.Equals(View.Position, 0.01f)
+        && Forward.Equals(ViewForward, 0.001f);
+}
+
+FVector3 GetComponentIconTint(EComponentIcon Icon)
+{
+    switch (Icon)
+    {
+    case EComponentIcon::PointLight: return {0.949f, 0.706f, 0.369f};
+    case EComponentIcon::DirectionalLight: return {0.902f, 0.804f, 0.388f};
+    case EComponentIcon::Camera: return {0.412f, 0.741f, 0.878f};
+    case EComponentIcon::PlayerStart: return {0.412f, 0.800f, 0.541f};
+    case EComponentIcon::SpringArm: return {0.663f, 0.541f, 0.871f};
+    default: return FVector3::OneVector;
+    }
+}
+
 void AddLine(
     std::vector<FVector3>& Vertices,
     const FVector3& Start,
@@ -282,7 +356,8 @@ FComponentVisualization BuildComponentVisualization(
     const PSceneComponent* Component,
     const FSceneView& View,
     float AspectRatio,
-    bool bSelected)
+    bool bSelected,
+    bool bHasBillboardIcon)
 {
     FComponentVisualization Result;
     if (Component == nullptr)
@@ -303,6 +378,7 @@ FComponentVisualization BuildComponentVisualization(
     const PActor* Owner = Component->GetOwner();
     if (Owner != nullptr && Owner->IsA(PPlayerStart::StaticClass()))
     {
+        if (bHasBillboardIcon && !bSelected) return Result;
         const float Radius = VisualSize * 0.34f;
         const float HalfHeight = VisualSize * 0.75f;
         const FVector3 Top = Origin + Up * HalfHeight;
@@ -329,10 +405,9 @@ FComponentVisualization BuildComponentVisualization(
     }
     else if (Component->IsA(PCameraComponent::StaticClass()))
     {
+        if (bHasBillboardIcon && !bSelected) return Result;
         const auto* Camera = static_cast<const PCameraComponent*>(Component);
-        const FVector3 ViewForward = (View.Target - View.Position).GetSafeNormal();
-        if (Origin.Equals(View.Position, 0.01f)
-            && Forward.Equals(ViewForward, 0.001f))
+        if (IsActiveViewCamera(Component, View))
         {
             return Result;
         }
@@ -363,6 +438,7 @@ FComponentVisualization BuildComponentVisualization(
     }
     else if (Component->IsA(PDirectionalLightComponent::StaticClass()))
     {
+        if (bHasBillboardIcon && !bSelected) return Result;
         const auto* Light = static_cast<const PDirectionalLightComponent*>(Component);
         const FVector3 Direction = Light->GetLightDirection();
         const FVector3 End = Origin + Direction * (VisualSize * 2.0f);
@@ -393,26 +469,30 @@ FComponentVisualization BuildComponentVisualization(
     }
     else if (Component->IsA(PPointLightComponent::StaticClass()))
     {
+        if (bHasBillboardIcon && !bSelected) return Result;
         const auto* Light = static_cast<const PPointLightComponent*>(Component);
         const float IconRadius = VisualSize * 0.28f;
-        AddCircle(
-            Result.Vertices,
-            Origin,
-            FVector3::ForwardVector,
-            FVector3::RightVector,
-            IconRadius);
-        AddCircle(
-            Result.Vertices,
-            Origin,
-            FVector3::ForwardVector,
-            FVector3::UpVector,
-            IconRadius);
-        AddCircle(
-            Result.Vertices,
-            Origin,
-            FVector3::RightVector,
-            FVector3::UpVector,
-            IconRadius);
+        if (!bHasBillboardIcon)
+        {
+            AddCircle(
+                Result.Vertices,
+                Origin,
+                FVector3::ForwardVector,
+                FVector3::RightVector,
+                IconRadius);
+            AddCircle(
+                Result.Vertices,
+                Origin,
+                FVector3::ForwardVector,
+                FVector3::UpVector,
+                IconRadius);
+            AddCircle(
+                Result.Vertices,
+                Origin,
+                FVector3::RightVector,
+                FVector3::UpVector,
+                IconRadius);
+        }
         if (bSelected)
         {
             const float Radius = Light->GetAttenuationRadius();
@@ -435,22 +515,26 @@ FComponentVisualization BuildComponentVisualization(
                 FVector3::UpVector,
                 Radius);
         }
-        AddLine(
-            Result.Vertices,
-            Origin - FVector3::ForwardVector * (VisualSize * 0.3f),
-            Origin + FVector3::ForwardVector * (VisualSize * 0.3f));
-        AddLine(
-            Result.Vertices,
-            Origin - FVector3::RightVector * (VisualSize * 0.3f),
-            Origin + FVector3::RightVector * (VisualSize * 0.3f));
-        AddLine(
-            Result.Vertices,
-            Origin - FVector3::UpVector * (VisualSize * 0.3f),
-            Origin + FVector3::UpVector * (VisualSize * 0.3f));
+        if (!bHasBillboardIcon)
+        {
+            AddLine(
+                Result.Vertices,
+                Origin - FVector3::ForwardVector * (VisualSize * 0.3f),
+                Origin + FVector3::ForwardVector * (VisualSize * 0.3f));
+            AddLine(
+                Result.Vertices,
+                Origin - FVector3::RightVector * (VisualSize * 0.3f),
+                Origin + FVector3::RightVector * (VisualSize * 0.3f));
+            AddLine(
+                Result.Vertices,
+                Origin - FVector3::UpVector * (VisualSize * 0.3f),
+                Origin + FVector3::UpVector * (VisualSize * 0.3f));
+        }
         Result.Color = FVector3(1.0f, 0.65f, 0.2f);
     }
     else if (Component->IsA(PSpringArmComponent::StaticClass()))
     {
+        if (bHasBillboardIcon && !bSelected) return Result;
         const auto* SpringArm = static_cast<const PSpringArmComponent*>(Component);
         const FVector3 Endpoint = SpringArm->GetSocketTransform(
             PSpringArmComponent::GetEndpointSocketName()).Translation;
@@ -499,6 +583,12 @@ struct FSceneViewportRenderer::FImpl
     };
 
     GLuint Program = 0;
+    GLuint ComponentIconProgram = 0;
+    GLuint ComponentIconVertexArray = 0;
+    GLuint ComponentIconVertexBuffer = 0;
+    std::array<GLuint, ComponentIconCount> ComponentIconTextures {};
+    bool bComponentIconLoadAttempted = false;
+    bool bComponentIconsReady = false;
     GLuint CubeVertexArray = 0;
     GLuint CubeVertexBuffer = 0;
     GLuint CubeIndexBuffer = 0;
@@ -544,6 +634,154 @@ struct FSceneViewportRenderer::FImpl
         PICO_LOG(LogRender, Error, "OpenGL shader compilation failed: {}", Log);
         glDeleteShader(Shader);
         return 0;
+    }
+
+    bool CreateComponentIconResources()
+    {
+        static constexpr char VertexSource[] = R"(
+#version 330 core
+layout(location = 0) in vec3 InPosition;
+layout(location = 1) in vec2 InTexCoord;
+uniform mat4 ViewProjection;
+out vec2 TexCoord;
+void main()
+{
+    TexCoord = InTexCoord;
+    gl_Position = ViewProjection * vec4(InPosition, 1.0);
+}
+)";
+        static constexpr char FragmentSource[] = R"(
+#version 330 core
+in vec2 TexCoord;
+uniform sampler2D IconTexture;
+uniform vec3 IconTint;
+uniform uint PickingId;
+layout(location = 0) out vec4 FragColor;
+layout(location = 1) out uint FragPickingId;
+void main()
+{
+    float Alpha = texture(IconTexture, TexCoord).a;
+    FragColor = vec4(IconTint, Alpha);
+    FragPickingId = PickingId;
+}
+)";
+
+        const GLuint VertexShader = Compile(GL_VERTEX_SHADER, VertexSource);
+        const GLuint FragmentShader = Compile(GL_FRAGMENT_SHADER, FragmentSource);
+        if (VertexShader == 0 || FragmentShader == 0)
+        {
+            if (VertexShader != 0) glDeleteShader(VertexShader);
+            if (FragmentShader != 0) glDeleteShader(FragmentShader);
+            return false;
+        }
+
+        ComponentIconProgram = glCreateProgram();
+        glAttachShader(ComponentIconProgram, VertexShader);
+        glAttachShader(ComponentIconProgram, FragmentShader);
+        glLinkProgram(ComponentIconProgram);
+        glDeleteShader(VertexShader);
+        glDeleteShader(FragmentShader);
+
+        GLint bLinked = GL_FALSE;
+        glGetProgramiv(ComponentIconProgram, GL_LINK_STATUS, &bLinked);
+        if (bLinked != GL_TRUE)
+        {
+            GLint Length = 0;
+            glGetProgramiv(ComponentIconProgram, GL_INFO_LOG_LENGTH, &Length);
+            std::string Log(static_cast<std::size_t>(std::max(Length, 1)), '\0');
+            glGetProgramInfoLog(
+                ComponentIconProgram,
+                Length,
+                nullptr,
+                Log.data());
+            PICO_LOG(LogRender, Error, "Component icon program linking failed: {}", Log);
+            glDeleteProgram(ComponentIconProgram);
+            ComponentIconProgram = 0;
+            return false;
+        }
+
+        glGenVertexArrays(1, &ComponentIconVertexArray);
+        glBindVertexArray(ComponentIconVertexArray);
+        glGenBuffers(1, &ComponentIconVertexBuffer);
+        glBindBuffer(GL_ARRAY_BUFFER, ComponentIconVertexBuffer);
+        glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0,
+            3,
+            GL_FLOAT,
+            GL_FALSE,
+            5 * sizeof(float),
+            nullptr);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1,
+            2,
+            GL_FLOAT,
+            GL_FALSE,
+            5 * sizeof(float),
+            reinterpret_cast<const void*>(3 * sizeof(float)));
+        glBindVertexArray(0);
+        return true;
+    }
+
+    bool LoadComponentIconTextures()
+    {
+        if (bComponentIconLoadAttempted) return bComponentIconsReady;
+        bComponentIconLoadAttempted = true;
+
+        constexpr std::array<const char*, ComponentIconCount> FileNames {
+            "PointLight.png",
+            "DirectionalLight.png",
+            "Camera.png",
+            "PlayerStart.png",
+            "SpringArm.png"
+        };
+        const std::filesystem::path IconDirectory =
+            FPaths::GetEngineRootDir()
+            / "Content/EditorResources/ComponentIcons";
+        for (std::size_t Index = 0; Index < FileNames.size(); ++Index)
+        {
+            FTextureData TextureData;
+            const std::filesystem::path FilePath = IconDirectory / FileNames[Index];
+            if (!LoadEditorIconImage(FilePath, TextureData))
+            {
+                PICO_LOG(
+                    LogRender,
+                    Warning,
+                    "Could not load editor component icon {}",
+                    FilePath.string());
+                for (GLuint& Texture : ComponentIconTextures)
+                {
+                    if (Texture != 0) glDeleteTextures(1, &Texture);
+                    Texture = 0;
+                }
+                return false;
+            }
+
+            GLuint& Texture = ComponentIconTextures[Index];
+            glGenTextures(1, &Texture);
+            glBindTexture(GL_TEXTURE_2D, Texture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(
+                GL_TEXTURE_2D,
+                0,
+                GL_RGBA8,
+                static_cast<GLsizei>(TextureData.Width),
+                static_cast<GLsizei>(TextureData.Height),
+                0,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                TextureData.Pixels.data());
+        }
+        glBindTexture(GL_TEXTURE_2D, 0);
+        bComponentIconsReady = true;
+        PICO_LOG(LogRender, Info, "Loaded {} editor component icons", FileNames.size());
+        return true;
     }
 
     bool CreateProgramAndGeometry()
@@ -855,7 +1093,7 @@ void main()
             sizeof(FVector3),
             nullptr);
         glBindVertexArray(0);
-        return true;
+        return CreateComponentIconResources();
     }
 
     void DestroyRenderTarget()
@@ -929,6 +1167,28 @@ bool FSceneViewportRenderer::Initialize(FOpenGLProcLoader Loader)
 void FSceneViewportRenderer::Shutdown()
 {
     Impl->DestroyRenderTarget();
+    for (GLuint& Texture : Impl->ComponentIconTextures)
+    {
+        if (Texture != 0) glDeleteTextures(1, &Texture);
+        Texture = 0;
+    }
+    Impl->bComponentIconLoadAttempted = false;
+    Impl->bComponentIconsReady = false;
+    if (Impl->ComponentIconVertexBuffer != 0)
+    {
+        glDeleteBuffers(1, &Impl->ComponentIconVertexBuffer);
+        Impl->ComponentIconVertexBuffer = 0;
+    }
+    if (Impl->ComponentIconVertexArray != 0)
+    {
+        glDeleteVertexArrays(1, &Impl->ComponentIconVertexArray);
+        Impl->ComponentIconVertexArray = 0;
+    }
+    if (Impl->ComponentIconProgram != 0)
+    {
+        glDeleteProgram(Impl->ComponentIconProgram);
+        Impl->ComponentIconProgram = 0;
+    }
     for (FImpl::FStaticMeshGpuResource& Mesh : Impl->StaticMeshes)
     {
         if (Mesh.IndexBuffer != 0)
@@ -1637,6 +1897,7 @@ bool FSceneViewportRenderer::Render(
 
     if (Options.bDrawComponentVisualizations)
     {
+        const bool bIconsReady = Impl->LoadComponentIconTextures();
         glUniformMatrix4fv(ModelLocation, 1, GL_TRUE, Identity.GetData());
         glUniform1i(UseTextureLocation, 0);
         glUniform1i(LightingLocation, 0);
@@ -1665,7 +1926,8 @@ bool FSceneViewportRenderer::Render(
                             SceneComponent,
                             View,
                             Aspect,
-                            bSelected);
+                            bSelected,
+                            bIconsReady);
                     if (Visualization.Vertices.empty()) continue;
 
                     const FVector3 Color = bSelected
@@ -1691,6 +1953,135 @@ bool FSceneViewportRenderer::Render(
                         static_cast<GLsizei>(Visualization.Vertices.size()));
                 }
             }
+        }
+
+        if (bIconsReady)
+        {
+            const FVector3 CameraForward =
+                (View.Target - View.Position).GetSafeNormal();
+            FVector3 CameraRight =
+                FVector3::Cross(CameraForward, View.Up).GetSafeNormal();
+            if (CameraRight.IsNearlyZero()) CameraRight = FVector3::RightVector;
+            const FVector3 CameraUp =
+                FVector3::Cross(CameraRight, CameraForward).GetSafeNormal();
+            const float HalfFovRadians = DegreesToRadians(
+                View.VerticalFieldOfViewDegrees) * 0.5f;
+
+            glUseProgram(Impl->ComponentIconProgram);
+            glUniformMatrix4fv(
+                glGetUniformLocation(
+                    Impl->ComponentIconProgram,
+                    "ViewProjection"),
+                1,
+                GL_TRUE,
+                ViewProjection.GetData());
+            glUniform1i(
+                glGetUniformLocation(
+                    Impl->ComponentIconProgram,
+                    "IconTexture"),
+                0);
+            const GLint TintLocation = glGetUniformLocation(
+                Impl->ComponentIconProgram,
+                "IconTint");
+            const GLint IconPickingIdLocation = glGetUniformLocation(
+                Impl->ComponentIconProgram,
+                "PickingId");
+
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_CULL_FACE);
+            glEnablei(GL_BLEND, 0);
+            glDisablei(GL_BLEND, 1);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBindVertexArray(Impl->ComponentIconVertexArray);
+            glActiveTexture(GL_TEXTURE0);
+
+            for (PLevel* Level : World->GetLevels())
+            {
+                if (Level == nullptr) continue;
+                for (PActor* Actor : Level->GetActors())
+                {
+                    if (Actor == nullptr) continue;
+                    for (PActorComponent* Component : Actor->GetComponents())
+                    {
+                        const PSceneComponent* SceneComponent =
+                            Component != nullptr
+                                && Component->IsA(PSceneComponent::StaticClass())
+                            ? static_cast<const PSceneComponent*>(Component)
+                            : nullptr;
+                        const EComponentIcon Icon =
+                            GetComponentIcon(SceneComponent);
+                        if (Icon == EComponentIcon::None
+                            || IsActiveViewCamera(SceneComponent, View))
+                        {
+                            continue;
+                        }
+
+                        const FVector3 Origin =
+                            SceneComponent->GetWorldTransform().Translation;
+                        const float Depth = FVector3::Dot(
+                            Origin - View.Position,
+                            CameraForward);
+                        if (Depth <= std::max(View.NearPlane, 0.01f)) continue;
+
+                        const bool bSelected = std::find(
+                                SelectedObjects.begin(),
+                                SelectedObjects.end(),
+                                Component->GetHandle()) != SelectedObjects.end()
+                            || std::find(
+                                SelectedObjects.begin(),
+                                SelectedObjects.end(),
+                                Actor->GetHandle()) != SelectedObjects.end();
+                        const float PixelSize = bSelected ? 92.0f : 80.0f;
+                        const float WorldUnitsPerPixel =
+                            2.0f * Depth * std::tan(HalfFovRadians)
+                            / static_cast<float>(Impl->Height);
+                        const float HalfSize =
+                            WorldUnitsPerPixel * PixelSize * 0.5f;
+                        const FVector3 Left = CameraRight * -HalfSize;
+                        const FVector3 RightOffset = CameraRight * HalfSize;
+                        const FVector3 Down = CameraUp * -HalfSize;
+                        const FVector3 UpOffset = CameraUp * HalfSize;
+                        const FVector3 BottomLeft = Origin + Left + Down;
+                        const FVector3 BottomRight = Origin + RightOffset + Down;
+                        const FVector3 TopRight = Origin + RightOffset + UpOffset;
+                        const FVector3 TopLeft = Origin + Left + UpOffset;
+                        const std::array<float, 30> Vertices {
+                            BottomLeft.X, BottomLeft.Y, BottomLeft.Z, 0.0f, 1.0f,
+                            BottomRight.X, BottomRight.Y, BottomRight.Z, 1.0f, 1.0f,
+                            TopRight.X, TopRight.Y, TopRight.Z, 1.0f, 0.0f,
+                            BottomLeft.X, BottomLeft.Y, BottomLeft.Z, 0.0f, 1.0f,
+                            TopRight.X, TopRight.Y, TopRight.Z, 1.0f, 0.0f,
+                            TopLeft.X, TopLeft.Y, TopLeft.Z, 0.0f, 0.0f
+                        };
+
+                        Impl->PickHandles.push_back(Component->GetHandle());
+                        const GLuint PickingId =
+                            static_cast<GLuint>(Impl->PickHandles.size());
+                        const FVector3 Tint = bSelected
+                            ? FVector3::OneVector
+                            : GetComponentIconTint(Icon);
+                        glUniform3f(TintLocation, Tint.X, Tint.Y, Tint.Z);
+                        glUniform1ui(IconPickingIdLocation, PickingId);
+                        glBindTexture(
+                            GL_TEXTURE_2D,
+                            Impl->ComponentIconTextures[
+                                static_cast<std::size_t>(Icon)]);
+                        glBindBuffer(
+                            GL_ARRAY_BUFFER,
+                            Impl->ComponentIconVertexBuffer);
+                        glBufferData(
+                            GL_ARRAY_BUFFER,
+                            static_cast<std::ptrdiff_t>(
+                                Vertices.size() * sizeof(float)),
+                            Vertices.data(),
+                            GL_DYNAMIC_DRAW);
+                        glDrawArrays(GL_TRIANGLES, 0, 6);
+                    }
+                }
+            }
+
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glDisablei(GL_BLEND, 0);
         }
     }
 

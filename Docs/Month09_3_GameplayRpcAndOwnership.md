@@ -51,20 +51,21 @@ void MulticastDoorPulse(int32 Revision);
 
 ## 开门闭环
 
-`PSandboxReplicationLabActor` 现在也是测试门。客户端按 `F` 后执行：
+地图中持久化的 `NetworkDoor`（`PSandboxReplicationLabActor`）是测试门。客户端按 `F` 后执行：
 
 ```text
 Local PlayerController
  -> ServerTryInteract(Door) [可靠 Server RPC]
  -> 服务器校验 Ownership 与距离
  -> ToggleDoor
- -> bDoorOpen + Transform 通过属性复制同步
+ -> bDoorOpen + bDoorCollisionEnabled + Transform 通过属性复制同步
  -> ClientInteractionResult [可靠 Client RPC]
  -> MulticastDoorPulse [不可靠 Multicast RPC]
 ```
 
-按 `F1` 打开 Gameplay Debug，可以观察对象 Role、NetId、RPC sent/received/rejected、可靠与不可靠消息计数，
-以及 Door open/closed、authority uses、multicast pulses 和 Client RPC replies。
+门打开时 `DoorPanel` 切换为 `NoCollision`，关闭时根据持久化的 `Door Collision Enabled` 恢复
+`QueryAndPhysics`。按 `F1` 打开 Gameplay Debug，可以观察对象 Role、NetId、RPC sent/received/rejected、可靠与
+不可靠消息计数，以及 Door open/closed、authority uses、multicast pulses 和 Client RPC replies。
 
 ## 自动化验收
 
@@ -79,4 +80,3 @@ Local PlayerController
 - Multicast 是瞬时通知；门的最终状态以可靠属性复制为准，因此丢失 Multicast 不会造成永久状态错误。
 - 尚未实现 RPC 参数分片、网络 Component/Subobject、Dormancy、重连或公网安全协议。
 - Character SavedMove、服务器重演、Correction、模拟代理快照插值和网络延迟模拟属于第 4 周。
-

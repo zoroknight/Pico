@@ -28,11 +28,9 @@ private:
     explicit PSandboxGameInstance(const Pico::FObjectConstructionParams& Params);
     PSandboxReplicationLabActor* ResolveReplicationLabActor() const;
     PSandboxReplicationLabActor* FindReplicationLabActor() const;
-    bool SpawnReplicationLabActor();
     void RemoveUnpossessedServerPreviewPawns(Pico::PWorld* World);
 
     Pico::FObjectHandle ReplicationLabActorHandle;
     std::string ReplicationLabLastAction = "waiting for world";
-    Pico::int32 ReplicationLabMoveStep = 0;
 };
 }

@@ -723,6 +723,10 @@ Delta、双连接独立基线、截断消息零创建副作用、Destroy 与断�
 F1 Project Debug 同时显示 NetId、`InitialOnly` marker、revision 与客户端本地 OnRep 次数。
 2026-08-18 已在编辑器启动一个可视化服务器和两个客户端完成 Spawn、`Y` Transform、`U` RepNotify、`I` Destroy、
 `T` 重新 Spawn 的全流程人工验收；三端状态与调试计数一致，第 2 周可视化准入门槛通过。
+后续工程化改造已将该临时对象迁移为 `StarterWorld.pworld` 中持久化的 `NetworkDoor`，不再由 GameInstance 自动
+生成，也不再暴露 `Y/U/I/T` 调试键。当前通过客户端 `F` 请求服务器切换门，`bDoorOpen`、
+`bDoorCollisionEnabled`、Transform 和实际阻挡结果会同步到两个客户端；旧记录保留用于说明 ActorChannel 的原始
+Spawn/Delta/Destroy 学习验收过程。
 实现说明见 [`Month09_2_ActorReplication.md`](Month09_2_ActorReplication.md)。
 
 第 3 周实现记录：新增 `PNetPlayer` 与 Connection Ownership，服务器连接沿 `Login/PostLogin/RestartPlayer/Possess`
@@ -750,6 +754,12 @@ Debug 全量自动化 19/19 通过；`PicoCharacterMovementTests` 增加固定�
 计划范围与真实局域网交付证据均按 100% 关闭；公网 Dedicated Server、重连和 Client/Server Shipping 包仍属于
 第 7 月，不反向扩大本月范围。
 实现说明见 [`Month09_4_CharacterNetworkMovement.md`](Month09_4_CharacterNetworkMovement.md)。
+
+后续纵向加固已完成精简 Collision Profile：Pawn、Pawn Ignore Pawn、Physics Actor、Trigger 与 Projectile 共享
+Ignore/Overlap/Block 解析；两个客户端分别以 AutonomousProxy 对 SimulatedProxy 完成胶囊阻挡验收，角色之间只
+阻挡不推动。Agent 可通过通用反射属性配置 Profile、Physics Body Type 与 Actor 复制组合，并读取依赖警告。
+实现与边界见
+[`CollisionProfilesAndNetworkPawnBlocking.zh-CN.md`](CollisionProfilesAndNetworkPawnBlocking.zh-CN.md)。
 
 第 4 周后低延迟加固顺序固定为：先增加端到端阶段计时，再建立服务器时间同步与 UE5 风格动态平滑，然后补
 AutonomousProxy 校正视觉平滑和更完整的 SimulatedProxy 状态。Pico 不为动作/FPS Demo 改成全局帧同步；目标模型

@@ -52,13 +52,22 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   Packet、握手、Sequence/Ack、有界且有序的可靠交付、心跳、超时，以及 World 前后 NetDriver 阶段。
 - 通过每连接 ActorChannel、服务器分配的 NetObjectId、稳定反射 Schema 和确认属性基线复制显式启用的 Actor，
   支持 Spawn/Delta/Destroy、Transform、InitialOnly、零参数 OnRep 和带类型检查的延迟 Actor 引用修复。
+- 所有 Actor 派生类型都可在反射 Details 中配置 `Replicates` 与 `Replicate Movement`；普通 Actor 可发送服务器
+  权威的不可靠根移动快照，动态根刚体同步位置、线速度、角速度和激活状态；客户端 Dynamic Network Physics
+  Proxy 在快照间提供短时本地预测，服务器快照覆盖误差。Character 继续使用独立的预测、纠错和重演链路。
+- Details 与通用 Agent 属性工具可配置精简 UE 风格 Collision Profile，包括 `Pawn`、`Pawn (Ignore Pawns)`、
+  `Physics Actor`、`Trigger` 和 `Projectile`。Pico 在稳定的 Jolt Moving/NonMoving BroadPhase 之上解析双方
+  Ignore/Overlap/Block；联机玩家胶囊默认互相阻挡但不推动，最终结果仍由服务器权威重演和纠错。
+- QueryOnly Blocking Body 与显式 Trigger Sensor 已在 Jolt 查询中过滤分离；Character 胶囊保留 Sweep 阻挡但不建立
+  刚体 Contact；`Enable Physics Interaction` 的最终推动结果由服务器 Authority 决定，本地 AutonomousProxy 预测
+  即时反馈，而 SimulatedProxy 不得推动观察端箱子。
 - 通过有界 SavedMove 冗余、Ownership 与控制策略校验实现服务器权威角色移动，自主代理可预测、纠错并重演；
   模拟代理支持 Disabled、Linear、Exponential 与 Snapshot Interpolation 四种网络平滑模式，并按 UE5 思路在快照间
   进行有上限的碰撞感知外推、只对 Mesh 消除视觉跳变；服务器时间与快照抖动驱动 25～100 ms 动态平滑，Play
   网络模拟以目标 RTT 表示延迟，F1 可观察 Move RTT、Snapshot Transit 和 Clock Offset。低延迟三窗口验收见
   [`Docs/Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md`](Docs/Month09_4_5_LowLatencyVisualAcceptance.zh-CN.md)。
-- PicoSandbox Replication Lab 可用一个可视化服务器和两个客户端验证完整路径：三个 F1 面板显示一致的 NetId 与
-  InitialOnly 状态，服务器按键可触发 Transform Delta、OnRep、Destroy 和重新 Spawn。
+- PicoSandbox 的 `NetworkDoor` 是保存在 `StarterWorld.pworld` 中的场景 Actor：服务器从地图加载权威实例，两个
+  客户端通过 ActorChannel 获得对应网络实例；开关状态、位移与碰撞结果会同步收敛。
 - 同一次 Windows Development Stage 已在两台真实 Windows 电脑上完成局域网验收：电脑 A 同时运行独立服务器与
   客户端 1，电脑 B 运行客户端 2，双方移动、跳跃和 Gameplay RPC 可通过 UDP 权威链路同步。
 - 编辑器 Play 下拉菜单可在 Standalone 与“可视化独立服务器 + 1～4 个客户端”之间切换，持久化端口和窗口
@@ -374,9 +383,10 @@ Runtime。三角形右侧的原生下三角按钮可选择 Standalone，或启�
 `Saved/Logs/PlaySession/Session_*/`。运行期间控件会变成红色正方形，一次停止整组进程；单个客户端自行退出
 只会结束该实例。Listen Server 与真正无窗口的 Headless Dedicated Server 将在复制层稳定后开放。
 
-PicoSandbox 的第 2 周 Replication Lab 会在 Standalone 或 Server 模式自动生成。使用“可视化服务器 + 两个客户端”
-运行时，在服务器窗口按 `Y` 移动权威 Actor，按 `U` 修改复制 revision 并变色，按 `I` 销毁，按 `T` 重新生成。
-F1 Project Debug 会显示三端 NetId、位置、InitialOnly marker、revision 和当前端的 OnRep 次数。
+PicoSandbox 当前把 Replication Lab 门持久化为 `StarterWorld.pworld` 中的 `NetworkDoor`，不再由 `GameInstance`
+临时生成。可在 Scene Outliner 选中它，并在 Details 中配置 `Door Open` 和 `Door Collision Enabled`。使用“可视化
+服务器 + 两个客户端”运行后，任一客户端靠近门按 `F`，服务器会权威切换门状态，两个客户端同步得到相同位移与
+碰撞结果；门打开时不阻挡，关闭时若启用了碰撞则恢复阻挡。
 
 ## 编辑器操作
 
@@ -591,6 +601,9 @@ private:
 - [网络开发风险登记](Docs/NetworkRiskRegister.zh-CN.md)
 - [网络传输、连接与帧阶段](Docs/Month09_1_NetTransportAndConnection.md)
 - [Actor、属性复制与可视化验收场](Docs/Month09_2_ActorReplication.md)
+- [Pico 碰撞系统指南](Docs/CollisionSystemGuide.zh-CN.md)
+- [Collision Profile 与联机玩家阻挡](Docs/CollisionProfilesAndNetworkPawnBlocking.zh-CN.md)
+- [Replicates、Replicate Movement 与 World 隔离](Docs/ReplicationSwitchesAndWorldIsolation.zh-CN.md)
 - [Gameplay RPC、所有权与开门验收场](Docs/Month09_3_GameplayRpcAndOwnership.md)
 - [第三人称控制基线与跨项目复用](Docs/Month09_3_5_ThirdPersonControlBaseline.md)
 - [角色网络移动、预测与插值](Docs/Month09_4_CharacterNetworkMovement.md)
@@ -645,6 +658,8 @@ private:
 
 第 6 月网络学习型 MVP 已完成并通过双机局域网验收：UDP Connection、ActorChannel、属性复制、RPC/Ownership、
 SavedMove、本地预测、服务器重演、Ack/Correction、模拟代理平滑和网络模拟已经形成可打包运行的双人闭环。
+`StarterWorld` 的 `PhysicsCrate` 已启用通用 Actor 移动复制，箱子由服务器 Jolt 世界权威模拟，而不是由每个客户端
+独立计算；双方仍需加载同一 Actor 类、组件与碰撞资产，Component/Subobject 任意属性复制属于后续范围。
 具体边界见 [角色网络移动、预测与插值](Docs/Month09_4_CharacterNetworkMovement.md) 和
 [网络风险登记](Docs/NetworkRiskRegister.zh-CN.md)。
 

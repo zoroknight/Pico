@@ -3,6 +3,7 @@
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/CameraComponent.h"
+#include "Pico/Engine/CapsuleComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/SpringArmComponent.h"
 #include "Pico/Engine/TickFunction.h"
@@ -196,6 +197,64 @@ int main()
             && SweepHit.Time > 0.0f
             && SweepHit.Time < 1.0f,
         "Sweep reports the earliest blocking wall with normalized hit time");
+
+    Pico::PActor* PawnA = World->SpawnActor<Pico::PActor>("PawnA");
+    Pico::PActor* PawnB = World->SpawnActor<Pico::PActor>("PawnB");
+    auto* PawnCapsuleA = PawnA != nullptr
+        ? PawnA->CreateComponent<Pico::PCapsuleComponent>("Capsule") : nullptr;
+    auto* PawnCapsuleB = PawnB != nullptr
+        ? PawnB->CreateComponent<Pico::PCapsuleComponent>("Capsule") : nullptr;
+    const bool bPawnPairReady = PawnA != nullptr && PawnB != nullptr
+        && PawnCapsuleA != nullptr && PawnCapsuleB != nullptr
+        && PawnA->SetRootComponent(PawnCapsuleA)
+        && PawnB->SetRootComponent(PawnCapsuleB);
+    if (bPawnPairReady)
+    {
+        PawnCapsuleA->SetPhysicsBodyType(Pico::EPhysicsBodyType::Kinematic);
+        PawnCapsuleB->SetPhysicsBodyType(Pico::EPhysicsBodyType::Kinematic);
+        PawnCapsuleA->SetCollisionProfile(Pico::ECollisionProfile::Pawn);
+        PawnCapsuleB->SetCollisionProfile(Pico::ECollisionProfile::Pawn);
+        PawnA->SetActorLocation({0.0f, 1000.0f, 96.0f});
+        PawnB->SetActorLocation({120.0f, 1000.0f, 96.0f});
+    }
+    Pico::FHitResult PawnHit;
+    const bool bPawnBlocked = bPawnPairReady
+        && PawnCapsuleA->MoveComponent(
+            {100.0f, 0.0f, 0.0f}, Pico::FQuat::Identity, true, &PawnHit)
+        && PawnHit.bBlockingHit
+        && PawnHit.HitObject == PawnCapsuleB->GetHandle()
+        && PawnCapsuleA->GetWorldTransform().Translation.X < 50.0f;
+    Runner.Expect(bPawnBlocked,
+        "Pawn collision profile blocks another Pawn capsule through Sweep");
+    if (bPawnPairReady)
+    {
+        PawnA->SetActorLocation({0.0f, 1000.0f, 96.0f});
+        PawnCapsuleB->SetCollisionProfile(
+            Pico::ECollisionProfile::PawnNoPawnCollision);
+    }
+    PawnHit.Reset({}, {});
+    const bool bPawnIgnored = bPawnPairReady
+        && PawnCapsuleA->MoveComponent(
+            {100.0f, 0.0f, 0.0f}, Pico::FQuat::Identity, true, &PawnHit)
+        && !PawnHit.bBlockingHit
+        && std::abs(PawnCapsuleA->GetWorldTransform().Translation.X - 100.0f)
+            < 0.01f;
+    Runner.Expect(bPawnIgnored,
+        "Pawn Ignore Pawns profile preserves World blocking while allowing Pawn passage");
+    if (bPawnPairReady)
+    {
+        PawnA->SetActorLocation({0.0f, 1000.0f, 96.0f});
+        PawnCapsuleB->SetCollisionProfile(Pico::ECollisionProfile::Pawn);
+        PawnCapsuleB->SetPhysicsContactEnabled(false);
+    }
+    PawnHit.Reset({}, {});
+    const bool bQueryOnlyPawnBlocked = bPawnPairReady
+        && PawnCapsuleA->MoveComponent(
+            {100.0f, 0.0f, 0.0f}, Pico::FQuat::Identity, true, &PawnHit)
+        && PawnHit.bBlockingHit
+        && PawnHit.HitObject == PawnCapsuleB->GetHandle();
+    Runner.Expect(bQueryOnlyPawnBlocked,
+        "Query-only Pawn remains a blocking Sweep target without physics contacts");
 
     Pico::PActor* CameraRig = World->SpawnActor<Pico::PActor>("CameraRig");
     Pico::PSpringArmComponent* CameraBoom = CameraRig != nullptr

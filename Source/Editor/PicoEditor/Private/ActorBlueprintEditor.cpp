@@ -526,16 +526,55 @@ struct FActorBlueprintEditor::FImpl
                 static_cast<std::uintptr_t>(Renderer->GetColorTexture())),
             Available,
             ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
-        if (ImGui::IsItemHovered() && ImGui::IsMouseDragging(ImGuiMouseButton_Right))
+        const ImGuiIO& IO = ImGui::GetIO();
+        const bool bHovered = ImGui::IsItemHovered();
+        if (bHovered && ImGui::IsMouseDragging(ImGuiMouseButton_Right))
         {
-            const ImVec2 Delta = ImGui::GetIO().MouseDelta;
+            const ImVec2 Delta = IO.MouseDelta;
             ViewYaw -= Delta.x * 0.35f;
             ViewPitch = std::clamp(ViewPitch + Delta.y * 0.35f, -89.0f, 89.0f);
         }
-        if (ImGui::IsItemHovered() && ImGui::GetIO().MouseWheel != 0.0f)
+        if (bHovered && IO.MouseWheel != 0.0f)
             ViewDistance = std::clamp(
-                ViewDistance * std::pow(0.85f, ImGui::GetIO().MouseWheel),
+                ViewDistance * std::pow(0.85f, IO.MouseWheel),
                 20.0f, 5000.0f);
+
+        const FVector3 ViewForward = -Direction;
+        FVector3 ViewRight = FVector3::Cross(
+            ViewForward, FVector3::UpVector).GetSafeNormal();
+        if (ViewRight.IsNearlyZero()) ViewRight = FVector3::RightVector;
+        const FVector3 ViewUp =
+            FVector3::Cross(ViewRight, ViewForward).GetSafeNormal();
+        if (bHovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
+        {
+            const float PanScale = std::max(ViewDistance * 0.0025f, 0.05f);
+            ViewTarget += ViewRight * (-IO.MouseDelta.x * PanScale)
+                + ViewUp * (IO.MouseDelta.y * PanScale);
+        }
+
+        if (bHovered && !IO.WantTextInput)
+        {
+            FVector3 Movement = FVector3::ZeroVector;
+            if (ImGui::IsKeyDown(ImGuiKey_W)) Movement += ViewForward;
+            if (ImGui::IsKeyDown(ImGuiKey_S)) Movement -= ViewForward;
+            if (ImGui::IsKeyDown(ImGuiKey_D)) Movement += ViewRight;
+            if (ImGui::IsKeyDown(ImGuiKey_A)) Movement -= ViewRight;
+            if (ImGui::IsKeyDown(ImGuiKey_E)) Movement += FVector3::UpVector;
+            if (ImGui::IsKeyDown(ImGuiKey_Q)) Movement -= FVector3::UpVector;
+            if (ImGui::IsKeyDown(ImGuiKey_RightArrow)) Movement += ViewRight;
+            if (ImGui::IsKeyDown(ImGuiKey_LeftArrow)) Movement -= ViewRight;
+            if (ImGui::IsKeyDown(ImGuiKey_UpArrow)) Movement += ViewUp;
+            if (ImGui::IsKeyDown(ImGuiKey_DownArrow)) Movement -= ViewUp;
+            if (Movement.Normalize())
+            {
+                const bool bFast = ImGui::IsKeyDown(ImGuiKey_LeftShift)
+                    || ImGui::IsKeyDown(ImGuiKey_RightShift);
+                const float Speed = std::max(ViewDistance * 0.8f, 50.0f)
+                    * (bFast ? 4.0f : 1.0f);
+                ViewTarget += Movement * Speed
+                    * std::clamp(IO.DeltaTime, 0.0f, 0.1f);
+            }
+        }
     }
 
     void DrawDetails()

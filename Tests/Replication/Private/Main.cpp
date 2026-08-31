@@ -3,6 +3,7 @@
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/Character.h"
 #include "Pico/Engine/Controller.h"
+#include "Pico/Engine/CubeComponent.h"
 #include "Pico/Engine/EngineLoop.h"
 #include "Pico/Engine/Replication.h"
 #include "Pico/Engine/SceneComponent.h"
@@ -170,6 +171,33 @@ protected:
 
 PICO_DEFINE_CLASS_NO_PROPERTIES(PRootlessReplicationActor)
 
+class PNetworkPhysicsTestActor : public Pico::PActor
+{
+    PICO_DECLARE_CLASS(PNetworkPhysicsTestActor, Pico::PActor)
+
+protected:
+    explicit PNetworkPhysicsTestActor(
+        const Pico::FObjectConstructionParams& Params)
+        : PActor(Params)
+    {
+        SetReplicates(true);
+        SetReplicateMovement(true);
+    }
+
+    bool DefineDefaultSubobjects(
+        Pico::FObjectInitializer& Initializer) override
+    {
+        Pico::PCubeComponent* Root =
+            Initializer.CreateDefaultSubobject<Pico::PCubeComponent>("Root");
+        if (Root == nullptr || !Initializer.SetRootSubobject(Root)) return false;
+        Root->SetCollisionEnabled(Pico::ECollisionEnabled::QueryAndPhysics);
+        Root->SetPhysicsBodyType(Pico::EPhysicsBodyType::Dynamic);
+        return true;
+    }
+};
+
+PICO_DEFINE_CLASS_NO_PROPERTIES(PNetworkPhysicsTestActor)
+
 struct FQueuedMessage
 {
     Pico::uint32 ReliableId = 0;
@@ -186,7 +214,8 @@ void TestReplicationLifecycle(FTestRunner& Runner)
         && EngineLoop.Init() == 0
         && PReplicationTestActor::RegisterClass()
         && PReplicationTestController::RegisterClass()
-        && PRootlessReplicationActor::RegisterClass();
+        && PRootlessReplicationActor::RegisterClass()
+        && PNetworkPhysicsTestActor::RegisterClass();
     Runner.Expect(bInitialized, "Replication test initializes engine classes");
     if (!bInitialized)
     {
@@ -458,6 +487,100 @@ void TestReplicationLifecycle(FTestRunner& Runner)
         && ClientReplication.GetObjectRegistry().ResolveActor(RootlessId)
             != nullptr,
         "A replicated Gameplay Actor without a RootComponent skips Transform safely");
+
+    Messages.clear();
+    PNetworkPhysicsTestActor* ServerCrate =
+        ServerWorld->SpawnActor<PNetworkPhysicsTestActor>("NetworkCrate");
+    if (ServerCrate != nullptr)
+    {
+        auto* Root = static_cast<Pico::PCubeComponent*>(
+            ServerCrate->GetRootComponent());
+        if (Root != nullptr)
+        {
+            Root->SetCollisionEnabled(
+                Pico::ECollisionEnabled::QueryAndPhysics);
+            Root->SetPhysicsBodyType(Pico::EPhysicsBodyType::Dynamic);
+        }
+        ServerCrate->SetActorLocation(Pico::FVector3(120.0f, 10.0f, 80.0f));
+    }
+    ServerWorld->Tick(1.0f / 60.0f);
+    ServerReplication.ReplicateServerConnection(Connection, Queue);
+    const Pico::FNetObjectId CrateId = ServerCrate != nullptr
+        ? ServerCrate->GetNetObjectId() : Pico::FNetObjectId {};
+    for (const FQueuedMessage& Message : Messages)
+    {
+        ClientReplication.HandleReliableMessage(Connection, Message.Payload);
+        ServerReplication.HandleReliableAcknowledged(
+            Connection, Message.ReliableId);
+    }
+    auto* ClientCrate = static_cast<PNetworkPhysicsTestActor*>(
+        ClientReplication.GetObjectRegistry().ResolveActor(CrateId));
+    auto* ServerCrateRoot = ServerCrate != nullptr
+        ? static_cast<Pico::PCubeComponent*>(ServerCrate->GetRootComponent())
+        : nullptr;
+    auto* ClientCrateRoot = ClientCrate != nullptr
+        ? static_cast<Pico::PCubeComponent*>(ClientCrate->GetRootComponent())
+        : nullptr;
+    if (ClientCrateRoot != nullptr)
+    {
+        ClientCrateRoot->SetCollisionEnabled(
+            Pico::ECollisionEnabled::QueryAndPhysics);
+        ClientCrateRoot->SetPhysicsBodyType(Pico::EPhysicsBodyType::Dynamic);
+    }
+    ClientWorld->Tick(1.0f / 60.0f);
+    Runner.Expect(ClientCrate != nullptr && ClientCrate->GetReplicateMovement(),
+        "Spawn carries the generic Replicate Movement policy to the remote Actor");
+
+    if (ServerCrate != nullptr && ServerCrateRoot != nullptr)
+    {
+        ServerCrate->SetActorLocation(Pico::FVector3(240.0f, -30.0f, 110.0f));
+        ServerCrateRoot->AddImpulse(Pico::FVector3(250.0f, 0.0f, 0.0f));
+    }
+    Messages.clear();
+    std::vector<std::vector<Pico::uint8>> CrateSnapshots;
+    ServerReplication.ReplicateServerConnection(
+        Connection,
+        Queue,
+        [&CrateSnapshots](std::span<const Pico::uint8> Payload)
+        {
+            CrateSnapshots.emplace_back(Payload.begin(), Payload.end());
+            return true;
+        });
+    bool bAppliedCrateSnapshot = false;
+    for (const std::vector<Pico::uint8>& Message : CrateSnapshots)
+    {
+        bAppliedCrateSnapshot = ClientReplication.HandleUnreliableMessage(
+            Connection, Message) || bAppliedCrateSnapshot;
+    }
+    Pico::FPhysicsBodyState ServerCrateState;
+    Pico::FPhysicsBodyState ClientCrateState;
+    const bool bHasCrateStates = ServerCrateRoot != nullptr
+        && ClientCrateRoot != nullptr
+        && ServerCrateRoot->GetPhysicsBodyState(ServerCrateState)
+        && ClientCrateRoot->GetPhysicsBodyState(ClientCrateState);
+    Runner.Expect(bAppliedCrateSnapshot
+            && ServerReplication.GetStatistics()
+                .ActorMovementSnapshotsSent >= 1
+            && ClientReplication.GetStatistics()
+                .ActorMovementSnapshotsReceived >= 1,
+        "A generic Actor movement snapshot crosses the unreliable channel");
+    Runner.Expect(bHasCrateStates,
+        "Server and client expose root rigid-body state after replication");
+    Runner.Expect(ClientCrateRoot != nullptr
+            && ClientCrateRoot->IsNetworkPhysicsProxy(),
+        "A replicated dynamic root body becomes a client physics proxy");
+    Runner.Expect(bHasCrateStates
+            && ClientCrateState.Transform.Translation.Equals(
+                ServerCrateState.Transform.Translation, 0.01f),
+        "The client physics proxy receives the authoritative position");
+    Runner.Expect(bHasCrateStates
+            && ClientCrateState.LinearVelocity.Equals(
+                ServerCrateState.LinearVelocity, 0.01f),
+        "The client physics proxy receives the authoritative linear velocity");
+    Runner.Expect(
+        ClientCrateRoot != nullptr
+            && ClientCrateRoot->AddImpulse(Pico::FVector3(50.0f, 0.0f, 0.0f)),
+        "A replicated Dynamic proxy remains locally simulatable between authority snapshots");
 
     Messages.clear();
     PReplicationTestController* ServerController =

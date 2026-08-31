@@ -15,7 +15,24 @@
 
 namespace Pico
 {
-PICO_DEFINE_CLASS_NO_PROPERTIES(PActor)
+PICO_DEFINE_CLASS(PActor)
+
+bool PActor::RegisterProperties(PClass& Class)
+{
+    FPropertyMetadata ReplicatesMetadata;
+    ReplicatesMetadata.DisplayName = "Replicates";
+    ReplicatesMetadata.Description =
+        "Create an ActorChannel and replicate this Actor from the server";
+    FPropertyMetadata MovementMetadata;
+    MovementMetadata.DisplayName = "Replicate Movement";
+    MovementMetadata.Description =
+        "Replicate the root Transform or root rigid-body state from the server";
+    std::vector<PProperty> Properties;
+    PICO_ADD_PROPERTY_METADATA(Properties, bReplicates, ReplicatesMetadata);
+    PICO_ADD_PROPERTY_METADATA(
+        Properties, bReplicateMovement, MovementMetadata);
+    return Class.AddProperties(std::move(Properties));
+}
 
 PActor::PActor(const FObjectConstructionParams& Params)
     : PObject(Params)
@@ -64,6 +81,18 @@ void PActor::SetReplicates(bool bInReplicates)
     if (bReplicates == bInReplicates) return;
     bReplicates = bInReplicates;
     if (bReplicates) MarkReplicationDirty();
+}
+
+bool PActor::GetReplicateMovement() const
+{
+    return bReplicateMovement;
+}
+
+void PActor::SetReplicateMovement(bool bInReplicateMovement)
+{
+    if (bReplicateMovement == bInReplicateMovement) return;
+    bReplicateMovement = bInReplicateMovement;
+    RecordReplicationDirty(0, true);
 }
 
 FNetObjectId PActor::GetNetObjectId() const
@@ -180,8 +209,15 @@ void PActor::RecordReplicationDirty(uint64 DirtyMask, bool bTransformDirty)
 void PActor::PostEditChangeProperty(const FPropertyChangedEvent& Event)
 {
     PObject::PostEditChangeProperty(Event);
-    if (Event.Property != nullptr)
-        MarkReplicatedPropertyDirty(Event.Property->GetName());
+    if (Event.Property == nullptr) return;
+    const FName PropertyName = Event.Property->GetName();
+    if (PropertyName == FName("bReplicates")
+        || PropertyName == FName("bReplicateMovement"))
+    {
+        RecordReplicationDirty(0, true);
+        return;
+    }
+    MarkReplicatedPropertyDirty(PropertyName);
 }
 
 bool PActor::HasBegunPlay() const

@@ -413,9 +413,43 @@ FJson DescribeObject(PObject* Object, bool bIncludeComponents)
     }
     if (Object->IsA(PActor::StaticClass()))
     {
+        const PActor* Actor = static_cast<const PActor*>(Object);
+        if (Actor->GetReplicateMovement() && !Actor->GetIsReplicated())
+        {
+            Result["configuration_warnings"] = FJson::array({
+                "Replicate Movement requires Replicates to create an ActorChannel"
+            });
+        }
         const FAssetPath BlueprintAsset = FindActorBlueprintAsset(Object->GetClass());
         if (BlueprintAsset.IsValid())
             Result["actor_blueprint_asset"] = BlueprintAsset.ToString();
+    }
+    if (Object->IsA(PPrimitiveComponent::StaticClass()))
+    {
+        const auto* Primitive = static_cast<const PPrimitiveComponent*>(Object);
+        FJson Warnings = Result.contains("configuration_warnings")
+            ? Result["configuration_warnings"] : FJson::array();
+        const PActor* Owner = Primitive->GetOwner();
+        if (Primitive->GetPhysicsBodyType() == EPhysicsBodyType::Dynamic
+            && Owner != nullptr && Owner->GetIsReplicated()
+            && !Owner->GetReplicateMovement())
+        {
+            Warnings.push_back(
+                "A replicated Dynamic root body normally requires Replicate Movement");
+        }
+        if (Object->IsA(PSkeletalMeshComponent::StaticClass())
+            && Primitive->GetCollisionProfile() == ECollisionProfile::Pawn)
+        {
+            Warnings.push_back(
+                "Character Pawn blocking should normally live on the capsule, not the skeletal mesh");
+        }
+        if (Primitive->GetCollisionProfile() == ECollisionProfile::PhysicsActor
+            && Primitive->GetPhysicsBodyType() != EPhysicsBodyType::Dynamic)
+        {
+            Warnings.push_back(
+                "Physics Actor profile is normally paired with Dynamic Physics Body Type");
+        }
+        if (!Warnings.empty()) Result["configuration_warnings"] = std::move(Warnings);
     }
     if (bIncludeComponents && Object->IsA(PActor::StaticClass()))
     {

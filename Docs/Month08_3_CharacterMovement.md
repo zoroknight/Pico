@@ -23,8 +23,15 @@ instances through the normal ObjectInitializer chain. Project classes can reques
 customize those inherited templates instead of creating a second capsule or movement component.
 
 The Character owns only the one-shot jump request. CharacterMovement owns movement mode, velocity,
-floor state, tuning values, and simulation. The capsule remains kinematic and QueryOnly: Gameplay
-moves it by Sweep, while dynamic bodies remain authoritative in Jolt.
+floor state, tuning values, and simulation. The capsule remains kinematic and uses the `Pawn`
+Collision Profile with QueryAndPhysics: Gameplay moves it by Sweep, another Pawn capsule can block
+it without receiving a dynamic impulse, and dynamic bodies remain authoritative in Jolt.
+
+The later multiplayer hardening keeps that authored Profile while separating backend query and
+simulation contact. Character capsules remain blocking Sweep targets but do not create Jolt solver
+contacts; explicit physics interaction is owned by CharacterMovement and is authority-only in network
+sessions. This prevents simulated proxies from pushing unrelated client-local rigid bodies when a
+network snapshot moves their capsules.
 
 ## Deterministic Simulation Boundary
 
@@ -111,7 +118,8 @@ Character with its own capsule and CharacterMovement instances.
 
 ## Automated Verification
 
-`PicoCharacterMovementTests` covers default-subobject construction, floor detection, walkable slope
+`PicoCharacterMovementTests` covers default-subobject construction, Pawn-to-Pawn blocking without
+pushing, the optional Pawn-ignore-Pawn profile, floor detection, walkable slope
 classification, acceleration, jump, no mid-air double jump, gravity, landing, edge transition,
 state/input replay, bounded long frames, and dynamic-body pushing.
 
@@ -119,6 +127,9 @@ state/input replay, bounded long frames, and dynamic-body pushing.
 subobjects, enters Walking, consumes mapped input, jumps through `Action.Jump`, and still works with
 GameMode restart. `PicoPhysicsTests` verifies a one-second frame performs only four fixed Jolt
 substeps. Existing Movement tests remain independent from Jolt.
+
+The compact profile model and two-client ownership acceptance are documented in
+[`CollisionProfilesAndNetworkPawnBlocking.zh-CN.md`](CollisionProfilesAndNetworkPawnBlocking.zh-CN.md).
 
 ## Deliberate Limits
 
