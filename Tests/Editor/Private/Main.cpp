@@ -1,5 +1,10 @@
 #include "Pico/Editor/EditorCommandService.h"
+#include "Pico/Editor/EditorAgentExecutionService.h"
 #include "Pico/Editor/EditorAgentTools.h"
+#include "Pico/Editor/EditorRuntimeFreshness.h"
+#include "Pico/Mcp/McpServerCore.h"
+#include "Pico/McpAdapter/McpAgentToolsetAdapter.h"
+#include "Pico/McpHttp/McpHttpServer.h"
 #include "Pico/Editor/EditorProjectManager.h"
 #include "Pico/Editor/EditorSceneClipboard.h"
 #include "Pico/Editor/EditorSelection.h"
@@ -12,6 +17,7 @@
 #include "Pico/Agent/AgentCredentialStore.h"
 #include "Pico/Agent/FakeAgentProvider.h"
 #include "Pico/Core/Config.h"
+#include "Pico/Core/GameThread.h"
 #include "Pico/Core/Paths.h"
 
 #include "Pico/Engine/Actor.h"
@@ -32,15 +38,21 @@
 #include "Pico/Object/ObjectRegistry.h"
 #include "Pico/Object/Property.h"
 #include "Pico/Render/SceneViewportRenderer.h"
+#include "Pico/Tasks/GameThreadDispatcher.h"
+#include "Pico/Tasks/TaskSystem.h"
 #include "PicoSandbox/SandboxModule.h"
 
 #include "TestRunner.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace
@@ -60,6 +72,288 @@ public:
     bool bApprove = false;
     int RequestCount = 0;
 };
+
+class FExecutionServiceTestTools final : public Pico::IAgentToolExecutor
+{
+public:
+    bool IsReadOnly(const Pico::FAgentToolCall& Call) const override
+    {
+        return Call.Name.starts_with("test.read");
+    }
+
+    Pico::FAgentToolResult Execute(
+        const Pico::FAgentToolCall& Call,
+        const Pico::FCancellationToken*) override
+    {
+        ExecuteCount.fetch_add(1);
+        if (IsReadOnly(Call)) ReadCount.fetch_add(1);
+        else MutationCount.fetch_add(1);
+        {
+            std::lock_guard Lock(ThreadMutex);
+            ExecutionThreads.push_back(std::this_thread::get_id());
+        }
+        return {Call.Id, true, R"({"executed":true})", {}, false};
+    }
+
+    std::string GetLastExecutionTraceJson() const override
+    {
+        return R"([{"stage":"Execute","succeeded":true}])";
+    }
+
+    std::atomic<int> ExecuteCount {0};
+    std::atomic<int> ReadCount {0};
+    std::atomic<int> MutationCount {0};
+    mutable std::mutex ThreadMutex;
+    std::vector<std::thread::id> ExecutionThreads;
+};
+
+void PumpUntilComplete(
+    Pico::FGameThreadDispatcher& Dispatcher,
+    const std::vector<Pico::FTaskHandle*>& Handles)
+{
+    const auto Deadline = std::chrono::steady_clock::now()
+        + std::chrono::seconds(3);
+    while (std::chrono::steady_clock::now() < Deadline)
+    {
+        bool bComplete = true;
+        for (const Pico::FTaskHandle* Handle : Handles)
+            bComplete = bComplete && Handle && Handle->IsComplete();
+        if (bComplete) return;
+        Dispatcher.Pump({64, std::chrono::milliseconds(10)});
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+void TestEditorAgentExecutionService(FTestRunner& Runner)
+{
+    const std::filesystem::path OperationDirectory =
+        std::filesystem::temp_directory_path()
+        / "PicoEditorAgentExecutionServiceTests";
+    std::error_code FileError;
+    std::filesystem::remove_all(OperationDirectory, FileError);
+
+    Runner.Expect(Pico::InitializeGameThread(),
+        "Editor Agent execution service binds the test Game Thread");
+    Pico::FGameThreadDispatcher Dispatcher;
+    Pico::FTaskSystem Tasks;
+    Runner.Expect(Tasks.Initialize(3),
+        "Editor Agent execution service test workers initialize");
+    FExecutionServiceTestTools Tools;
+    Pico::FEditorAgentExecutionService Service(
+        &Tools, &Dispatcher, OperationDirectory);
+    Service.SetSessionId("execution-service-test-session");
+    const std::thread::id GameThreadId = std::this_thread::get_id();
+
+    Pico::FAgentToolResult FirstRead;
+    Pico::FAgentToolResult SecondRead;
+    Pico::FTaskHandle FirstReadTask = Tasks.Submit(
+        "Execution service read one",
+        [&Service, &FirstRead](const Pico::FCancellationToken& Token)
+        {
+            FirstRead = Service.Execute(
+                {"read-1", "test.read.world", "{}"}, &Token);
+        });
+    Pico::FTaskHandle SecondReadTask = Tasks.Submit(
+        "Execution service read two",
+        [&Service, &SecondRead](const Pico::FCancellationToken& Token)
+        {
+            SecondRead = Service.Execute(
+                {"read-2", "test.read.selection", "{}"}, &Token);
+        });
+    PumpUntilComplete(Dispatcher, {&FirstReadTask, &SecondReadTask});
+    Runner.Expect(
+        FirstReadTask.IsComplete() && SecondReadTask.IsComplete()
+            && FirstRead.bSucceeded && SecondRead.bSucceeded
+            && Tools.ReadCount.load() == 2,
+        "Shared execution service accepts concurrent read callers");
+    {
+        std::lock_guard Lock(Tools.ThreadMutex);
+        Runner.Expect(
+            Tools.ExecutionThreads.size() == 2
+                && std::all_of(Tools.ExecutionThreads.begin(),
+                    Tools.ExecutionThreads.end(),
+                    [GameThreadId](std::thread::id Id)
+                    {
+                        return Id == GameThreadId;
+                    }),
+            "Shared execution service executes editor tools only on the Game Thread");
+    }
+
+    const Pico::FAgentToolCall MutationCall {
+        "mutation-1", "test.mutate.world", R"({"value":1})"};
+    Pico::FAgentToolResult FirstMutation;
+    Pico::FTaskHandle MutationTask = Tasks.Submit(
+        "Execution service mutation",
+        [&Service, &MutationCall, &FirstMutation](
+            const Pico::FCancellationToken& Token)
+        {
+            FirstMutation = Service.Execute(MutationCall, &Token);
+        });
+    PumpUntilComplete(Dispatcher, {&MutationTask});
+    Service.CommitDurableResult(MutationCall);
+
+    Pico::FAgentToolResult RecoveredMutation;
+    Pico::FTaskHandle RecoveryTask = Tasks.Submit(
+        "Execution service durable recovery",
+        [&Service, &MutationCall, &RecoveredMutation](
+            const Pico::FCancellationToken& Token)
+        {
+            RecoveredMutation = Service.Execute(MutationCall, &Token);
+        });
+    PumpUntilComplete(Dispatcher, {&RecoveryTask});
+    Runner.Expect(
+        FirstMutation.bSucceeded && RecoveredMutation.bSucceeded
+            && RecoveredMutation.bReused
+            && Tools.MutationCount.load() == 1,
+        "Shared execution service journals and reuses a durable mutation exactly once");
+
+    Service.SetSessionId("execution-service-second-session");
+    Pico::FAgentToolResult OtherSessionMutation;
+    Pico::FTaskHandle OtherSessionTask = Tasks.Submit(
+        "Execution service session isolation",
+        [&Service, &MutationCall, &OtherSessionMutation](
+            const Pico::FCancellationToken& Token)
+        {
+            OtherSessionMutation = Service.Execute(MutationCall, &Token);
+        });
+    PumpUntilComplete(Dispatcher, {&OtherSessionTask});
+    Runner.Expect(
+        OtherSessionMutation.bSucceeded && !OtherSessionMutation.bReused
+            && Tools.MutationCount.load() == 2,
+        "Durable ToolCall ids are isolated by Agent Session");
+
+    Pico::FAgentToolResult CancelledResult;
+    Pico::FTaskHandle CancelledTask = Tasks.Submit(
+        "Execution service queued cancellation",
+        [&Service, &CancelledResult](const Pico::FCancellationToken& Token)
+        {
+            CancelledResult = Service.Execute(
+                {"cancelled-read", "test.read.cancelled", "{}"}, &Token);
+        });
+    const auto QueueDeadline = std::chrono::steady_clock::now()
+        + std::chrono::seconds(1);
+    while (Dispatcher.GetPendingCallbackCount() == 0
+        && std::chrono::steady_clock::now() < QueueDeadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    CancelledTask.RequestCancel();
+    CancelledTask.Wait(std::chrono::seconds(1));
+    Dispatcher.Pump({64, std::chrono::milliseconds(10)});
+    Runner.Expect(
+        CancelledTask.IsComplete() && !CancelledResult.bSucceeded
+            && Tools.ReadCount.load() == 2,
+        "Cancelling a queued call prevents a late editor side effect");
+
+    const std::string McpCatalog = R"([{
+        "name":"test.read.world",
+        "description":"Read the editor test world",
+        "permission":"ReadOnly",
+        "capability_provider":"TestWorldProvider",
+        "input_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}
+    }])";
+    Pico::FMcpAgentToolsetAdapter McpAdapter(Service, McpCatalog);
+    Pico::FMcpServerCore McpCore(McpAdapter);
+    Pico::FMcpHttpServerConfig McpHttpConfig;
+    McpHttpConfig.Port = 18766;
+    McpHttpConfig.BearerToken = "editor-test-token-0123456789abcdef";
+    Pico::FMcpHttpBinding McpHttp(McpCore, McpHttpConfig);
+    Pico::FMcpHttpResponse McpResult;
+    Pico::FTaskHandle McpTask = Tasks.Submit(
+        "MCP HTTP shared execution service integration",
+        [&McpHttp, &McpResult](const Pico::FCancellationToken&)
+        {
+            Pico::FMcpHttpRequest Request;
+            Request.Method = "POST";
+            Request.Path = "/mcp";
+            Request.Headers = {
+                {"host", "127.0.0.1:18766"},
+                {"authorization", "Bearer editor-test-token-0123456789abcdef"},
+                {"content-type", "application/json"},
+                {"accept", "application/json, text/event-stream"},
+                {"mcp-protocol-version", "2026-07-28"},
+                {"mcp-method", "tools/call"},
+                {"mcp-name", "call_tool"}};
+            Request.Body = R"({
+                "jsonrpc":"2.0",
+                "id":91,
+                "method":"tools/call",
+                "params":{
+                    "name":"call_tool",
+                    "arguments":{
+                        "toolset":"TestWorldProvider",
+                        "name":"test.read.world",
+                        "arguments":{}
+                    },
+                    "_meta":{
+                        "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities":{}
+                    }
+                }
+            })";
+            McpResult = McpHttp.Handle(Request, "editor-http-test-peer");
+        });
+    PumpUntilComplete(Dispatcher, {&McpTask});
+    Runner.Expect(McpTask.IsComplete() && McpResult.Status == 200
+            && McpResult.Body.find("\"isError\":false")
+                != std::string::npos
+            && Tools.ReadCount.load() == 3,
+        "HTTP, MCP Core, and Toolset Adapter execute through the shared Editor Game Thread service");
+    {
+        std::lock_guard Lock(Tools.ThreadMutex);
+        Runner.Expect(!Tools.ExecutionThreads.empty()
+                && Tools.ExecutionThreads.back() == GameThreadId,
+            "MCP-originated editor work still executes on the Game Thread");
+    }
+
+    Service.Shutdown();
+    const Pico::FAgentToolResult ShutdownResult = Service.Execute(
+        {"shutdown-read", "test.read.shutdown", "{}"}, nullptr);
+    Runner.Expect(
+        !ShutdownResult.bSucceeded
+            && Dispatcher.GetPendingCallbackCount() == 0
+            && Tools.ExecuteCount.load() == 5,
+        "A stopped execution service rejects new calls without dispatching work");
+
+    Tasks.Shutdown();
+    Dispatcher.Shutdown();
+    Pico::ShutdownGameThread();
+    std::filesystem::remove_all(OperationDirectory, FileError);
+}
+
+void TestGameRuntimeFreshnessIgnoresEditorOnlyLibraries(FTestRunner& Runner)
+{
+    const std::filesystem::path Root =
+        std::filesystem::temp_directory_path() / "PicoRuntimeFreshnessTests";
+    std::error_code Error;
+    std::filesystem::remove_all(Root, Error);
+    std::filesystem::create_directories(Root, Error);
+#if defined(_WIN32)
+    const std::filesystem::path Runtime = Root / "PicoSandboxGame.exe";
+    const std::filesystem::path Tasks = Root / "PicoTasks.lib";
+    const std::filesystem::path Engine = Root / "PicoEngine.lib";
+#else
+    const std::filesystem::path Runtime = Root / "PicoSandboxGame";
+    const std::filesystem::path Tasks = Root / "PicoTasks.a";
+    const std::filesystem::path Engine = Root / "PicoEngine.a";
+#endif
+    std::ofstream(Runtime) << "runtime";
+    std::ofstream(Tasks) << "editor-only";
+    std::ofstream(Engine) << "runtime-library";
+    const auto Now = std::filesystem::file_time_type::clock::now();
+    std::filesystem::last_write_time(Runtime, Now - std::chrono::seconds(3));
+    std::filesystem::last_write_time(Tasks, Now - std::chrono::seconds(1));
+    std::filesystem::last_write_time(Engine, Now - std::chrono::seconds(4));
+
+    std::string Dependency;
+    Runner.Expect(!Pico::IsDevelopmentGameRuntimeStale(Runtime, Dependency)
+            && Dependency.empty(),
+        "Editor-only PicoTasks updates do not mark the standalone Game Runtime stale");
+
+    std::filesystem::last_write_time(Engine, Now);
+    Runner.Expect(Pico::IsDevelopmentGameRuntimeStale(Runtime, Dependency)
+            && Dependency.find("PicoEngine") != std::string::npos,
+        "A newer linked Runtime library still blocks Play with a precise dependency");
+    std::filesystem::remove_all(Root, Error);
+}
 
 bool CopyEditorTestProject(
     const std::filesystem::path& SourceRoot,
@@ -1987,6 +2281,8 @@ void TestEditorWorldDocument(FTestRunner& Runner)
 int main()
 {
     FTestRunner Runner;
+    TestEditorAgentExecutionService(Runner);
+    TestGameRuntimeFreshnessIgnoresEditorOnlyLibraries(Runner);
     TestEditorProjectManager(Runner);
     TestViewportRenderOptionDefaults(Runner);
     TestPlaySessionSettings(Runner);

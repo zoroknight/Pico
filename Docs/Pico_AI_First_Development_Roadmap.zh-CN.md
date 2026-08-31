@@ -1,9 +1,10 @@
 # Pico AI 优先后续开发路线
 
-本文档记录 Pico 在完成第 6 月网络学习型 MVP 后的新主线。当前 8 周任务的最高优先级、实施顺序和验收标准以
-[`Pico_Engineering_Depth_Roadmap.zh-CN.md`](Pico_Engineering_Depth_Roadmap.zh-CN.md) 为准；其余长期排期以本文档
-为准。当本文档与 [`Pico_Remaining_Development_Roadmap.zh-CN.md`](Pico_Remaining_Development_Roadmap.zh-CN.md)
-中的未完成排期冲突时，以新路线为准。旧路线继续保留已经完成的架构基线、风险记录和历史决策。
+本文档记录 Pico 在完成第 6 月网络学习型 MVP 后的新主线。8 周工程深度阶段已经完成并形成可复现基线；
+碰撞与通用 Actor Replication 纵向切片以及 MCP 四周纵向切片均已完成；MCP 现作为可关闭、可替换的本地
+Development Editor 基线保留。
+当本文档与 [`Pico_Remaining_Development_Roadmap.zh-CN.md`](Pico_Remaining_Development_Roadmap.zh-CN.md) 中的
+未完成排期冲突时，以新路线为准。旧路线继续保留已经完成的架构基线、风险记录和历史决策。
 
 计划中的“月份”均指项目开发月份，不是自然月。已经完成的对象系统、编辑器、Gameplay、物理、动画、
 打包和网络主链不再重复列为新任务。
@@ -30,9 +31,11 @@ Pico 已经通过本机多进程和两台真实 Windows 电脑验证 UDP、Repli
  -> 编辑器场景 Agent
  -> Mini GAS / AbilityTask
  -> PicoGraph Lite
- -> Profiler + Runtime Scalability（当前最高优先级）
- -> Agent Reliability + Decoupling（当前最高优先级）
- -> AI 完整游戏搭建
+ -> Profiler + Runtime Scalability（已完成工程基线）
+ -> Agent Reliability + Decoupling（已完成工程基线）
+ -> 通用 Actor Replication 与碰撞语义收尾（已完成）
+ -> Pico MCP 四周纵向切片（已完成）
+ -> AI 完整游戏搭建（下一候选主线）
  -> ECS 纵向切片
  -> Render Architecture
 ```
@@ -40,17 +43,15 @@ Pico 已经通过本机多进程和两台真实 Windows 电脑验证 UDP、Repli
 固定优先级为：
 
 ```text
-Profiler / Benchmark / Agent Metrics
- > Runtime Scalability / Agent Reliability
- > AI 完整游戏搭建
+AI 完整游戏搭建
  > ECS
  > 深入渲染
- > MCP / Multi-Agent / Code Agent
+ > Multi-Agent / Code Agent
 ```
 
-当前冻结范围、8 周拆解和完成门槛详见
-[Pico 工程深度阶段路线](Pico_Engineering_Depth_Roadmap.zh-CN.md)。本阶段完成前不得以旧月份排期为理由
-启动 ECS、复杂渲染、更多 GAS、MCP 或 Code Agent。
+已完成的 8 周工程基线、性能数据和取舍详见
+[Pico 工程深度阶段路线](Pico_Engineering_Depth_Roadmap.zh-CN.md)。容器全面重写继续延期；后续仍不得以旧月份
+排期为理由同时启动 ECS、复杂渲染、更多 GAS、Multi-Agent 或 Code Agent。
 
 ## AI 架构决策
 
@@ -170,11 +171,140 @@ PackageProject
   但不能自行提升权限，也不能默认执行任意脚本。
 - RAG：先实现反射、AssetRegistry、当前 World、选中对象、文档、Message Log 和构建错误的确定性检索；
   语料规模证明需要后，再增加关键词与 Embedding 混合召回。检索内容始终是不可信数据。
-- MCP：`AgentToolRegistry` 稳定后增加本地 `stdio` Server Adapter。MCP 是互操作协议，不是 Agent Runtime
-  或安全边界；Pico 内部架构不得依赖 MCP。
+- MCP：参考 UE 实验性 MCP 插件的 Toolset 与本地 Server 组织方式，在共享执行服务稳定后增加本地
+  Streamable HTTP Server Adapter。MCP 是互操作协议，不是 Agent Runtime 或安全边界；Pico 内部架构不得
+  依赖 MCP，内置聊天也不得绕过统一 Harness 去调用另一套工具链。
 - LangGraph：后期通过 `IAgentRuntime` 增加可选后端，使用相同工具和评测集比较，不作为第一版前置依赖。
 - 多 Agent：主线暂不实现。一个 Agent、确定性工具、验证器和有限修复循环足以完成首个 Demo。
 - Memory：从第一版保存显式 Session Event 和摘要，不使用不可审计的供应商隐式记忆作为事实来源。
+
+## 已完成基线：Pico MCP 四周纵向切片
+
+### 定位与时机
+
+本阶段在通用 Actor Replication、碰撞 Profile 与网络语义收尾后开始，优先于 AI 完整游戏搭建、ECS、复杂渲染、
+更多 GAS、Multi-Agent 和 Code Agent。底层容器全面替换没有被重新提上日程；只有 Profiler 和固定 Benchmark
+证明现有容器形成真实瓶颈时，才建立单独优化任务。
+
+Pico MCP 的目标不是再造一个 Agent Harness，也不是让外部客户端直接获得编辑器权限，而是把已经存在的工具、
+审批、事务、验证和日志能力以标准协议安全地开放给 Codex、Claude、MCP Inspector 等外部客户端。参考 UE 的
+方向是“嵌入式本地 Server + Toolset”，Pico 保留自身 C++ Harness、反射、Game Thread 和编辑器事务边界。
+
+```text
+外部 MCP Client
+  -> 本地 Streamable HTTP
+  -> Pico MCP Server
+  -> Toolset Adapter
+  -> FEditorAgentExecutionService
+  -> AgentToolRegistry
+  -> Validate / Permission / Approval / Transaction / Execute / Verify
+  -> Game Thread
+```
+
+`FEditorAgentToolExecutor` 是底层工具入口；Game Thread 投递、交互审批、Operation Journal 和异步操作等待已在
+第 1 周提取到共享执行服务。内置聊天和后续 MCP Adapter 都依赖该服务。禁止让 MCP 直接调用 Editor Executor、
+复制第二套审批管线或绕过 Game Thread。
+
+### 第 1 周：共享执行服务
+
+状态：**已完成**。实现与自动化验收见
+[MCP 第 1 周：共享 Editor Agent 执行服务](McpWeek01_SharedEditorAgentExecutionService.zh-CN.md)。
+
+任务：
+
+- 新增 `FEditorAgentExecutionService`，统一 Game Thread Dispatch、Approval Queue、Operation Journal、取消、
+  Trace、并发控制以及 Play/Package 等异步操作的最终完成等待；
+- 为一次外部调用分配稳定的 `SessionId/RunId/ToolCallId`，并与现有 Event Log、Journal 和 Tool Result 对齐；
+- 将内置 DeepSeek/Kimi Chat Workspace 迁移到共享服务，UI 只负责会话展示、用户审批和取消，不再拥有执行语义；
+- 为只读并发、修改串行、取消和编辑器关闭增加确定性测试。
+
+周末验收：内置聊天功能与审批体验无回归；同一 Tool Call 在 UI 与无 UI 测试入口得到相同结构化结果；任何
+编辑器对象修改只发生在 Game Thread；关闭会话或编辑器后不会留下延迟副作用。
+
+### 第 2 周：传输无关的 MCP Core
+
+状态：**已完成**。实现与自动化验收见
+[MCP 第 2 周：传输无关协议核心](McpWeek02_TransportIndependentCore.zh-CN.md)。
+
+任务：
+
+- 新增独立 `PicoMcpCore`，实现 JSON-RPC 2.0 请求、响应、Notification、批次拒绝策略和结构化错误；
+- 以当前 `2026-07-28` 无状态规范为主，实现每请求 `_meta`、`server/discover`、`ping` 和取消；同时提供有界的
+  `2025-11-25` `initialize` / `notifications/initialized` 兼容入口；
+- 实现最小工具协议：`tools/list` 与 `tools/call`，并对请求体、参数深度、字符串长度、超时和会话数设置上限；
+- 以 Fake Transport 覆盖乱序、重复 ID、未知方法、非法 JSON、取消、超时和 Session 关闭，不在本周接真实端口。
+
+周末验收：MCP Core 不依赖 Editor、HTTP 或具体 Tool；协议错误稳定映射为 JSON-RPC Error；工具执行失败保留为
+MCP Tool Result 的 `isError=true`，不会错误地变成传输失败。
+
+### 第 3 周：Toolset Adapter 与安全闭环
+
+状态：**已完成**。实现与自动化验收见
+[MCP 第 3 周：Toolset Adapter 与安全闭环](McpWeek03_ToolsetAdapterAndSafety.zh-CN.md)。
+
+任务：
+
+- 将现有 `IAgentCapabilityProvider` 组合为可版本化 Toolset，第一版默认只暴露
+  `list_toolsets`、`describe_toolset`、`call_tool` 三个元工具；
+- 将 `FAgentToolSchema` 映射为 MCP `inputSchema`，将 `FAgentToolResult` 的 Facts、Artifacts、Diagnostics、
+  StateChanges、RevisionChanges、RecoveryHint 和 Trace 映射为结构化结果；
+- 读写调用继续经过 Validate、Permission、Approval、Transaction、Execute、Verify 和 Journal，不把 MCP 当作
+  身份认证或权限边界；
+- 默认不自动暴露所有 `PFunction`。新增能力仍需 Capability Provider、Schema、权限、Verifier 和 Eval；
+- 为只读世界查询、属性修改、拒绝审批、Undo/Redo、未知 Toolset 和 Prompt Injection 增加固定测试。
+
+补充实现决策：JSON-RPC ID 不作为持久化幂等键；默认调用分配新 ToolCall ID，需要重试恢复时由客户端显式提供
+`operation_id`。MCP 取消通过外部取消查询桥继续传入 Agent 与共享 Editor 执行服务。
+
+周末验收：外部调用与内置聊天共享完全相同的工具结果和副作用规则；审批拒绝时 Revision 不变且零副作用；批准
+后可通过 Undo 撤销；Toolset 可以独立启停而不修改 MCP Core。
+
+### 第 4 周：本地 Streamable HTTP 与真实验收
+
+状态：**已完成**。实现、安全边界、自动化和真实客户端验收见
+[MCP 第 4 周：本地 Streamable HTTP 与真实验收](McpWeek04_LocalStreamableHttpAndAcceptance.zh-CN.md)。
+
+任务：
+
+- 通过隔离的成熟 HTTP Server 依赖实现 Streamable HTTP，不手写 HTTP Parser；实现本地 MCP Endpoint 的
+  `POST`、现代每请求协议 Header、事件投递、取消和有界输出；仅旧协议兼容路径保留有界 Session；
+- 在 Editor Settings 中提供启动/停止、端口、Endpoint、已连接 Session、复制客户端配置和诊断状态；
+- 默认关闭且只绑定 `127.0.0.1`，校验 `Host/Origin`，使用保存在 Git 忽略本地配置中的随机 Bearer Token；
+- API Key、Credential、本地私有配置和任意文件系统内容不得作为 Resource 或 Tool Result 暴露；
+- 使用 MCP Inspector 和至少一个真实外部客户端完成查询 World、审批修改、Undo、取消、Play/Package 最终结果
+  回传的端到端验收。
+
+周末验收：Server 关闭时没有监听端口和持续帧开销；默认客户端只看到三个元工具；中文审批可用；请求取消或
+Transport 断开后未执行修改不会迟到生效；Play/Package 返回最终完成状态而非“已启动”；内置 DeepSeek/Kimi
+行为无回归。
+
+### 固定安全边界
+
+- 第一版仅用于本地 Development Editor，不进入 Shipping Runtime，不支持公网、局域网或远程 Host；
+- 修改操作串行执行，只读操作也必须遵守快照、Revision 与 Game Thread 访问规则；
+- 限制请求大小、并发请求、旧协议 Session、单调用时间、返回结果和 Artifact 生命周期，所有取消必须可审计；
+- MCP Token 与 Provider API Key 分离，均不得提交 Git；外部客户端不能查询、替换或打印 Provider API Key；
+- MCP Adapter 只做协议映射，安全判断归现有 Harness。任何新客户端都不能获得比内置聊天更高的权限；
+- UE MCP 仍属于实验性参考，因此 Pico 的协议层、HTTP 层和 Editor Adapter 必须独立模块化，可单独替换或关闭。
+
+### 明确不做
+
+- MCP Client、Sampling、Multi-Agent 协调、远程公网 Server、OAuth、多租户和云端部署；
+- 自动把全部反射函数变成工具、模型任意执行 Shell、绕过审批的批量写入；
+- 用 MCP 替换 Harness、Skill、RAG、Tool Registry、事务、验证器或 Project Knowledge Store；
+- 第一版不扩展完整 Resources/Prompts。后续若有真实需求，只优先把 Project Knowledge Store 作为只读、可审计
+  Resource 暴露。
+
+### 综合完成门槛
+
+1. Server 默认关闭，关闭时没有监听、后台线程和可测量的持续帧成本；
+2. MCP Inspector 与真实客户端均能完成现代 `server/discover`（或旧版兼容初始化）、列举 Toolset、查询 World
+   和调用受控工具；
+3. 修改工具必须触发中文审批，拒绝零副作用，批准后可验证并可 Undo；
+4. 工具执行保持 Game Thread 正确性，请求取消或 Transport 关闭后不会产生迟到修改；
+5. Play/Package、错误、Artifact、Trace 和 Revision 使用结构化结果返回，不依赖解析自然语言；
+6. 敏感配置不会进入 Tool Schema、Resource、日志或响应；
+7. MCP Core、Adapter、安全故障注入、真实 Editor Smoke 和现有 Agent Golden Tests 全部通过。
 
 ## 第 7 月：Pico Agent 基础
 
@@ -231,7 +361,8 @@ StateRevision 下缓存等价只读查询，并以分类预算和连续无进展
 
 进入 Mini GAS 前已经追加完成 SSE Streaming、可审计 Project Knowledge Store、确定性 RAG Lite 和 Pico Skill
 v0。当前来源覆盖项目文本、World、AssetRegistry、选择对象反射、工具 Schema 与 Message Log；四个内置 Skill
-同时裁剪 Provider Schema 并在执行器侧限制工具。Embedding、MCP 与跨项目长期知识仍延期。详见
+同时裁剪 Provider Schema 并在执行器侧限制工具。该阶段当时延期了 Embedding、MCP 与跨项目长期知识；
+本地 MCP Server 现已按本文四周纵向切片重新排入下一阶段，其他两项继续延期。详见
 [`AIPhase08_StreamingKnowledgeRagAndSkills.md`](AIPhase08_StreamingKnowledgeRagAndSkills.md)。
 Agent 阶段收尾已将 Intent Router 提取到 `PicoAgentCore`，当前已冻结 39 条中英文生产提示评测，覆盖 Play/Package
 否定语义、场景/角色 Skill 和多 Skill 组合。后续 Gameplay 模块必须通过扩展该评测集接入 Agent，不能在聊天
@@ -264,7 +395,8 @@ Pico 保留自研 C++ Harness，不为了功能数量迁移到 LangChain/LangGra
 
 - 多 Agent、Handoff 和并行子 Agent：单 Agent 的 Gameplay/资产/构建职责出现可测量瓶颈后再引入。
 - LangChain/LangGraph 运行时迁移：只参考 Checkpoint、Interrupt 和 State Graph 思想，不替换 Pico 的 C++/Game Thread 集成。
-- 完整 MCP 生态、跨项目长期记忆、Embedding/向量数据库：先由真实检索 Eval 证明现有 RAG Lite 不足。
+- MCP Client、远程公网接入、跨项目长期记忆、Embedding/向量数据库：先由真实用例和 Eval 证明需要；本地
+  MCP Server 纵向切片按下文四周计划实施。
 - 云端 Trace、分布式任务队列、多租户与远程 Worker：本地单用户编辑器阶段不实现。
 - 任意 Shell、无约束脚本和模型直接写字节码：不作为成熟度升级方向。
 
@@ -681,7 +813,8 @@ PrimitiveComponent
 2. 必须保留自研最小 Harness、Event Log、Tool Policy、审批和评测。
 3. 必须保留场景 Agent、Mini GAS 核心和 PicoGraph 编译/VM 纵向切片。
 4. 优先完成 AI 创建简单单机场景和玩法，再扩展双人联网验收。
-5. MCP、LangGraph、Embedding RAG 和 C++ 自动生成均可延期。
+5. MCP Server 只保留下文定义的本地四周纵向切片；MCP Client、LangGraph、Embedding RAG 和 C++ 自动生成
+   均可延期。
 6. ECS 只保留纵向切片，不改写现有 Actor 架构。
 7. 深入渲染先完成架构边界，不同时追求多图形 API 和光线追踪。
 8. 不得通过开放任意 Shell、删除审批、跳过事务或放宽执行预算换取表面进度。

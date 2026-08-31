@@ -40,6 +40,9 @@ Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小
   Session；API Key 保存在被 Git 忽略的编辑器本地目录，所有项目共享且不会暴露给 Agent 工具。Harness 使用
   StateRevision 语义缓存、结构化 Progress Ledger、分类预算
   和连续无进展检测约束重复查询。
+- 可选择在 AI Chat 中开启本地 MCP Streamable HTTP Server；它默认关闭且只绑定 `127.0.0.1`，验证
+  Host、Origin 和 Git 忽略的独立 Bearer Token，外部客户端默认只看到三个 Toolset 元工具。MCP 调用继续复用
+  内置聊天相同的审批、事务、验证、取消与 Game Thread 执行边界。
 - 运行类似 UE 的 `PreInit -> Init -> Tick -> Exit` 引擎循环。
 - 通过位于 `PicoCore` 的低开销 CPU Profiler 记录 Frame/Thread/Parent Scope，导出 Chrome Trace 和聚合 JSON；
   独立 `PicoRuntimeBenchmarks` 以 Quick/Full 两档测量真实 Object、Tick、GC 和 Replication 路径并输出版本化
@@ -577,8 +580,12 @@ private:
 
 相关文档：
 
-- [AI 优先后续开发路线（当前首要计划）](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)
-- [工程深度 8 周路线（当前最高优先级）](Docs/Pico_Engineering_Depth_Roadmap.zh-CN.md)
+- [AI 优先后续开发路线（含已完成 MCP 四周纵向切片）](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)
+- [MCP 第 1 周：共享 Editor Agent 执行服务](Docs/McpWeek01_SharedEditorAgentExecutionService.zh-CN.md)
+- [MCP 第 2 周：传输无关的双时代协议核心](Docs/McpWeek02_TransportIndependentCore.zh-CN.md)
+- [MCP 第 3 周：Toolset Adapter 与安全闭环](Docs/McpWeek03_ToolsetAdapterAndSafety.zh-CN.md)
+- [MCP 第 4 周：本地 Streamable HTTP 与真实客户端验收](Docs/McpWeek04_LocalStreamableHttpAndAcceptance.zh-CN.md)
+- [工程深度 8 周路线（已完成工程基线）](Docs/Pico_Engineering_Depth_Roadmap.zh-CN.md)
 - [工程深度第 1 周：Profiler、Runtime Benchmark 与 Agent Metrics](Docs/EngineeringDepthWeek01_MeasurementFoundation.zh-CN.md)
 - [工程深度第 2 周：Runtime 基线与 Agent 失败语义](Docs/EngineeringDepthWeek02_BaselineAndFailureSemantics.zh-CN.md)
 - [工程深度第 3 周：Object Index 与 Agent Capability Provider](Docs/EngineeringDepthWeek03_ObjectIndexAndAgentCapabilities.zh-CN.md)

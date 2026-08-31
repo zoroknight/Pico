@@ -2,16 +2,16 @@
 
 ## 文档定位
 
-本文档记录 Pico 当前最高优先级的 8 周工程加固阶段：
+本文档记录 Pico 已完成的 8 周工程加固阶段：
 
 ```text
 Profiler + Runtime Scalability
 Agent Reliability + Decoupling
 ```
 
-在本阶段完成前，AI 游戏搭建、ECS、深入渲染、更完整 GAS、MCP、Multi-Agent 和 Code Agent 全部顺延。
-后续对话、规划和实施如果与其他未完成排期冲突，以本文档为准。总体长期目标仍由
-[AI 优先后续开发路线](Pico_AI_First_Development_Roadmap.zh-CN.md) 记录。
+本阶段已经通过自动化综合验收并成为后续工作的工程基线。MCP 四周纵向切片也已经完成，其结果与后续优先级由
+[AI 优先后续开发路线](Pico_AI_First_Development_Roadmap.zh-CN.md) 记录；本文档继续作为 Profiler、Runtime
+Scalability、Agent Reliability 和 Decoupling 的历史依据。
 
 性能优化的跨周总账见[性能优化总览与追踪记录](Pico_Performance_Optimization_Log.zh-CN.md)。
 
@@ -499,9 +499,9 @@ Token/Latency、ForbiddenSideEffect 和 RecoverableFailureRecoveryRate。
 - 形成“采用了什么、拒绝了什么、为什么”的工程报告；
 - 只有门槛全部通过后，才恢复 Agent 游戏搭建闭环。
 
-## 冻结范围
+## 阶段内冻结范围（历史）
 
-8 周内暂缓：
+8 周实施期间暂缓：
 
 - ECS 和全面数据导向迁移；
 - 新渲染效果、RHI 扩展和光线追踪；
@@ -517,6 +517,8 @@ Token/Latency、ForbiddenSideEffect 和 RecoverableFailureRecoveryRate。
 
 ```text
 工程深度阶段通过
+ -> 通用 Actor Replication 与碰撞语义收尾
+ -> Pico MCP 四周纵向切片
  -> Agent 游戏制作链路六周阶段
  -> 以第二个不同玩法验证复用性
  -> 再评估 ECS 是否有高密度真实用例

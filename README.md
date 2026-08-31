@@ -69,6 +69,10 @@ The current implementation can:
   marks, without changing persisted or copied UTF-8.
 - Restore the last selected AI Provider and its model across projects from the Git-ignored,
   editor-local `Saved/Editor/Agent/ChatSettings.ini`; project handoff settings take precedence.
+- Expose the existing Editor Agent execution chain through an optional local MCP Streamable HTTP server.
+  It is disabled by default, binds only `127.0.0.1`, validates Host/Origin and a Git-ignored bearer token,
+  and advertises only three Toolset meta-tools; external calls still use the same approval, transaction,
+  verification, cancellation, and Game Thread boundaries as built-in chat.
 - Stream OpenAI-compatible text and Tool Call fragments over SSE while persisting only aggregate
   messages; ground turns through an audited project Knowledge Store and bounded cited RAG Lite, then
   narrow both advertised and executable tools with versioned Pico Skills.
@@ -756,8 +760,12 @@ the existing `PClass`, `PProperty`, and `PFunction` runtime. Generated files liv
 
 See:
 
-- [AI-First Development Roadmap (Chinese)](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)
-- [Engineering Depth: Profiler, Runtime Scalability, and Agent Reliability (Chinese)](Docs/Pico_Engineering_Depth_Roadmap.zh-CN.md)
+- [AI-First Development Roadmap, including the next four-week MCP slice (Chinese)](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)
+- [MCP Week 1: Shared Editor Agent Execution Service (Chinese)](Docs/McpWeek01_SharedEditorAgentExecutionService.zh-CN.md)
+- [MCP Week 2: Transport-Independent Dual-Era Protocol Core (Chinese)](Docs/McpWeek02_TransportIndependentCore.zh-CN.md)
+- [MCP Week 3: Toolset Adapter and Safety Closure (Chinese)](Docs/McpWeek03_ToolsetAdapterAndSafety.zh-CN.md)
+- [MCP Week 4: Local Streamable HTTP and Real Client Acceptance (Chinese)](Docs/McpWeek04_LocalStreamableHttpAndAcceptance.zh-CN.md)
+- [Completed Engineering Depth Baseline: Profiler, Runtime Scalability, and Agent Reliability (Chinese)](Docs/Pico_Engineering_Depth_Roadmap.zh-CN.md)
 - [Engineering Depth Week 1: Measurement Foundation (Chinese)](Docs/EngineeringDepthWeek01_MeasurementFoundation.zh-CN.md)
 - [Engineering Depth Week 4: Tick Cache and Structured Tool Result (Chinese)](Docs/EngineeringDepthWeek04_TickCacheAndStructuredToolResult.zh-CN.md)
 - [Engineering Depth Week 4 Gate: Frame Pacing Correctness (Chinese)](Docs/EngineeringDepthWeek04_FramePacingCorrectness.zh-CN.md)

@@ -1,7 +1,7 @@
 # Pico 剩余开发路线
 
-> 当前最高优先级已调整为 8 周工程深度阶段，任务、实施顺序和验收标准以
-> [`Pico_Engineering_Depth_Roadmap.zh-CN.md`](Pico_Engineering_Depth_Roadmap.zh-CN.md) 为准；后续长期阶段以
+> 8 周工程深度、通用 Actor Replication/碰撞语义和 MCP 四周纵向切片均已完成；下一阶段任务仍以
+> 任务、实施顺序和验收标准以
 > [`Pico_AI_First_Development_Roadmap.zh-CN.md`](Pico_AI_First_Development_Roadmap.zh-CN.md) 为准。
 > 本文档继续保留已完成基线、历史计划和长期架构决策；文档冲突时优先采用新的专项路线。
 
@@ -1026,5 +1026,6 @@ Package Evidence，再进入 ECS。详细范围与验收以
 - 每完成一个阶段，更新对应表格和“当前完成基线”。
 - 新计划不得重新列入已经验收完成的任务。
 - 改变系统边界、网络范围或最终 Demo 时，必须同步修改“固定架构决策”。
-- 当前 8 周任务以 `Pico_Engineering_Depth_Roadmap.zh-CN.md` 为最高优先依据；长期排期以 AI-first 路线为准。
+- 已完成的 8 周工程基线以 `Pico_Engineering_Depth_Roadmap.zh-CN.md` 为依据；当前 MCP 与长期排期以 AI-first
+  路线为准。
 - AI 游戏制作阶段的具体范围、周计划和完成门槛以 `AgentGameCreationPipeline.zh-CN.md` 为优先依据；若与本文旧描述冲突，以该专项文档为准。

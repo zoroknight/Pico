@@ -26,10 +26,12 @@ class FCancellationToken
 {
 public:
     explicit FCancellationToken(std::weak_ptr<FTaskSharedState> State);
+    explicit FCancellationToken(std::function<bool()> CancellationQuery);
     bool IsCancellationRequested() const;
 
 private:
     std::weak_ptr<FTaskSharedState> State;
+    std::function<bool()> CancellationQuery;
 };
 
 class FTaskHandle

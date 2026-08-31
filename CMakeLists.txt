@@ -42,6 +42,20 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(jolt)
 
+# Keep the local MCP listener on a maintained HTTP implementation. Pico owns
+# the MCP binding and security policy, not an ad-hoc HTTP parser.
+set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+set(HTTPLIB_USE_ZSTD_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    cpp_httplib
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+    # v0.51.0, pinned to an immutable commit for reproducible builds.
+    GIT_TAG d66d9a95997d51a8ba9822a611d1267757741535
+)
+FetchContent_MakeAvailable(cpp_httplib)
+
 option(PICO_FETCH_ASSIMP "Download Assimp for glTF/FBX skeletal animation import" OFF)
 set(PICO_ASSIMP_SOURCE_DIR
     "${PICO_ROOT_DIR}/ThirdParty/Assimp"
@@ -163,6 +177,75 @@ if(MSVC)
     target_compile_options(PicoAgentCore PRIVATE /W4 /permissive-)
 else()
     target_compile_options(PicoAgentCore PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_library(PicoMcpCore STATIC
+    Source/Developer/Mcp/Private/McpServerCore.cpp
+)
+
+target_include_directories(PicoMcpCore
+    PUBLIC
+        Source/Developer/Mcp/Public
+    PRIVATE
+        ThirdParty/NlohmannJson/single_include
+)
+
+target_link_libraries(PicoMcpCore PUBLIC PicoCore Threads::Threads)
+set_target_properties(PicoMcpCore PROPERTIES FOLDER "Pico/Developer")
+
+if(MSVC)
+    target_compile_options(PicoMcpCore PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoMcpCore PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_library(PicoMcpAgentAdapter STATIC
+    Source/Developer/McpAdapter/Private/McpAgentToolsetAdapter.cpp
+)
+
+target_include_directories(PicoMcpAgentAdapter
+    PUBLIC
+        Source/Developer/McpAdapter/Public
+    PRIVATE
+        ThirdParty/NlohmannJson/single_include
+)
+
+target_link_libraries(PicoMcpAgentAdapter
+    PUBLIC
+        PicoMcpCore
+        PicoAgentCore
+)
+set_target_properties(PicoMcpAgentAdapter PROPERTIES FOLDER "Pico/Developer")
+
+if(MSVC)
+    target_compile_options(PicoMcpAgentAdapter PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoMcpAgentAdapter PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_library(PicoMcpHttp STATIC
+    Source/Developer/McpHttp/Private/McpHttpServer.cpp
+)
+
+target_include_directories(PicoMcpHttp
+    PUBLIC
+        Source/Developer/McpHttp/Public
+    PRIVATE
+        ThirdParty/NlohmannJson/single_include
+)
+
+target_link_libraries(PicoMcpHttp
+    PUBLIC
+        PicoMcpCore
+    PRIVATE
+        httplib::httplib
+)
+set_target_properties(PicoMcpHttp PROPERTIES FOLDER "Pico/Developer")
+
+if(MSVC)
+    target_compile_options(PicoMcpHttp PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoMcpHttp PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_library(PicoPackaging STATIC
@@ -815,6 +898,7 @@ if(PICO_BUILD_INSPECTOR)
 
     add_library(PicoEditorCore STATIC
         Source/Editor/PicoEditor/Private/AssetDependencyService.cpp
+        Source/Editor/PicoEditor/Private/EditorAgentExecutionService.cpp
         Source/Editor/PicoEditor/Private/EditorAgentTools.cpp
         Source/Editor/PicoEditor/Private/EditorAssetSelection.cpp
         Source/Editor/PicoEditor/Private/EditorAssetService.cpp
@@ -822,6 +906,7 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Private/EditorPropertyService.cpp
         Source/Editor/PicoEditor/Private/PlaySession.cpp
         Source/Editor/PicoEditor/Private/EditorProjectManager.cpp
+        Source/Editor/PicoEditor/Private/EditorRuntimeFreshness.cpp
         Source/Editor/PicoEditor/Private/EditorSceneClipboard.cpp
         Source/Editor/PicoEditor/Private/EditorSelection.cpp
         Source/Editor/PicoEditor/Private/EditorTransformService.cpp
@@ -829,8 +914,10 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Private/EditorWorldDocument.cpp
         Source/Editor/PicoEditor/Public/Pico/Editor/EditorPropertyService.h
         Source/Editor/PicoEditor/Public/Pico/Editor/EditorProjectManager.h
+        Source/Editor/PicoEditor/Public/Pico/Editor/EditorRuntimeFreshness.h
         Source/Editor/PicoEditor/Public/Pico/Editor/PlaySession.h
         Source/Editor/PicoEditor/Public/Pico/Editor/AssetDependencyService.h
+        Source/Editor/PicoEditor/Public/Pico/Editor/EditorAgentExecutionService.h
     )
 
     target_include_directories(PicoEditorCore
@@ -844,6 +931,7 @@ if(PICO_BUILD_INSPECTOR)
             PicoAssetImport
             PicoAgentCore
             PicoGameplayAbilities
+            PicoMcpAgentAdapter
     )
 
     target_include_directories(PicoEditorCore PRIVATE ThirdParty/NlohmannJson/single_include)
@@ -931,6 +1019,7 @@ if(PICO_BUILD_INSPECTOR)
             PicoImGuizmo
             PicoMd4c
             PicoEditorCore
+            PicoMcpHttp
             PicoEngine
             PicoRender
             PicoTasks
@@ -979,6 +1068,7 @@ if(PICO_BUILD_INSPECTOR)
     target_link_libraries(PicoEditorTests
         PRIVATE
             PicoEditorCore
+            PicoMcpHttp
             PicoRender
     )
 
@@ -1021,6 +1111,57 @@ if(MSVC)
     target_compile_options(PicoAgentTests PRIVATE /W4 /permissive-)
 else()
     target_compile_options(PicoAgentTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(PicoMcpTests
+    Tests/Mcp/Private/Main.cpp
+)
+
+target_include_directories(PicoMcpTests PRIVATE
+    Tests/Common
+    ThirdParty/NlohmannJson/single_include
+)
+target_link_libraries(PicoMcpTests PRIVATE PicoMcpCore)
+set_target_properties(PicoMcpTests PROPERTIES FOLDER "Tests/Developer")
+
+if(MSVC)
+    target_compile_options(PicoMcpTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoMcpTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(PicoMcpAdapterTests
+    Tests/McpAdapter/Private/Main.cpp
+)
+
+target_include_directories(PicoMcpAdapterTests PRIVATE
+    Tests/Common
+    ThirdParty/NlohmannJson/single_include
+)
+target_link_libraries(PicoMcpAdapterTests PRIVATE PicoMcpAgentAdapter)
+set_target_properties(PicoMcpAdapterTests PROPERTIES FOLDER "Tests/Developer")
+
+if(MSVC)
+    target_compile_options(PicoMcpAdapterTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoMcpAdapterTests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(PicoMcpHttpTests
+    Tests/McpHttp/Private/Main.cpp
+)
+
+target_include_directories(PicoMcpHttpTests PRIVATE
+    Tests/Common
+    ThirdParty/NlohmannJson/single_include
+)
+target_link_libraries(PicoMcpHttpTests PRIVATE PicoMcpHttp httplib::httplib)
+set_target_properties(PicoMcpHttpTests PROPERTIES FOLDER "Tests/Developer")
+
+if(MSVC)
+    target_compile_options(PicoMcpHttpTests PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoMcpHttpTests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_executable(PicoPackagingTests
@@ -1316,6 +1457,9 @@ if(BUILD_TESTING)
     add_test(NAME PicoCoreTests COMMAND PicoCoreTests)
     add_test(NAME PicoTaskTests COMMAND PicoTaskTests)
     add_test(NAME PicoAgentTests COMMAND PicoAgentTests)
+    add_test(NAME PicoMcpTests COMMAND PicoMcpTests)
+    add_test(NAME PicoMcpAdapterTests COMMAND PicoMcpAdapterTests)
+    add_test(NAME PicoMcpHttpTests COMMAND PicoMcpHttpTests)
     add_test(
         NAME PicoRuntimeBenchmarksSmoke
         COMMAND PicoRuntimeBenchmarks --quick
@@ -1347,6 +1491,15 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoAgentTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoMcpTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoMcpAdapterTests PROPERTIES
+        WORKING_DIRECTORY ${PICO_ROOT_DIR}
+    )
+    set_tests_properties(PicoMcpHttpTests PROPERTIES
         WORKING_DIRECTORY ${PICO_ROOT_DIR}
     )
     set_tests_properties(PicoRuntimeBenchmarksSmoke PROPERTIES

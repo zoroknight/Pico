@@ -127,8 +127,14 @@ FCancellationToken::FCancellationToken(std::weak_ptr<FTaskSharedState> InState)
 {
 }
 
+FCancellationToken::FCancellationToken(std::function<bool()> InCancellationQuery)
+    : CancellationQuery(std::move(InCancellationQuery))
+{
+}
+
 bool FCancellationToken::IsCancellationRequested() const
 {
+    if (CancellationQuery) return CancellationQuery();
     const std::shared_ptr<FTaskSharedState> Pinned = State.lock();
     return Pinned == nullptr || Pinned->bCancellationRequested.load();
 }

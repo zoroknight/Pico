@@ -5,14 +5,17 @@
 #include "Pico/Agent/AgentCredentialStore.h"
 #include "Pico/Agent/AgentIntent.h"
 #include "Pico/Agent/AgentKnowledgeStore.h"
-#include "Pico/Agent/AgentOperationJournal.h"
 #include "Pico/Agent/AgentProjectHandoff.h"
 #include "Pico/Agent/AgentSkill.h"
 #include "Pico/Agent/FakeAgentProvider.h"
 #include "Pico/Agent/OpenAICompatibleProvider.h"
 #include "Pico/Core/Config.h"
 #include "Pico/Core/Paths.h"
+#include "Pico/Editor/EditorAgentExecutionService.h"
 #include "Pico/Editor/EditorAgentTools.h"
+#include "Pico/Mcp/McpServerCore.h"
+#include "Pico/McpAdapter/McpAgentToolsetAdapter.h"
+#include "Pico/McpHttp/McpHttpServer.h"
 #include "Pico/Tasks/GameThreadDispatcher.h"
 
 #include <imgui.h>
@@ -47,6 +50,17 @@ namespace Pico
 namespace
 {
 using FJson = nlohmann::json;
+
+std::string LowerAscii(std::string_view Text)
+{
+    std::string Result(Text);
+    std::transform(Result.begin(), Result.end(), Result.begin(),
+        [](unsigned char Character)
+        {
+            return static_cast<char>(std::tolower(Character));
+        });
+    return Result;
+}
 
 enum class EChatProvider
 {
@@ -483,255 +497,6 @@ private:
     bool bShuttingDown = false;
 };
 
-class FGameThreadToolExecutor final : public IAgentToolExecutor
-{
-public:
-    FGameThreadToolExecutor(
-        FEditorAgentToolExecutor* InEditorTools,
-        FGameThreadDispatcher* InDispatcher,
-        std::filesystem::path OperationDirectory)
-        : EditorTools(InEditorTools), Dispatcher(InDispatcher)
-        , Journal(std::move(OperationDirectory))
-    {
-    }
-
-    void BeginRun(std::string_view RunId) override
-    {
-        DispatchRunLifecycle(std::string(RunId), EAgentStatus::Planning, true);
-    }
-
-    void EndRun(std::string_view RunId, EAgentStatus Status) override
-    {
-        DispatchRunLifecycle(std::string(RunId), Status, false);
-    }
-
-    bool RequiresApproval(const FAgentToolCall& Call) const override
-    {
-        if (!IntentError(Call).empty()) return false;
-        return EditorTools && EditorTools->RequiresApproval(Call);
-    }
-
-    bool IsReadOnly(const FAgentToolCall& Call) const override
-    {
-        return EditorTools && EditorTools->IsReadOnly(Call);
-    }
-
-    std::vector<std::string> GetRevisionReadSet(
-        const FAgentToolCall& Call) const override
-    {
-        return EditorTools ? EditorTools->GetRevisionReadSet(Call)
-            : std::vector<std::string>{"State.Revision"};
-    }
-
-    std::vector<std::string> GetRevisionWriteSet(
-        const FAgentToolCall& Call) const override
-    {
-        return EditorTools ? EditorTools->GetRevisionWriteSet(Call)
-            : std::vector<std::string>{"State.Revision"};
-    }
-
-    void PrepareApproval(const FAgentToolCall& Call) override
-    {
-        if (!IntentError(Call).empty()) return;
-        if (EditorTools) EditorTools->PrepareApproval(Call);
-    }
-
-    void SetTurnIntent(EAgentTurnIntent InIntent)
-    {
-        TurnIntent.store(InIntent);
-    }
-
-    void SetAllowedTools(const std::vector<FAgentSkill>& Skills)
-    {
-        std::lock_guard Lock(SkillMutex);
-        bSkillRestricted = !Skills.empty();
-        AllowedTools.clear();
-        for (const FAgentSkill& Skill : Skills)
-            AllowedTools.insert(
-                Skill.AllowedTools.begin(), Skill.AllowedTools.end());
-    }
-
-    FAgentToolResult Execute(
-        const FAgentToolCall& Call,
-        const FCancellationToken* CancellationToken) override
-    {
-        (void)CancellationToken;
-        LastTraceJson = "[]";
-        const std::string BlockedReason = IntentError(Call);
-        if (!BlockedReason.empty())
-        {
-            LastTraceJson = FailureTrace("Intent", BlockedReason);
-            return {Call.Id, false, "{}", BlockedReason, false};
-        }
-        const bool bDurable = !IsReadOnly(Call);
-        if (bDurable)
-        {
-            std::string JournalError;
-            if (const auto Recovered = Journal.FindApplied(Call, &JournalError))
-            {
-                LastTraceJson = FJson::array({{{"stage", "Recovery"},
-                    {"succeeded", true},
-                    {"message", "Recovered the previously applied tool result; handler was not called again"}}}).dump();
-                return *Recovered;
-            }
-            if (!JournalError.empty()
-                || !Journal.Prepare(Call, &JournalError)
-                || !Journal.MarkExecuting(Call, &JournalError))
-            {
-                LastTraceJson = FailureTrace("Journal", JournalError);
-                return {Call.Id, false, "{}",
-                    "Could not prepare durable operation: " + JournalError, false};
-            }
-        }
-        struct FSharedResult
-        {
-            std::mutex Mutex;
-            std::condition_variable Condition;
-            FAgentToolResult Result;
-            bool bDone = false;
-        };
-        auto Shared = std::make_shared<FSharedResult>();
-        FEditorAgentToolExecutor* Tools = EditorTools;
-        if (!Tools || !Dispatcher || Dispatcher->Post(
-                "Execute Agent editor tool",
-                [Shared, Tools, Call]()
-                {
-                    FAgentToolResult Result = Tools->Execute(Call, nullptr);
-                    {
-                        std::lock_guard Lock(Shared->Mutex);
-                        Shared->Result = std::move(Result);
-                        Shared->bDone = true;
-                    }
-                    Shared->Condition.notify_all();
-                }) == 0)
-        {
-            LastTraceJson = FailureTrace(
-                "Execute", "Game Thread dispatcher is unavailable");
-            return {Call.Id, false, "{}", "Game Thread dispatcher is unavailable", false};
-        }
-
-        std::unique_lock Lock(Shared->Mutex);
-        while (!Shared->bDone)
-        {
-            Shared->Condition.wait_for(Lock, std::chrono::milliseconds(10));
-        }
-        LastTraceJson = Tools->GetLastExecutionTraceJson();
-        FAgentToolResult Result = Shared->Result;
-        if (Result.bSucceeded)
-        {
-            Result = Tools->WaitForAsyncCompletion(
-                Call, std::move(Result), CancellationToken);
-            if (!Result.bSucceeded)
-            {
-                LastTraceJson = FailureTrace(
-                    "AsyncCompletion",
-                    Result.Error.empty()
-                        ? "Asynchronous tool operation failed" : Result.Error);
-            }
-        }
-        if (bDurable)
-        {
-            std::string JournalError;
-            if (!Journal.MarkApplied(Call, Result, &JournalError))
-            {
-                LastTraceJson = FailureTrace("Journal", JournalError);
-                return {Call.Id, false, "{}",
-                    "Tool returned, but its durable result could not be recorded; outcome may be uncertain: "
-                        + JournalError,
-                    false};
-            }
-        }
-        return Result;
-    }
-
-    void CommitDurableResult(const FAgentToolCall& Call) override
-    {
-        if (IsReadOnly(Call)) return;
-        std::string Error;
-        Journal.MarkCommitted(Call, &Error);
-    }
-
-    std::vector<FAgentOperationRecord> ListIncompleteOperations() const
-    {
-        return Journal.ListIncomplete();
-    }
-
-    std::string GetLastExecutionTraceJson() const override
-    {
-        return LastTraceJson;
-    }
-
-private:
-    void DispatchRunLifecycle(
-        std::string RunId,
-        EAgentStatus Status,
-        bool bBegin)
-    {
-        struct FCompletion
-        {
-            std::mutex Mutex;
-            std::condition_variable Condition;
-            bool bDone = false;
-        };
-        auto Completion = std::make_shared<FCompletion>();
-        FEditorAgentToolExecutor* Tools = EditorTools;
-        if (!Tools || !Dispatcher || Dispatcher->Post(
-                bBegin ? "Begin Agent Run ChangeSet" : "End Agent Run ChangeSet",
-                [Completion, Tools, RunId = std::move(RunId), Status, bBegin]()
-                {
-                    if (bBegin) Tools->BeginRun(RunId);
-                    else Tools->EndRun(RunId, Status);
-                    {
-                        std::lock_guard Lock(Completion->Mutex);
-                        Completion->bDone = true;
-                    }
-                    Completion->Condition.notify_all();
-                }) == 0)
-            return;
-        std::unique_lock Lock(Completion->Mutex);
-        while (!Completion->bDone)
-            Completion->Condition.wait_for(Lock, std::chrono::milliseconds(10));
-    }
-
-    static std::string FailureTrace(
-        std::string_view Stage,
-        std::string_view Message)
-    {
-        return FJson::array({{{"stage", Stage}, {"succeeded", false},
-            {"message", Message}}}).dump();
-    }
-
-    std::string IntentError(const FAgentToolCall& Call) const
-    {
-        {
-            std::lock_guard Lock(SkillMutex);
-            if (bSkillRestricted && !AllowedTools.contains(Call.Name))
-                return "The active Pico Skill does not allow tool '" + Call.Name + "'";
-        }
-        const EAgentTurnIntent Intent = TurnIntent.load();
-        if (Intent == EAgentTurnIntent::Play
-            && Call.Name == "editor.project.package")
-        {
-            return "This turn requests Play, not packaging. Do not package the project; call editor.play.start instead.";
-        }
-        if (Intent == EAgentTurnIntent::Package
-            && Call.Name == "editor.play.start")
-        {
-            return "This turn requests packaging, not Play. Do not start a Play Session; call editor.project.package instead.";
-        }
-        return {};
-    }
-
-    FEditorAgentToolExecutor* EditorTools = nullptr;
-    FGameThreadDispatcher* Dispatcher = nullptr;
-    FAgentOperationJournal Journal;
-    std::string LastTraceJson = "[]";
-    std::atomic<EAgentTurnIntent> TurnIntent {EAgentTurnIntent::General};
-    mutable std::mutex SkillMutex;
-    std::unordered_set<std::string> AllowedTools;
-    bool bSkillRestricted = false;
-};
-
 class FFakeSceneAgentProvider final : public IAgentProvider
 {
 public:
@@ -850,8 +615,15 @@ struct FAgentChatWorkspace::FImpl
                 std::move(StartPlay), std::move(StopPlay),
                 std::move(RestoreSnapshot),
                 FPaths::GetProjectSavedDir() / "Agent/ChangeSets"})
-        , GameThreadTools(&EditorTools, InDispatcher,
-            FPaths::GetProjectSavedDir() / "Agent/Operations")
+        , ExecutionService(&EditorTools, InDispatcher,
+            FPaths::GetProjectSavedDir() / "Agent/Operations",
+            [this](const FAgentToolCall& Call,
+                FAgentToolResult StartedResult,
+                const FCancellationToken* CancellationToken)
+            {
+                return EditorTools.WaitForAsyncCompletion(
+                    Call, std::move(StartedResult), CancellationToken);
+            })
         , RequestProjectOpen(std::move(InRequestProjectOpen))
     {
         std::snprintf(Model.data(), Model.size(), "%s", "offline-fake");
@@ -865,6 +637,7 @@ struct FAgentChatWorkspace::FImpl
         {
             Status = SkillError;
         }
+        InitializeMcpServer();
         std::string HandoffError;
         const std::optional<FAgentProjectHandoff> Handoff =
             ConsumeAgentProjectHandoff(FPaths::GetProjectRootDir(), &HandoffError);
@@ -892,6 +665,193 @@ struct FAgentChatWorkspace::FImpl
         RefreshSessionView();
         if (!HandoffError.empty()) Status = HandoffError;
         else if (Handoff) Status = "Project handoff restored this conversation";
+    }
+
+    std::filesystem::path GetMcpSettingsPath() const
+    {
+        const std::filesystem::path& EngineRoot = FPaths::GetEngineRootDir();
+        return EngineRoot.empty() ? std::filesystem::path {}
+            : EngineRoot / "Saved/Editor/McpServer.ini";
+    }
+
+    void SaveMcpSettings()
+    {
+        const std::filesystem::path Path = GetMcpSettingsPath();
+        if (Path.empty()) return;
+        FConfigFile Config;
+        Config.SetString("Server", "Enabled", bMcpEnabled ? "true" : "false");
+        Config.SetString("Server", "Port", std::to_string(McpPort));
+        Config.SetString("Server", "Endpoint", McpEndpoint);
+        Config.SetString("Server", "BearerToken", McpBearerToken);
+        if (McpAdapter)
+        {
+            for (const std::string& Toolset : McpAdapter->GetToolsetNames())
+                Config.SetString("Toolsets", Toolset,
+                    McpAdapter->IsToolsetEnabled(Toolset) ? "true" : "false");
+        }
+        if (!Config.Save(Path))
+            McpUiError = "Could not save editor-local MCP settings";
+    }
+
+    bool StartMcpServer()
+    {
+        if (!McpServer) return false;
+        FMcpHttpServerConfig Config;
+        Config.Port = static_cast<std::uint16_t>(McpPort);
+        Config.Endpoint = McpEndpoint;
+        Config.BearerToken = McpBearerToken;
+        std::string Error;
+        if (!McpServer->Start(std::move(Config), &Error))
+        {
+            McpUiError = std::move(Error);
+            return false;
+        }
+        McpUiError.clear();
+        return true;
+    }
+
+    void InitializeMcpServer()
+    {
+        McpAdapter = std::make_unique<FMcpAgentToolsetAdapter>(
+            ExecutionService, EditorTools.BuildToolCatalogJson(), "1.0.0",
+            [this](const FMcpToolCallContext&)
+            {
+                ExecutionService.SetSessionId("mcp-local");
+                ExecutionService.SetTurnIntent(EAgentTurnIntent::General);
+                ExecutionService.SetAllowedTools({});
+            });
+        if (!McpAdapter->IsValid())
+        {
+            McpUiError = McpAdapter->GetError();
+            return;
+        }
+        McpCore = std::make_unique<FMcpServerCore>(*McpAdapter,
+            FMcpServerInfo {"PicoEditor", "0.1.0",
+                "Pico Editor tools execute through approval, transaction, verification, and Game Thread dispatch."});
+        McpServer = std::make_unique<FMcpHttpServer>(*McpCore);
+
+        FConfigFile Config;
+        const std::filesystem::path Path = GetMcpSettingsPath();
+        if (!Path.empty()) Config.Load(Path);
+        bMcpEnabled = Config.GetBool("Server", "Enabled", false);
+        McpPort = std::clamp(Config.GetInt("Server", "Port", 8765), 1024, 65535);
+        McpEndpoint = Config.GetString("Server", "Endpoint", "/mcp");
+        std::snprintf(McpEndpointInput.data(), McpEndpointInput.size(), "%s",
+            McpEndpoint.c_str());
+        McpBearerToken = Config.GetString("Server", "BearerToken", "");
+        for (const auto& [Toolset, Enabled] : Config.GetSectionEntries("Toolsets"))
+        {
+            const std::string LowerEnabled = LowerAscii(Enabled);
+            McpAdapter->SetToolsetEnabled(Toolset,
+                LowerEnabled == "true" || LowerEnabled == "1"
+                    || LowerEnabled == "yes" || LowerEnabled == "on");
+        }
+        if (McpBearerToken.size() < 32)
+        {
+            McpBearerToken = GenerateMcpBearerToken();
+            SaveMcpSettings();
+        }
+        if (bMcpEnabled && !StartMcpServer()) bMcpEnabled = false;
+    }
+
+    void DrawMcpSettings()
+    {
+        if (!ImGui::CollapsingHeader("Local MCP Server")) return;
+        bool bEnabled = bMcpEnabled;
+        if (ImGui::Checkbox("Enabled##McpServer", &bEnabled))
+        {
+            if (bEnabled)
+            {
+                bMcpEnabled = StartMcpServer();
+            }
+            else
+            {
+                if (McpServer) McpServer->Stop();
+                bMcpEnabled = false;
+            }
+            SaveMcpSettings();
+        }
+
+        ImGui::BeginDisabled(bMcpEnabled);
+        ImGui::SetNextItemWidth(130.0f);
+        if (ImGui::InputInt("Port##McpServer", &McpPort))
+            McpPort = std::clamp(McpPort, 1024, 65535);
+        if (ImGui::IsItemDeactivatedAfterEdit()) SaveMcpSettings();
+        ImGui::SetNextItemWidth(180.0f);
+        if (ImGui::InputText("Endpoint##McpServer", McpEndpointInput.data(),
+                McpEndpointInput.size()))
+        {
+            McpEndpoint = McpEndpointInput.data();
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) SaveMcpSettings();
+        ImGui::EndDisabled();
+
+        const FMcpHttpServerStatus McpStatus = McpServer
+            ? McpServer->GetStatus() : FMcpHttpServerStatus {};
+        ImGui::SameLine();
+        ImGui::TextColored(McpStatus.bRunning
+                ? ImVec4(0.36f, 0.82f, 0.48f, 1.0f)
+                : ImVec4(0.72f, 0.72f, 0.72f, 1.0f),
+            McpStatus.bRunning ? "Running" : "Stopped");
+        ImGui::Text("Endpoint: http://127.0.0.1:%d%s",
+            McpPort, McpEndpoint.c_str());
+        ImGui::Text("Accepted: %llu | Rejected: %llu | Active: %llu",
+            static_cast<unsigned long long>(McpStatus.AcceptedRequests),
+            static_cast<unsigned long long>(McpStatus.RejectedRequests),
+            static_cast<unsigned long long>(McpStatus.ActiveRequests));
+
+        if (ImGui::Button("Copy Token"))
+        {
+            ImGui::SetClipboardText(McpBearerToken.c_str());
+            McpUiStatus = "MCP bearer token copied";
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Copy Client Config"))
+        {
+            const FJson ClientConfig = {
+                {"mcpServers", {{"pico-editor", {
+                    {"type", "http"},
+                    {"url", "http://127.0.0.1:" + std::to_string(McpPort)
+                        + McpEndpoint},
+                    {"protocolEra", "modern"},
+                    {"headers", {{"Authorization",
+                        "Bearer " + McpBearerToken}}}}}}}};
+            ImGui::SetClipboardText(ClientConfig.dump(2).c_str());
+            McpUiStatus = "MCP client config copied";
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(bMcpEnabled);
+        if (ImGui::Button("Regenerate Token"))
+        {
+            McpBearerToken = GenerateMcpBearerToken();
+            SaveMcpSettings();
+            McpUiStatus = "MCP bearer token regenerated";
+        }
+        ImGui::EndDisabled();
+
+        if (McpAdapter && ImGui::TreeNode("Exposed Toolsets"))
+        {
+            for (const std::string& Toolset : McpAdapter->GetToolsetNames())
+            {
+                bool bToolsetEnabled = McpAdapter->IsToolsetEnabled(Toolset);
+                if (ImGui::Checkbox(Toolset.c_str(), &bToolsetEnabled))
+                {
+                    McpAdapter->SetToolsetEnabled(Toolset, bToolsetEnabled);
+                    SaveMcpSettings();
+                }
+            }
+            ImGui::TreePop();
+        }
+        if (!McpUiStatus.empty())
+            ImGui::TextColored(ImVec4(0.50f, 0.82f, 0.62f, 1.0f),
+                "%s", McpUiStatus.c_str());
+        const std::string Error = !McpUiError.empty()
+            ? McpUiError : McpStatus.LastError;
+        if (!Error.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.42f, 0.36f, 1.0f),
+                "%s", Error.c_str());
+        ImGui::TextDisabled("Settings: %s",
+            GetMcpSettingsPath().string().c_str());
     }
 
     void RefreshSessionList(bool bSelectLatest)
@@ -1267,7 +1227,7 @@ struct FAgentChatWorkspace::FImpl
         if (!TaskSystem || bRunning.load() || Input[0] == '\0') return;
         const std::string Prompt = Input.data();
         Input.fill('\0');
-        GameThreadTools.SetTurnIntent(ClassifyAgentTurnIntent(Prompt));
+        const EAgentTurnIntent SelectedIntent = ClassifyAgentTurnIntent(Prompt);
         const EChatProvider SelectedProvider = Provider;
         const std::string SelectedModel = Model.data();
         const std::string SelectedProviderName =
@@ -1287,7 +1247,6 @@ struct FAgentChatWorkspace::FImpl
             return;
         }
         const std::vector<FAgentSkill> ActiveSkills = SkillRegistry.Select(Prompt);
-        GameThreadTools.SetAllowedTools(ActiveSkills);
         const std::string SkillContext =
             SkillRegistry.BuildSkillContextJson(ActiveSkills);
         const std::string ToolCatalog = SkillRegistry.FilterToolCatalogJson(
@@ -1319,11 +1278,15 @@ struct FAgentChatWorkspace::FImpl
             "Pico Agent chat turn",
             [this, Prompt, AgentProvider = std::move(SharedProvider),
                 SelectedProvider, SelectedProviderName, SelectedModel, SelectedSessionId,
-                SelectedSessionPath, KnowledgeContext, SkillContext](
+                SelectedSessionPath, KnowledgeContext, SkillContext,
+                SelectedIntent, ActiveSkills](
                 const FCancellationToken& Token) mutable
             {
                 std::string Error;
                 std::optional<std::filesystem::path> ProjectToOpen;
+                ExecutionService.SetSessionId(SelectedSessionId);
+                ExecutionService.SetTurnIntent(SelectedIntent);
+                ExecutionService.SetAllowedTools(ActiveSkills);
                 auto Session = FAgentSession::OpenOrCreate(
                     SelectedSessionId, SelectedSessionPath, &Error);
                 FAgentRunResult Result;
@@ -1349,7 +1312,7 @@ struct FAgentChatWorkspace::FImpl
                         bScrollToBottom.store(true);
                     };
                     FAgentRuntime Runtime(*Session, *AgentProvider,
-                        GameThreadTools, Budget, std::move(RuntimeContext));
+                        ExecutionService, Budget, std::move(RuntimeContext));
                     Result = Runtime.Run(Prompt, &Token);
                     if (Result.Status == EAgentStatus::Completed)
                     {
@@ -1599,6 +1562,7 @@ struct FAgentChatWorkspace::FImpl
             ImGui::TextDisabled(
                 "Environment variables override editor-local Saved/Editor/Agent/ApiKeys.ini values.");
         }
+        DrawMcpSettings();
 
         std::string CurrentStatus;
         std::vector<FChatLine> CurrentLines;
@@ -1647,7 +1611,7 @@ struct FAgentChatWorkspace::FImpl
             if (!MetricsRunId.empty()) ImGui::TextDisabled("Run: %s", MetricsRunId.c_str());
         }
         const std::vector<FAgentOperationRecord> IncompleteOperations =
-            GameThreadTools.ListIncompleteOperations();
+            ExecutionService.ListIncompleteOperations();
         if (!IncompleteOperations.empty()
             && ImGui::CollapsingHeader(
                 "Agent Recovery", ImGuiTreeNodeFlags_DefaultOpen))
@@ -1820,8 +1784,10 @@ struct FAgentChatWorkspace::FImpl
     void Shutdown()
     {
         if (bShutdown.exchange(true)) return;
+        if (McpServer) McpServer->Stop();
         Approval.Shutdown();
         if (ActiveTask) ActiveTask->RequestCancel();
+        ExecutionService.Shutdown();
     }
 
     FEngineLoop* EngineLoop = nullptr;
@@ -1832,7 +1798,10 @@ struct FAgentChatWorkspace::FImpl
     FAgentKnowledgeStore KnowledgeStore;
     FAgentSkillRegistry SkillRegistry;
     FEditorAgentToolExecutor EditorTools;
-    FGameThreadToolExecutor GameThreadTools;
+    FEditorAgentExecutionService ExecutionService;
+    std::unique_ptr<FMcpAgentToolsetAdapter> McpAdapter;
+    std::unique_ptr<FMcpServerCore> McpCore;
+    std::unique_ptr<FMcpHttpServer> McpServer;
     std::optional<FTaskHandle> ActiveTask;
     std::string SessionId;
     std::filesystem::path SessionPath;
@@ -1851,6 +1820,7 @@ struct FAgentChatWorkspace::FImpl
     std::array<char, 2048> Input {};
     std::array<char, 128> Model {};
     std::array<char, 640> ApiKeyInput {};
+    std::array<char, 128> McpEndpointInput {};
     EChatProvider Provider = EChatProvider::Fake;
     std::atomic<bool> bRunning {false};
     std::atomic<bool> bShutdown {false};
@@ -1860,6 +1830,12 @@ struct FAgentChatWorkspace::FImpl
     bool bStoredCredential = false;
     std::string CredentialError;
     std::string PreferenceError;
+    bool bMcpEnabled = false;
+    int McpPort = 8765;
+    std::string McpEndpoint = "/mcp";
+    std::string McpBearerToken;
+    std::string McpUiStatus;
+    std::string McpUiError;
     std::function<void(const std::filesystem::path&)> RequestProjectOpen;
 };
 

@@ -11,6 +11,7 @@
 #include "Pico/Core/PlatformProcess.h"
 #include "Pico/Core/Math/MathUtility.h"
 #include "Pico/Editor/EditorProjectManager.h"
+#include "Pico/Editor/EditorRuntimeFreshness.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/ActorBlueprint.h"
@@ -74,44 +75,6 @@ enum EDocumentAction
     DocumentActionOpenProject,
     DocumentActionExit
 };
-
-bool IsDevelopmentGameRuntimeStale(
-    const std::filesystem::path& GameExecutable,
-    std::string& OutDependency)
-{
-    if (FPaths::IsStaged()) return false;
-    std::error_code TimeError;
-    const auto GameTime = std::filesystem::last_write_time(
-        GameExecutable, TimeError);
-    if (TimeError) return false;
-
-#if defined(_WIN32)
-    constexpr std::string_view LibraryExtension = ".lib";
-#else
-    constexpr std::string_view LibraryExtension = ".a";
-#endif
-    static constexpr std::string_view RuntimeLibraries[] {
-        "PicoCore", "PicoTasks", "PicoObject", "PicoAsset", "PicoInput",
-        "PicoNetCore", "PicoGraph", "PicoPhysicsCore", "PicoPhysicsJolt",
-        "PicoEngine", "PicoRender", "PicoGameplayAbilities"
-    };
-    const std::filesystem::path Directory = GameExecutable.parent_path();
-    for (std::string_view LibraryName : RuntimeLibraries)
-    {
-        const std::filesystem::path Library = Directory
-            / (std::string(LibraryName) + std::string(LibraryExtension));
-        if (!std::filesystem::is_regular_file(Library)) continue;
-        const auto LibraryTime = std::filesystem::last_write_time(
-            Library, TimeError);
-        if (!TimeError && LibraryTime > GameTime)
-        {
-            OutDependency = Library.filename().string();
-            return true;
-        }
-        TimeError.clear();
-    }
-    return false;
-}
 
 bool DrawPlayStopButton(bool bGameRunning)
 {
