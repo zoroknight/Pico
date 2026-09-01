@@ -1,6 +1,7 @@
 #include "Pico/Editor/EditorCommandService.h"
 #include "Pico/Editor/EditorAgentExecutionService.h"
 #include "Pico/Editor/EditorAgentTools.h"
+#include "Pico/Editor/ExternalAgentConnector.h"
 #include "Pico/Editor/EditorRuntimeFreshness.h"
 #include "Pico/Mcp/McpServerCore.h"
 #include "Pico/McpAdapter/McpAgentToolsetAdapter.h"
@@ -57,6 +58,52 @@
 
 namespace
 {
+void TestExternalAgentConnector(FTestRunner& Runner)
+{
+    Pico::FCodexExternalAgentConnector Connector;
+    const std::string Secret = "pico-test-secret-that-must-not-be-copied";
+    const std::string Url = "http://127.0.0.1:8765/mcp";
+    const std::string Config =
+        Connector.GetClientConfig(Url);
+    Runner.Expect(
+        Config.find("[mcp_servers.pico_editor]") != std::string::npos
+            && Config.find("url = \"" + Url + "\"") != std::string::npos
+            && Config.find("bearer_token_env_var = \"PICO_MCP_BEARER_TOKEN\"")
+                != std::string::npos
+            && Config.find("list_toolsets") != std::string::npos
+            && Config.find("describe_toolset") != std::string::npos
+            && Config.find("call_tool") != std::string::npos
+            && Config.find(Secret) == std::string::npos
+            && Config.find("Authorization") == std::string::npos,
+        "Codex MCP config references a process environment variable and contains no secret");
+
+    Runner.Expect(Connector.GetId() == "codex"
+            && Connector.GetDisplayName() == "Codex"
+            && std::string_view(Connector.TokenEnvironmentVariable)
+                == "PICO_MCP_BEARER_TOKEN",
+        "External client identity is provided by its connector");
+
+    const std::filesystem::path Root = std::filesystem::temp_directory_path()
+        / "PicoExternalAgentConnectorTests";
+    const std::filesystem::path ConfigPath = Root / ".codex" / "config.toml";
+    std::error_code Error;
+    std::filesystem::remove_all(Root, Error);
+    std::filesystem::create_directories(ConfigPath.parent_path(), Error);
+    {
+        std::ofstream Stream(ConfigPath, std::ios::binary | std::ios::trunc);
+        Stream << Config;
+    }
+    const std::filesystem::path NestedProjectRoot =
+        Root / "Projects" / "NestedProject";
+    std::filesystem::create_directories(NestedProjectRoot, Error);
+    std::filesystem::path FoundPath;
+    Runner.Expect(
+        Connector.HasClientConfig(NestedProjectRoot, &FoundPath)
+            && FoundPath == ConfigPath,
+        "Codex connector finds one editor-scoped MCP config from nested projects");
+    std::filesystem::remove_all(Root, Error);
+}
+
 class FEditorAgentApproval final : public Pico::IAgentToolApproval
 {
 public:
@@ -2281,6 +2328,7 @@ void TestEditorWorldDocument(FTestRunner& Runner)
 int main()
 {
     FTestRunner Runner;
+    TestExternalAgentConnector(Runner);
     TestEditorAgentExecutionService(Runner);
     TestGameRuntimeFreshnessIgnoresEditorOnlyLibraries(Runner);
     TestEditorProjectManager(Runner);

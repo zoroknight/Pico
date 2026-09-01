@@ -87,6 +87,20 @@ Pico::FMcpHttpRequest Request(
     return Value;
 }
 
+Pico::FMcpHttpRequest StandardRequest(const FJson& Body)
+{
+    Pico::FMcpHttpRequest Value;
+    Value.Method = "POST";
+    Value.Path = "/mcp";
+    Value.Body = Body.dump();
+    Value.Headers = {
+        {"host", "127.0.0.1:18765"},
+        {"authorization", "Bearer 0123456789abcdef0123456789abcdef"},
+        {"content-type", "application/json; charset=utf-8"},
+        {"accept", "application/json, text/event-stream"}};
+    return Value;
+}
+
 void TestBinding(FTestRunner& Runner)
 {
     FProvider Provider;
@@ -142,6 +156,27 @@ void TestBinding(FTestRunner& Runner)
             && FJson::parse(ToolResult.Body)["result"]["isError"] == false,
         "Validated Streamable HTTP tool calls reach MCP Core exactly once");
 
+    const std::string StandardPeer = "standard-binding-session";
+    const Pico::FMcpHttpResponse Initialize = Binding.Handle(StandardRequest({
+        {"jsonrpc", "2.0"}, {"id", 20}, {"method", "initialize"},
+        {"params", {{"protocolVersion", "2026-07-28"},
+            {"capabilities", FJson::object()},
+            {"clientInfo", {{"name", "codex-test"}, {"version", "1"}}}}}}),
+        StandardPeer);
+    Runner.Expect(Initialize.Status == 200
+            && FJson::parse(Initialize.Body)["result"]["protocolVersion"]
+                == std::string(Pico::McpProtocolLegacy),
+        "Standard Streamable HTTP initialize reaches the compatibility core");
+    const Pico::FMcpHttpResponse Initialized = Binding.Handle(StandardRequest({
+        {"jsonrpc", "2.0"}, {"method", "notifications/initialized"}}),
+        StandardPeer);
+    const Pico::FMcpHttpResponse StandardTools = Binding.Handle(StandardRequest({
+        {"jsonrpc", "2.0"}, {"id", 21}, {"method", "tools/list"},
+        {"params", FJson::object()}}), StandardPeer);
+    Runner.Expect(Initialized.Status == 202 && StandardTools.Status == 200
+            && FJson::parse(StandardTools.Body)["result"]["tools"].size() == 2,
+        "A standard initialized HTTP peer can list tools without custom metadata");
+
     const Pico::FMcpHttpResponse Unknown = Binding.Handle(Request(
         ModernRequest(4, "unknown/method"), "unknown/method"), "unknown");
     Runner.Expect(Unknown.Status == 404
@@ -149,7 +184,7 @@ void TestBinding(FTestRunner& Runner)
         "Unknown modern MCP methods map to HTTP 404 plus JSON-RPC MethodNotFound");
 
     const Pico::FMcpHttpServerStatus Status = Binding.GetStatus();
-    Runner.Expect(Status.AcceptedRequests == 2
+    Runner.Expect(Status.AcceptedRequests == 5
             && Status.RejectedRequests == 6
             && Status.ActiveRequests == 0,
         "HTTP diagnostics separate accepted, rejected, and active requests");
@@ -185,6 +220,58 @@ void TestRealLoopbackServer(FTestRunner& Runner)
     Runner.Expect(Result && Result->status == 200
             && FJson::parse(Result->body)["result"]["resultType"] == "complete",
         "An independent HTTP client completes a modern MCP request over TCP");
+
+    httplib::Headers StandardHeaders = {
+        {"Authorization", "Bearer " + Config.BearerToken},
+        {"Accept", "application/json, text/event-stream"}};
+    const FJson InitializeBody = {
+        {"jsonrpc", "2.0"}, {"id", 30}, {"method", "initialize"},
+        {"params", {{"protocolVersion", "2026-07-28"},
+            {"capabilities", FJson::object()},
+            {"clientInfo", {{"name", "codex-test"}, {"version", "1"}}}}}};
+    const auto InitializeResult = Client.Post(
+        "/mcp", StandardHeaders, InitializeBody.dump(), "application/json");
+    const std::string SessionId = InitializeResult
+        ? InitializeResult->get_header_value("Mcp-Session-Id") : std::string {};
+    StandardHeaders.emplace("Mcp-Session-Id", SessionId);
+    const auto InitializedResult = Client.Post(
+        "/mcp", StandardHeaders,
+        R"({"jsonrpc":"2.0","method":"notifications/initialized"})",
+        "application/json");
+    const auto StandardToolsResult = Client.Post(
+        "/mcp", StandardHeaders,
+        R"({"jsonrpc":"2.0","id":31,"method":"tools/list","params":{}})",
+        "application/json");
+    Runner.Expect(InitializeResult && InitializeResult->status == 200
+            && !SessionId.empty() && SessionId.size() <= 128
+            && InitializedResult && InitializedResult->status == 202
+            && StandardToolsResult && StandardToolsResult->status == 200
+            && FJson::parse(StandardToolsResult->body)["result"]["tools"].size() == 2,
+        "A real standard HTTP client completes session initialize and tools/list");
+
+    httplib::Headers MissingSessionHeaders = {
+        {"Authorization", "Bearer " + Config.BearerToken},
+        {"Accept", "application/json, text/event-stream"}};
+    const auto MissingSessionResult = Client.Post(
+        "/mcp", MissingSessionHeaders,
+        R"({"jsonrpc":"2.0","id":32,"method":"tools/list","params":{}})",
+        "application/json");
+    httplib::Headers ExpiredSessionHeaders = MissingSessionHeaders;
+    ExpiredSessionHeaders.emplace("Mcp-Session-Id", "expired-session-id");
+    const auto ExpiredSessionResult = Client.Post(
+        "/mcp", ExpiredSessionHeaders,
+        R"({"jsonrpc":"2.0","id":33,"method":"tools/list","params":{}})",
+        "application/json");
+    Runner.Expect(MissingSessionResult && MissingSessionResult->status == 400
+            && ExpiredSessionResult && ExpiredSessionResult->status == 404,
+        "Missing sessions return 400 while expired sessions request client reinitialization with 404");
+    const auto ReinitializeResult = Client.Post(
+        "/mcp", MissingSessionHeaders, InitializeBody.dump(), "application/json");
+    Runner.Expect(ReinitializeResult && ReinitializeResult->status == 200
+            && !ReinitializeResult->get_header_value("Mcp-Session-Id").empty()
+            && ReinitializeResult->get_header_value("Mcp-Session-Id")
+                != SessionId,
+        "A client can establish a fresh session after an expired-session response");
 
     const FJson ToolBody = ModernRequest(11, "tools/call",
         {{"name", "echo"}, {"arguments", {{"over", "tcp"}}}});

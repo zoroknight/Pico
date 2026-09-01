@@ -234,6 +234,17 @@ public:
     {
         std::lock_guard Lock(Mutex);
         LegacySessions.erase(std::string(PeerId));
+        CancelPeerRequestsLocked(PeerId);
+    }
+
+    void CancelPeerRequests(std::string_view PeerId)
+    {
+        std::lock_guard Lock(Mutex);
+        CancelPeerRequestsLocked(PeerId);
+    }
+
+    void CancelPeerRequestsLocked(std::string_view PeerId)
+    {
         const std::string Prefix = std::string(PeerId) + '\n';
         for (auto& [Key, State] : InFlight)
         {
@@ -539,6 +550,11 @@ FMcpMessageResult FMcpServerCore::HandleMessage(
 void FMcpServerCore::ClosePeer(std::string_view PeerId)
 {
     Impl->ClosePeer(PeerId);
+}
+
+void FMcpServerCore::CancelPeerRequests(std::string_view PeerId)
+{
+    Impl->CancelPeerRequests(PeerId);
 }
 
 std::size_t FMcpServerCore::GetLegacySessionCount() const

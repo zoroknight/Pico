@@ -903,6 +903,7 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Private/EditorAssetSelection.cpp
         Source/Editor/PicoEditor/Private/EditorAssetService.cpp
         Source/Editor/PicoEditor/Private/EditorCommandService.cpp
+        Source/Editor/PicoEditor/Private/CodexExternalAgentConnector.cpp
         Source/Editor/PicoEditor/Private/EditorPropertyService.cpp
         Source/Editor/PicoEditor/Private/PlaySession.cpp
         Source/Editor/PicoEditor/Private/EditorProjectManager.cpp
@@ -914,6 +915,8 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Private/EditorWorldDocument.cpp
         Source/Editor/PicoEditor/Public/Pico/Editor/EditorPropertyService.h
         Source/Editor/PicoEditor/Public/Pico/Editor/EditorProjectManager.h
+        Source/Editor/PicoEditor/Public/Pico/Editor/EditorAgentHost.h
+        Source/Editor/PicoEditor/Public/Pico/Editor/ExternalAgentConnector.h
         Source/Editor/PicoEditor/Public/Pico/Editor/EditorRuntimeFreshness.h
         Source/Editor/PicoEditor/Public/Pico/Editor/PlaySession.h
         Source/Editor/PicoEditor/Public/Pico/Editor/AssetDependencyService.h
@@ -973,6 +976,8 @@ if(PICO_BUILD_INSPECTOR)
 
     add_executable(PicoEditor
         Source/Editor/PicoEditor/Private/AgentChatWorkspace.cpp
+        Source/Editor/PicoEditor/Private/EditorAgentHost.cpp
+        Source/Editor/PicoEditor/Private/ExternalAgentWorkspace.cpp
         Source/Editor/PicoEditor/Private/AgentChatWorkspace.h
         Source/Editor/PicoEditor/Private/MarkdownRenderer.cpp
         Source/Editor/PicoEditor/Private/MarkdownRenderer.h

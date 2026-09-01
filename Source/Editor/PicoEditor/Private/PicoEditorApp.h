@@ -48,6 +48,8 @@ class PSceneComponent;
 class PWorld;
 class FSceneViewportRenderer;
 class FAgentChatWorkspace;
+class FEditorAgentHost;
+class FExternalAgentWorkspace;
 
 class FPicoEditorApp
 {
@@ -216,7 +218,9 @@ private:
     FPlaySessionSettings PlaySettings;
     FTaskSystem TaskSystem;
     FGameThreadDispatcher GameThreadDispatcher;
+    std::unique_ptr<FEditorAgentHost> AgentHost;
     std::unique_ptr<FAgentChatWorkspace> AgentChatWorkspace;
+    std::unique_ptr<FExternalAgentWorkspace> ExternalAgentWorkspace;
     std::shared_ptr<FPackageOperationState> PackageOperationState;
     FProcessHandle PackageProcess;
     FProcessGroup PackageProcessGroup;
@@ -251,6 +255,7 @@ private:
     bool bStatusIsWarning = false;
     bool bMessageLogOpen = true;
     bool bAgentChatOpen = true;
+    bool bExternalAgentsOpen = false;
     bool bShowFrameRate = true;
     bool bDevelopmentMetricsOpen = true;
     bool bFocusMessageLog = false;

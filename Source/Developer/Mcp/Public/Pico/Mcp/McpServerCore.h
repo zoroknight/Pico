@@ -109,6 +109,7 @@ public:
         const FMcpRequestContext& Context,
         std::string_view MessageJson);
     void ClosePeer(std::string_view PeerId);
+    void CancelPeerRequests(std::string_view PeerId);
     std::size_t GetLegacySessionCount() const;
     std::size_t GetInFlightRequestCount() const;
 

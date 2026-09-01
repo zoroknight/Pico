@@ -1,7 +1,5 @@
 #pragma once
 
-#include "Pico/Editor/EditorAgentTools.h"
-#include "Pico/Editor/EditorTransactionManager.h"
 #include "Pico/Tasks/TaskSystem.h"
 
 #include <functional>
@@ -12,32 +10,16 @@
 
 namespace Pico
 {
-class FEditorSelection;
-class FEditorTransactionManager;
-class FEditorCommandService;
-class FEditorWorldDocument;
-class FEngineLoop;
+class FEditorAgentHost;
 class FGameThreadDispatcher;
 
 class FAgentChatWorkspace
 {
 public:
     FAgentChatWorkspace(
-        FEngineLoop* EngineLoop,
-        FEditorSelection* Selection,
-        FEditorTransactionManager* Transactions,
+        FEditorAgentHost* AgentHost,
         FTaskSystem* TaskSystem,
         FGameThreadDispatcher* Dispatcher,
-        std::function<void()> OnWorldChanged,
-        FEditorCommandService* Commands,
-        FEditorWorldDocument* WorldDocument,
-        std::function<std::pair<bool, std::string>(
-            const std::filesystem::path&, const std::string&, bool)> StartPackage,
-        std::function<FEditorAgentPackageCompletion(
-            const FCancellationToken*)> WaitForPackage,
-        std::function<std::pair<bool, std::string>()> StartPlay,
-        std::function<std::pair<bool, std::string>()> StopPlay,
-        FEditorTransactionManager::FRestoreSnapshot RestoreSnapshot,
         std::function<void(const std::filesystem::path&)> RequestProjectOpen);
     ~FAgentChatWorkspace();
 

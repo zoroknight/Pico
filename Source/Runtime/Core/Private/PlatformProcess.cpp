@@ -18,6 +18,7 @@
 #endif
 
 #include <algorithm>
+#include <cwchar>
 #include <limits>
 #endif
 
@@ -127,6 +128,74 @@ std::string GetWindowsErrorMessage(unsigned long ErrorCode)
         Message.pop_back();
     }
     return Message;
+}
+
+bool BuildEnvironmentBlock(
+    const std::vector<std::pair<std::string, std::string>>& Overrides,
+    std::vector<wchar_t>& OutBlock,
+    std::string* OutError)
+{
+    std::vector<std::wstring> Entries;
+    LPWCH Environment = GetEnvironmentStringsW();
+    if (Environment == nullptr)
+    {
+        SetError(OutError, GetWindowsErrorMessage(GetLastError()));
+        return false;
+    }
+    for (const wchar_t* Entry = Environment; *Entry != L'\0';)
+    {
+        const std::size_t Length = std::wcslen(Entry);
+        Entries.emplace_back(Entry, Length);
+        Entry += Length + 1;
+    }
+    FreeEnvironmentStringsW(Environment);
+
+    for (const auto& [Name, Value] : Overrides)
+    {
+        if (Name.empty() || Name.find('=') != std::string::npos
+            || Name.find('\0') != std::string::npos
+            || Value.find('\0') != std::string::npos)
+        {
+            SetError(OutError, "A process environment override is invalid");
+            return false;
+        }
+        const std::wstring WideName = Utf8ToWide(Name);
+        const std::wstring WideValue = Utf8ToWide(Value);
+        if (WideName.empty() || (!Value.empty() && WideValue.empty()))
+        {
+            SetError(OutError, "A process environment override is not valid UTF-8");
+            return false;
+        }
+        const std::wstring Prefix = WideName + L"=";
+        const auto Existing = std::find_if(
+            Entries.begin(), Entries.end(),
+            [&WideName](const std::wstring& Entry)
+            {
+                const std::size_t Separator = Entry.find(L'=');
+                return Separator == WideName.size()
+                    && _wcsnicmp(Entry.c_str(), WideName.c_str(), WideName.size()) == 0;
+            });
+        const std::wstring Replacement = Prefix + WideValue;
+        if (Existing != Entries.end()) *Existing = Replacement;
+        else Entries.push_back(Replacement);
+    }
+    std::sort(Entries.begin(), Entries.end(),
+        [](const std::wstring& Left, const std::wstring& Right)
+        {
+            return _wcsicmp(Left.c_str(), Right.c_str()) < 0;
+        });
+    std::size_t CharacterCount = 1;
+    for (const std::wstring& Entry : Entries)
+        CharacterCount += Entry.size() + 1;
+    OutBlock.clear();
+    OutBlock.reserve(CharacterCount);
+    for (const std::wstring& Entry : Entries)
+    {
+        OutBlock.insert(OutBlock.end(), Entry.begin(), Entry.end());
+        OutBlock.push_back(L'\0');
+    }
+    OutBlock.push_back(L'\0');
+    return true;
 }
 #endif
 }
@@ -242,7 +311,8 @@ FProcessHandle FPlatformProcess::CreateProcess(
     const std::filesystem::path& WorkingDirectory,
     const std::filesystem::path& OutputFile,
     std::string* OutError,
-    FProcessGroup* ProcessGroup)
+    FProcessGroup* ProcessGroup,
+    const FProcessLaunchOptions& LaunchOptions)
 {
     if (OutError != nullptr)
     {
@@ -316,8 +386,18 @@ FProcessHandle FPlatformProcess::CreateProcess(
         StartupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     }
     PROCESS_INFORMATION ProcessInformation {};
+    std::vector<wchar_t> EnvironmentBlock;
+    if (!LaunchOptions.EnvironmentOverrides.empty()
+        && !BuildEnvironmentBlock(
+            LaunchOptions.EnvironmentOverrides, EnvironmentBlock, OutError))
+    {
+        if (OutputHandle != INVALID_HANDLE_VALUE) CloseHandle(OutputHandle);
+        return Result;
+    }
     const DWORD CreationFlags = CREATE_NEW_PROCESS_GROUP
-        | (ProcessGroup != nullptr ? CREATE_SUSPENDED : 0);
+        | (ProcessGroup != nullptr ? CREATE_SUSPENDED : 0)
+        | (LaunchOptions.bCreateNewConsole ? CREATE_NEW_CONSOLE : 0)
+        | (!EnvironmentBlock.empty() ? CREATE_UNICODE_ENVIRONMENT : 0);
     const BOOL bCreated = CreateProcessW(
         ExecutablePath.c_str(),
         CommandLine.data(),
@@ -325,7 +405,7 @@ FProcessHandle FPlatformProcess::CreateProcess(
         nullptr,
         OutputHandle != INVALID_HANDLE_VALUE,
         CreationFlags,
-        nullptr,
+        EnvironmentBlock.empty() ? nullptr : EnvironmentBlock.data(),
         WorkingDirectoryPath.empty() ? nullptr : WorkingDirectoryPath.c_str(),
         &StartupInfo,
         &ProcessInformation);
@@ -368,6 +448,7 @@ FProcessHandle FPlatformProcess::CreateProcess(
     (void)WorkingDirectory;
     (void)OutputFile;
     (void)ProcessGroup;
+    (void)LaunchOptions;
     SetError(OutError, "Process creation is not implemented on this platform");
 #endif
     return Result;

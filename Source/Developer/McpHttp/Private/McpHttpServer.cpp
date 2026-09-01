@@ -12,6 +12,7 @@
 #include <random>
 #include <set>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 
 namespace Pico
@@ -160,6 +161,41 @@ bool TryReadBodyMetadata(const FJson& Request,
     return true;
 }
 
+bool TryReadRequestMethod(const FJson& Request, std::string& OutMethod)
+{
+    if (!Request.is_object() || !Request.contains("method")
+        || !Request["method"].is_string())
+        return false;
+    OutMethod = Request["method"].get<std::string>();
+    return true;
+}
+
+bool IsStandardMethod(std::string_view Method)
+{
+    return Method == "initialize" || Method == "notifications/initialized"
+        || Method == "notifications/cancelled" || Method == "ping"
+        || Method == "tools/list" || Method == "tools/call";
+}
+
+bool IsModernRequest(const FJson& Request)
+{
+    std::string Method;
+    std::string Version;
+    std::string Name;
+    return TryReadBodyMetadata(Request, Method, Version, Name);
+}
+
+bool IsSafeSessionId(std::string_view SessionId)
+{
+    return !SessionId.empty() && SessionId.size() <= 128
+        && std::all_of(SessionId.begin(), SessionId.end(),
+            [](unsigned char Character)
+            {
+                return std::isalnum(Character) || Character == '-'
+                    || Character == '_' || Character == '.';
+            });
+}
+
 bool IsHeaderSafeAscii(std::string_view Value)
 {
     if (Value.empty() || std::isspace(static_cast<unsigned char>(Value.front()))
@@ -286,9 +322,19 @@ std::optional<FMcpHttpResponse> FMcpHttpBinding::Validate(
     std::string BodyMethod;
     std::string BodyVersion;
     std::string BodyName;
-    if (!TryReadBodyMetadata(Body, BodyMethod, BodyVersion, BodyName))
-        return Reject(JsonError(400, RequestId(Body), HeaderMismatch,
-            "Missing required request metadata"));
+    if (!TryReadRequestMethod(Body, BodyMethod))
+        return Reject(JsonError(400, RequestId(Body), -32600,
+            "Invalid JSON-RPC request"));
+
+    const bool bModern = TryReadBodyMetadata(
+        Body, BodyMethod, BodyVersion, BodyName);
+    if (!bModern)
+    {
+        if (!IsStandardMethod(BodyMethod))
+            return Reject(JsonError(404, RequestId(Body), -32601,
+                "Method not found"));
+        return std::nullopt;
+    }
 
     const std::string ProtocolVersion = Header(
         Request.Headers, "mcp-protocol-version");
@@ -371,12 +417,48 @@ class FMcpHttpServer::FImpl
 public:
     explicit FImpl(FMcpServerCore& InCore) : Core(InCore) {}
 
+    std::string CreateSessionId() const
+    {
+        return GenerateMcpBearerToken(16);
+    }
+
+    void RegisterSession(std::string SessionId)
+    {
+        std::lock_guard Lock(SessionMutex);
+        Sessions.insert(std::move(SessionId));
+    }
+
+    bool HasSession(std::string_view SessionId) const
+    {
+        std::lock_guard Lock(SessionMutex);
+        return Sessions.contains(std::string(SessionId));
+    }
+
+    std::size_t GetSessionCount() const
+    {
+        std::lock_guard Lock(SessionMutex);
+        return Sessions.size();
+    }
+
+    void CloseSessions()
+    {
+        std::unordered_set<std::string> Closing;
+        {
+            std::lock_guard Lock(SessionMutex);
+            Closing.swap(Sessions);
+        }
+        for (const std::string& SessionId : Closing)
+            Core.ClosePeer("http-session-" + SessionId);
+    }
+
     FMcpServerCore& Core;
     std::unique_ptr<FMcpHttpBinding> Binding;
     std::unique_ptr<httplib::Server> Server;
     std::thread ListenerThread;
     std::atomic<bool> bRunning {false};
     std::atomic<std::uint64_t> NextPeer {1};
+    mutable std::mutex SessionMutex;
+    std::unordered_set<std::string> Sessions;
     mutable std::mutex Mutex;
     std::string LastError;
     FMcpHttpServerStatus LastStatus;
@@ -436,8 +518,6 @@ bool FMcpHttpServer::Start(FMcpHttpServerConfig Config, std::string* OutError)
             Input.Body = Request.body;
             for (const auto& [Name, Value] : Request.headers)
                 Input.Headers[Lower(Name)] = Value;
-            const std::string PeerId = "http-"
-                + std::to_string(Impl->NextPeer.fetch_add(1));
             if (std::optional<FMcpHttpResponse> Rejection =
                     Impl->Binding->Validate(Input))
             {
@@ -448,7 +528,49 @@ bool FMcpHttpServer::Start(FMcpHttpServerConfig Config, std::string* OutError)
                 return;
             }
 
-            const std::string Method = Header(Input.Headers, "mcp-method");
+            const FJson Body = FJson::parse(Input.Body, nullptr, false);
+            std::string Method;
+            TryReadRequestMethod(Body, Method);
+            const bool bModern = IsModernRequest(Body);
+            std::string SessionId;
+            std::string PeerId;
+            if (bModern)
+            {
+                PeerId = "http-" + std::to_string(
+                    Impl->NextPeer.fetch_add(1));
+            }
+            else if (Method == "initialize")
+            {
+                SessionId = Impl->CreateSessionId();
+                PeerId = "http-session-" + SessionId;
+            }
+            else
+            {
+                SessionId = Header(Input.Headers, "mcp-session-id");
+                if (!IsSafeSessionId(SessionId))
+                {
+                    const FMcpHttpResponse Rejection = JsonError(
+                        400, RequestId(Body), -32021,
+                        "Missing or invalid MCP session");
+                    Response.status = Rejection.Status;
+                    for (const auto& [Name, Value] : Rejection.Headers)
+                        Response.set_header(Name, Value);
+                    Response.body = Rejection.Body;
+                    return;
+                }
+                if (!Impl->HasSession(SessionId))
+                {
+                    const FMcpHttpResponse Rejection = JsonError(
+                        404, RequestId(Body), -32021,
+                        "MCP session expired; initialize a new session");
+                    Response.status = Rejection.Status;
+                    for (const auto& [Name, Value] : Rejection.Headers)
+                        Response.set_header(Name, Value);
+                    Response.body = Rejection.Body;
+                    return;
+                }
+                PeerId = "http-session-" + SessionId;
+            }
             if (Method == "tools/call")
             {
                 struct FStreamState
@@ -463,7 +585,8 @@ bool FMcpHttpServer::Start(FMcpHttpServerConfig Config, std::string* OutError)
                 auto Core = &Impl->Core;
                 Response.set_header("X-Accel-Buffering", "no");
                 Response.set_chunked_content_provider("text/event-stream",
-                    [State, Binding, Core, Input = std::move(Input), PeerId](
+                    [State, Binding, Core, Input = std::move(Input), PeerId,
+                        bModern](
                         std::size_t, httplib::DataSink& Sink) mutable
                     {
                         std::unique_lock Lock(State->Mutex);
@@ -482,7 +605,8 @@ bool FMcpHttpServer::Start(FMcpHttpServerConfig Config, std::string* OutError)
                         {
                             if (!Sink.is_writable())
                             {
-                                Core->ClosePeer(PeerId);
+                                if (bModern) Core->ClosePeer(PeerId);
+                                else Core->CancelPeerRequests(PeerId);
                                 State->bFinished = true;
                                 Sink.done();
                                 return false;
@@ -494,12 +618,12 @@ bool FMcpHttpServer::Start(FMcpHttpServerConfig Config, std::string* OutError)
                         const bool bWritten = Sink.write(Event.data(), Event.size());
                         State->bFinished = true;
                         Sink.done();
-                        Core->ClosePeer(PeerId);
+                        if (bModern) Core->ClosePeer(PeerId);
                         return bWritten;
                     },
-                    [Core, PeerId](bool bSuccess)
+                    [Core, PeerId, bModern](bool bSuccess)
                     {
-                        if (!bSuccess) Core->ClosePeer(PeerId);
+                        if (!bSuccess && bModern) Core->ClosePeer(PeerId);
                     });
                 return;
             }
@@ -509,8 +633,17 @@ bool FMcpHttpServer::Start(FMcpHttpServerConfig Config, std::string* OutError)
             Response.status = Output.Status;
             for (const auto& [Name, Value] : Output.Headers)
                 Response.set_header(Name, Value);
+            if (!bModern && Method == "initialize" && Output.Status == 200)
+            {
+                Impl->RegisterSession(SessionId);
+                Response.set_header("Mcp-Session-Id", SessionId);
+            }
+            else if (!bModern && Method == "initialize")
+            {
+                Impl->Core.ClosePeer(PeerId);
+            }
             if (!Output.Body.empty()) Response.body = Output.Body;
-            Impl->Core.ClosePeer(PeerId);
+            if (bModern) Impl->Core.ClosePeer(PeerId);
         });
     Impl->Server->Get(Endpoint,
         [](const httplib::Request&, httplib::Response& Response)
@@ -551,6 +684,7 @@ void FMcpHttpServer::Stop()
     Impl->bRunning.store(false);
     if (Impl->Server) Impl->Server->stop();
     if (Impl->ListenerThread.joinable()) Impl->ListenerThread.join();
+    Impl->CloseSessions();
     if (Impl->Binding)
     {
         std::lock_guard Lock(Impl->Mutex);
@@ -575,6 +709,8 @@ FMcpHttpServerStatus FMcpHttpServer::GetStatus() const
         Status.LastError = Impl->LastError;
     }
     Status.bRunning = Impl->bRunning.load();
+    Status.ActiveSessions = static_cast<std::uint64_t>(
+        Impl->GetSessionCount());
     return Status;
 }
 

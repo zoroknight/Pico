@@ -46,6 +46,7 @@ struct FMcpHttpServerStatus
     std::uint64_t AcceptedRequests = 0;
     std::uint64_t RejectedRequests = 0;
     std::uint64_t ActiveRequests = 0;
+    std::uint64_t ActiveSessions = 0;
     std::string LastError;
 };
 

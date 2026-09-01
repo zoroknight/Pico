@@ -549,6 +549,21 @@ void TestPlatformProcess(FTestRunner& Runner)
     Runner.Expect(
         !Missing.IsValid() && !Error.empty(),
         "Platform process reports a missing executable safely");
+
+    Pico::FProcessLaunchOptions EnvironmentOptions;
+    EnvironmentOptions.EnvironmentOverrides.emplace_back(
+        "PICO_PROCESS_TEST_VALUE", "child-only-value");
+    Pico::FProcessHandle EnvironmentChild = Pico::FPlatformProcess::CreateProcess(
+        Pico::FPaths::GetExecutablePath(), {"-platform-process-environment-child"},
+        Pico::FPaths::GetEngineRootDir(), {}, &Error, nullptr, EnvironmentOptions);
+    ExitCode = -1;
+    Runner.Expect(
+        EnvironmentChild.IsValid()
+            && Pico::FPlatformProcess::WaitForExit(
+                EnvironmentChild, 5000, &ExitCode)
+            && ExitCode == 0
+            && std::getenv("PICO_PROCESS_TEST_VALUE") == nullptr,
+        "Platform process applies environment overrides only to the child process");
 }
 
 void TestAppOwnsProjectName(FTestRunner& Runner)
@@ -903,6 +918,13 @@ int main(int Argc, char** Argv)
     {
         std::this_thread::sleep_for(std::chrono::seconds(30));
         return 0;
+    }
+    if (Argc == 2
+        && std::string_view(Argv[1]) == "-platform-process-environment-child")
+    {
+        const char* Value = std::getenv("PICO_PROCESS_TEST_VALUE");
+        return Value != nullptr && std::string_view(Value) == "child-only-value"
+            ? 0 : 9;
     }
 
     Pico::FPaths::Init(Argc > 0 ? Argv[0] : "PicoCoreTests");

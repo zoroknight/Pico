@@ -1,5 +1,6 @@
 #include "PicoEditorApp.h"
 #include "AgentChatWorkspace.h"
+#include "ExternalAgentWorkspace.h"
 #include "NativeFileDialog.h"
 
 #include "Pico/Developer/ReflectionDebug.h"
@@ -11,6 +12,7 @@
 #include "Pico/Core/PlatformProcess.h"
 #include "Pico/Core/Math/MathUtility.h"
 #include "Pico/Editor/EditorProjectManager.h"
+#include "Pico/Editor/EditorAgentHost.h"
 #include "Pico/Editor/EditorRuntimeFreshness.h"
 #include "Pico/Engine/Actor.h"
 #include "Pico/Engine/ActorComponent.h"
@@ -313,11 +315,10 @@ FPicoEditorApp::FPicoEditorApp(
     SaveEditorSession(true);
     UpdateWindowTitle();
     PackageOperationState = std::make_shared<FPackageOperationState>();
-    AgentChatWorkspace = std::make_unique<FAgentChatWorkspace>(
+    AgentHost = std::make_unique<FEditorAgentHost>(
         EngineLoop,
         &Selection,
         &TransactionManager,
-        &TaskSystem,
         &GameThreadDispatcher,
         [this]() { WorldDocument.MarkDirty(); },
         &CommandService,
@@ -414,7 +415,9 @@ FPicoEditorApp::FPicoEditorApp(
                EWorldSerializationError* Error)
         {
             return RestoreEditorSnapshot(Snapshot, Error);
-        },
+        });
+    AgentChatWorkspace = std::make_unique<FAgentChatWorkspace>(
+        AgentHost.get(), &TaskSystem, &GameThreadDispatcher,
         [this](const std::filesystem::path& ProjectFile)
         {
             const FEditorProjectResolution Resolution =
@@ -429,6 +432,8 @@ FPicoEditorApp::FPicoEditorApp(
             SetStatus("Agent created the project; preparing a clean editor handoff");
             RequestDocumentAction(DocumentActionOpenProject);
         });
+    ExternalAgentWorkspace =
+        std::make_unique<FExternalAgentWorkspace>(AgentHost.get());
 }
 
 FPicoEditorApp::~FPicoEditorApp()
@@ -444,13 +449,14 @@ FPicoEditorApp::~FPicoEditorApp()
             PackageOperationState->Condition.notify_all();
         }
     }
-    if (AgentChatWorkspace)
-    {
-        AgentChatWorkspace->Shutdown();
-    }
+    if (ExternalAgentWorkspace) ExternalAgentWorkspace->Shutdown();
+    if (AgentChatWorkspace) AgentChatWorkspace->Shutdown();
+    if (AgentHost) AgentHost->Shutdown();
     TaskSystem.Shutdown();
     GameThreadDispatcher.Shutdown();
+    ExternalAgentWorkspace.reset();
     AgentChatWorkspace.reset();
+    AgentHost.reset();
     SaveEditorSession(true);
     StopGame(false);
     PackageProcess.Reset();
@@ -720,6 +726,11 @@ void FPicoEditorApp::Draw()
     {
         AgentChatWorkspace->Draw(&bAgentChatOpen);
     }
+    if (ExternalAgentWorkspace && bExternalAgentsOpen)
+    {
+        ExternalAgentWorkspace->Draw(&bExternalAgentsOpen);
+    }
+    if (AgentHost) AgentHost->DrawApprovalCenter();
 
     if (bCancelInteractiveEditRequested)
     {
@@ -1382,6 +1393,7 @@ void FPicoEditorApp::DrawViewMenu()
     }
     ImGui::MenuItem("Message Log", nullptr, &bMessageLogOpen);
     ImGui::MenuItem("AI Chat", nullptr, &bAgentChatOpen);
+    ImGui::MenuItem("External Agents", nullptr, &bExternalAgentsOpen);
     ImGui::MenuItem("Frame Rate", nullptr, &bShowFrameRate);
     ImGui::MenuItem("Development Metrics", nullptr, &bDevelopmentMetricsOpen);
     ImGui::EndMenu();

@@ -4,10 +4,17 @@
 
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Pico
 {
+struct FProcessLaunchOptions
+{
+    bool bCreateNewConsole = false;
+    std::vector<std::pair<std::string, std::string>> EnvironmentOverrides;
+};
+
 class FProcessGroup
 {
 public:
@@ -59,7 +66,8 @@ public:
         const std::filesystem::path& WorkingDirectory = {},
         const std::filesystem::path& OutputFile = {},
         std::string* OutError = nullptr,
-        FProcessGroup* ProcessGroup = nullptr);
+        FProcessGroup* ProcessGroup = nullptr,
+        const FProcessLaunchOptions& LaunchOptions = {});
     static FProcessHandle CreateProcess(
         const std::filesystem::path& Executable,
         const std::vector<std::string>& Arguments,

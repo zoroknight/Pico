@@ -72,7 +72,17 @@ The current implementation can:
 - Expose the existing Editor Agent execution chain through an optional local MCP Streamable HTTP server.
   It is disabled by default, binds only `127.0.0.1`, validates Host/Origin and a Git-ignored bearer token,
   and advertises only three Toolset meta-tools; external calls still use the same approval, transaction,
-  verification, cancellation, and Game Thread boundaries as built-in chat.
+  verification, cancellation, and Game Thread boundaries as built-in chat. The shared `EditorAgentHost`,
+  built-in AI Chat, MCP transport, and external-client adapters now have separate lifetimes. Open
+  `View -> External Agents` to configure the host, copy a client-specific config, or optionally launch a
+  client. Codex remains the first adapter, but its model, reasoning, conversation, and UI are owned by Codex,
+  not Pico; the launcher passes process-local MCP overrides and injects the bearer token only into the child
+  process, without replacing the user's Codex home. Another client such as Claude Code only needs a configuration adapter.
+  Mutating MCP calls use an editor-global approval window even when either workspace is closed, and remembered
+  reversible-World grants are isolated by client session. Expired Streamable HTTP sessions return the standard 404 recovery
+  signal so clients can reinitialize after an Editor restart. Standard initialize/session clients and
+  request-scoped modern clients share the same Core,
+  while the credential remains persisted solely under the local Git-ignored Pico Editor directory.
 - Stream OpenAI-compatible text and Tool Call fragments over SSE while persisting only aggregate
   messages; ground turns through an audited project Knowledge Store and bounded cited RAG Lite, then
   narrow both advertised and executable tools with versioned Pico Skills.

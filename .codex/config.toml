@@ -1,0 +1,9 @@
+[mcp_servers.pico_editor]
+url = "http://127.0.0.1:8765/mcp"
+bearer_token_env_var = "PICO_MCP_BEARER_TOKEN"
+enabled = true
+required = false
+enabled_tools = ["list_toolsets", "describe_toolset", "call_tool"]
+default_tools_approval_mode = "prompt"
+startup_timeout_sec = 10
+tool_timeout_sec = 300

@@ -11,11 +11,9 @@
 #include "Pico/Agent/OpenAICompatibleProvider.h"
 #include "Pico/Core/Config.h"
 #include "Pico/Core/Paths.h"
+#include "Pico/Editor/EditorAgentHost.h"
 #include "Pico/Editor/EditorAgentExecutionService.h"
 #include "Pico/Editor/EditorAgentTools.h"
-#include "Pico/Mcp/McpServerCore.h"
-#include "Pico/McpAdapter/McpAgentToolsetAdapter.h"
-#include "Pico/McpHttp/McpHttpServer.h"
 #include "Pico/Tasks/GameThreadDispatcher.h"
 
 #include <imgui.h>
@@ -26,7 +24,6 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
-#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -41,7 +38,6 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -51,75 +47,12 @@ namespace
 {
 using FJson = nlohmann::json;
 
-std::string LowerAscii(std::string_view Text)
-{
-    std::string Result(Text);
-    std::transform(Result.begin(), Result.end(), Result.begin(),
-        [](unsigned char Character)
-        {
-            return static_cast<char>(std::tolower(Character));
-        });
-    return Result;
-}
-
 enum class EChatProvider
 {
     Fake,
     DeepSeek,
     Kimi
 };
-
-const char* ApprovalPermissionDisplayName(EAgentToolPermission Permission)
-{
-    switch (Permission)
-    {
-    case EAgentToolPermission::ReadOnly: return "只读访问";
-    case EAgentToolPermission::ModifyWorld: return "修改当前场景";
-    case EAgentToolPermission::WriteProject: return "写入项目文件";
-    case EAgentToolPermission::LaunchProcess: return "启动或停止外部进程";
-    }
-    return "未知权限";
-}
-
-const char* ApprovalToolDisplayName(std::string_view ToolName)
-{
-    if (ToolName == "editor.object.set_properties") return "修改对象属性";
-    if (ToolName == "editor.object.batch_set_properties") return "批量修改对象属性";
-    if (ToolName == "editor.actor.spawn") return "创建场景 Actor";
-    if (ToolName == "editor.actor.spawn_blueprint") return "创建 Actor Blueprint 实例";
-    if (ToolName == "editor.actor.delete") return "删除场景 Actor";
-    if (ToolName == "editor.actor.delete_many") return "批量删除场景 Actor";
-    if (ToolName == "editor.agent.revert_run") return "恢复 Agent 操作前的场景";
-    if (ToolName == "editor.scene.create_room") return "创建碰撞房间";
-    if (ToolName == "editor.gameplay.create_third_person_character") return "创建第三人称角色";
-    if (ToolName == "editor.actor.set_location") return "修改 Actor 位置";
-    if (ToolName == "editor.play.start") return "运行当前项目";
-    if (ToolName == "editor.play.stop") return "停止当前运行项目";
-    if (ToolName == "editor.world.save") return "保存当前世界";
-    if (ToolName == "editor.project.create_from_third_person_template") return "创建第三人称项目";
-    if (ToolName == "editor.project.package") return "打包当前项目";
-    return "执行 Agent 工具";
-}
-
-const char* ApprovalToolDescription(std::string_view ToolName)
-{
-    if (ToolName == "editor.object.set_properties") return "Agent 将修改对象的反射属性，可通过 Undo 撤销。";
-    if (ToolName == "editor.object.batch_set_properties") return "Agent 将在一次事务中修改多个对象的反射属性，可整体 Undo。";
-    if (ToolName == "editor.actor.spawn") return "Agent 将在当前世界中创建一个新的 Actor。";
-    if (ToolName == "editor.actor.spawn_blueprint") return "Agent 将使用指定 Actor Blueprint 在当前世界创建实例。";
-    if (ToolName == "editor.actor.delete") return "Agent 将从当前世界删除指定 Actor，可通过 Undo 撤销。";
-    if (ToolName == "editor.actor.delete_many") return "Agent 将在一次事务中删除一组已验证的 Actor，可整体 Undo。";
-    if (ToolName == "editor.agent.revert_run") return "Agent 将恢复指定 Run 开始前的完整 World 快照；若场景之后又被修改，会拒绝覆盖。";
-    if (ToolName == "editor.scene.create_room") return "Agent 将在一次事务中创建地板和碰撞墙壁。";
-    if (ToolName == "editor.gameplay.create_third_person_character") return "Agent 将配置可操控角色、PlayerStart 和第三人称 Gameplay 链。";
-    if (ToolName == "editor.actor.set_location") return "Agent 将修改指定 Actor 的世界坐标，可通过 Undo 撤销。";
-    if (ToolName == "editor.play.start") return "Agent 将启动编辑器当前配置的 Play 会话，并保持运行直到你停止。";
-    if (ToolName == "editor.play.stop") return "Agent 将停止编辑器拥有的 Play 会话及其进程。";
-    if (ToolName == "editor.world.save") return "Agent 将把当前世界保存到现有项目资产路径。";
-    if (ToolName == "editor.project.create_from_third_person_template") return "Agent 将复制模板内容并创建一个新的 Pico 项目目录。";
-    if (ToolName == "editor.project.package") return "Agent 将在指定目录生成可分发项目包，可能需要较长时间。";
-    return "Agent 请求执行一个会修改场景、项目文件或进程状态的操作。";
-}
 
 const char* ProviderDisplayName(EChatProvider Provider)
 {
@@ -427,76 +360,6 @@ void DrawToolSummary(const FChatLine& Line)
     }
 }
 
-class FInteractiveApproval final : public IAgentToolApproval
-{
-public:
-    bool RequestApproval(
-        const FAgentToolCall& Call,
-        EAgentToolPermission Permission,
-        std::string_view Description) override
-    {
-        std::unique_lock Lock(Mutex);
-        PendingCall = Call;
-        PendingPermission = Permission;
-        PendingDescription = Description;
-        bHasDecision = false;
-        bPending = true;
-        Condition.notify_all();
-        Condition.wait(Lock, [this]() { return bHasDecision || bShuttingDown; });
-        const bool bResult = !bShuttingDown && bApproved;
-        bPending = false;
-        PendingCall.reset();
-        return bResult;
-    }
-
-    void Decide(bool bInApproved)
-    {
-        std::lock_guard Lock(Mutex);
-        if (!bPending) return;
-        bApproved = bInApproved;
-        bHasDecision = true;
-        Condition.notify_all();
-    }
-
-    void CancelWait()
-    {
-        Decide(false);
-    }
-
-    void Shutdown()
-    {
-        std::lock_guard Lock(Mutex);
-        bShuttingDown = true;
-        bHasDecision = true;
-        bApproved = false;
-        Condition.notify_all();
-    }
-
-    bool GetPending(
-        FAgentToolCall& OutCall,
-        EAgentToolPermission& OutPermission,
-        std::string& OutDescription) const
-    {
-        std::lock_guard Lock(Mutex);
-        if (!bPending || !PendingCall) return false;
-        OutCall = *PendingCall;
-        OutPermission = PendingPermission;
-        OutDescription = PendingDescription;
-        return true;
-    }
-
-private:
-    mutable std::mutex Mutex;
-    std::condition_variable Condition;
-    std::optional<FAgentToolCall> PendingCall;
-    EAgentToolPermission PendingPermission = EAgentToolPermission::ReadOnly;
-    std::string PendingDescription;
-    bool bPending = false;
-    bool bHasDecision = false;
-    bool bApproved = false;
-    bool bShuttingDown = false;
-};
-
 class FFakeSceneAgentProvider final : public IAgentProvider
 {
 public:
@@ -588,42 +451,16 @@ std::string MakeRunNonce()
 struct FAgentChatWorkspace::FImpl
 {
     FImpl(
-        FEngineLoop* InEngineLoop,
-        FEditorSelection* Selection,
-        FEditorTransactionManager* Transactions,
+        FEditorAgentHost* InAgentHost,
         FTaskSystem* InTaskSystem,
         FGameThreadDispatcher* InDispatcher,
-        std::function<void()> OnWorldChanged,
-        FEditorCommandService* Commands,
-        FEditorWorldDocument* WorldDocument,
-        std::function<std::pair<bool, std::string>(
-            const std::filesystem::path&, const std::string&, bool)> StartPackage,
-        std::function<FEditorAgentPackageCompletion(
-            const FCancellationToken*)> WaitForPackage,
-        std::function<std::pair<bool, std::string>()> StartPlay,
-        std::function<std::pair<bool, std::string>()> StopPlay,
-        FEditorTransactionManager::FRestoreSnapshot RestoreSnapshot,
         std::function<void(const std::filesystem::path&)> InRequestProjectOpen)
-        : EngineLoop(InEngineLoop)
+        : AgentHost(InAgentHost)
         , TaskSystem(InTaskSystem)
         , Dispatcher(InDispatcher)
         , KnowledgeStore(FPaths::GetProjectSavedDir() / "Agent/Knowledge")
-        , EditorTools(InEngineLoop, Selection, Transactions, &Approval,
-            std::move(OnWorldChanged),
-            {Commands, WorldDocument, std::move(StartPackage),
-                std::move(WaitForPackage),
-                std::move(StartPlay), std::move(StopPlay),
-                std::move(RestoreSnapshot),
-                FPaths::GetProjectSavedDir() / "Agent/ChangeSets"})
-        , ExecutionService(&EditorTools, InDispatcher,
-            FPaths::GetProjectSavedDir() / "Agent/Operations",
-            [this](const FAgentToolCall& Call,
-                FAgentToolResult StartedResult,
-                const FCancellationToken* CancellationToken)
-            {
-                return EditorTools.WaitForAsyncCompletion(
-                    Call, std::move(StartedResult), CancellationToken);
-            })
+        , EditorTools(InAgentHost->GetTools())
+        , ExecutionService(InAgentHost->GetExecutionService())
         , RequestProjectOpen(std::move(InRequestProjectOpen))
     {
         std::snprintf(Model.data(), Model.size(), "%s", "offline-fake");
@@ -637,7 +474,6 @@ struct FAgentChatWorkspace::FImpl
         {
             Status = SkillError;
         }
-        InitializeMcpServer();
         std::string HandoffError;
         const std::optional<FAgentProjectHandoff> Handoff =
             ConsumeAgentProjectHandoff(FPaths::GetProjectRootDir(), &HandoffError);
@@ -665,193 +501,6 @@ struct FAgentChatWorkspace::FImpl
         RefreshSessionView();
         if (!HandoffError.empty()) Status = HandoffError;
         else if (Handoff) Status = "Project handoff restored this conversation";
-    }
-
-    std::filesystem::path GetMcpSettingsPath() const
-    {
-        const std::filesystem::path& EngineRoot = FPaths::GetEngineRootDir();
-        return EngineRoot.empty() ? std::filesystem::path {}
-            : EngineRoot / "Saved/Editor/McpServer.ini";
-    }
-
-    void SaveMcpSettings()
-    {
-        const std::filesystem::path Path = GetMcpSettingsPath();
-        if (Path.empty()) return;
-        FConfigFile Config;
-        Config.SetString("Server", "Enabled", bMcpEnabled ? "true" : "false");
-        Config.SetString("Server", "Port", std::to_string(McpPort));
-        Config.SetString("Server", "Endpoint", McpEndpoint);
-        Config.SetString("Server", "BearerToken", McpBearerToken);
-        if (McpAdapter)
-        {
-            for (const std::string& Toolset : McpAdapter->GetToolsetNames())
-                Config.SetString("Toolsets", Toolset,
-                    McpAdapter->IsToolsetEnabled(Toolset) ? "true" : "false");
-        }
-        if (!Config.Save(Path))
-            McpUiError = "Could not save editor-local MCP settings";
-    }
-
-    bool StartMcpServer()
-    {
-        if (!McpServer) return false;
-        FMcpHttpServerConfig Config;
-        Config.Port = static_cast<std::uint16_t>(McpPort);
-        Config.Endpoint = McpEndpoint;
-        Config.BearerToken = McpBearerToken;
-        std::string Error;
-        if (!McpServer->Start(std::move(Config), &Error))
-        {
-            McpUiError = std::move(Error);
-            return false;
-        }
-        McpUiError.clear();
-        return true;
-    }
-
-    void InitializeMcpServer()
-    {
-        McpAdapter = std::make_unique<FMcpAgentToolsetAdapter>(
-            ExecutionService, EditorTools.BuildToolCatalogJson(), "1.0.0",
-            [this](const FMcpToolCallContext&)
-            {
-                ExecutionService.SetSessionId("mcp-local");
-                ExecutionService.SetTurnIntent(EAgentTurnIntent::General);
-                ExecutionService.SetAllowedTools({});
-            });
-        if (!McpAdapter->IsValid())
-        {
-            McpUiError = McpAdapter->GetError();
-            return;
-        }
-        McpCore = std::make_unique<FMcpServerCore>(*McpAdapter,
-            FMcpServerInfo {"PicoEditor", "0.1.0",
-                "Pico Editor tools execute through approval, transaction, verification, and Game Thread dispatch."});
-        McpServer = std::make_unique<FMcpHttpServer>(*McpCore);
-
-        FConfigFile Config;
-        const std::filesystem::path Path = GetMcpSettingsPath();
-        if (!Path.empty()) Config.Load(Path);
-        bMcpEnabled = Config.GetBool("Server", "Enabled", false);
-        McpPort = std::clamp(Config.GetInt("Server", "Port", 8765), 1024, 65535);
-        McpEndpoint = Config.GetString("Server", "Endpoint", "/mcp");
-        std::snprintf(McpEndpointInput.data(), McpEndpointInput.size(), "%s",
-            McpEndpoint.c_str());
-        McpBearerToken = Config.GetString("Server", "BearerToken", "");
-        for (const auto& [Toolset, Enabled] : Config.GetSectionEntries("Toolsets"))
-        {
-            const std::string LowerEnabled = LowerAscii(Enabled);
-            McpAdapter->SetToolsetEnabled(Toolset,
-                LowerEnabled == "true" || LowerEnabled == "1"
-                    || LowerEnabled == "yes" || LowerEnabled == "on");
-        }
-        if (McpBearerToken.size() < 32)
-        {
-            McpBearerToken = GenerateMcpBearerToken();
-            SaveMcpSettings();
-        }
-        if (bMcpEnabled && !StartMcpServer()) bMcpEnabled = false;
-    }
-
-    void DrawMcpSettings()
-    {
-        if (!ImGui::CollapsingHeader("Local MCP Server")) return;
-        bool bEnabled = bMcpEnabled;
-        if (ImGui::Checkbox("Enabled##McpServer", &bEnabled))
-        {
-            if (bEnabled)
-            {
-                bMcpEnabled = StartMcpServer();
-            }
-            else
-            {
-                if (McpServer) McpServer->Stop();
-                bMcpEnabled = false;
-            }
-            SaveMcpSettings();
-        }
-
-        ImGui::BeginDisabled(bMcpEnabled);
-        ImGui::SetNextItemWidth(130.0f);
-        if (ImGui::InputInt("Port##McpServer", &McpPort))
-            McpPort = std::clamp(McpPort, 1024, 65535);
-        if (ImGui::IsItemDeactivatedAfterEdit()) SaveMcpSettings();
-        ImGui::SetNextItemWidth(180.0f);
-        if (ImGui::InputText("Endpoint##McpServer", McpEndpointInput.data(),
-                McpEndpointInput.size()))
-        {
-            McpEndpoint = McpEndpointInput.data();
-        }
-        if (ImGui::IsItemDeactivatedAfterEdit()) SaveMcpSettings();
-        ImGui::EndDisabled();
-
-        const FMcpHttpServerStatus McpStatus = McpServer
-            ? McpServer->GetStatus() : FMcpHttpServerStatus {};
-        ImGui::SameLine();
-        ImGui::TextColored(McpStatus.bRunning
-                ? ImVec4(0.36f, 0.82f, 0.48f, 1.0f)
-                : ImVec4(0.72f, 0.72f, 0.72f, 1.0f),
-            McpStatus.bRunning ? "Running" : "Stopped");
-        ImGui::Text("Endpoint: http://127.0.0.1:%d%s",
-            McpPort, McpEndpoint.c_str());
-        ImGui::Text("Accepted: %llu | Rejected: %llu | Active: %llu",
-            static_cast<unsigned long long>(McpStatus.AcceptedRequests),
-            static_cast<unsigned long long>(McpStatus.RejectedRequests),
-            static_cast<unsigned long long>(McpStatus.ActiveRequests));
-
-        if (ImGui::Button("Copy Token"))
-        {
-            ImGui::SetClipboardText(McpBearerToken.c_str());
-            McpUiStatus = "MCP bearer token copied";
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Copy Client Config"))
-        {
-            const FJson ClientConfig = {
-                {"mcpServers", {{"pico-editor", {
-                    {"type", "http"},
-                    {"url", "http://127.0.0.1:" + std::to_string(McpPort)
-                        + McpEndpoint},
-                    {"protocolEra", "modern"},
-                    {"headers", {{"Authorization",
-                        "Bearer " + McpBearerToken}}}}}}}};
-            ImGui::SetClipboardText(ClientConfig.dump(2).c_str());
-            McpUiStatus = "MCP client config copied";
-        }
-        ImGui::SameLine();
-        ImGui::BeginDisabled(bMcpEnabled);
-        if (ImGui::Button("Regenerate Token"))
-        {
-            McpBearerToken = GenerateMcpBearerToken();
-            SaveMcpSettings();
-            McpUiStatus = "MCP bearer token regenerated";
-        }
-        ImGui::EndDisabled();
-
-        if (McpAdapter && ImGui::TreeNode("Exposed Toolsets"))
-        {
-            for (const std::string& Toolset : McpAdapter->GetToolsetNames())
-            {
-                bool bToolsetEnabled = McpAdapter->IsToolsetEnabled(Toolset);
-                if (ImGui::Checkbox(Toolset.c_str(), &bToolsetEnabled))
-                {
-                    McpAdapter->SetToolsetEnabled(Toolset, bToolsetEnabled);
-                    SaveMcpSettings();
-                }
-            }
-            ImGui::TreePop();
-        }
-        if (!McpUiStatus.empty())
-            ImGui::TextColored(ImVec4(0.50f, 0.82f, 0.62f, 1.0f),
-                "%s", McpUiStatus.c_str());
-        const std::string Error = !McpUiError.empty()
-            ? McpUiError : McpStatus.LastError;
-        if (!Error.empty())
-            ImGui::TextColored(ImVec4(1.0f, 0.42f, 0.36f, 1.0f),
-                "%s", Error.c_str());
-        ImGui::TextDisabled("Settings: %s",
-            GetMcpSettingsPath().string().c_str());
     }
 
     void RefreshSessionList(bool bSelectLatest)
@@ -1284,9 +933,8 @@ struct FAgentChatWorkspace::FImpl
             {
                 std::string Error;
                 std::optional<std::filesystem::path> ProjectToOpen;
-                ExecutionService.SetSessionId(SelectedSessionId);
-                ExecutionService.SetTurnIntent(SelectedIntent);
-                ExecutionService.SetAllowedTools(ActiveSkills);
+                AgentHost->ConfigureSession(
+                    SelectedSessionId, SelectedIntent, ActiveSkills);
                 auto Session = FAgentSession::OpenOrCreate(
                     SelectedSessionId, SelectedSessionPath, &Error);
                 FAgentRunResult Result;
@@ -1395,7 +1043,7 @@ struct FAgentChatWorkspace::FImpl
 
     void Cancel()
     {
-        Approval.CancelWait();
+        if (AgentHost) AgentHost->CancelPendingApproval();
         if (ActiveTask) ActiveTask->RequestCancel();
     }
 
@@ -1562,7 +1210,6 @@ struct FAgentChatWorkspace::FImpl
             ImGui::TextDisabled(
                 "Environment variables override editor-local Saved/Editor/Agent/ApiKeys.ini values.");
         }
-        DrawMcpSettings();
 
         std::string CurrentStatus;
         std::vector<FChatLine> CurrentLines;
@@ -1629,26 +1276,6 @@ struct FAgentChatWorkspace::FImpl
         }
         ImGui::Separator();
         ImGui::Text("Status: %s", CurrentStatus.c_str());
-
-        FAgentToolCall PendingCall;
-        EAgentToolPermission PendingPermission;
-        std::string PendingDescription;
-        if (Approval.GetPending(PendingCall, PendingPermission, PendingDescription))
-        {
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.20f, 0.17f, 0.08f, 1.0f));
-            ImGui::BeginChild("AgentApproval", ImVec2(0.0f, 190.0f), true);
-            ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.28f, 1.0f), "需要你的批准");
-            ImGui::Text("操作：%s", ApprovalToolDisplayName(PendingCall.Name));
-            ImGui::Text("权限：%s", ApprovalPermissionDisplayName(PendingPermission));
-            ImGui::TextDisabled("工具：%s", PendingCall.Name.c_str());
-            ImGui::TextWrapped("说明：%s", ApprovalToolDescription(PendingCall.Name));
-            ImGui::TextWrapped("参数：%s", PendingCall.ArgumentsJson.c_str());
-            if (ImGui::Button("批准")) Approval.Decide(true);
-            ImGui::SameLine();
-            if (ImGui::Button("拒绝")) Approval.Decide(false);
-            ImGui::EndChild();
-            ImGui::PopStyleColor();
-        }
 
         const float ComposerHeight = 118.0f;
         ImGui::BeginChild("AgentConversation", ImVec2(0.0f,
@@ -1784,24 +1411,17 @@ struct FAgentChatWorkspace::FImpl
     void Shutdown()
     {
         if (bShutdown.exchange(true)) return;
-        if (McpServer) McpServer->Stop();
-        Approval.Shutdown();
         if (ActiveTask) ActiveTask->RequestCancel();
-        ExecutionService.Shutdown();
     }
 
-    FEngineLoop* EngineLoop = nullptr;
+    FEditorAgentHost* AgentHost = nullptr;
     FTaskSystem* TaskSystem = nullptr;
     FGameThreadDispatcher* Dispatcher = nullptr;
-    FInteractiveApproval Approval;
     FAgentCredentialStore CredentialStore;
     FAgentKnowledgeStore KnowledgeStore;
     FAgentSkillRegistry SkillRegistry;
-    FEditorAgentToolExecutor EditorTools;
-    FEditorAgentExecutionService ExecutionService;
-    std::unique_ptr<FMcpAgentToolsetAdapter> McpAdapter;
-    std::unique_ptr<FMcpServerCore> McpCore;
-    std::unique_ptr<FMcpHttpServer> McpServer;
+    FEditorAgentToolExecutor& EditorTools;
+    FEditorAgentExecutionService& ExecutionService;
     std::optional<FTaskHandle> ActiveTask;
     std::string SessionId;
     std::filesystem::path SessionPath;
@@ -1820,7 +1440,6 @@ struct FAgentChatWorkspace::FImpl
     std::array<char, 2048> Input {};
     std::array<char, 128> Model {};
     std::array<char, 640> ApiKeyInput {};
-    std::array<char, 128> McpEndpointInput {};
     EChatProvider Provider = EChatProvider::Fake;
     std::atomic<bool> bRunning {false};
     std::atomic<bool> bShutdown {false};
@@ -1830,37 +1449,15 @@ struct FAgentChatWorkspace::FImpl
     bool bStoredCredential = false;
     std::string CredentialError;
     std::string PreferenceError;
-    bool bMcpEnabled = false;
-    int McpPort = 8765;
-    std::string McpEndpoint = "/mcp";
-    std::string McpBearerToken;
-    std::string McpUiStatus;
-    std::string McpUiError;
     std::function<void(const std::filesystem::path&)> RequestProjectOpen;
 };
 
 FAgentChatWorkspace::FAgentChatWorkspace(
-    FEngineLoop* EngineLoop,
-    FEditorSelection* Selection,
-    FEditorTransactionManager* Transactions,
+    FEditorAgentHost* AgentHost,
     FTaskSystem* TaskSystem,
     FGameThreadDispatcher* Dispatcher,
-    std::function<void()> OnWorldChanged,
-    FEditorCommandService* Commands,
-    FEditorWorldDocument* WorldDocument,
-    std::function<std::pair<bool, std::string>(
-        const std::filesystem::path&, const std::string&, bool)> StartPackage,
-    std::function<FEditorAgentPackageCompletion(
-        const FCancellationToken*)> WaitForPackage,
-    std::function<std::pair<bool, std::string>()> StartPlay,
-    std::function<std::pair<bool, std::string>()> StopPlay,
-    FEditorTransactionManager::FRestoreSnapshot RestoreSnapshot,
     std::function<void(const std::filesystem::path&)> RequestProjectOpen)
-    : Impl(std::make_unique<FImpl>(EngineLoop, Selection, Transactions,
-        TaskSystem, Dispatcher, std::move(OnWorldChanged), Commands,
-        WorldDocument, std::move(StartPackage), std::move(WaitForPackage),
-        std::move(StartPlay),
-        std::move(StopPlay), std::move(RestoreSnapshot),
+    : Impl(std::make_unique<FImpl>(AgentHost, TaskSystem, Dispatcher,
         std::move(RequestProjectOpen)))
 {
 }
