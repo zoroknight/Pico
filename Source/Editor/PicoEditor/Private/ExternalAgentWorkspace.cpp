@@ -66,6 +66,8 @@ struct FExternalAgentWorkspace::FImpl
         Config.SetString("Server", "Port", std::to_string(Port));
         Config.SetString("Server", "Endpoint", Endpoint);
         Config.SetString("Server", "BearerToken", BearerToken);
+        Config.SetString(
+            "Workspace", "ToolsetsOpen", bToolsetsOpen ? "true" : "false");
         if (Adapter)
         {
             for (const std::string& Toolset : Adapter->GetToolsetNames())
@@ -130,6 +132,7 @@ struct FExternalAgentWorkspace::FImpl
             Adapter->SetToolsetEnabled(Toolset,
                 Value == "true" || Value == "1" || Value == "yes" || Value == "on");
         }
+        bToolsetsOpen = Config.GetBool("Workspace", "ToolsetsOpen", false);
         if (BearerToken.size() < 32)
         {
             BearerToken = GenerateMcpBearerToken();
@@ -203,7 +206,18 @@ struct FExternalAgentWorkspace::FImpl
         }
         ImGui::EndDisabled();
 
-        if (Adapter && ImGui::TreeNode("Exposed Toolsets"))
+        bool bToolsetsNodeOpen = false;
+        if (Adapter)
+        {
+            ImGui::SetNextItemOpen(bToolsetsOpen, ImGuiCond_Always);
+            bToolsetsNodeOpen = ImGui::TreeNode("Exposed Toolsets");
+        }
+        if (bToolsetsNodeOpen != bToolsetsOpen)
+        {
+            bToolsetsOpen = bToolsetsNodeOpen;
+            SaveSettings();
+        }
+        if (bToolsetsNodeOpen)
         {
             for (const std::string& Toolset : Adapter->GetToolsetNames())
             {
@@ -281,6 +295,7 @@ struct FExternalAgentWorkspace::FImpl
     std::vector<std::unique_ptr<IExternalAgentConnector>> Connectors;
     std::array<char, 128> EndpointInput {};
     bool bEnabled = false;
+    bool bToolsetsOpen = false;
     bool bShutdown = false;
     int Port = 8765;
     std::string Endpoint = "/mcp";

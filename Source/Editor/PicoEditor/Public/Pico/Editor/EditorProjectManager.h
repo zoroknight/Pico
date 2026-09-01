@@ -45,6 +45,8 @@ struct FEditorSessionState
     FAssetPath LastWorld;
     FAssetPath OpenActorBlueprint;
     FAssetPath OpenSkeletalAsset;
+    bool bAgentChatOpen = true;
+    bool bExternalAgentsOpen = false;
 
     bool Load(const std::filesystem::path& FilePath);
     bool Save(const std::filesystem::path& FilePath) const;

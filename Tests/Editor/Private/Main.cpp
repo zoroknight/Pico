@@ -501,14 +501,18 @@ void TestEditorProjectManager(FTestRunner& Runner)
     Pico::FAssetPath::TryParse(
         "/Game/Characters/BP_Knight.pblueprint",
         Session.OpenActorBlueprint);
+    Session.bAgentChatOpen = false;
+    Session.bExternalAgentsOpen = true;
     const std::filesystem::path SessionFile = Root / "EditorSession.ini";
     Pico::FEditorSessionState LoadedSession;
     Runner.Expect(
         Session.Save(SessionFile)
             && LoadedSession.Load(SessionFile)
             && LoadedSession.LastWorld == Session.LastWorld
-            && LoadedSession.OpenActorBlueprint == Session.OpenActorBlueprint,
-        "Editor session restores the last World and open Actor Blueprint");
+            && LoadedSession.OpenActorBlueprint == Session.OpenActorBlueprint
+            && !LoadedSession.bAgentChatOpen
+            && LoadedSession.bExternalAgentsOpen,
+        "Editor session restores documents and workspace visibility");
 
     std::filesystem::remove_all(Root, Error);
 }

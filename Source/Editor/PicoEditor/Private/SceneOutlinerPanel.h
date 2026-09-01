@@ -38,10 +38,17 @@ public:
         FApplyResult ApplyResult);
 
 private:
+    enum class ESortColumn
+    {
+        Name,
+        Type
+    };
+
     void DrawLevelNode(PLevel* Level);
     void DrawActorNode(PActor* Actor);
     void DrawComponentNode(PActorComponent* Component, PActor* Owner);
     void BuildObjectOrder(PWorld* CurrentWorld);
+    std::vector<PActor*> GetSortedActors(PLevel* Level) const;
     void CollectComponentOrder(PActorComponent* Component);
     void DrawActorContextMenu(PActor* Actor);
     void DrawComponentContextMenu(PActorComponent* Component);
@@ -68,5 +75,7 @@ private:
     FBeginRename RequestRename;
     FApplyResult ApplyResult;
     std::vector<PObject*> OrderedObjects;
+    ESortColumn SortColumn = ESortColumn::Name;
+    bool bSortAscending = true;
 };
 }

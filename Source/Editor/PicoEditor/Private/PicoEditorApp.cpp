@@ -268,6 +268,11 @@ FPicoEditorApp::FPicoEditorApp(
         "Editor/EditorSession.ini",
         SessionPath);
     const bool bHasSession = bHasSessionPath && Session.Load(SessionPath);
+    if (bHasSession)
+    {
+        bAgentChatOpen = Session.bAgentChatOpen;
+        bExternalAgentsOpen = Session.bExternalAgentsOpen;
+    }
     bool bOpenedWorld = false;
     if (bHasSession && Session.LastWorld.IsValid())
     {
@@ -2935,10 +2940,14 @@ void FPicoEditorApp::SaveEditorSession(bool bForce)
     {
         Session.OpenSkeletalAsset = SkeletalAssetEditor.GetOpenedAsset();
     }
+    Session.bAgentChatOpen = bAgentChatOpen;
+    Session.bExternalAgentsOpen = bExternalAgentsOpen;
     const std::string Fingerprint =
         std::string(Session.LastWorld.ToString()) + "|"
         + std::string(Session.OpenActorBlueprint.ToString()) + "|"
-        + std::string(Session.OpenSkeletalAsset.ToString());
+        + std::string(Session.OpenSkeletalAsset.ToString()) + "|"
+        + (Session.bAgentChatOpen ? "1" : "0") + "|"
+        + (Session.bExternalAgentsOpen ? "1" : "0");
     if (!bForce && Fingerprint == SavedSessionFingerprint)
     {
         return;

@@ -17,7 +17,10 @@ workspace.
 
 The existing panel functions still own their original responsibilities:
 
-- Scene Outliner traverses and selects runtime objects.
+- Scene Outliner traverses and selects runtime objects. Its `Actor` and `Type` columns sort Actor
+  peers by label or reflected type while preserving World, Level, and Component hierarchy. Generic
+  `Actor` instances include their root Component type so authored Cube, Camera, and Light-style
+  objects remain distinguishable without introducing one-off Actor subclasses.
 - Viewport displays the OpenGL framebuffer and owns editor-camera input.
 - Details edits Actor, Component, Transform, and reflected-property state.
 
@@ -33,6 +36,13 @@ After `FEngineLoop::PreInit` establishes the active project, PicoEditor asks `FP
 
 ImGui loads and saves window positions, sizes, tabs, and Dock node relationships there. The backing
 path string remains alive until ImGui shuts down, and the layout is saved explicitly at exit.
+
+Window visibility is stored separately in the project-local `EditorSession.ini`, because a window
+that is closed is not submitted to ImGui and therefore cannot recover its own open flag. AI Chat
+panel expansion, request timeout, retry count, Provider, and model remain editor-local preferences
+under `Saved/Editor/Agent/ChatSettings.ini`; External Agents stores its Toolset expansion beside its
+MCP host settings. Transient Combo popups are deliberately closed on restart, while their selected
+values remain persistent.
 
 If no valid project write path exists, ini persistence is disabled. PicoEditor never falls back to
 writing `imgui.ini` beside the engine source.

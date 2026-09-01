@@ -8,6 +8,7 @@
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/World.h"
+#include "Pico/Object/Class.h"
 #include "Pico/Object/Object.h"
 #include "Pico/Object/ObjectGlobals.h"
 
@@ -53,6 +54,32 @@ bool ContainsComponent(PSceneComponent* Component, FObjectHandle Handle)
     }
     return false;
 }
+
+std::string GetObjectTypeName(const PObject* Object)
+{
+    std::string TypeName = Object != nullptr && Object->GetClass() != nullptr
+        ? Object->GetClass()->GetName().ToString()
+        : "Unknown";
+    if (TypeName.size() > 1 && TypeName.front() == 'P'
+        && TypeName[1] >= 'A' && TypeName[1] <= 'Z')
+    {
+        TypeName.erase(TypeName.begin());
+    }
+    return TypeName;
+}
+
+std::string GetActorTypeName(const PActor* Actor)
+{
+    const std::string ClassName = GetObjectTypeName(Actor);
+    if (Actor == nullptr || Actor->GetClass() != PActor::StaticClass())
+    {
+        return ClassName;
+    }
+    PSceneComponent* Root = Actor->GetRootComponent();
+    return Root != nullptr
+        ? ClassName + " (" + GetObjectTypeName(Root) + ")"
+        : ClassName;
+}
 }
 
 void FSceneOutlinerPanel::Draw(
@@ -78,8 +105,38 @@ void FSceneOutlinerPanel::Draw(
         ImGui::TextDisabled("No active world");
         return;
     }
+    constexpr ImGuiTableFlags TableFlags =
+        ImGuiTableFlags_BordersInnerV
+        | ImGuiTableFlags_Resizable
+        | ImGuiTableFlags_RowBg
+        | ImGuiTableFlags_ScrollX
+        | ImGuiTableFlags_Sortable
+        | ImGuiTableFlags_SizingStretchProp;
+    if (!ImGui::BeginTable("SceneOutlinerObjects", 2, TableFlags))
+    {
+        return;
+    }
+    ImGui::TableSetupColumn(
+        "Actor",
+        ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_WidthStretch,
+        0.68f);
+    ImGui::TableSetupColumn(
+        "Type", ImGuiTableColumnFlags_WidthStretch, 0.32f);
+    ImGui::TableHeadersRow();
+
+    if (const ImGuiTableSortSpecs* SortSpecs = ImGui::TableGetSortSpecs();
+        SortSpecs != nullptr && SortSpecs->SpecsCount > 0)
+    {
+        const ImGuiTableColumnSortSpecs& PrimarySort = SortSpecs->Specs[0];
+        SortColumn = PrimarySort.ColumnIndex == 1
+            ? ESortColumn::Type : ESortColumn::Name;
+        bSortAscending =
+            PrimarySort.SortDirection != ImGuiSortDirection_Descending;
+    }
     BuildObjectOrder(CurrentWorld);
 
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
     PushObjectId(CurrentWorld);
     ImGuiTreeNodeFlags Flags =
         ImGuiTreeNodeFlags_DefaultOpen
@@ -122,6 +179,8 @@ void FSceneOutlinerPanel::Draw(
         ImGui::EndDisabled();
         ImGui::EndPopup();
     }
+    ImGui::TableSetColumnIndex(1);
+    ImGui::TextDisabled("%s", GetObjectTypeName(CurrentWorld).c_str());
     if (bOpen)
     {
         for (PLevel* Level : CurrentWorld->GetLevels())
@@ -131,6 +190,7 @@ void FSceneOutlinerPanel::Draw(
         ImGui::TreePop();
     }
     PopObjectId();
+    ImGui::EndTable();
 }
 
 void FSceneOutlinerPanel::DrawLevelNode(PLevel* Level)
@@ -140,6 +200,8 @@ void FSceneOutlinerPanel::DrawLevelNode(PLevel* Level)
         return;
     }
 
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
     PushObjectId(Level);
     ImGuiTreeNodeFlags Flags =
         ImGuiTreeNodeFlags_DefaultOpen
@@ -182,9 +244,11 @@ void FSceneOutlinerPanel::DrawLevelNode(PLevel* Level)
         ImGui::EndDisabled();
         ImGui::EndPopup();
     }
+    ImGui::TableSetColumnIndex(1);
+    ImGui::TextDisabled("%s", GetObjectTypeName(Level).c_str());
     if (bOpen)
     {
-        for (PActor* Actor : Level->GetActors())
+        for (PActor* Actor : GetSortedActors(Level))
         {
             DrawActorNode(Actor);
         }
@@ -201,6 +265,8 @@ void FSceneOutlinerPanel::DrawActorNode(PActor* Actor)
     }
 
     const std::vector<PActorComponent*> Components = Actor->GetComponents();
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
     PushObjectId(Actor);
     ImGuiTreeNodeFlags Flags =
         ImGuiTreeNodeFlags_OpenOnArrow
@@ -233,6 +299,8 @@ void FSceneOutlinerPanel::DrawActorNode(PActor* Actor)
         Select(Actor);
     }
     DrawActorContextMenu(Actor);
+    ImGui::TableSetColumnIndex(1);
+    ImGui::TextDisabled("%s", GetActorTypeName(Actor).c_str());
     if (bOpen && !Components.empty())
     {
         PSceneComponent* RootComponent = Actor->GetRootComponent();
@@ -275,6 +343,8 @@ void FSceneOutlinerPanel::DrawComponentNode(PActorComponent* Component, PActor* 
         ? SceneComponent->GetAttachChildren()
         : std::vector<PSceneComponent*> {};
 
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
     PushObjectId(Component);
     ImGuiTreeNodeFlags Flags =
         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
@@ -312,6 +382,8 @@ void FSceneOutlinerPanel::DrawComponentNode(PActorComponent* Component, PActor* 
         Select(Component);
     }
     DrawComponentContextMenu(Component);
+    ImGui::TableSetColumnIndex(1);
+    ImGui::TextDisabled("%s", GetObjectTypeName(Component).c_str());
     if (bOpen && !Children.empty())
     {
         for (PSceneComponent* Child : Children)
@@ -480,7 +552,7 @@ void FSceneOutlinerPanel::BuildObjectOrder(PWorld* CurrentWorld)
             continue;
         }
         OrderedObjects.push_back(Level);
-        for (PActor* Actor : Level->GetActors())
+        for (PActor* Actor : GetSortedActors(Level))
         {
             if (Actor == nullptr)
             {
@@ -509,6 +581,37 @@ void FSceneOutlinerPanel::BuildObjectOrder(PWorld* CurrentWorld)
             }
         }
     }
+}
+
+std::vector<PActor*> FSceneOutlinerPanel::GetSortedActors(PLevel* Level) const
+{
+    std::vector<PActor*> Actors = Level != nullptr
+        ? Level->GetActors() : std::vector<PActor*> {};
+    std::stable_sort(
+        Actors.begin(), Actors.end(),
+        [this](const PActor* Left, const PActor* Right)
+        {
+            if (Left == nullptr || Right == nullptr)
+            {
+                return bSortAscending ? Left != nullptr : Right == nullptr;
+            }
+            const std::string LeftName = Left->GetName().ToString();
+            const std::string RightName = Right->GetName().ToString();
+            const std::string LeftType = GetActorTypeName(Left);
+            const std::string RightType = GetActorTypeName(Right);
+            const std::string& LeftPrimary =
+                SortColumn == ESortColumn::Type ? LeftType : LeftName;
+            const std::string& RightPrimary =
+                SortColumn == ESortColumn::Type ? RightType : RightName;
+            if (LeftPrimary != RightPrimary)
+            {
+                return bSortAscending
+                    ? LeftPrimary < RightPrimary
+                    : LeftPrimary > RightPrimary;
+            }
+            return LeftName < RightName;
+        });
+    return Actors;
 }
 
 void FSceneOutlinerPanel::CollectComponentOrder(PActorComponent* Component)

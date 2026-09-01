@@ -9,7 +9,7 @@ serialization, worlds, actors, components, transforms, editor tooling, and rende
 Pico is not intended to compete with production engines. It deliberately keeps each system small
 enough to study while preserving clear ownership boundaries and an end-to-end runtime.
 
-![Pico Editor scene workspace with a restored skeletal asset preview](Docs/Images/PicoEditorSkeletalWorkspace.png)
+![Pico Editor workspace with Scene Outliner, viewport, AI Chat, and Content Browser](Docs/Images/PicoEditorSkeletalWorkspace.png)
 
 ## Current State
 

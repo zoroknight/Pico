@@ -619,6 +619,19 @@ struct FAgentChatWorkspace::FImpl
         const std::string SavedModel = Config.GetString("Models",
             ProviderSessionSlug(Provider), DefaultModelForProvider(Provider));
         std::snprintf(Model.data(), Model.size(), "%s", SavedModel.c_str());
+        TimeoutSeconds = std::clamp(
+            Config.GetInt("Request", "TimeoutSeconds", 30), 5, 120);
+        MaxRetries = std::clamp(
+            Config.GetInt("Request", "MaxRetries", 2), 0, 3);
+        bApiKeyPanelOpen = Config.GetBool("Panels", "ApiKeyOpen", true);
+        bRequestSettingsOpen =
+            Config.GetBool("Panels", "RequestSettingsOpen", false);
+        bGroundingSkillsOpen =
+            Config.GetBool("Panels", "GroundingSkillsOpen", false);
+        bAgentMetricsOpen =
+            Config.GetBool("Panels", "AgentMetricsOpen", true);
+        bAgentRecoveryOpen =
+            Config.GetBool("Panels", "AgentRecoveryOpen", true);
     }
 
     void SaveChatPreferences()
@@ -631,6 +644,19 @@ struct FAgentChatWorkspace::FImpl
             Config.Load(Path);
         Config.SetString("Chat", "LastProvider", ProviderSessionSlug(Provider));
         Config.SetString("Models", ProviderSessionSlug(Provider), Model.data());
+        Config.SetString(
+            "Request", "TimeoutSeconds", std::to_string(TimeoutSeconds));
+        Config.SetString("Request", "MaxRetries", std::to_string(MaxRetries));
+        Config.SetString(
+            "Panels", "ApiKeyOpen", bApiKeyPanelOpen ? "true" : "false");
+        Config.SetString("Panels", "RequestSettingsOpen",
+            bRequestSettingsOpen ? "true" : "false");
+        Config.SetString("Panels", "GroundingSkillsOpen",
+            bGroundingSkillsOpen ? "true" : "false");
+        Config.SetString("Panels", "AgentMetricsOpen",
+            bAgentMetricsOpen ? "true" : "false");
+        Config.SetString("Panels", "AgentRecoveryOpen",
+            bAgentRecoveryOpen ? "true" : "false");
         if (!Config.Save(Path))
             PreferenceError = "Could not save editor-local AI Chat preferences";
         else
@@ -1099,8 +1125,15 @@ struct FAgentChatWorkspace::FImpl
             if (ImGui::IsItemDeactivatedAfterEdit()) SaveChatPreferences();
             ImGui::EndDisabled();
 
-            if (ImGui::CollapsingHeader(
-                    "API Key (Editor Local)", ImGuiTreeNodeFlags_DefaultOpen))
+            ImGui::SetNextItemOpen(bApiKeyPanelOpen, ImGuiCond_Always);
+            const bool bApiKeyOpen =
+                ImGui::CollapsingHeader("API Key (Editor Local)");
+            if (bApiKeyOpen != bApiKeyPanelOpen)
+            {
+                bApiKeyPanelOpen = bApiKeyOpen;
+                SaveChatPreferences();
+            }
+            if (bApiKeyOpen)
             {
                 ImGui::SetNextItemWidth(-1.0f);
                 ImGui::InputTextWithHint(
@@ -1203,10 +1236,19 @@ struct FAgentChatWorkspace::FImpl
             ImGui::TextColored(ImVec4(1.0f, 0.42f, 0.36f, 1.0f),
                 "%s", PreferenceError.c_str());
         }
-        if (ImGui::CollapsingHeader("Request Settings"))
+        ImGui::SetNextItemOpen(bRequestSettingsOpen, ImGuiCond_Always);
+        const bool bRequestOpen = ImGui::CollapsingHeader("Request Settings");
+        if (bRequestOpen != bRequestSettingsOpen)
+        {
+            bRequestSettingsOpen = bRequestOpen;
+            SaveChatPreferences();
+        }
+        if (bRequestOpen)
         {
             ImGui::SliderInt("Timeout (seconds)", &TimeoutSeconds, 5, 120);
+            if (ImGui::IsItemDeactivatedAfterEdit()) SaveChatPreferences();
             ImGui::SliderInt("Retries", &MaxRetries, 0, 3);
+            if (ImGui::IsItemDeactivatedAfterEdit()) SaveChatPreferences();
             ImGui::TextDisabled(
                 "Environment variables override editor-local Saved/Editor/Agent/ApiKeys.ini values.");
         }
@@ -1224,7 +1266,14 @@ struct FAgentChatWorkspace::FImpl
             CurrentKnowledgeHits = LastKnowledgeHits;
             CurrentSkillIds = LastActiveSkillIds;
         }
-        if (ImGui::CollapsingHeader("Grounding & Skills"))
+        ImGui::SetNextItemOpen(bGroundingSkillsOpen, ImGuiCond_Always);
+        const bool bGroundingOpen = ImGui::CollapsingHeader("Grounding & Skills");
+        if (bGroundingOpen != bGroundingSkillsOpen)
+        {
+            bGroundingSkillsOpen = bGroundingOpen;
+            SaveChatPreferences();
+        }
+        if (bGroundingOpen)
         {
             ImGui::Text("Knowledge records: %zu | Retrieved: %zu | Skills: %zu",
                 KnowledgeStore.GetRecordCount(), CurrentKnowledgeHits.size(),
@@ -1237,7 +1286,14 @@ struct FAgentChatWorkspace::FImpl
                 ImGui::BulletText("[K:%s] %.1f  %s",
                     Hit.Record.Id.c_str(), Hit.Score, Hit.Record.Title.c_str());
         }
-        if (ImGui::CollapsingHeader("Agent Metrics", ImGuiTreeNodeFlags_DefaultOpen))
+        ImGui::SetNextItemOpen(bAgentMetricsOpen, ImGuiCond_Always);
+        const bool bMetricsOpen = ImGui::CollapsingHeader("Agent Metrics");
+        if (bMetricsOpen != bAgentMetricsOpen)
+        {
+            bAgentMetricsOpen = bMetricsOpen;
+            SaveChatPreferences();
+        }
+        if (bMetricsOpen)
         {
             FAgentCounters MetricsCounters;
             std::uint64_t MetricsContextBytes = 0;
@@ -1259,9 +1315,18 @@ struct FAgentChatWorkspace::FImpl
         }
         const std::vector<FAgentOperationRecord> IncompleteOperations =
             ExecutionService.ListIncompleteOperations();
-        if (!IncompleteOperations.empty()
-            && ImGui::CollapsingHeader(
-                "Agent Recovery", ImGuiTreeNodeFlags_DefaultOpen))
+        bool bRecoveryOpen = false;
+        if (!IncompleteOperations.empty())
+        {
+            ImGui::SetNextItemOpen(bAgentRecoveryOpen, ImGuiCond_Always);
+            bRecoveryOpen = ImGui::CollapsingHeader("Agent Recovery");
+            if (bRecoveryOpen != bAgentRecoveryOpen)
+            {
+                bAgentRecoveryOpen = bRecoveryOpen;
+                SaveChatPreferences();
+            }
+        }
+        if (!IncompleteOperations.empty() && bRecoveryOpen)
         {
             ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.28f, 1.0f),
                 "检测到 %zu 个未完成提交的工具操作。", IncompleteOperations.size());
@@ -1445,6 +1510,11 @@ struct FAgentChatWorkspace::FImpl
     std::atomic<bool> bShutdown {false};
     int TimeoutSeconds = 30;
     int MaxRetries = 2;
+    bool bApiKeyPanelOpen = true;
+    bool bRequestSettingsOpen = false;
+    bool bGroundingSkillsOpen = false;
+    bool bAgentMetricsOpen = true;
+    bool bAgentRecoveryOpen = true;
     std::atomic<bool> bScrollToBottom {true};
     bool bStoredCredential = false;
     std::string CredentialError;

@@ -218,6 +218,8 @@ bool FEditorSessionState::Load(const std::filesystem::path& FilePath)
     LastWorld = {};
     OpenActorBlueprint = {};
     OpenSkeletalAsset = {};
+    bAgentChatOpen = true;
+    bExternalAgentsOpen = false;
     FConfigFile Config;
     if (!Config.Load(FilePath))
     {
@@ -226,6 +228,9 @@ bool FEditorSessionState::Load(const std::filesystem::path& FilePath)
     ParseAssetPath(Config, "LastWorld", LastWorld);
     ParseAssetPath(Config, "OpenActorBlueprint", OpenActorBlueprint);
     ParseAssetPath(Config, "OpenSkeletalAsset", OpenSkeletalAsset);
+    bAgentChatOpen = Config.GetBool("Workspace", "AgentChatOpen", true);
+    bExternalAgentsOpen =
+        Config.GetBool("Workspace", "ExternalAgentsOpen", false);
     return true;
 }
 
@@ -249,6 +254,11 @@ bool FEditorSessionState::Save(const std::filesystem::path& FilePath) const
             "Session", "OpenSkeletalAsset",
             std::string(OpenSkeletalAsset.ToString()));
     }
+    Config.SetString(
+        "Workspace", "AgentChatOpen", bAgentChatOpen ? "true" : "false");
+    Config.SetString(
+        "Workspace", "ExternalAgentsOpen",
+        bExternalAgentsOpen ? "true" : "false");
     return Config.Save(FilePath);
 }
 }
