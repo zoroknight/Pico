@@ -163,6 +163,8 @@ public:
     std::vector<std::string> GetRevisionWriteSet(
         const FAgentToolCall& Call) const override;
     void PrepareApproval(const FAgentToolCall& Call) override;
+    bool PrepareApprovalDecision(
+        const FAgentToolCall& Call, bool bApproved) override;
     std::string GetLastExecutionTraceJson() const override;
     FAgentToolResult Execute(
         const FAgentToolCall& Call,

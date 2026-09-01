@@ -2,7 +2,9 @@
 
 #include <chrono>
 #include <cstddef>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -46,12 +48,36 @@ struct FMcpToolCallResult
     bool bIsError = false;
     std::string Text;
     std::string StructuredContentJson;
+    bool bInputRequired = false;
+    std::string InputRequestsJson;
+    std::string RequestState;
 };
+
+struct FMcpFormElicitationRequest
+{
+    std::string Message;
+    std::string RequestedSchemaJson;
+    std::string MetaJson;
+};
+
+struct FMcpFormElicitationResponse
+{
+    std::string Action;
+    std::string ContentJson;
+};
+
+using FMcpFormElicitationHandler = std::function<
+    std::optional<FMcpFormElicitationResponse>(
+        const FMcpFormElicitationRequest&)>;
 
 struct FMcpToolCallContext
 {
     std::string PeerId;
     std::string RequestId;
+    bool bSupportsFormElicitation = false;
+    std::string InputResponsesJson;
+    std::string RequestState;
+    FMcpFormElicitationHandler FormElicitation;
 };
 
 class FMcpCancellationToken
@@ -85,6 +111,7 @@ struct FMcpRequestContext
     // A transport-supplied identity used only to correlate in-flight requests,
     // cancellation, and legacy sessions. Modern MCP semantics remain stateless.
     std::string PeerId;
+    FMcpFormElicitationHandler FormElicitation;
 };
 
 struct FMcpMessageResult

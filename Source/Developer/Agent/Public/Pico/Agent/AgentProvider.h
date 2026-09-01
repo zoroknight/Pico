@@ -54,6 +54,8 @@ public:
     virtual std::vector<std::string> GetRevisionWriteSet(
         const FAgentToolCall& Call) const;
     virtual void PrepareApproval(const FAgentToolCall& Call);
+    virtual bool PrepareApprovalDecision(
+        const FAgentToolCall& Call, bool bApproved);
     virtual void CommitDurableResult(const FAgentToolCall& Call);
     virtual std::string GetLastExecutionTraceJson() const;
     virtual FAgentToolResult Execute(

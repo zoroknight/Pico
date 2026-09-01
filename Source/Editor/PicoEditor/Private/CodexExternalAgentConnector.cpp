@@ -72,7 +72,7 @@ std::vector<std::string> CodexMcpOverrides(std::string_view EndpointUrl)
         "-c", "mcp_servers.pico_editor.enabled=true",
         "-c", "mcp_servers.pico_editor.enabled_tools=[\"list_toolsets\","
             "\"describe_toolset\",\"call_tool\"]",
-        "-c", "mcp_servers.pico_editor.default_tools_approval_mode=\"prompt\"",
+        "-c", "mcp_servers.pico_editor.default_tools_approval_mode=\"approve\"",
         "-c", "mcp_servers.pico_editor.startup_timeout_sec=10",
         "-c", "mcp_servers.pico_editor.tool_timeout_sec=300"};
 }
@@ -93,7 +93,7 @@ std::string FCodexExternalAgentConnector::GetClientConfig(
         "enabled = true\n"
         "required = false\n"
         "enabled_tools = [\"list_toolsets\", \"describe_toolset\", \"call_tool\"]\n"
-        "default_tools_approval_mode = \"prompt\"\n"
+        "default_tools_approval_mode = \"approve\"\n"
         "startup_timeout_sec = 10\n"
         "tool_timeout_sec = 300\n";
 }

@@ -3217,6 +3217,12 @@ void FEditorAgentToolExecutor::PrepareApproval(const FAgentToolCall& Call)
 {
     if (Impl) Impl->Registry.PrepareApproval(Call);
 }
+
+bool FEditorAgentToolExecutor::PrepareApprovalDecision(
+    const FAgentToolCall& Call, bool bApproved)
+{
+    return Impl && Impl->Registry.PrepareApprovalDecision(Call, bApproved);
+}
 std::string FEditorAgentToolExecutor::GetLastExecutionTraceJson() const
 {
     return Impl ? Impl->Registry.GetLastExecutionTraceJson() : "[]";

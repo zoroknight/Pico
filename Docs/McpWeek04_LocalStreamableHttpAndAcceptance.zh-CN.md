@@ -82,10 +82,27 @@ MCP 不再属于 AI Chat。`PicoEditorApp` 持有共享 `EditorAgentHost`，内�
 3. 回到 Editor 点击 Codex 的 `Launch CLI`。新控制台中的 Codex 以当前项目为工作目录，并从仅该进程继承的
    `PICO_MCP_BEARER_TOKEN` 读取认证信息。
 
-外部 Codex 与内置 AI Chat 共用 Pico 的工具安全链，但审批入口不再依赖 AI Chat 窗口是否打开。任何需要审批的
-调用都会显示编辑器级 `MCP / Agent Approval` 窗口：可以批准一次、拒绝，或仅对 `ModifyWorld` 权限的同名工具
-在当前来源会话内放行。授权按 MCP Peer/内置 Chat Session 隔离；写项目、启动进程和其他高风险权限始终逐次
-审批，重启 Editor 会清空所有会话授权。
+外部 Codex 与内置 AI Chat 共用 Pico 的工具安全链，但审批入口不再依赖 AI Chat 窗口是否打开。支持 Form
+Elicitation 的客户端会直接在自己的会话 UI 中显示 Pico 工具名、参数和允许/拒绝操作；用户不再需要切回
+PicoEditor。客户端只负责呈现决定，Pico 仍负责判断工具是否需要审批、生成挑战、校验决定并进入原有
+`Validate -> Permission -> Approval -> Transaction -> Execute -> Verify` 链路。
+
+标准 Streamable HTTP 客户端通过工具调用的 SSE 接收服务端 `elicitation/create` 请求，再用同一 Session 的独立
+POST 返回决定；原工具调用在拿到决定前保持等待。现代 `2026-07-28` 客户端也支持
+`input_required -> inputResponses` 往返。两条路径都不暴露可被模型直接调用的 `approve_tool`：
+
+- 标准路径把随机一次性 JSON-RPC 请求 ID 绑定到已认证 Session 和正在等待的调用；现代路径生成随机
+  `requestState`，并绑定 Toolset、工具名和完整参数指纹。
+- 待审批状态最多保留 2 分钟、总数最多 128；接受、拒绝、取消、参数不匹配和重放都会消耗或拒绝该状态。
+- 审批前不会启动事务或产生 World 副作用；接受后也只能执行匹配操作一次。
+- SSE 断开、Session 关闭或 Editor 停止会取消等待中的审批和工具调用，不会在重连后补执行旧操作。
+- Codex MCP 的外层 `call_tool` 配为 `approve`，避免先出现一层通用 MCP 提示；真正的修改审批由 Pico
+  Elicitation 提供，权限边界没有交给 Codex。
+- 不支持 Form Elicitation 的 Inspector 或其他客户端仍回退到编辑器级 `MCP / Agent Approval` 弹窗。
+
+回退弹窗可以批准一次、拒绝，或仅对 `ModifyWorld` 权限的同名工具在当前来源会话内放行。授权按 MCP Peer/
+内置 Chat Session 隔离；写项目、启动进程和其他高风险权限始终逐次审批，重启 Editor 会清空所有会话授权和
+未完成的一次性审批状态。
 
 TOML 中不会出现 Token、`Authorization` Header 或 `Saved/Editor/McpServer.ini` 路径。Token 仍只持久化在
 Pico 本地开发目录的 Git 忽略文件中；PicoEditor 自身和系统环境不会被修改。Codex 进程及其子进程必须持有
@@ -125,9 +142,10 @@ PicoEditorTests       Passed
 
 覆盖内容包括：合法请求、认证失败、恶意 Origin、错误 Host、Accept 缺失、Header/Body 冲突、未知方法、真实回环
 HTTP、SSE 工具结果、传输断开取消，以及 `HTTP -> Core -> Adapter -> Editor Game Thread` 完整链路。
-此外，HTTP 测试通过真实 TCP 覆盖标准 initialize、Session Header、initialized 通知和 tools/list；Core 测试验证
-环境覆盖只进入子进程；Editor 测试验证 Codex 配置包含三个元工具和环境变量引用，且不包含 Token 或静态
-`Authorization`。
+此外，HTTP 测试通过真实 TCP 覆盖标准 initialize、Session Header、initialized 通知、tools/list 和双向
+`elicitation/create -> accept -> tool result`；Adapter
+测试覆盖客户端审批的接受、拒绝、一次性消费、重放拒绝和参数篡改拒绝；Core 测试验证环境覆盖只进入子进程；
+Editor 测试验证 Codex 配置包含三个元工具和环境变量引用，且不包含 Token 或静态 `Authorization`。
 
 ### 真实客户端验收
 
@@ -137,11 +155,11 @@ HTTP、SSE 工具结果、传输断开取消，以及 `HTTP -> Core -> Adapter -
 - 官方 MCP Inspector CLI `2.4.0` 使用 `protocolEra: modern` 成功连接并列出且只列出三个顶层元工具：
   `list_toolsets`、`describe_toolset`、`call_tool`。
 - Codex CLI 使用进程级 MCP 配置覆盖和 Token 完成标准 MCP 握手，并成功开始
-  `pico_editor/list_toolsets`；非交互测试在工具审批处按预期停止，没有执行编辑器副作用。
+  `pico_editor/list_toolsets`；支持 Form Elicitation 的版本在 Codex UI 内呈现 Pico 修改审批。
 - 第 3 周测试继续覆盖批准修改、拒绝零副作用和 Undo；第 1 周测试继续覆盖 Play/Package 等异步操作等待最终结果。
 
-Inspector 实测证明协议互操作，自动化证明副作用边界。中文交互审批仍保留为下面的人工可视化验收项，不能用
-自动批准测试冒充人工确认。
+Inspector 实测证明协议互操作，自动化证明副作用边界。Codex 内审批仍保留为下面的人工可视化验收项，不能用
+自动接受测试冒充人工确认。
 
 ## 可视化验收流程
 
@@ -155,9 +173,10 @@ Inspector 实测证明协议互操作，自动化证明副作用边界。中文�
    目的：确认外部客户端按 Toolset 渐进发现，不把全部内部工具平铺暴露。
 5. 通过 `call_tool` 调用 `WorldToolProvider/editor.world.describe`。
    目的：读取当前真实 World，验证 HTTP 到 Editor 游戏线程的只读链路。
-6. 通过 `call_tool` 调用 `WorldToolProvider/editor.actor.spawn` 创建测试 Cube，并在 Editor 内批准中文弹窗。
-   目的：验证外部写操作不能绕过审批、事务和后置验证。
-7. 在 Editor 中执行正常 Undo，确认 Cube 被完整删除；再拒绝一次创建请求。
+6. 从 Pico 启动 Codex，在 Codex 中要求创建测试 Cube；审批应直接出现在 Codex 会话中，Editor 不再同时弹出
+   第二个审批框。检查工具名和参数后选择允许。
+   目的：验证交互入口属于客户端，但权限判断、事务和后置验证仍属于 Pico。
+7. 在 Editor 中执行正常 Undo，确认 Cube 被完整删除；再从 Codex 发起一次创建并在 Codex 中拒绝。
    目的：验证批准操作可撤销，拒绝操作零副作用且不增加 Revision。
 8. 发起工具调用后关闭 Inspector 连接，观察 `Active` 回到 0，且被取消的未执行修改不会稍后出现。
    目的：验收 SSE 断开到共享执行服务的取消传播。
@@ -183,3 +202,5 @@ Gameplay、Object、Network 或 Render Runtime。
 - [MCP Inspector](https://github.com/modelcontextprotocol/inspector)
 - [OpenAI Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
 - [OpenAI Codex Config Reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+- [MCP Elicitation](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation)
+- [Codex App Server MCP approval Elicitation](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)

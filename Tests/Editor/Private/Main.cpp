@@ -73,9 +73,11 @@ void TestExternalAgentConnector(FTestRunner& Runner)
             && Config.find("list_toolsets") != std::string::npos
             && Config.find("describe_toolset") != std::string::npos
             && Config.find("call_tool") != std::string::npos
+            && Config.find("default_tools_approval_mode = \"approve\"")
+                != std::string::npos
             && Config.find(Secret) == std::string::npos
             && Config.find("Authorization") == std::string::npos,
-        "Codex MCP config references a process environment variable and contains no secret");
+        "Codex MCP config delegates mutation approval to Pico Elicitation and contains no secret");
 
     Runner.Expect(Connector.GetId() == "codex"
             && Connector.GetDisplayName() == "Codex"

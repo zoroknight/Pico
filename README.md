@@ -78,8 +78,10 @@ The current implementation can:
   client. Codex remains the first adapter, but its model, reasoning, conversation, and UI are owned by Codex,
   not Pico; the launcher passes process-local MCP overrides and injects the bearer token only into the child
   process, without replacing the user's Codex home. Another client such as Claude Code only needs a configuration adapter.
-  Mutating MCP calls use an editor-global approval window even when either workspace is closed, and remembered
-  reversible-World grants are isolated by client session. Expired Streamable HTTP sessions return the standard 404 recovery
+  Elicitation-capable clients such as Codex surface mutating-tool approval in their own UI, while Pico still creates,
+  validates, consumes, audits, and executes the decision. One-time approval state is bound to the exact tool and arguments;
+  replay, expiry, or argument changes fail closed. Clients without form Elicitation fall back to the editor-global approval
+  window, and remembered reversible-World grants remain isolated by client session. Expired Streamable HTTP sessions return the standard 404 recovery
   signal so clients can reinitialize after an Editor restart. Standard initialize/session clients and
   request-scoped modern clients share the same Core,
   while the credential remains persisted solely under the local Git-ignored Pico Editor directory.

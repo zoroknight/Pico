@@ -273,6 +273,22 @@ void FAgentToolRegistry::PrepareApproval(const FAgentToolCall& Call)
     PreparedApprovals[Call.Id] = {Call.Name + "\n" + Call.ArgumentsJson, bApproved};
 }
 
+bool FAgentToolRegistry::PrepareApprovalDecision(
+    const FAgentToolCall& Call, bool bApproved)
+{
+    const FAgentToolDefinition* Definition = Find(Call.Name);
+    std::string Error;
+    if (!Definition || !Validate(Call, *Definition, Error)
+        || !Policy.Allows(Definition->Permission)
+        || !Policy.RequiresApproval(Definition->Permission))
+    {
+        return false;
+    }
+    PreparedApprovals[Call.Id] = {
+        Call.Name + "\n" + Call.ArgumentsJson, bApproved};
+    return true;
+}
+
 FAgentToolResult FAgentToolRegistry::Execute(
     const FAgentToolCall& Call,
     const FCancellationToken* CancellationToken)

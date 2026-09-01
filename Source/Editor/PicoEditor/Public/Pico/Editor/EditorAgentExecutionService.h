@@ -50,6 +50,8 @@ public:
     std::vector<std::string> GetRevisionWriteSet(
         const FAgentToolCall& Call) const override;
     void PrepareApproval(const FAgentToolCall& Call) override;
+    bool PrepareApprovalDecision(
+        const FAgentToolCall& Call, bool bApproved) override;
     FAgentToolResult Execute(
         const FAgentToolCall& Call,
         const FCancellationToken* CancellationToken) override;

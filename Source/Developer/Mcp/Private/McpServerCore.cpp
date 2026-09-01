@@ -140,6 +140,20 @@ bool HasModernCapabilities(const FJson& Request)
     return Meta.contains(Key) && Meta[Key].is_object();
 }
 
+bool SupportsModernFormElicitation(const FJson& Request)
+{
+    const FJson& Capabilities = Request["params"]["_meta"]
+        ["io.modelcontextprotocol/clientCapabilities"];
+    if (!Capabilities.contains("elicitation")
+        || !Capabilities["elicitation"].is_object())
+    {
+        return false;
+    }
+    const FJson& Elicitation = Capabilities["elicitation"];
+    return Elicitation.empty()
+        || (Elicitation.contains("form") && Elicitation["form"].is_object());
+}
+
 FJson ParseSchema(const std::string& Text)
 {
     FJson Schema = FJson::parse(Text, nullptr, false);
@@ -403,6 +417,19 @@ private:
             return Error(Id, InvalidParams, "Tool arguments must be an object");
 
         const std::string Name = Params["name"].get<std::string>();
+        if (Params.contains("requestState") != Params.contains("inputResponses"))
+        {
+            return Error(Id, InvalidParams,
+                "requestState and inputResponses must be provided together");
+        }
+        if (Params.contains("requestState")
+            && (!Params["requestState"].is_string()
+                || Params["requestState"].get_ref<const std::string&>().empty()
+                || Params["requestState"].get_ref<const std::string&>().size() > 256
+                || !Params["inputResponses"].is_object()))
+        {
+            return Error(Id, InvalidParams, "Invalid elicitation continuation");
+        }
         try
         {
             const auto Tools = ToolProvider.ListTools();
@@ -442,8 +469,20 @@ private:
         {
             const std::string Arguments = Params.value(
                 "arguments", FJson::object()).dump();
+            FMcpToolCallContext ToolContext {Context.PeerId, Id.dump()};
+            ToolContext.bSupportsFormElicitation = bModern
+                && SupportsModernFormElicitation(Request);
+            ToolContext.FormElicitation = Context.FormElicitation;
+            if (ToolContext.FormElicitation)
+                ToolContext.bSupportsFormElicitation = true;
+            if (Params.contains("requestState"))
+            {
+                ToolContext.RequestState =
+                    Params["requestState"].get<std::string>();
+                ToolContext.InputResponsesJson = Params["inputResponses"].dump();
+            }
             ToolResult = ToolProvider.CallTool(
-                {Context.PeerId, Id.dump()},
+                ToolContext,
                 Name, Arguments, FMcpCancellationToken(State));
         }
         catch (const std::exception& Exception)
@@ -462,11 +501,34 @@ private:
             ToolResult.StructuredContentJson.clear();
         }
         if (ToolResult.Text.size() + ToolResult.StructuredContentJson.size()
+                + ToolResult.InputRequestsJson.size()
+                + ToolResult.RequestState.size()
             > Limits.MaxToolResultBytes)
         {
             ToolResult.bIsError = true;
             ToolResult.Text = "Tool result exceeds size limit";
             ToolResult.StructuredContentJson.clear();
+            ToolResult.bInputRequired = false;
+            ToolResult.InputRequestsJson.clear();
+            ToolResult.RequestState.clear();
+        }
+        if (ToolResult.bInputRequired)
+        {
+            if (!bModern || !SupportsModernFormElicitation(Request))
+                return Error(Id, InternalError,
+                    "Tool requested input from a client without elicitation support");
+            FJson InputRequests = FJson::parse(
+                ToolResult.InputRequestsJson, nullptr, false);
+            if (ToolResult.RequestState.empty() || InputRequests.is_discarded()
+                || !InputRequests.is_object() || InputRequests.empty())
+            {
+                return Error(Id, InternalError,
+                    "Tool returned an invalid input-required result");
+            }
+            return Response(Id, {{"resultType", "input_required"},
+                {"_meta", ServerMeta(ServerInfo)},
+                {"inputRequests", std::move(InputRequests)},
+                {"requestState", ToolResult.RequestState}});
         }
 
         FJson Result {

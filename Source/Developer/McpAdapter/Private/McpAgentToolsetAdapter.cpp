@@ -6,10 +6,13 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <cstdint>
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <iomanip>
 #include <mutex>
+#include <optional>
+#include <random>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -84,11 +87,34 @@ FJson ParseOrString(std::string_view Text, FJson Fallback = FJson::object())
     FJson Parsed = FJson::parse(Text, nullptr, false);
     return Parsed.is_discarded() ? FJson(std::string(Text)) : Parsed;
 }
+
+std::string RandomApprovalState()
+{
+    std::random_device Random;
+    std::ostringstream Stream;
+    Stream << "pico-approval-v1-" << std::hex << std::setfill('0');
+    for (int Index = 0; Index < 4; ++Index)
+        Stream << std::setw(8) << static_cast<std::uint32_t>(Random());
+    return Stream.str();
+}
+
+std::string ApprovalFingerprint(
+    std::string_view Toolset, std::string_view Tool, const FJson& Arguments)
+{
+    return std::string(Toolset) + "\n" + std::string(Tool) + "\n"
+        + Arguments.dump();
+}
 }
 
 class FMcpAgentToolsetAdapter::FImpl
 {
 public:
+    struct FPendingApproval
+    {
+        std::string Fingerprint;
+        std::chrono::steady_clock::time_point ExpiresAt;
+    };
+
     FImpl(IAgentToolExecutor& InExecutor,
         std::string ToolCatalogJson, std::string ToolsetVersion,
         FMcpAgentToolsetAdapter::FExecutionContextBinder InExecutionContextBinder)
@@ -246,18 +272,22 @@ public:
         }
         const std::string ToolsetName = Arguments["toolset"].get<std::string>();
         const std::string ToolName = Arguments["name"].get<std::string>();
+        FToolEntry ToolMetadata;
         {
             std::lock_guard Lock(Mutex);
             const auto It = Toolsets.find(ToolsetName);
             if (It == Toolsets.end()) return Failure("Unknown Pico toolset");
             if (!It->second.bEnabled) return Failure("Pico toolset is disabled");
-            if (std::none_of(It->second.Tools.begin(), It->second.Tools.end(),
+            const auto ToolIt = std::find_if(
+                It->second.Tools.begin(), It->second.Tools.end(),
                 [&ToolName](const FToolEntry& Tool) {
                     return Tool.Name == ToolName;
-                }))
+                });
+            if (ToolIt == It->second.Tools.end())
             {
                 return Failure("Tool does not belong to the selected Pico toolset");
             }
+            ToolMetadata = *ToolIt;
         }
         if (Cancellation.IsCancellationRequested() || Cancellation.IsExpired())
             return Failure("Pico tool call was cancelled before execution");
@@ -285,11 +315,76 @@ public:
         });
 
         if (ExecutionContextBinder) ExecutionContextBinder(Context);
+
+        if (Executor.RequiresApproval(Call))
+        {
+            const std::string Fingerprint = ApprovalFingerprint(
+                ToolsetName, ToolName, Arguments["arguments"]);
+            FJson Meta {
+                {"codex_approval_kind", "mcp_tool_call"},
+                {"tool_name", ToolName},
+                {"tool_title", ToolName},
+                {"tool_description", ToolMetadata.Description},
+                {"tool_params", Arguments["arguments"]}};
+            FJson RequestedSchema {
+                {"type", "object"},
+                {"properties", FJson::object()},
+                {"additionalProperties", false}};
+            const std::string Message =
+                "PicoEditor approval is required for this "
+                + ToolMetadata.Permission + " operation.";
+            if (Context.FormElicitation)
+            {
+                const auto Response = Context.FormElicitation({
+                    Message, RequestedSchema.dump(), Meta.dump()});
+                if (!Response.has_value())
+                    return Failure("Pico approval request was cancelled or expired");
+                const bool bApproved = Response->Action == "accept";
+                if (!bApproved && Response->Action != "decline"
+                    && Response->Action != "cancel")
+                {
+                    return Failure("Pico approval response used an unknown action");
+                }
+                if (!Executor.PrepareApprovalDecision(Call, bApproved))
+                    return Failure("Editor rejected the external approval decision");
+            }
+            else if (Context.RequestState.empty()
+                && Context.bSupportsFormElicitation)
+            {
+                const std::string State = CreatePendingApproval(Fingerprint);
+                if (State.empty())
+                    return Failure("Too many pending Pico approval requests");
+                FJson InputRequests {{"pico_tool_approval", {
+                    {"method", "elicitation/create"},
+                    {"params", {
+                        {"mode", "form"},
+                        {"message", Message},
+                        {"requestedSchema", std::move(RequestedSchema)},
+                        {"_meta", std::move(Meta)}}}}}};
+                FMcpToolCallResult Result;
+                Result.bInputRequired = true;
+                Result.InputRequestsJson = InputRequests.dump();
+                Result.RequestState = State;
+                return Result;
+            }
+            else if (!Context.RequestState.empty())
+            {
+                const std::optional<bool> Decision = ConsumeApprovalResponse(
+                    Context.RequestState, Context.InputResponsesJson, Fingerprint);
+                if (!Decision.has_value())
+                    return Failure("Invalid, expired, or mismatched Pico approval response");
+                if (!Executor.PrepareApprovalDecision(Call, *Decision))
+                    return Failure("Editor rejected the external approval decision");
+            }
+            else
+            {
+                Executor.PrepareApproval(Call);
+            }
+        }
         Executor.BeginRun(RunId);
         FAgentToolResult AgentResult;
         try
         {
-            if (Executor.RequiresApproval(Call)) Executor.PrepareApproval(Call);
             AgentResult = Executor.Execute(Call, &AgentCancellation);
             NormalizeAgentToolResult(AgentResult);
             if (AgentResult.bSucceeded && !Executor.IsReadOnly(Call))
@@ -322,6 +417,57 @@ public:
         return {!AgentResult.bSucceeded, std::move(Text), Structured.dump()};
     }
 
+    std::string CreatePendingApproval(const std::string& Fingerprint)
+    {
+        std::lock_guard Lock(Mutex);
+        const auto Now = std::chrono::steady_clock::now();
+        std::erase_if(PendingApprovals,
+            [Now](const auto& Entry) { return Entry.second.ExpiresAt <= Now; });
+        if (PendingApprovals.size() >= 128) return {};
+        for (int Attempt = 0; Attempt < 4; ++Attempt)
+        {
+            std::string State = RandomApprovalState();
+            if (PendingApprovals.emplace(State, FPendingApproval {
+                    Fingerprint, Now + std::chrono::minutes(2)}).second)
+            {
+                return State;
+            }
+        }
+        return {};
+    }
+
+    std::optional<bool> ConsumeApprovalResponse(
+        const std::string& State,
+        std::string_view ResponsesJson,
+        const std::string& Fingerprint)
+    {
+        FJson Responses = FJson::parse(ResponsesJson, nullptr, false);
+        if (Responses.is_discarded() || !Responses.is_object()
+            || !Responses.contains("pico_tool_approval")
+            || !Responses["pico_tool_approval"].is_object())
+        {
+            return std::nullopt;
+        }
+        const FJson& Response = Responses["pico_tool_approval"];
+        if (!Response.contains("action") || !Response["action"].is_string())
+            return std::nullopt;
+
+        std::lock_guard Lock(Mutex);
+        const auto It = PendingApprovals.find(State);
+        if (It == PendingApprovals.end()) return std::nullopt;
+        const FPendingApproval Pending = It->second;
+        PendingApprovals.erase(It);
+        if (Pending.ExpiresAt <= std::chrono::steady_clock::now()
+            || Pending.Fingerprint != Fingerprint)
+        {
+            return std::nullopt;
+        }
+        const std::string Action = Response["action"].get<std::string>();
+        if (Action == "accept") return true;
+        if (Action == "decline" || Action == "cancel") return false;
+        return std::nullopt;
+    }
+
     std::vector<std::string> SortedToolsetNames() const
     {
         std::vector<std::string> Names;
@@ -339,6 +485,7 @@ public:
     FMcpAgentToolsetAdapter::FExecutionContextBinder ExecutionContextBinder;
     mutable std::mutex Mutex;
     std::unordered_map<std::string, FToolsetEntry> Toolsets;
+    std::unordered_map<std::string, FPendingApproval> PendingApprovals;
     std::string Error;
     std::atomic<std::uint64_t> NextInvocation {1};
 };

@@ -26,11 +26,13 @@ public:
             {"echo", "Echo", "Echo arguments",
                 R"({"type":"object","additionalProperties":true})", ""},
             {"wait", "Wait", "Wait for cancellation",
+                R"({"type":"object","additionalProperties":false})", ""},
+            {"approve", "Approve", "Request client approval",
                 R"({"type":"object","additionalProperties":false})", ""}};
     }
 
     Pico::FMcpToolCallResult CallTool(
-        const Pico::FMcpToolCallContext&,
+        const Pico::FMcpToolCallContext& Context,
         std::string_view Name,
         std::string_view ArgumentsJson,
         const Pico::FMcpCancellationToken& Cancellation) override
@@ -50,12 +52,28 @@ public:
             }
             return {false, "completed", "{}"};
         }
+        if (Name == "approve")
+        {
+            bElicitationObserved.store(static_cast<bool>(Context.FormElicitation));
+            if (!Context.FormElicitation)
+                return {true, "elicitation unavailable", ""};
+            const auto Response = Context.FormElicitation({
+                "Approve the test mutation",
+                R"({"type":"object","properties":{},"additionalProperties":false})",
+                R"({"codex_approval_kind":"mcp_tool_call","tool_name":"approve"})"});
+            if (!Response || Response->Action != "accept")
+                return {true, "approval rejected", ""};
+            ApprovedSideEffects.fetch_add(1);
+            return {false, "approved", R"({"changed":true})"};
+        }
         if (Name != "echo") return {true, "unknown", ""};
         return {false, "echo", std::string(ArgumentsJson)};
     }
 
     int Calls = 0;
     std::atomic<bool> bCancellationObserved {false};
+    std::atomic<bool> bElicitationObserved {false};
+    std::atomic<int> ApprovedSideEffects {0};
 };
 
 FJson ModernRequest(int Id, std::string Method, FJson Params = FJson::object())
@@ -174,7 +192,7 @@ void TestBinding(FTestRunner& Runner)
         {"jsonrpc", "2.0"}, {"id", 21}, {"method", "tools/list"},
         {"params", FJson::object()}}), StandardPeer);
     Runner.Expect(Initialized.Status == 202 && StandardTools.Status == 200
-            && FJson::parse(StandardTools.Body)["result"]["tools"].size() == 2,
+            && FJson::parse(StandardTools.Body)["result"]["tools"].size() == 3,
         "A standard initialized HTTP peer can list tools without custom metadata");
 
     const Pico::FMcpHttpResponse Unknown = Binding.Handle(Request(
@@ -227,7 +245,7 @@ void TestRealLoopbackServer(FTestRunner& Runner)
     const FJson InitializeBody = {
         {"jsonrpc", "2.0"}, {"id", 30}, {"method", "initialize"},
         {"params", {{"protocolVersion", "2026-07-28"},
-            {"capabilities", FJson::object()},
+            {"capabilities", {{"elicitation", {{"form", FJson::object()}}}}},
             {"clientInfo", {{"name", "codex-test"}, {"version", "1"}}}}}};
     const auto InitializeResult = Client.Post(
         "/mcp", StandardHeaders, InitializeBody.dump(), "application/json");
@@ -246,8 +264,57 @@ void TestRealLoopbackServer(FTestRunner& Runner)
             && !SessionId.empty() && SessionId.size() <= 128
             && InitializedResult && InitializedResult->status == 202
             && StandardToolsResult && StandardToolsResult->status == 200
-            && FJson::parse(StandardToolsResult->body)["result"]["tools"].size() == 2,
+            && FJson::parse(StandardToolsResult->body)["result"]["tools"].size() == 3,
         "A real standard HTTP client completes session initialize and tools/list");
+
+    httplib::Client ApprovalClient("127.0.0.1", Config.Port);
+    ApprovalClient.set_connection_timeout(2, 0);
+    ApprovalClient.set_read_timeout(5, 0);
+    httplib::Client ApprovalResponseClient("127.0.0.1", Config.Port);
+    ApprovalResponseClient.set_connection_timeout(2, 0);
+    ApprovalResponseClient.set_read_timeout(2, 0);
+    std::string ApprovalStream;
+    bool bResponded = false;
+    int ApprovalResponseStatus = 0;
+    const auto ApprovalResult = ApprovalClient.Post(
+        "/mcp", StandardHeaders,
+        R"({"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"approve","arguments":{}}})",
+        "application/json",
+        [&](const char* Data, std::size_t Size)
+        {
+            ApprovalStream.append(Data, Size);
+            const std::string Marker = "data: ";
+            const std::size_t Begin = ApprovalStream.find(Marker);
+            const std::size_t End = Begin == std::string::npos
+                ? std::string::npos : ApprovalStream.find("\n\n", Begin);
+            if (!bResponded && End != std::string::npos)
+            {
+                const FJson Event = FJson::parse(ApprovalStream.substr(
+                    Begin + Marker.size(), End - Begin - Marker.size()),
+                    nullptr, false);
+                if (Event.is_object()
+                    && Event.value("method", "") == "elicitation/create")
+                {
+                    bResponded = true;
+                    const FJson Decision {
+                        {"jsonrpc", "2.0"}, {"id", Event["id"]},
+                        {"result", {{"action", "accept"},
+                            {"content", FJson::object()}}}};
+                    const auto DecisionResult = ApprovalResponseClient.Post(
+                        "/mcp", StandardHeaders, Decision.dump(),
+                        "application/json");
+                    ApprovalResponseStatus = DecisionResult
+                        ? DecisionResult->status : 0;
+                }
+            }
+            return true;
+        });
+    Runner.Expect(ApprovalResult && ApprovalResult->status == 200
+            && bResponded && ApprovalResponseStatus == 202
+            && Provider.bElicitationObserved.load()
+            && Provider.ApprovedSideEffects.load() == 1
+            && ApprovalStream.find("\"isError\":false") != std::string::npos,
+        "A standard Streamable HTTP client approves a tool through bidirectional Elicitation");
 
     httplib::Headers MissingSessionHeaders = {
         {"Authorization", "Bearer " + Config.BearerToken},

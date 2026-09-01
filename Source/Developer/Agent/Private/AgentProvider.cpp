@@ -36,6 +36,11 @@ void IAgentToolExecutor::PrepareApproval(const FAgentToolCall&)
 {
 }
 
+bool IAgentToolExecutor::PrepareApprovalDecision(const FAgentToolCall&, bool)
+{
+    return false;
+}
+
 void IAgentToolExecutor::CommitDurableResult(const FAgentToolCall&)
 {
 }

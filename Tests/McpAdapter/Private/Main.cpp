@@ -10,6 +10,7 @@
 #include <atomic>
 #include <algorithm>
 #include <chrono>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -223,6 +224,24 @@ struct FFixture
                 std::move(MetaTool), std::move(Arguments)).dump()));
     }
 
+    FJson InvokeWithElicitation(int Id, FJson Arguments,
+        std::string RequestState = {}, std::string Action = {})
+    {
+        FJson Request = ToolCall(Id, "call_tool", std::move(Arguments));
+        Request["params"]["_meta"]
+            ["io.modelcontextprotocol/clientCapabilities"] = {
+                {"elicitation", {{"form", FJson::object()}}}};
+        if (!RequestState.empty())
+        {
+            Request["params"]["requestState"] = std::move(RequestState);
+            Request["params"]["inputResponses"] = {
+                {"pico_tool_approval", {{"action", std::move(Action)},
+                    {"content", FJson::object()}}}};
+        }
+        return Parse(Core->HandleMessage(
+            {"adapter-peer"}, Request.dump()));
+    }
+
     FApproval Approval;
     FTransaction Transaction;
     Pico::FAgentToolRegistry Registry;
@@ -375,6 +394,105 @@ void TestIsolationAndInjectionResistance(FTestRunner& Runner)
         "Unknown toolsets fail as actionable tool results");
 }
 
+void TestClientSurfacedApproval(FTestRunner& Runner)
+{
+    FFixture Fixture;
+    const FJson MutationArguments {
+        {"toolset", "ObjectProvider"},
+        {"name", "editor.actor.set_property"},
+        {"arguments", {{"value", 41}}}};
+
+    const FJson Challenge = Fixture.InvokeWithElicitation(
+        40, MutationArguments);
+    const std::string State = Challenge["result"]["requestState"];
+    const FJson& Request = Challenge["result"]["inputRequests"]
+        ["pico_tool_approval"];
+    Runner.Expect(Challenge["result"]["resultType"] == "input_required"
+            && !State.empty()
+            && Request["method"] == "elicitation/create"
+            && Request["params"]["_meta"]["codex_approval_kind"]
+                == "mcp_tool_call"
+            && Fixture.Approval.Requests == 0
+            && Fixture.MutationCalls == 0
+            && Fixture.Transaction.Begins == 0,
+        "An elicitation-capable client receives approval before any Editor side effect");
+
+    const FJson Accepted = Fixture.InvokeWithElicitation(
+        41, MutationArguments, State, "accept");
+    Runner.Expect(Accepted["result"]["resultType"] == "complete"
+            && Accepted["result"]["isError"] == false
+            && Fixture.Approval.Requests == 0
+            && Fixture.MutationCalls == 1
+            && Fixture.Transaction.Begins == 1
+            && Fixture.Transaction.Commits == 1,
+        "A client acceptance is consumed by Pico and executes the mutation once");
+
+    const FJson Replay = Fixture.InvokeWithElicitation(
+        42, MutationArguments, State, "accept");
+    Runner.Expect(Replay["result"]["isError"] == true
+            && Fixture.MutationCalls == 1
+            && Fixture.Transaction.Begins == 1,
+        "A consumed approval state cannot be replayed");
+
+    const FJson TamperChallenge = Fixture.InvokeWithElicitation(
+        43, MutationArguments);
+    FJson ChangedArguments = MutationArguments;
+    ChangedArguments["arguments"]["value"] = 99;
+    const FJson Tampered = Fixture.InvokeWithElicitation(
+        44, ChangedArguments,
+        TamperChallenge["result"]["requestState"].get<std::string>(),
+        "accept");
+    Runner.Expect(Tampered["result"]["isError"] == true
+            && Fixture.MutationCalls == 1
+            && Fixture.Transaction.Begins == 1,
+        "An approval state cannot authorize changed tool arguments");
+
+    const FJson DeclineChallenge = Fixture.InvokeWithElicitation(
+        45, MutationArguments);
+    const FJson Declined = Fixture.InvokeWithElicitation(
+        46, MutationArguments,
+        DeclineChallenge["result"]["requestState"].get<std::string>(),
+        "decline");
+    Runner.Expect(Declined["result"]["isError"] == true
+            && Declined["result"]["structuredContent"]["agent_result"]
+                ["failure_class"] == "ApprovalRejected"
+            && Fixture.Approval.Requests == 0
+            && Fixture.MutationCalls == 1
+            && Fixture.Transaction.Begins == 1,
+        "A client decline uses Pico's normal rejection result with zero side effects");
+}
+
+void TestStandardElicitationApproval(FTestRunner& Runner)
+{
+    FFixture Fixture;
+    bool bElicitationObserved = false;
+    Pico::FMcpRequestContext Context {"adapter-peer"};
+    Context.FormElicitation = [&bElicitationObserved](
+        const Pico::FMcpFormElicitationRequest& Request)
+        -> std::optional<Pico::FMcpFormElicitationResponse>
+    {
+        const FJson Meta = FJson::parse(Request.MetaJson);
+        bElicitationObserved = Meta["codex_approval_kind"] == "mcp_tool_call"
+            && Meta["tool_name"] == "editor.actor.set_property";
+        return Pico::FMcpFormElicitationResponse {"accept", "{}"};
+    };
+    const FJson Response = Parse(Fixture.Core->HandleMessage(Context,
+        ToolCall(47, "call_tool", {
+            {"toolset", "ObjectProvider"},
+            {"name", "editor.actor.set_property"},
+            {"arguments", {{"value", 47}}}}).dump()));
+    Runner.Expect(bElicitationObserved,
+        "Standard Elicitation exposes the Pico tool approval metadata");
+    Runner.Expect(Response["result"]["isError"] == false,
+        "Standard Elicitation acceptance completes the MCP tool result");
+    Runner.Expect(Fixture.Approval.Requests == 0,
+        "Standard Elicitation does not reopen the Editor approval UI");
+    Runner.Expect(Fixture.MutationCalls == 1,
+        "A transport-provided standard Elicitation decision executes once");
+    Runner.Expect(Fixture.Transaction.Commits == 1,
+        "The accepted standard Elicitation commits one transaction");
+}
+
 void TestCancellationBridge(FTestRunner& Runner)
 {
     FFixture Fixture;
@@ -404,6 +522,8 @@ int main()
     TestCatalogAndMetaTools(Runner);
     TestProtectedExecutionAndStructuredResult(Runner);
     TestIsolationAndInjectionResistance(Runner);
+    TestClientSurfacedApproval(Runner);
+    TestStandardElicitationApproval(Runner);
     TestCancellationBridge(Runner);
     return Runner.Finish();
 }

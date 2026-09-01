@@ -63,10 +63,11 @@ public:
 
 private:
     std::optional<FMcpHttpResponse> Validate(
-        const FMcpHttpRequest& Request);
+        const FMcpHttpRequest& Request,
+        bool bAllowJsonRpcResponse = false);
     FMcpHttpResponse ExecuteValidated(
         const FMcpHttpRequest& Request,
-        std::string_view PeerId);
+        const FMcpRequestContext& Context);
 
     FMcpServerCore& Core;
     FMcpHttpServerConfig Config;

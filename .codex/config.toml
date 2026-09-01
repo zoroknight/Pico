@@ -4,6 +4,6 @@ bearer_token_env_var = "PICO_MCP_BEARER_TOKEN"
 enabled = true
 required = false
 enabled_tools = ["list_toolsets", "describe_toolset", "call_tool"]
-default_tools_approval_mode = "prompt"
+default_tools_approval_mode = "approve"
 startup_timeout_sec = 10
 tool_timeout_sec = 300

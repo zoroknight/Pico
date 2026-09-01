@@ -495,6 +495,14 @@ void FEditorAgentExecutionService::PrepareApproval(
         Tools->PrepareApproval(Call);
 }
 
+bool FEditorAgentExecutionService::PrepareApprovalDecision(
+    const FAgentToolCall& Call, bool bApproved)
+{
+    if (!Impl || !Impl->IntentError(Call).empty()) return false;
+    IAgentToolExecutor* Tools = Impl->GetTools();
+    return Tools && Tools->PrepareApprovalDecision(Call, bApproved);
+}
+
 FAgentToolResult FEditorAgentExecutionService::Execute(
     const FAgentToolCall& Call,
     const FCancellationToken* CancellationToken)
