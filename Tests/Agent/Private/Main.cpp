@@ -3,6 +3,7 @@
 #include "Pico/Agent/AgentRuntime.h"
 #include "Pico/Agent/AgentCredentialStore.h"
 #include "Pico/Agent/AgentEvaluation.h"
+#include "Pico/Agent/AgentGameAssembly.h"
 #include "Pico/Agent/AgentIntent.h"
 #include "Pico/Agent/AgentKnowledgeStore.h"
 #include "Pico/Agent/AgentOperationJournal.h"
@@ -1560,6 +1561,7 @@ void TestIntentAndSkillEvalSet(FTestRunner& Runner)
 {
     const std::vector<std::string> Tools = {
         "editor.world.describe", "editor.selection.describe", "editor.asset.search",
+        "editor.asset.describe_catalog",
         "editor.object.describe", "editor.object.get_property",
         "editor.object.set_properties", "editor.object.batch_set_properties",
         "editor.actor_blueprint.describe_defaults",
@@ -1613,7 +1615,7 @@ void TestIntentAndSkillEvalSet(FTestRunner& Runner)
                 && ActualSkills.str() == ExpectedSkills,
             "Agent intent and Skill routing eval case " + std::to_string(CaseIndex));
     }
-    Runner.Expect(CaseIndex >= 42, "Agent routing eval keeps at least 42 fixed prompts");
+    Runner.Expect(CaseIndex >= 45, "Agent routing eval keeps at least 45 fixed prompts");
 }
 
 void TestGoldenTaskRunner(FTestRunner& Runner)
@@ -2022,6 +2024,271 @@ void TestDeterministicFailureInjectionAndReconcile(FTestRunner& Runner)
     Runner.Expect(static_cast<bool>(Report),
         "Failure-injection evaluation persists its recovery-rate metric");
 }
+
+Pico::FAgentCapabilityCatalog BuildGameAssemblyCatalog(FTestRunner& Runner)
+{
+    Pico::FAgentCapabilityCatalog Catalog;
+    const auto Add = [&Catalog, &Runner](
+        std::string Id, std::vector<std::string> Tags,
+        std::vector<std::string> RequiredKinds = {})
+    {
+        Pico::FAgentCapabilityDescriptor Descriptor;
+        Descriptor.Id = std::move(Id);
+        Descriptor.DisplayName = Descriptor.Id;
+        Descriptor.Category = "GameAssembly";
+        Descriptor.ProducerId = "test-producer";
+        Descriptor.Tags = std::move(Tags);
+        Descriptor.RequiredAssetKinds = std::move(RequiredKinds);
+        Descriptor.SideEffect = "WriteProject";
+        Descriptor.Approval = "PlanHash";
+        Descriptor.VerifierId = "verify." + Descriptor.Id;
+        Descriptor.Provenance = "PicoAgentTests fixture";
+        std::string Error;
+        Runner.Expect(Catalog.AddCapability(std::move(Descriptor), &Error),
+            "Versioned game-assembly capability registers without ambiguity");
+    };
+    Add("player.control", {"player", "movement"});
+    Add("network.coop", {"coop", "network"});
+    Add("ability.different", {"ability", "coop"}, {"ActorBlueprint"});
+    Add("collectible.pickup", {"collectible", "interaction"});
+    Add("door.owned", {"door", "ownership", "interaction"});
+    Add("mechanism.environment", {"mechanism", "interaction"});
+    Add("match.shared-victory", {"objective", "victory", "authority"});
+    Add("package.windows", {"package", "windows"});
+
+    Pico::FAgentGameplayRecipe Recipe;
+    Recipe.Id = "coop-owned-door";
+    Recipe.DisplayName = "Cooperative owned door";
+    Recipe.RequirementTags = {"door", "coop", "victory"};
+    Recipe.CapabilityIds = {"network.coop", "door.owned", "match.shared-victory"};
+    Recipe.ParametersSchemaJson = R"({"type":"object"})";
+    Recipe.VerifierId = "verify.recipe.coop-owned-door";
+    std::string Error;
+    Runner.Expect(Catalog.AddRecipe(std::move(Recipe), &Error),
+        "Gameplay Recipe references only registered capabilities");
+    return Catalog;
+}
+
+void TestAssetDescriptorAndCapabilityCatalog(FTestRunner& Runner)
+{
+    Pico::FAgentAssetDescriptor Descriptor;
+    Descriptor.Id = "asset:/Game/Characters/BP_Player.pblueprint";
+    Descriptor.Kind = "ActorBlueprint";
+    Descriptor.VirtualPath = "/Game/Characters/BP_Player.pblueprint";
+    Descriptor.SourceRevision = 7;
+    Descriptor.SizeBytes = 512;
+    Descriptor.Dependencies = {"/Game/Characters/Player.pcharprofile"};
+    Descriptor.Tags = {"asset", "ActorBlueprint", "player"};
+    Descriptor.SummaryJson = R"({"component_count":4,"graph_count":1})";
+    Descriptor.Provenance = "AssetRegistry fixture";
+    Descriptor.ValidatorId = "asset.registry.record";
+    std::string Error;
+    Runner.Expect(Pico::ValidateAgentAssetDescriptor(Descriptor, &Error),
+        "AssetDescriptor carries stable identity, structure, dependency, provenance, and verifier data");
+    const std::string Serialized =
+        Pico::SerializeAgentAssetDescriptors({Descriptor});
+    Runner.Expect(Serialized.find("ActorBlueprint") != std::string::npos
+            && Serialized.find("component_count") != std::string::npos,
+        "AssetDescriptor serialization preserves typed summary evidence");
+
+    Pico::FAgentCapabilityCatalog Catalog = BuildGameAssemblyCatalog(Runner);
+    Pico::FAgentCapabilityDescriptor Duplicate;
+    Duplicate.Id = "player.control";
+    Duplicate.ProducerId = "test-producer";
+    Duplicate.VerifierId = "verify.duplicate";
+    Duplicate.Provenance = "fixture";
+    Runner.Expect(!Catalog.AddCapability(std::move(Duplicate), &Error)
+            && Error.find("Duplicate") != std::string::npos,
+        "Capability Catalog rejects duplicate stable ids");
+    Runner.Expect(Catalog.ToJson().find("coop-owned-door") != std::string::npos,
+        "Capability Catalog publishes recipes and capability provenance as one contract");
+}
+
+void TestGameSpecRecipeAndSupportDiagnosis(FTestRunner& Runner)
+{
+    const std::string Prompt =
+        "Build a two-player co-op game with different abilities, collect coins, "
+        "an environment mechanism, an owned door, shared victory, and package for Windows.";
+    std::string Error;
+    const auto First = Pico::ParseAgentGameRequirement(Prompt, &Error);
+    const auto Second = Pico::ParseAgentGameRequirement(Prompt, &Error);
+    Runner.Expect(First && Second && First->Id == Second->Id
+            && Pico::SerializeAgentGameSpec(*First)
+                == Pico::SerializeAgentGameSpec(*Second)
+            && First->PlayerCount == 2 && First->bNetworked
+            && First->bPackageWindows,
+        "Requirement Parser deterministically creates a versioned two-player PicoGameSpec");
+
+    Pico::FAgentAssetDescriptor Blueprint;
+    Blueprint.Id = "asset:/Game/BP_Player.pblueprint";
+    Blueprint.Kind = "ActorBlueprint";
+    Blueprint.VirtualPath = "/Game/BP_Player.pblueprint";
+    Blueprint.SummaryJson = "{}";
+    Blueprint.Provenance = "fixture";
+    Blueprint.ValidatorId = "asset.registry.record";
+    Pico::FAgentCapabilityCatalog Catalog = BuildGameAssemblyCatalog(Runner);
+    const Pico::FAgentSupportDiagnosis Supported =
+        Catalog.Diagnose(*First, {Blueprint});
+    const Pico::FAgentSupportDiagnosis Missing = Catalog.Diagnose(*First, {});
+    const bool bReportsMissingBlueprint = std::any_of(
+        Missing.Requirements.begin(), Missing.Requirements.end(),
+        [](const Pico::FAgentRequirementDiagnosis& Entry)
+        {
+            return Entry.Support
+                    == Pico::EAgentRequirementSupport::MissingDependency
+                && std::find(Entry.MissingAssetKinds.begin(),
+                    Entry.MissingAssetKinds.end(), "ActorBlueprint")
+                    != Entry.MissingAssetKinds.end();
+        });
+    Runner.Expect(Supported.bSupported && !Missing.bSupported
+            && bReportsMissingBlueprint,
+        "Support diagnosis distinguishes supported requirements from missing asset dependencies");
+    Runner.Expect(Pico::SerializeAgentSupportDiagnosis(Missing)
+            .find("MissingDependency") != std::string::npos,
+        "Support diagnosis is machine-readable and explains why execution is blocked");
+
+    Pico::FAgentCapabilityDescriptor AssetBackedAlternative;
+    AssetBackedAlternative.Id = "ability.asset-backed";
+    AssetBackedAlternative.ProducerId = "test-producer";
+    AssetBackedAlternative.Tags = {"ability"};
+    AssetBackedAlternative.RequiredAssetKinds = {"Texture"};
+    AssetBackedAlternative.VerifierId = "verify.ability.asset-backed";
+    AssetBackedAlternative.Provenance = "fixture";
+    Pico::FAgentCapabilityDescriptor BuiltInAlternative = AssetBackedAlternative;
+    BuiltInAlternative.Id = "ability.built-in";
+    BuiltInAlternative.RequiredAssetKinds.clear();
+    BuiltInAlternative.VerifierId = "verify.ability.built-in";
+    Pico::FAgentCapabilityCatalog AlternativeCatalog;
+    Runner.Expect(AlternativeCatalog.AddCapability(
+            std::move(AssetBackedAlternative), &Error)
+            && AlternativeCatalog.AddCapability(
+                std::move(BuiltInAlternative), &Error),
+        "Capability alternatives register for support diagnosis");
+    Pico::FAgentGameSpec AlternativeSpec;
+    AlternativeSpec.Id = "alternative-spec";
+    AlternativeSpec.Requirements.push_back(
+        {"ability-choice", {"ability"}, true, "Choose any available ability"});
+    const Pico::FAgentSupportDiagnosis AlternativeDiagnosis =
+        AlternativeCatalog.Diagnose(AlternativeSpec, {});
+    Runner.Expect(AlternativeDiagnosis.bSupported
+            && AlternativeDiagnosis.Requirements.size() == 1
+            && AlternativeDiagnosis.Requirements.front().MissingAssetKinds.empty(),
+        "One ready capability alternative satisfies a requirement without false missing dependencies");
+}
+
+void TestBuildPlanDagDryRunAndPlanHash(FTestRunner& Runner)
+{
+    const auto Spec = Pico::ParseAgentGameRequirement(
+        "Build a two-player co-op game with different abilities, collect coins, "
+        "an owned door, shared victory, and package for Windows.");
+    Pico::FAgentAssetDescriptor Blueprint;
+    Blueprint.Id = "asset:/Game/BP_Player.pblueprint";
+    Blueprint.Kind = "ActorBlueprint";
+    Blueprint.VirtualPath = "/Game/BP_Player.pblueprint";
+    Blueprint.Provenance = "fixture";
+    Blueprint.ValidatorId = "asset.registry.record";
+    Pico::FAgentCapabilityCatalog Catalog = BuildGameAssemblyCatalog(Runner);
+    const auto Diagnosis = Catalog.Diagnose(*Spec, {Blueprint});
+    std::string Error;
+    const auto Plan = Pico::BuildAgentBuildPlan(
+        *Spec, Catalog, Diagnosis, &Error);
+    const auto DryRun = Plan
+        ? Pico::BuildAgentBuildPlanDryRun(*Plan, &Error) : std::nullopt;
+    Runner.Expect(Plan && DryRun && !DryRun->OrderedStepIds.empty()
+            && DryRun->PlanHash == Pico::HashAgentBuildPlan(*Plan)
+            && DryRun->ReportJson.find("test-producer") != std::string::npos,
+        "Build Plan emits a validated DAG and complete Dry Run bound to PlanHash");
+
+    Pico::FAgentBuildPlan Changed = *Plan;
+    Changed.Steps.front().ArgumentsJson = R"({"changed":true})";
+    Runner.Expect(Pico::HashAgentBuildPlan(Changed) != DryRun->PlanHash,
+        "Any approved plan content change invalidates PlanHash");
+
+    Pico::FAgentBuildPlan Cyclic = *Plan;
+    Cyclic.Steps.front().Dependencies = {Cyclic.Steps.back().Id};
+    Runner.Expect(!Pico::ValidateAgentBuildPlan(Cyclic, nullptr, &Error)
+            && Error.find("cycle") != std::string::npos,
+        "Build Plan rejects dependency cycles before side effects");
+}
+
+void TestArtifactCheckpointAndIdempotentPlanResume(FTestRunner& Runner)
+{
+    class FProducer final : public Pico::IAgentArtifactProducer
+    {
+    public:
+        std::string_view GetId() const override { return "test-producer"; }
+        bool Produce(const Pico::FAgentBuildPlanStep& Step,
+            const std::filesystem::path& StagingDirectory,
+            std::vector<Pico::FAgentArtifact>& OutArtifacts,
+            std::string& OutError) override
+        {
+            ++Calls;
+            std::error_code Error;
+            std::filesystem::create_directories(StagingDirectory, Error);
+            if (Error) { OutError = Error.message(); return false; }
+            OutArtifacts.push_back({"staged:" + Step.Id, "ProjectMutation",
+                Step.Operation, StagingDirectory.generic_string(), 0});
+            return true;
+        }
+        int Calls = 0;
+    } Producer;
+    class FTransaction final : public Pico::IAgentBuildPlanTransaction
+    {
+    public:
+        bool Begin(std::string_view, std::string&) override
+        { ++Begins; return true; }
+        bool Commit(std::string&) override { ++Commits; return true; }
+        bool Rollback(std::string&) override { ++Rollbacks; return true; }
+        int Begins = 0;
+        int Commits = 0;
+        int Rollbacks = 0;
+    } Transaction;
+
+    const std::filesystem::path Root = std::filesystem::temp_directory_path()
+        / "PicoAgentTests/GameAssembly";
+    std::error_code Ignore;
+    std::filesystem::remove_all(Root, Ignore);
+    Pico::FAgentArtifactStore Artifacts(Root / "Artifacts");
+    std::string Error;
+    const auto Artifact = Artifacts.PublishText(
+        "SupportDiagnosis", "Large structured evidence",
+        std::string(80 * 1024, 'x'), &Error);
+    const auto LoadedArtifact = Artifact
+        ? Artifacts.ReadText(Artifact->Handle, &Error) : std::nullopt;
+    Runner.Expect(Artifact && LoadedArtifact && LoadedArtifact->size() == 80 * 1024,
+        "Artifact Store externalizes large evidence behind a content-addressed handle");
+
+    Pico::FAgentBuildPlan Plan;
+    Plan.Id = "resume-plan";
+    Plan.GameSpecId = "resume-spec";
+    Plan.Steps = {
+        {"step-a", "test-producer", "create-a", "{}", {},
+            {"ProjectMutation"}, "resume-spec:create-a", "WriteProject", "verify.a"},
+        {"step-b", "test-producer", "create-b", "{}", {"step-a"},
+            {"ProjectMutation"}, "resume-spec:create-b", "WriteProject", "verify.b"}};
+    const std::string Hash = Pico::HashAgentBuildPlan(Plan);
+    Pico::FAgentAssemblyCheckpointStore Checkpoints(Root / "checkpoint.json");
+    const std::unordered_map<std::string, Pico::IAgentArtifactProducer*> Producers = {
+        {"test-producer", &Producer}};
+    const auto First = Pico::ExecuteAgentBuildPlan(Plan, Hash, Root / "Stage",
+        Producers, Transaction, Checkpoints);
+    const auto Restored = Checkpoints.Load(&Error);
+    const int CallsAfterFirst = Producer.Calls;
+    const auto Replayed = Restored
+        ? Pico::ExecuteAgentBuildPlan(Plan, Hash, Root / "Stage",
+            Producers, Transaction, Checkpoints, &*Restored)
+        : Pico::FAgentBuildPlanExecutionResult{};
+    Runner.Expect(First.bSucceeded && Restored && Replayed.bSucceeded
+            && Replayed.bResumed && Producer.Calls == CallsAfterFirst
+            && Restored->CompletedStepIds.size() == Plan.Steps.size(),
+        "Checkpoint resume skips completed idempotency keys without repeating producer side effects");
+    const auto Rejected = Pico::ExecuteAgentBuildPlan(Plan, "wrong-plan-hash",
+        Root / "Stage", Producers, Transaction, Checkpoints);
+    Runner.Expect(!Rejected.bSucceeded && Rejected.Error.find("PlanHash")
+            != std::string::npos,
+        "Build Plan execution rejects approval for a different PlanHash before transaction begin");
+    std::filesystem::remove_all(Root, Ignore);
+}
 }
 
 int main()
@@ -2053,5 +2320,9 @@ int main()
     TestCredentialStoreRejectsInvalidInput(Runner);
     TestDurableOperationJournal(Runner);
     TestDeterministicFailureInjectionAndReconcile(Runner);
+    TestAssetDescriptorAndCapabilityCatalog(Runner);
+    TestGameSpecRecipeAndSupportDiagnosis(Runner);
+    TestBuildPlanDagDryRunAndPlanHash(Runner);
+    TestArtifactCheckpointAndIdempotentPlanResume(Runner);
     return Runner.Finish();
 }

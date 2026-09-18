@@ -998,26 +998,32 @@ Editor Utility 权限。可视化调试只显示当前节点、最近错误、�
 Delay、GameplayEvent/Montage 等待、Ability 激活、Cook、Agent Graph Tools 和状态可视化闭合；更完整的
 Trigger/拾取节点库可以在顺延后的 Agent 游戏搭建阶段通过同一 Schema/Extension 机制增量加入。
 
-原计划中的 Agent 游戏制作链路已顺延。当前先完成 8 周
-[Pico 工程深度阶段](Pico_Engineering_Depth_Roadmap.zh-CN.md)，建立 Profiler、Runtime Benchmark、Object/Tick/
-Replication/GC 扩展性基线，并完成 Agent Tool 解耦、失败语义、故障注入和对抗 Eval。只有该阶段完成门槛
-全部通过后，才恢复六周“Agent 游戏制作链路”：
-Capability Catalog、Gameplay Recipe、PicoGameSpec、Build Plan、通用玩法积木、三进程 Scenario Runner 和
-Package Evidence，再进入 ECS。详细范围与验收以
+8 周 [Pico 工程深度阶段](Pico_Engineering_Depth_Roadmap.zh-CN.md)、通用 Actor Replication/碰撞语义与 MCP
+纵向切片均已完成。当前恢复扩展后的八周“Agent 游戏制作链路”：Asset Descriptor、Capability Catalog、
+Gameplay Recipe、PicoGameSpec、Build Plan、Checkpoint、通用双人协作玩法积木、三进程 Scenario Runner 和
+Package Evidence。之后依次进入 Render Architecture、AI 视觉资产、受控 Code Harness 和第二玩法综合验收；
+ECS 继续延后，Vulkan 仅在 RHI/OpenGL Backend 边界验收后启动。详细范围与验收以
 [Agent 游戏制作链路规划](AgentGameCreationPipeline.zh-CN.md) 为准。
 
-## MVP 后任务
+## MVP 后续阶段与延期任务
 
-以下内容不进入当前主线，只有主计划提前完成时才开始：
+以下内容已进入当前 AI-first 后续顺序，但必须逐阶段通过准入门槛，不能并行铺开：
 
-- `PicoGraph Lite` 可视化脚本按上述第 9 月独立阶段执行；完整 Blueprint 生态继续延后。
-- ECS Registry、稠密组件存储和 Actor/ECS 桥接。
-- Render Architecture：PrimitiveSceneProxy、MeshBatch、RenderScene、RHI 和 RenderPass/RenderGraph；完成后再接入光线追踪。
+- Render Architecture：PrimitiveSceneProxy、MeshBatch、RenderScene、RenderPass/RenderGraph Lite、RHI 和 OpenGL Backend；现已提前到 Agent 首个双人协作切片之后。
+- AI 视觉资产生产：受控纹理生成、参数化几何和外部 glTF/GLB Producer。
+- 受控 Code Harness：隔离 Patch、Diff 审批、构建验证、有限修复、回滚和能力注册。
+- 第二个非同构双人玩法复用验收。
+- ECS Registry、稠密组件存储和 Actor/ECS 桥接；仅在上述链路通过且存在高密度真实用例后启动。
+- Vulkan Backend；仅在 RenderGraph、RHI 和 OpenGL Backend 回归通过后单独实施。
+
+以下内容继续延期，不阻塞当前主线：
+
+- 完整 Blueprint 生态。
 - 完整 GameplayTask Scheduler 和 TargetData 系统。
 - 更完整的 GAS Effect Aggregator 和复杂叠层。
 - NAT 穿透、P2P、Relay、匹配和账号平台。
 - 基于网络 Schema 的 Replay：结构化 Checkpoint、时间跳转、事件重放和可选倍速播放。
-- 语音 Agent 和自动生成复杂 C++ 游戏代码。
+- 语音 Agent 和不受控的任意 C++/Shell 生成。
 
 若进度延期，首先削减 AI 和可选增强，不削减 CDO、GC、Gameplay Framework、Movement、Replication/RPC、客户端预测和 Package 主链。
 

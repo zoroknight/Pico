@@ -1,5 +1,13 @@
 #include "Pico/Editor/EditorAgentTools.h"
 
+#include "Pico/Agent/AgentGameAssembly.h"
+#include "Pico/Asset/CharacterProfile.h"
+#include "Pico/Asset/Material.h"
+#include "Pico/Asset/SkeletalAnimation.h"
+#include "Pico/Asset/StaticMesh.h"
+#include "Pico/Asset/Texture.h"
+#include "Pico/Asset/ThirdPersonControlProfile.h"
+#include "Pico/Editor/AssetDependencyService.h"
 #include "Pico/Editor/EditorCommandService.h"
 #include "Pico/Editor/EditorPropertyService.h"
 #include "Pico/Editor/EditorSelection.h"
@@ -20,6 +28,7 @@
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/SkeletalMeshComponent.h"
 #include "Pico/Engine/World.h"
+#include "Pico/Engine/WorldSerialization.h"
 #include "Pico/GameplayAbilities/AbilitySystemComponent.h"
 #include "Pico/GameplayAbilities/GameplayAbility.h"
 #include "Pico/GameplayAbilities/GameplayEffect.h"
@@ -275,6 +284,318 @@ FJson VectorToJson(const FVector3& Value)
 FJson RotatorToJson(const FRotator& Value)
 {
     return {{"pitch", Value.Pitch}, {"yaw", Value.Yaw}, {"roll", Value.Roll}};
+}
+
+FJson BoundsToJson(const FStaticMeshBounds& Bounds)
+{
+    return {{"min", VectorToJson(Bounds.Min)}, {"max", VectorToJson(Bounds.Max)}};
+}
+
+std::string AssetPathString(const FAssetPath& Path)
+{
+    return std::string(Path.ToString());
+}
+
+FJson BuildTypedAssetSummary(const FAssetRecord& Asset)
+{
+    FJson Summary{{"descriptor_schema_version", 1},
+        {"asset_type", std::string(ToString(Asset.Type))},
+        {"inspection_status", "loaded"}};
+    const auto Fail = [&Summary](std::string_view Error)
+    {
+        Summary["inspection_status"] = "unreadable";
+        Summary["inspection_error"] = Error;
+    };
+
+    switch (Asset.Type)
+    {
+    case EAssetType::World:
+    {
+        FWorldAssetData World;
+        EWorldSerializationError Error = EWorldSerializationError::None;
+        if (!LoadWorldAssetDataFromFile(Asset.FilePath, World, &Error))
+        {
+            Fail(ToString(Error));
+            break;
+        }
+        std::size_t PropertyCount = 0;
+        for (const FSceneObjectRecord& Object : World.Objects)
+            PropertyCount += Object.Properties.size();
+        Summary["object_count"] = World.Objects.size();
+        Summary["relation_count"] = World.Relations.size();
+        Summary["serialized_property_count"] = PropertyCount;
+        break;
+    }
+    case EAssetType::StaticMesh:
+    {
+        FStaticMeshData Mesh;
+        EStaticMeshError Error = EStaticMeshError::None;
+        if (!LoadStaticMeshFromFile(Asset.FilePath, Mesh, &Error))
+        {
+            Fail(ToString(Error));
+            break;
+        }
+        FJson Slots = FJson::array();
+        for (const FStaticMeshSection& Section : Mesh.Sections)
+            Slots.push_back(Section.MaterialSlotName);
+        Summary["vertex_count"] = Mesh.Vertices.size();
+        Summary["index_count"] = Mesh.Indices.size();
+        Summary["triangle_count"] = Mesh.Indices.size() / 3;
+        Summary["section_count"] = Mesh.Sections.size();
+        Summary["material_slots"] = std::move(Slots);
+        Summary["uv_channel_count"] = Mesh.Vertices.empty() ? 0 : 1;
+        Summary["has_vertex_normals"] = !Mesh.Vertices.empty();
+        Summary["bounds"] = BoundsToJson(Mesh.Bounds);
+        break;
+    }
+    case EAssetType::Texture:
+    {
+        FTextureData Texture;
+        ETextureError Error = ETextureError::None;
+        if (!LoadTextureFromFile(Asset.FilePath, Texture, &Error))
+        {
+            Fail(ToString(Error));
+            break;
+        }
+        bool bUsesTransparency = false;
+        for (std::size_t Index = 3; Index < Texture.Pixels.size(); Index += 4)
+        {
+            if (Texture.Pixels[Index] != 255)
+            {
+                bUsesTransparency = true;
+                break;
+            }
+        }
+        Summary["width"] = Texture.Width;
+        Summary["height"] = Texture.Height;
+        Summary["pixel_format"] = "RGBA8";
+        Summary["channel_count"] = 4;
+        Summary["has_alpha_channel"] = true;
+        Summary["uses_transparency"] = bUsesTransparency;
+        Summary["pixel_data_bytes"] = Texture.Pixels.size();
+        break;
+    }
+    case EAssetType::Material:
+    {
+        FMaterialData Material;
+        EMaterialError Error = EMaterialError::None;
+        if (!LoadMaterialFromFile(Asset.FilePath, Material, &Error))
+        {
+            Fail(ToString(Error));
+            break;
+        }
+        const bool bUsesTexture = !Material.BaseColorTexture.IsEmpty();
+        Summary["shading_model"] = "PicoLitPBR";
+        Summary["base_color_source"] = bUsesTexture ? "texture" : "constant";
+        Summary["base_color"] = VectorToJson(Material.BaseColor);
+        Summary["base_color_texture"] = bUsesTexture
+            ? FJson(AssetPathString(Material.BaseColorTexture)) : FJson(nullptr);
+        Summary["metallic"] = Material.Metallic;
+        Summary["roughness"] = Material.Roughness;
+        Summary["has_normal_texture"] = false;
+        Summary["has_height_texture"] = false;
+        Summary["has_vertex_displacement"] = false;
+        Summary["semantic_surface"] = "unknown";
+        break;
+    }
+    case EAssetType::Skeleton:
+    {
+        FSkeletonData Skeleton;
+        ESkeletalAssetError Error = ESkeletalAssetError::None;
+        if (!LoadSkeletonFromFile(Asset.FilePath, Skeleton, &Error))
+        {
+            Fail(ToString(Error));
+            break;
+        }
+        const std::size_t RootCount = static_cast<std::size_t>(std::count_if(
+            Skeleton.Bones.begin(), Skeleton.Bones.end(),
+            [](const FSkeletonBone& Bone) { return Bone.ParentIndex < 0; }));
+        Summary["bone_count"] = Skeleton.Bones.size();
+        Summary["root_bone_count"] = RootCount;
+        break;
+    }
+    case EAssetType::SkeletalMesh:
+    {
+        FSkeletalMeshData Mesh;
+        ESkeletalAssetError Error = ESkeletalAssetError::None;
+        if (!LoadSkeletalMeshFromFile(Asset.FilePath, Mesh, &Error))
+        {
+            Fail(ToString(Error));
+            break;
+        }
+        FJson Materials = FJson::array();
+        for (const FAssetPath& Material : Mesh.DefaultMaterials)
+            Materials.push_back(AssetPathString(Material));
+        std::size_t MaxBoneInfluences = 0;
+        for (const FSkeletalMeshVertex& Vertex : Mesh.Vertices)
+        {
+            const std::size_t Used = static_cast<std::size_t>(std::count_if(
+                Vertex.BoneWeights.begin(), Vertex.BoneWeights.end(),
+                [](float Weight) { return Weight > 0.0f; }));
+            MaxBoneInfluences = std::max(MaxBoneInfluences, Used);
+        }
+        Summary["skeleton"] = AssetPathString(Mesh.SkeletonAsset);
+        Summary["vertex_count"] = Mesh.Vertices.size();
+        Summary["index_count"] = Mesh.Indices.size();
+        Summary["triangle_count"] = Mesh.Indices.size() / 3;
+        Summary["section_count"] = Mesh.Sections.size();
+        Summary["default_materials"] = std::move(Materials);
+        Summary["uv_channel_count"] = Mesh.Vertices.empty() ? 0 : 1;
+        Summary["max_bone_influences"] = MaxBoneInfluences;
+        Summary["bounds"] = BoundsToJson(Mesh.Bounds);
+        break;
+    }
+    case EAssetType::AnimationClip:
+    {
+        FAnimationClipData Clip;
+        ESkeletalAssetError Error = ESkeletalAssetError::None;
+        if (!LoadAnimationClipFromFile(Asset.FilePath, Clip, &Error))
+        {
+            Fail(ToString(Error));
+            break;
+        }
+        std::size_t KeyCount = 0;
+        for (const FBoneAnimationTrack& Track : Clip.Tracks)
+            KeyCount += Track.TranslationKeys.size() + Track.RotationKeys.size()
+                + Track.ScaleKeys.size();
+        Summary["skeleton"] = AssetPathString(Clip.SkeletonAsset);
+        Summary["clip_name"] = Clip.Name;
+        Summary["duration_seconds"] = Clip.Duration;
+        Summary["looping"] = Clip.bLooping;
+        Summary["track_count"] = Clip.Tracks.size();
+        Summary["key_count"] = KeyCount;
+        Summary["notify_count"] = Clip.Notifies.size();
+        Summary["has_root_motion_track"] = Clip.RootBoneIndex >= 0
+            && std::any_of(Clip.Tracks.begin(), Clip.Tracks.end(),
+                [&Clip](const FBoneAnimationTrack& Track)
+                {
+                    return Track.BoneIndex
+                        == static_cast<uint32>(Clip.RootBoneIndex);
+                });
+        break;
+    }
+    case EAssetType::AnimationSet:
+    {
+        FAnimationSetData Set;
+        ESkeletalAssetError Error = ESkeletalAssetError::None;
+        if (!LoadAnimationSetFromFile(Asset.FilePath, Set, &Error))
+        {
+            Fail(ToString(Error));
+            break;
+        }
+        Summary["skeleton"] = AssetPathString(Set.SkeletonAsset);
+        Summary["idle_animation"] = AssetPathString(Set.IdleAnimation);
+        Summary["walk_animation"] = AssetPathString(Set.WalkAnimation);
+        Summary["jump_animation"] = AssetPathString(Set.JumpAnimation);
+        break;
+    }
+    case EAssetType::AnimationMontage:
+    {
+        FAnimationMontageData Montage;
+        ESkeletalAssetError Error = ESkeletalAssetError::None;
+        if (!LoadAnimationMontageFromFile(Asset.FilePath, Montage, &Error))
+        {
+            Fail(ToString(Error));
+            break;
+        }
+        Summary["skeleton"] = AssetPathString(Montage.SkeletonAsset);
+        Summary["slot_name"] = Montage.SlotName;
+        Summary["blend_in_seconds"] = Montage.BlendInTime;
+        Summary["blend_out_seconds"] = Montage.BlendOutTime;
+        Summary["segment_count"] = Montage.Segments.size();
+        Summary["section_count"] = Montage.Sections.size();
+        Summary["notify_count"] = Montage.Notifies.size();
+        break;
+    }
+    case EAssetType::CharacterProfile:
+    {
+        FCharacterProfileData Profile;
+        ECharacterProfileError Error = ECharacterProfileError::None;
+        if (!LoadCharacterProfileFromFile(Asset.FilePath, Profile, &Error))
+        {
+            Fail(ToString(Error));
+            break;
+        }
+        FJson Overrides = FJson::array();
+        for (const FAssetPath& Material : Profile.MaterialOverrides)
+            if (!Material.IsEmpty()) Overrides.push_back(AssetPathString(Material));
+        Summary["skeletal_mesh"] = AssetPathString(Profile.SkeletalMesh);
+        Summary["animation_set"] = AssetPathString(Profile.AnimationSet);
+        Summary["default_montage"] = Profile.DefaultMontage.IsEmpty()
+            ? FJson(nullptr) : FJson(AssetPathString(Profile.DefaultMontage));
+        Summary["material_overrides"] = std::move(Overrides);
+        Summary["mesh_transform"] = {{"location", VectorToJson(Profile.MeshTransform.Translation)},
+            {"rotation", RotatorToJson(Profile.MeshTransform.Rotation.Rotator())},
+            {"scale", VectorToJson(Profile.MeshTransform.Scale)}};
+        break;
+    }
+    case EAssetType::ThirdPersonControlProfile:
+    {
+        FThirdPersonControlProfileData Profile;
+        EThirdPersonControlProfileError Error = EThirdPersonControlProfileError::None;
+        if (!LoadThirdPersonControlProfileFromFile(Asset.FilePath, Profile, &Error))
+        {
+            Fail(ToString(Error));
+            break;
+        }
+        Summary["profile_version"] = Profile.Version;
+        Summary["movement_reference"] = ToString(Profile.MovementReference);
+        Summary["max_walk_speed"] = Profile.MaxWalkSpeed;
+        Summary["rotation_rate"] = Profile.RotationRate;
+        Summary["orient_rotation_to_movement"] = Profile.bOrientRotationToMovement;
+        Summary["camera_arm_length"] = Profile.DefaultCameraArmLength;
+        Summary["camera_uses_control_rotation"] = Profile.bCameraUsesControlRotation;
+        Summary["camera_pitch_range"] = {Profile.MinimumCameraPitch, Profile.MaximumCameraPitch};
+        break;
+    }
+    case EAssetType::ActorBlueprint:
+    {
+        FActorBlueprintData Blueprint;
+        EActorBlueprintError Error = EActorBlueprintError::None;
+        if (!LoadActorBlueprintFromFile(Asset.FilePath, Blueprint, &Error))
+        {
+            Fail(ToString(Error));
+            break;
+        }
+        std::size_t PropertyOverrideCount = Blueprint.ActorDefaults.Properties.size();
+        FJson Components = FJson::array();
+        for (const FActorBlueprintObjectDefaults& Component : Blueprint.ComponentDefaults)
+        {
+            PropertyOverrideCount += Component.Properties.size();
+            Components.push_back({{"name", Component.ObjectName.ToString()},
+                {"class", Component.ComponentClassName.ToString()},
+                {"property_override_count", Component.Properties.size()}});
+        }
+        Summary["blueprint_version"] = Blueprint.Version;
+        Summary["parent_class"] = Blueprint.ParentClassName.ToString();
+        Summary["generated_class"] = Blueprint.GeneratedClassName.ToString();
+        Summary["component_count"] = Blueprint.ComponentDefaults.size();
+        Summary["components"] = std::move(Components);
+        Summary["property_override_count"] = PropertyOverrideCount;
+        break;
+    }
+    case EAssetType::PicoGraph:
+    {
+        FPicoGraphAsset Graph;
+        EGraphAssetError Error = EGraphAssetError::None;
+        if (!LoadGraphAssetFromFile(Asset.FilePath, Graph, &Error))
+        {
+            Fail(ToString(Error));
+            break;
+        }
+        FJson NodeTypes = FJson::object();
+        for (const FGraphNode& Node : Graph.Nodes)
+            NodeTypes[Node.TypeName] = NodeTypes.value(Node.TypeName, 0) + 1;
+        Summary["graph_version"] = Graph.Version;
+        Summary["graph_id"] = Graph.GraphId;
+        Summary["variable_count"] = Graph.Variables.size();
+        Summary["node_count"] = Graph.Nodes.size();
+        Summary["link_count"] = Graph.Links.size();
+        Summary["node_types"] = std::move(NodeTypes);
+        break;
+    }
+    }
+    return Summary;
 }
 
 bool PropertyValueToJson(
@@ -766,6 +1087,13 @@ public:
 
 struct FEditorAgentToolExecutor::FImpl
 {
+    struct FCachedTypedSummary
+    {
+        std::uint64_t SourceRevision = 0;
+        std::uint64_t SizeBytes = 0;
+        FJson Summary;
+    };
+
     struct FPendingChangeSet
     {
         std::string RunId;
@@ -1000,6 +1328,82 @@ struct FEditorAgentToolExecutor::FImpl
         return Policy;
     }
 
+    std::vector<FAgentAssetDescriptor> BuildAssetDescriptors() const
+    {
+        std::vector<FAgentAssetDescriptor> Descriptors;
+        if (!EngineLoop) return Descriptors;
+        const FAssetRegistry& AssetRegistry = EngineLoop->GetAssetRegistry();
+        for (const FAssetRecord& Asset : AssetRegistry.GetAssets())
+        {
+            FAgentAssetDescriptor Descriptor;
+            const std::string AssetPath(Asset.AssetPath.ToString());
+            Descriptor.Id = "asset:" + AssetPath;
+            Descriptor.Kind = std::string(ToString(Asset.Type));
+            Descriptor.VirtualPath = AssetPath;
+            Descriptor.SourceRevision = static_cast<std::uint64_t>(
+                Asset.LastWriteTime.time_since_epoch().count());
+            Descriptor.SizeBytes = Asset.FileSize;
+            for (const FAssetPath& Dependency :
+                FAssetDependencyService::GetAssetDependencies(
+                    Asset.AssetPath, AssetRegistry))
+            {
+                Descriptor.Dependencies.emplace_back(Dependency.ToString());
+            }
+            Descriptor.Tags = {"asset", Descriptor.Kind};
+            const std::uint64_t Revision = static_cast<std::uint64_t>(
+                Asset.LastWriteTime.time_since_epoch().count());
+            const std::string CacheKey(Asset.AssetPath.ToString());
+            auto Cached = TypedSummaryCache.find(CacheKey);
+            if (Cached == TypedSummaryCache.end()
+                || Cached->second.SourceRevision != Revision
+                || Cached->second.SizeBytes != Asset.FileSize)
+            {
+                FCachedTypedSummary Entry;
+                Entry.SourceRevision = Revision;
+                Entry.SizeBytes = Asset.FileSize;
+                Entry.Summary = BuildTypedAssetSummary(Asset);
+                Cached = TypedSummaryCache.insert_or_assign(
+                    CacheKey, std::move(Entry)).first;
+            }
+            FJson Summary = Cached->second.Summary;
+            Summary["file_size"] = Descriptor.SizeBytes;
+            Summary["dependency_count"] = Descriptor.Dependencies.size();
+            Descriptor.SummaryJson = std::move(Summary).dump();
+            Descriptor.Provenance =
+                "Live AssetRegistry, typed asset loader, and asset dependency service";
+            Descriptor.ValidatorId = "asset.typed-descriptor.v1";
+            Descriptors.push_back(std::move(Descriptor));
+        }
+        PWorld* World = EngineLoop->GetWorld();
+        if (World)
+        {
+            FAgentAssetDescriptor Descriptor;
+            Descriptor.Id = "world:" + World->GetPathName();
+            Descriptor.Kind = "WorldSnapshot";
+            Descriptor.VirtualPath = World->GetPathName();
+            std::size_t ActorCount = 0;
+            for (PLevel* Level : World->GetLevels())
+                if (Level) ActorCount += Level->GetActors().size();
+            for (const FObjectAssetReference& Reference :
+                FAssetDependencyService::GatherWorldReferences(World))
+            {
+                const std::string Path(Reference.AssetPath.ToString());
+                if (std::find(Descriptor.Dependencies.begin(),
+                        Descriptor.Dependencies.end(), Path)
+                    == Descriptor.Dependencies.end())
+                    Descriptor.Dependencies.push_back(Path);
+            }
+            Descriptor.SourceRevision = ActorCount;
+            Descriptor.Tags = {"world", "scene", "actor"};
+            Descriptor.SummaryJson = FJson{{"actor_count", ActorCount},
+                {"asset_reference_count", Descriptor.Dependencies.size()}}.dump();
+            Descriptor.Provenance = "Live Game Thread World and reflected asset references";
+            Descriptor.ValidatorId = "world.snapshot.references";
+            Descriptors.push_back(std::move(Descriptor));
+        }
+        return Descriptors;
+    }
+
     std::vector<FAgentKnowledgeRecord> CollectKnowledgeRecords() const
     {
         std::vector<FAgentKnowledgeRecord> Result;
@@ -1027,18 +1431,17 @@ struct FEditorAgentToolExecutor::FImpl
 
         if (EngineLoop)
         {
-            FJson Assets = FJson::array();
-            for (const FAssetRecord& Asset : EngineLoop->GetAssetRegistry().GetAssets())
-                Assets.push_back({{"path", Asset.AssetPath.ToString()},
-                    {"type", ToString(Asset.Type)}, {"size", Asset.FileSize}});
+            const std::vector<FAgentAssetDescriptor> Assets =
+                BuildAssetDescriptors();
             FAgentKnowledgeRecord Record;
-            Record.SourceType = "assets";
+            Record.SourceType = "asset-descriptor";
             Record.SourcePath = "/Game";
-            Record.Title = "Project AssetRegistry snapshot";
-            Record.Content = Assets.dump();
+            Record.Title = "Versioned project asset and World descriptors";
+            Record.Content = SerializeAgentAssetDescriptors(Assets);
             Record.SourceRevision = Assets.size();
-            Record.Tags = {"asset", "assetregistry", "content"};
-            Record.Provenance = "Live AssetRegistry";
+            Record.Tags = {"asset", "descriptor", "dependency", "world"};
+            Record.Provenance =
+                "Live AssetRegistry, dependency service, and World snapshot";
             Result.push_back(std::move(Record));
         }
 
@@ -1762,6 +2165,23 @@ struct FEditorAgentToolExecutor::FImpl
             return Success(Call, {{"assets", std::move(Assets)}});
         };
         bInitialized = RegisterTool(std::move(SearchAssets)) && bInitialized;
+
+        FAgentToolDefinition DescribeAssetCatalog;
+        DescribeAssetCatalog.Name = "editor.asset.describe_catalog";
+        DescribeAssetCatalog.Description =
+            "Return versioned typed AssetDescriptor records for project assets and the active World, including deterministic technical characteristics, dependencies, provenance, and verifier ids";
+        DescribeAssetCatalog.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const std::vector<FAgentAssetDescriptor> Descriptors =
+                BuildAssetDescriptors();
+            return Success(Call, {{"format_version", 1},
+                {"descriptor_count", Descriptors.size()},
+                {"descriptors", FJson::parse(
+                    SerializeAgentAssetDescriptors(Descriptors))}});
+        };
+        bInitialized = RegisterTool(std::move(DescribeAssetCatalog))
+            && bInitialized;
 
         const auto ResolveGraphFile = [](std::string_view Text,
                                          FAssetPath& OutPath,
@@ -3148,6 +3568,7 @@ struct FEditorAgentToolExecutor::FImpl
     FGameplayToolProvider GameplayTools;
     FProjectProcessToolProvider ProjectProcessTools;
     FAgentToolRegistry Registry;
+    mutable std::unordered_map<std::string, FCachedTypedSummary> TypedSummaryCache;
     std::optional<FPendingChangeSet> PendingChangeSet;
     std::string LastChangeSetError;
     bool bInitialized = true;

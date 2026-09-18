@@ -1237,8 +1237,9 @@ void TestEditorCommandService(FTestRunner& Runner)
     };
     Runner.Expect(
         AgentTools.IsInitialized()
-            && AgentToolNames.size() == 33
+            && AgentToolNames.size() == 34
             && HasAgentTool("editor.world.describe")
+            && HasAgentTool("editor.asset.describe_catalog")
             && HasAgentTool("editor.actor.spawn")
             && HasAgentTool("editor.gameplay.asc.describe")
             && HasAgentTool("editor.actor_blueprint.describe_defaults")
@@ -1247,6 +1248,17 @@ void TestEditorCommandService(FTestRunner& Runner)
             && HasAgentTool("editor.play.start")
             && HasAgentTool("editor.project.package"),
         "Editor Agent adapter registers inspection, scene, gameplay, save, project, and package tools");
+    const Pico::FAgentToolResult DescribeAssetCatalogResult = AgentTools.Execute(
+        {"agent-asset-catalog", "editor.asset.describe_catalog", "{}"}, nullptr);
+    Runner.Expect(
+        DescribeAssetCatalogResult.bSucceeded
+            && DescribeAssetCatalogResult.OutputJson.find("\"format_version\":1")
+                != std::string::npos
+            && DescribeAssetCatalogResult.OutputJson.find("WorldSnapshot")
+                != std::string::npos
+            && DescribeAssetCatalogResult.OutputJson.find("provenance")
+                != std::string::npos,
+        "Editor Agent exposes versioned asset descriptors with live World provenance");
     const std::string AgentCatalog = AgentTools.BuildToolCatalogJson();
     const std::vector<Pico::FAgentKnowledgeRecord> CapabilityKnowledge =
         AgentTools.CollectKnowledgeRecords();
@@ -2264,6 +2276,26 @@ void TestEditorWorldDocument(FTestRunner& Runner)
     AgentApproval.bApprove = true;
     Pico::FEditorAgentToolExecutor AgentTools(
         &EngineLoop, &AgentSelection, &AgentTransactions, &AgentApproval);
+    const Pico::FAgentToolResult TypedCatalogResult = AgentTools.Execute(
+        {"typed-project-asset-catalog", "editor.asset.describe_catalog", "{}"},
+        nullptr);
+    Runner.Expect(
+        TypedCatalogResult.bSucceeded
+            && TypedCatalogResult.OutputJson.find("base_color_source")
+                != std::string::npos
+            && TypedCatalogResult.OutputJson.find("has_vertex_displacement")
+                != std::string::npos
+            && TypedCatalogResult.OutputJson.find("vertex_count")
+                != std::string::npos
+            && TypedCatalogResult.OutputJson.find("pixel_format")
+                != std::string::npos
+            && TypedCatalogResult.OutputJson.find("component_count")
+                != std::string::npos
+            && TypedCatalogResult.OutputJson.find("node_types")
+                != std::string::npos
+            && TypedCatalogResult.OutputJson.find("asset.typed-descriptor.v1")
+                != std::string::npos,
+        "Project AssetDescriptor catalog exposes deterministic per-type technical characteristics");
     const Pico::FAgentToolCall SpawnBlueprintCall {
         "spawn-blueprint-npc", "editor.actor.spawn_blueprint",
         R"({"blueprint_asset":"/Game/Characters/BP_Knight.pblueprint","name":"AgentBlueprintNpc","x":1300,"y":0,"z":95})"

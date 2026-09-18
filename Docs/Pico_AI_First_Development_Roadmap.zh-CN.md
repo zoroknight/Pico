@@ -20,7 +20,8 @@ Pico 已经通过本机多进程和两台真实 Windows 电脑验证 UDP、Repli
 2. 让 AI 安全使用 Pico 已有的反射、资产、事务、World、Gameplay、网络和打包能力。
 3. 先建立 Profiler、Benchmark、Failure Taxonomy 和 Eval，让性能与 Agent 正确性可测量。
 4. 加固 Object/Tick/GC/Replication 的扩展性，并解除 Agent 通用层与项目特例的耦合。
-5. 工程深度阶段验收后，再恢复“完成简单 3D 游戏”、ECS 和复杂渲染架构。
+5. 工程深度阶段验收后，以“小型双人协作游戏”为北极星恢复 Agent 游戏搭建；先建立资产理解和可靠生产链，
+   再依次推进渲染架构、AI 视觉资产、受控代码生产，ECS 与 Vulkan 继续由真实需求和准入门槛驱动。
 
 ## 新实施顺序
 
@@ -35,23 +36,34 @@ Pico 已经通过本机多进程和两台真实 Windows 电脑验证 UDP、Repli
  -> Agent Reliability + Decoupling（已完成工程基线）
  -> 通用 Actor Replication 与碰撞语义收尾（已完成）
  -> Pico MCP 四周纵向切片（已完成）
- -> AI 完整游戏搭建（下一候选主线）
- -> ECS 纵向切片
- -> Render Architecture
+ -> 阶段 A 第 1～4 周：资产理解、规格、Build Plan 与恢复（已完成）
+ -> ReAct 轻量化加固门（下一优先级，五周）
+ -> 阶段 A 第 5～8 周：玩法积木、Graph、组装与真实验收
+ -> 阶段 C：Render Architecture（提前，四周）
+ -> 阶段 D：AI 视觉资产生产（两周）
+ -> 阶段 E：受控 Code Harness（四周）
+ -> 阶段 A.2：第二玩法综合验收（两周）
+ -> PicoResearchKit：算法研究扩展（独立专项路线）
+ -> 阶段 B：ECS 纵向切片（继续延后）
+ -> 阶段 C.2：Vulkan Backend（通过 RHI 准入后）
 ```
 
 固定优先级为：
 
 ```text
-AI 完整游戏搭建
- > ECS
- > 深入渲染
- > Multi-Agent / Code Agent
+AI 双人协作游戏闭环与 Harness 可靠性
+ > Render Architecture
+ > AI 视觉资产与受控 Code Harness
+ > ECS / Vulkan / Multi-Agent
 ```
 
 已完成的 8 周工程基线、性能数据和取舍详见
 [Pico 工程深度阶段路线](Pico_Engineering_Depth_Roadmap.zh-CN.md)。容器全面重写继续延期；后续仍不得以旧月份
-排期为理由同时启动 ECS、复杂渲染、更多 GAS、Multi-Agent 或 Code Agent。
+排期为理由同时启动 ECS、Vulkan、更多 GAS、Multi-Agent 或不受控 Code Agent。
+
+对象语义、Semantic Skill、World Model、Planner、AI Companion 和后续 Learned Motion 的研究工作统一遵循
+[Pico 算法研究扩展落地路线](Pico_Algorithm_Research_Extension_Roadmap.zh-CN.md)。研究代码以可选扩展维护，不得
+把 Python 训练依赖、实验资产或特定算法实现写入 Pico Runtime 默认构建。
 
 ## AI 架构决策
 
@@ -98,6 +110,18 @@ Session、受保护 Tool Pipeline 和能力隔离；Codex Harness 主要参考 W
 
 第一版不引入 LangChain 作为核心依赖，不直接嵌入预发布的 DeepSeek Harness，也不实现动态装卸一切能力的
 通用插件内核。
+
+### ReAct 轻量化决策
+
+阶段 A 前四周完成后，Agent 架构只沿单一 ReAct Loop 加固，不同时引入 Direct、Plan-Execute、GoT、Multi-Agent
+或模式路由器。Build Plan/DAG 保留为复杂任务的结构化 Task State 与审批产物，不建立第二套执行 Runtime。
+Task State、Context Assembler、Memory/RAG、Query Rewrite 和 Reflection 均采用轻量、按需和可关闭设计；简单
+任务不得因此增加模型轮次。Harness 继续独占 Validate、Permission、Approval、Transaction、Execute、Verify、
+Journal 和 Game Thread 语义，Agent 层只消费结构化事实并判断是否推进用户目标。
+
+详细依赖边界、五周任务、性能门槛和明确延期项见
+[Pico Agent ReAct 轻量化加固路线](AgentReActLightweightHardeningRoadmap.zh-CN.md)。MCP 继续使用已完成的本地
+Streamable HTTP；stdio 暂不实现。
 
 ### 接口边界
 
@@ -660,21 +684,30 @@ PClass 注册表生成 Callable 和基础 Property 节点，只读/Transient 属
 Graph 节点类或 Agent 属性 Tool。PicoSandbox 早期 Mini GAS 语义工具暂作为旧 Skill 兼容适配器保留；后续扩展
 DisplayName、Category、范围和权限元数据后，再将该适配器完全移出通用 Editor 模块。
 
-## 后续阶段 A（顺延，六周）：AI 游戏搭建闭环
+## 后续阶段 A（进行中，八周）：AI 游戏搭建闭环
 
-目标：让 AI 在受控工具、Skill、上下文检索和验证器的约束下完成一个简单可玩、可联网、可打包的 3D 游戏。
+目标：让 AI 在受控工具、Skill、上下文检索和验证器的约束下完成一个简单可玩、可联网、可打包的双人协作
+3D 游戏。首个纵向切片固定包含两个角色、差异化能力、环境机关、玩家专属交互、共享目标和服务器权威胜利判定；
+它是对 Agent 生产链的工程验收，不宣称复刻完整商业游戏的内容规模。
 本阶段不是开放任意代码生成，而是补齐“自然语言需求 -> 结构化规格 -> 可复用玩法积木 -> 自动运行验收 -> 打包证据”的
 可靠链路。详细架构、数据契约、边界和验收以
 [Agent 游戏制作链路规划](AgentGameCreationPipeline.zh-CN.md) 为准。
 
+阶段 A 第 1～4 周已经完成。在继续第 5～8 周前，先执行
+[ReAct 轻量化加固门](AgentReActLightweightHardeningRoadmap.zh-CN.md)：它强化现有 Agent Runtime，但不计为
+第二套 Harness 或新的执行模式。加固门通过前，不以继续增加玩法 Tool、独立 Memory Service 或额外模型调用掩盖
+上下文、证据、振荡和恢复问题。
+
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |
-| 第 1 周 | Capability Descriptor/Catalog、Gameplay Recipe 格式、`PicoGameSpec` Schema 和支持度诊断 | 同一需求稳定生成 Spec，并清楚列出已支持、缺失和不支持项；能力可追溯到来源和 Verifier |
-| 第 2 周 | Build Plan、Dry Run、PlanHash 审批、项目级事务、幂等批处理工具和 Artifact Handle | 执行前可预览完整修改；批准后原子执行；故障可回滚且不污染已有项目 |
-| 第 3 周 | PicoGraph 补齐 Input/Overlap/RepNotify/Custom Event、事件参数、Int/比较/布尔、参数化 PFunction 和 Authority Policy | 不新增项目专用 C++ 也能表达收集、条件判断、交互和服务器权威调用 |
-| 第 4 周 | Agent Game Starter Template、收集/交互/Owned Door/目标/比赛状态/HUD 组件和首批 Recipes | 人工只用现有积木即可组装并运行双人收集开门 Demo |
-| 第 5 周 | Development/Test Runtime Probe、Input Action 注入、Server + Client 1 + Client 2 Scenario Runner 和网络断言 | 自动验证拾取、错误门拒绝、正确开门、双门胜利和双端 UI，并输出结构化证据 |
-| 第 6 周 | 端到端 Game Assembly Skill、最多两轮定向修复、Package Validator、真实 Editor Golden Tasks 和第二玩法复用验收 | 从中文需求到可审计、可运行、可联网的 Windows Stage 形成闭环；“钥匙 + 双人压力板”等第二玩法证明没有写死 Demo |
+| 第 1 周（已完成） | `AssetDescriptor`、Capability Descriptor/Catalog 和统一来源元数据；覆盖 Mesh、Texture、骨骼动画、Actor Blueprint、PicoGraph 与 World | Agent 可用结构化事实说明用户资产和现有积木；结果带来源、版本、依赖、预览证据和 Verifier，不读取二进制后猜测 |
+| 第 2 周（已完成） | Gameplay Recipe、版本化 `PicoGameSpec`、Requirement Parser 和支持度诊断 | 同一需求稳定生成 Spec，并清楚列出已支持、缺失和不支持项；真正阻塞的问题才要求用户澄清 |
+| 第 3 周（已完成） | Build Plan DAG、Dry Run、PlanHash 审批、项目级事务、幂等批处理工具和暂存工作区 | 执行前可预览完整修改；批准后只执行绑定计划；故障可回滚且不污染已有项目 |
+| 第 4 周（已完成） | Checkpoint、Artifact Handle、大结果外置、失败分类、上下文预算和有限恢复策略 | 中断后可从已验证边界恢复；重复查询和无进展调用被确定性停止；证据不依赖聊天上下文存活 |
+| 第 5 周 | Agent Game Starter Template、双角色/差异化能力、收集/交互/Owned Door/机关/目标/比赛状态/HUD 组件和首批 Recipes | 人工只用现有积木即可组装并运行双人协作 Demo；通用引擎层不出现项目专用类名 |
+| 第 6 周 | PicoGraph 补齐 Input/Overlap/RepNotify/Custom Event、事件参数、Int/比较/布尔、参数化 PFunction 和 Authority Policy | 不新增项目专用 C++ 也能表达收集、能力协作、条件判断、专属交互和服务器权威调用 |
+| 第 7 周 | 端到端 Game Assembly Skill、World/Blueprint/Graph 联合生产和最多两轮定向修复 | Agent 从中文需求自动搭建首个双人协作关卡；所有修改可审计、保存、重开并由失败断言驱动修复 |
+| 第 8 周 | Development/Test Runtime Probe、Input Action 注入、Server + Client 1 + Client 2 Scenario Runner、Package Validator 和真实 Editor Golden Tasks | 自动验证移动、能力、机关、错误玩家拒绝、共享胜利、双端 UI 和 Windows Stage，形成结构化证据 |
 
 最终指令示例：
 
@@ -686,8 +719,9 @@ DisplayName、Category、范围和权限元数据后，再将该适配器完全�
 AI 可以分步规划和申请审批，但完成定义必须由确定性验证器判定，不能由模型自行宣布成功。
 
 本阶段统一使用以下产物生产边界：`ExistingAssetProducer`、`ActorBlueprintProducer`、
-`PicoGraphProducer` 和 `WorldProducer`。未来代码 Harness 以禁用状态的 `CodeModuleProducer` 接入同一 Build Plan；
-它不能绕过 Tool Policy、Diff 审批、事务、构建测试或验证器。ECS 推迟到本阶段六周验收和第二玩法复用通过后。
+`PicoGraphProducer` 和 `WorldProducer`。`CodeModuleProducer` 在本阶段保持禁用，待阶段 E 通过独立准入后接入同一
+Build Plan；它不能绕过 Tool Policy、Diff 审批、事务、构建测试或验证器。阶段 A 完成后先进入阶段 C，不直接
+进入 ECS；第二玩法复用由阶段 A.2 独立验收。
 
 ### Skill 路由演进原则
 
@@ -720,26 +754,9 @@ Golden Tasks，覆盖“自然语言需求 -> Agent 规划 -> Tool Pipeline -> �
 - Golden Tasks 使用可重建的 Fixture 项目或临时副本运行，失败时保留 Journal、Session、Tool Trace 和验证报告，避免污染开发项目。
 - 修改 Provider、Prompt、Skill、RAG、Tool Schema 或 Agent Runtime 后必须重跑；路由 Eval 负责快速定位，端到端 Eval 负责发现跨模块回归。
 
-## 后续阶段 B（顺延）：ECS 纵向切片
+## 后续阶段 C（提前）：Render Architecture
 
-ECS 不替换 `PObject/Actor/Component`。Actor 继续管理身份、生命周期、Gameplay、网络和编辑器对象；ECS
-用于大量同构、数据导向的运行时实体。
-
-进入门槛：工程深度 8 周阶段、Agent 游戏搭建六周链路和第二个非同构玩法复用验收均通过。若未通过，继续修正 Catalog、Recipe、Graph
-表达力或 Scenario Runner，不以 ECS 新功能掩盖 Agent 游戏搭建链路的缺口。
-
-| 周次 | 任务 | 周末验收 |
-| --- | --- | --- |
-| 第 1 周 | Entity ID、Registry、组件类型注册和生命周期 | Entity 与组件可稳定创建销毁 |
-| 第 2 周 | 稠密存储、Query、System 调度和结构变更缓冲 | 大量实体遍历无迭代期失效 |
-| 第 3 周 | Actor/ECS 桥接、Transform 和 Render Instance 同步 | 少量 Actor 可拥有大量 ECS 表现实体 |
-| 第 4 周 | 性能、序列化/网络边界和可视化验收 | 对比 Actor 与 ECS 用例并证明真实收益 |
-
-没有第二个高密度用例前，不把 Gameplay Framework、Character 或现有 Component 全面迁移到 ECS。
-
-## 后续阶段 C（顺延）：Render Architecture
-
-本阶段先拆清渲染职责，再增加复杂效果：
+阶段 A 首个双人协作切片通过后，先拆清渲染职责，再开放 AI 编排后处理或增加第二图形后端：
 
 ```text
 PrimitiveComponent
@@ -753,11 +770,65 @@ PrimitiveComponent
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |
 | 第 1 周 | PrimitiveSceneProxy、MeshBatch 和 Game/Render 数据快照 | 渲染不遍历和持有可变 Gameplay 对象 |
-| 第 2 周 | RenderScene、资源句柄、上传/销毁命令和缓存生命周期 | OpenGL 类型不进入 Gameplay/序列化边界 |
-| 第 3 周 | RenderPass/RenderGraph Lite、依赖和资源生命周期 | 现有 PBR、蒙皮、Picking 和辅助线迁移 |
-| 第 4 周 | 最小 RHI 与 OpenGL Backend、回归和性能基线 | 为 Vulkan/DX12/光线追踪保留真实替换边界 |
+| 第 2 周 | RenderScene、资源句柄、上传/销毁命令和缓存生命周期 | OpenGL 类型不进入 Gameplay/序列化边界；失效句柄和延迟销毁可检测 |
+| 第 3 周 | RenderPass/RenderGraph Lite、声明式资源、读写依赖、拓扑排序、生命周期验证和调试视图 | 现有 PBR、蒙皮、Picking 和辅助线迁移；非法依赖在执行前失败 |
+| 第 4 周 | 最小 RHI 与 OpenGL Backend、截图回归和 CPU/GPU 性能基线 | 高层渲染不调用 OpenGL；现有编辑器与打包游戏画面一致，为第二 Backend 留下真实边界 |
 
-延迟渲染、Vulkan、DX12、硬件光线追踪和 Render Thread 在上述边界验收后单独规划，不与架构拆分同时展开。
+第一版不复制 UE5 RDG 的异步计算、资源别名、并行录制和复杂 Barrier，也不在拆分期间同时实现 Vulkan。
+
+## 后续阶段 D（新增，两周）：AI 视觉资产生产
+
+| 周次 | 任务 | 周末验收 |
+| --- | --- | --- |
+| 第 1 周 | `TextureProducer`：生成/编辑源图、平铺与尺寸检查、颜色空间和通道校验、预览审批、来源与 Prompt 记录 | Agent 可生成并导入简单地面、墙体、机关和道具贴图；未经审批的源图不进入正式 `/Game` 资产 |
+| 第 2 周 | 参数化几何与 `External3DProducer`：外部生成、glTF/GLB 暂存、比例/拓扑/UV/材质/骨骼/碰撞检查 | Agent 可生产或导入简单环境道具；复杂角色生成失败时明确降级为用户资产或受控外部工具 |
+
+生成器只产出暂存 Artifact，Pico 的 Importer、Validator 和审批负责是否发布。首版不承诺任意高质量角色、自动
+重拓扑、自动绑定或不可追踪的云端模型下载。
+
+## 后续阶段 E（新增，四周）：受控 Code Harness
+
+只有阶段 A 已暴露出无法由 Tool、Recipe、PicoGraph 或现有 Component 合理表达的重复能力缺口时才进入本阶段。
+
+| 周次 | 任务 | 周末验收 |
+| --- | --- | --- |
+| 第 1 周 | `CodeModuleProducer`、隔离 Worktree/临时项目、Patch Artifact 和项目源码白名单 | 模型不能直接写主工作区或引擎核心；生成结果可丢弃且不影响用户修改 |
+| 第 2 周 | 文件/目录/依赖/代码量预算、结构化 Diff、PlanHash 与应用前二次审批 | 计划审批不等于源码审批；越权路径、密钥、二进制和未知依赖零副作用 |
+| 第 3 周 | 格式化、静态检查、编译、测试、运行验证、有限修复和原子回滚 | 不可编译或验证失败的代码不能发布；失败保留诊断与 Patch，不污染项目 |
+| 第 4 周 | 将通过验收的代码注册为 Component、反射函数、Graph Node 或 Recipe，并刷新 Catalog | 新能力随后可由普通生产链复用，不为每次需求重复生成一次性代码 |
+
+Code Harness 是现有 Harness 下的新 Artifact Producer，不拥有任意 Shell 权限，不形成第二套 Agent Runtime，
+默认禁止修改 `PicoCore`、对象生命周期、网络协议和渲染 Backend。
+
+## 后续阶段 A.2（新增，两周）：第二玩法综合验收
+
+使用不同于首个双人收集开门 Demo 的需求，例如“钥匙 + 双人压力板 + 差异化能力机关”，验证 Catalog、Recipe、
+Graph 和新增代码能力没有绑定首个项目类名。第一周完成生成、运行和定向修复，第二周完成三进程、Package、迁移性
+与指标对比。两个非同构玩法均通过后，才宣称 Agent 游戏制作链成立，并允许评估 ECS。
+
+## 后续阶段 B（继续延后）：ECS 纵向切片
+
+ECS 不替换 `PObject/Actor/Component`。Actor 继续管理身份、生命周期、Gameplay、网络和编辑器对象；ECS
+用于大量同构、数据导向的运行时实体。
+
+进入门槛：工程深度阶段、阶段 A、C、D、E 与 A.2 均通过，并且性能数据存在高密度同构实体用例。若未通过，
+继续修正 Catalog、Recipe、Graph、Producer 或 Scenario Runner，不以 ECS 新功能掩盖游戏制作链路的缺口。
+
+| 周次 | 任务 | 周末验收 |
+| --- | --- | --- |
+| 第 1 周 | Entity ID、Registry、组件类型注册和生命周期 | Entity 与组件可稳定创建销毁 |
+| 第 2 周 | 稠密存储、Query、System 调度和结构变更缓冲 | 大量实体遍历无迭代期失效 |
+| 第 3 周 | Actor/ECS 桥接、Transform 和 Render Instance 同步 | 少量 Actor 可拥有大量 ECS 表现实体 |
+| 第 4 周 | 性能、序列化/网络边界和可视化验收 | 对比 Actor 与 ECS 用例并证明真实收益 |
+
+没有第二个高密度用例前，不把 Gameplay Framework、Character 或现有 Component 全面迁移到 ECS。
+
+## 后续阶段 C.2（准入后，四至六周）：Vulkan Backend
+
+只有阶段 C 证明 OpenGL 已完全位于 RHI 后方、RenderGraph 承载现有效果、公共接口和资产不泄漏 OpenGL Handle，
+并建立稳定截图与性能基线后才开始。阶段依次覆盖 Vulkan Device/Swapchain/资源、Shader 与 Pipeline、RenderGraph
+Barrier 映射、OpenGL/Vulkan 画面一致性、编辑器/游戏/Package 回归。DX12、硬件光线追踪和 Render Thread 继续
+独立评估，不与 Vulkan 首个 Backend 验收捆绑。
 
 ## 网络保留任务
 
@@ -787,10 +858,10 @@ PrimitiveComponent
 | Tool Policy 与事务 | 第 7 月第 3 周 | 非法输入、拒绝、路径穿越和未知工具零副作用 |
 | Provider 隔离 | 第 7 月第 4 周 | 切换 DeepSeek/Kimi 不修改 Editor Tool 实现 |
 | 跨进程持久操作 | 第 7 月收尾并已加固 | Journal 区分 Applied/Committed；项目和 Package 使用 Staging；Play/Package 子进程归属 Job Object；Package 最终退出码、报告和完成标记回写原 Tool Result |
-| Skill 路由 | Agent 游戏搭建阶段第 1 周 | 候选筛选后才允许结构化模型选 Skill；未知、低置信度和越权结果无副作用；固定 Eval 覆盖误路由 |
+| Skill 路由 | Agent 游戏搭建阶段第 2 周 | 候选筛选后才允许结构化模型选 Skill；未知、低置信度和越权结果无副作用；固定 Eval 覆盖误路由 |
 | Graph 类型和执行预算 | 第 9 月第 3 周 | 非法图不可运行；超预算终止当前执行而不阻塞 World |
-| AI 完成判定 | Agent 游戏搭建阶段第 3 周 | 编译、引用、Play、日志和 Package 由验证器判定 |
-| 端到端 Agent Eval | Agent 游戏搭建阶段第 6 周 | 至少 20 个 Golden Tasks 可重复运行；覆盖场景修改、保存、Play、验证、Package 和禁止副作用 |
+| AI 完成判定 | Agent 游戏搭建阶段第 3～4 周 | 编译、引用、Play、日志和 Package 由验证器判定 |
+| 端到端 Agent Eval | Agent 游戏搭建阶段第 8 周 | 至少 20 个 Golden Tasks 可重复运行；覆盖场景修改、保存、Play、验证、Package 和禁止副作用 |
 
 从第一版开始覆盖以下故障测试：
 
@@ -815,9 +886,11 @@ PrimitiveComponent
 4. 优先完成 AI 创建简单单机场景和玩法，再扩展双人联网验收。
 5. MCP Server 只保留下文定义的本地四周纵向切片；MCP Client、LangGraph、Embedding RAG 和 C++ 自动生成
    均可延期。
-6. ECS 只保留纵向切片，不改写现有 Actor 架构。
-7. 深入渲染先完成架构边界，不同时追求多图形 API 和光线追踪。
-8. 不得通过开放任意 Shell、删除审批、跳过事务或放宽执行预算换取表面进度。
+6. AI 视觉资产先保留纹理、参数化几何和受控 glTF/GLB 导入，不承诺任意高质量 3D 生成。
+7. 受控 Code Harness 可以削减生成范围，但不能削减隔离、Diff 审批、构建验证和回滚。
+8. ECS 只保留纵向切片，不改写现有 Actor 架构。
+9. 深入渲染先完成架构边界，不同时追求多图形 API 和光线追踪。
+10. 不得通过开放任意 Shell、删除审批、跳过事务或放宽执行预算换取表面进度。
 
 ## 最终验收结果
 

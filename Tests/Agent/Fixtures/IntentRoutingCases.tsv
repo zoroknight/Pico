@@ -41,3 +41,6 @@ General	configure-character-abilities	configure gravity burn and freeze abilitie
 General	edit-picograph	创建一个开始运行后等待一秒的 PicoGraph
 General	edit-picograph	编辑可视化脚本并编译图表
 General	edit-picograph	create and compile a graph asset
+General	inspect-project-assets	请生成当前项目的资产目录，并列出依赖、provenance 和 validator_id
+General	inspect-project-assets	请使用 AssetDescriptor 分析当前项目资产和当前世界
+General	inspect-project-assets	Describe the project asset catalog and its provenance

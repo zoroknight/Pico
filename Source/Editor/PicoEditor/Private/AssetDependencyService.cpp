@@ -5,6 +5,7 @@
 #include "Pico/Asset/Material.h"
 #include "Pico/Asset/SkeletalAnimation.h"
 #include "Pico/Engine/Actor.h"
+#include "Pico/Engine/ActorBlueprint.h"
 #include "Pico/Engine/ActorComponent.h"
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/World.h"
@@ -133,7 +134,20 @@ std::vector<FAssetPath> FAssetDependencyService::GetAssetDependencies(
     if (Record == nullptr) return Dependencies;
     const auto Add = [&Dependencies](const FAssetPath& Path)
     {
-        if (Path.IsValid()) Dependencies.push_back(Path);
+        if (Path.IsValid()
+            && std::find(Dependencies.begin(), Dependencies.end(), Path)
+                == Dependencies.end())
+            Dependencies.push_back(Path);
+    };
+    const auto AddBlueprintDefaults = [&Add](
+        const FActorBlueprintObjectDefaults& Defaults)
+    {
+        for (const auto& [Name, Value] : Defaults.Properties)
+        {
+            (void)Name;
+            FAssetPath Path;
+            if (FAssetPath::TryParse(Value, Path)) Add(Path);
+        }
     };
     if (Record->Type == EAssetType::Material)
     {
@@ -188,6 +202,17 @@ std::vector<FAssetPath> FAssetDependencyService::GetAssetDependencies(
             Add(Profile.AnimationSet);
             Add(Profile.DefaultMontage);
             for (const FAssetPath& Material : Profile.MaterialOverrides) Add(Material);
+        }
+    }
+    else if (Record->Type == EAssetType::ActorBlueprint)
+    {
+        FActorBlueprintData Blueprint;
+        if (LoadActorBlueprintFromFile(Record->FilePath, Blueprint))
+        {
+            AddBlueprintDefaults(Blueprint.ActorDefaults);
+            for (const FActorBlueprintObjectDefaults& Component :
+                Blueprint.ComponentDefaults)
+                AddBlueprintDefaults(Component);
         }
     }
     return Dependencies;

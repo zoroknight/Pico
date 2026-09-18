@@ -1,0 +1,23 @@
+{
+  "format_version": 1,
+  "id": "inspect-project-assets",
+  "version": "1.0.0",
+  "description": "Inspect versioned Pico AssetDescriptor records and the active World without modifying the project.",
+  "triggers": ["资产目录", "资产描述器", "AssetDescriptor", "asset catalog", "describe catalog", "provenance", "validator_id"],
+  "allowed_tools": [
+    "editor.asset.describe_catalog",
+    "editor.asset.search",
+    "editor.world.describe"
+  ],
+  "preconditions": ["A Pico project is open."],
+  "workflow": [
+    "Call editor.asset.describe_catalog once to obtain the versioned project asset and active World descriptors, including per-type technical characteristics.",
+    "Use editor.asset.search only when the user asks to narrow the catalog by path or type.",
+    "Use editor.world.describe only when live Actor instance details are required beyond the WorldSnapshot descriptor.",
+    "Report only paths, kinds, dependencies, provenance, validator ids, summaries, and evidence returned by tools; never infer binary asset contents."
+  ],
+  "completion_criteria": [
+    "The response cites AssetDescriptor facts returned by editor.asset.describe_catalog and distinguishes deterministic technical characteristics from unknown visual semantics.",
+    "No project or World mutation tool was available or invoked."
+  ]
+}

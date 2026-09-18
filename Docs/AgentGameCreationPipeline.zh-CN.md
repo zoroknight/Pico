@@ -1,14 +1,19 @@
 # Pico Agent 游戏制作链路规划
 
+> 当前执行顺序：本链路第 1～4 周完成后，先通过
+> [Pico Agent ReAct 轻量化加固路线](AgentReActLightweightHardeningRoadmap.zh-CN.md)，再继续玩法积木、Graph、
+> 端到端组装和真实 Scenario Runner。加固只扩展现有单 ReAct Runtime；Harness、审批、事务和验证边界不变，
+> MCP stdio 暂不实现。
+
 ## 文档定位
 
-本文档是 Pico 在**暂不引入代码生成 Harness**的前提下，让 Agent 组装简单 3D 游戏的权威实施方案。
+本文档是 Pico 在阶段 A **保持代码生成禁用**的前提下，让 Agent 组装简单双人协作 3D 游戏的权威实施方案。
 总体月份优先级仍以 [AI-First Development Roadmap](Pico_AI_First_Development_Roadmap.zh-CN.md) 为准；
 涉及 Agent 游戏搭建的范围、架构、周计划和验收标准时，以本文档为准。
 
-> 状态：**已顺延**。8 周工程深度阶段已经完成；当前先完成通用 Actor Replication 与碰撞语义收尾，再实施
-> [AI-First Development Roadmap](Pico_AI_First_Development_Roadmap.zh-CN.md) 中的 MCP 四周纵向切片。MCP
-> 验收通过后才开始本文的六周实施计划。
+> 状态：**进行中**。第 1～4 周结构化规划与可恢复执行底座已完成，详见
+> [第 1～4 周交付记录](AgentGameAssemblyWeeks01_04.zh-CN.md)；下一项为 ReAct 轻量化加固门，通过后再进入第 5 周
+> Gameplay Starter Template 与首批真实 Producers。
 
 当前目标不是让模型自由创造任意游戏，也不是让模型直接修改引擎源码。目标是在 Pico 已有反射、Data-Only
 Actor Blueprint、PicoGraph、GAS、Replication、编辑器事务、Play 和 Package 链路上，让 Agent 可靠组装以下
@@ -35,6 +40,7 @@ Actor Blueprint、PicoGraph、GAS、Replication、编辑器事务、Play 和 Pac
 用户自然语言需求
  -> Requirement Parser
  -> PicoGameSpec
+ -> Asset Descriptor / Project Facts
  -> Capability Catalog
  -> Recipe Resolver
  -> Build Plan
@@ -42,6 +48,7 @@ Actor Blueprint、PicoGraph、GAS、Replication、编辑器事务、Play 和 Pac
  -> Authoring Tools / Artifact Producers
  -> Actor Blueprint + PicoGraph + World
  -> Static Validator
+ -> Checkpoint / Artifact Evidence
  -> Runtime Scenario Runner
  -> 最多两轮定向修复
  -> Package Validator
@@ -72,6 +79,12 @@ Capability Catalog 是 Agent 能使用什么的统一目录，由以下来源构
 - GAS Ability、Effect、Tag 和 Attribute Schema；
 - AssetRegistry、输入动作、网络能力、Tool 和 Validator；
 - 人工维护的 Gameplay Recipe。
+
+用户提供的 Mesh、Texture、骨骼动画、Actor Blueprint、PicoGraph 和 World 先转换为版本化 `AssetDescriptor`。
+Descriptor 记录类型、稳定身份、结构摘要、依赖、来源、导入设置和预览证据；模型不直接读取二进制后猜测资产用途。
+其中结构摘要由各类型的正式加载器确定性生成，覆盖网格规模与 Bounds、纹理尺寸与通道、材质颜色来源与 PBR 参数、
+骨骼和动画统计、蓝图组件与属性覆盖、Graph 节点与连接等事实。花岗岩、大理石等视觉语义仍保持 `unknown`，
+直到存在人工语义元数据或带证据句柄的预览分析结果。
 
 每项能力至少包含稳定 ID、版本、Tag、输入/输出、前置条件、冲突项、Authority/Ownership、可能副作用、
 所需审批以及 Verifier ID。反射元数据解决“能调用什么”，Recipe 解决“这些积木应该怎样组合”。
@@ -178,26 +191,29 @@ Package 成功必须同时满足退出码、`PackageReport.ini`、`PicoPackage.c
 所有节点继续由 Schema、反射元数据和权限规则生成或注册。禁止为某个 Demo 编写名称匹配的隐藏节点，禁止
 Graph 直接发送任意网络包或调用未标记 Callable 的函数。
 
-## 六周实施计划
+## 八周实施计划
 
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |
-| 第 1 周 | Capability Descriptor/Catalog、Recipe 格式、`PicoGameSpec` Schema 和支持度诊断 | 同一需求稳定生成 Spec；清楚列出已支持、缺失和不支持项；Catalog 可追溯到来源与 Verifier |
-| 第 2 周 | Build Plan、Dry Run、PlanHash 审批、项目级事务、幂等批处理工具和 Artifact Handle | 执行前可预览完整修改；批准后原子执行；故障可回滚且不污染已有项目 |
-| 第 3 周 | PicoGraph 事件/参数、Int/比较/布尔、参数化 PFunction 和 Authority Policy | 不新增项目专用 C++ 也能表达收集、条件判断、交互和服务器权威调用 |
-| 第 4 周 | Starter Template Gameplay Components、GameMode/GameState/PlayerState、正式 HUD 和首批 Recipes | 人工只用现有积木即可组装并运行双人收集开门 Demo |
-| 第 5 周 | Runtime Probe、Input Action 注入、三进程 Scenario Runner 和网络断言 | 自动完成拾取、错误门拒绝、正确开门和双端胜利验收，并输出结构化证据 |
-| 第 6 周 | 端到端 Game Assembly Skill、最多两轮修复、Package 验证和真实 Golden Tasks | 从中文需求到可审计、可运行、可联网的 Windows Stage 形成闭环 |
+| 第 1 周（已完成） | `AssetDescriptor`、Capability Descriptor/Catalog 和统一来源元数据 | Agent 用结构化事实说明用户资产和现有能力；结果可追溯到来源、依赖、预览证据和 Verifier |
+| 第 2 周（已完成） | Recipe 格式、`PicoGameSpec` Schema、Requirement Parser 和支持度诊断 | 同一需求稳定生成 Spec；清楚列出已支持、缺失和不支持项；只询问真正阻塞的问题 |
+| 第 3 周（已完成） | Build Plan DAG、Dry Run、PlanHash 审批、项目级事务、幂等批处理工具和暂存工作区 | 执行前可预览完整修改；批准后只执行绑定计划；故障可回滚且不污染已有项目 |
+| 第 4 周（已完成） | Checkpoint、Artifact Handle、大结果外置、失败分类、上下文预算和有限恢复 | 中断后从已验证边界恢复；重复查询和无进展调用被停止；证据不依赖聊天上下文存活 |
+| 第 5 周 | 双角色/差异化能力、Starter Template Gameplay Components、GameMode/GameState/PlayerState、HUD 和首批 Recipes | 人工只用现有积木即可组装并运行双人协作 Demo |
+| 第 6 周 | PicoGraph 事件/参数、Int/比较/布尔、参数化 PFunction 和 Authority Policy | 不新增项目专用 C++ 也能表达收集、能力协作、条件判断、专属交互和服务器权威调用 |
+| 第 7 周 | 端到端 Game Assembly Skill、World/Blueprint/Graph 联合生产和最多两轮定向修复 | Agent 从中文需求自动搭建首个双人协作关卡；失败修复绑定具体断言和 Artifact |
+| 第 8 周 | Runtime Probe、Input Action 注入、三进程 Scenario Runner、Package Validator 和真实 Golden Tasks | 自动完成能力、机关、错误玩家拒绝、共享胜利和 Windows Stage 验收，并输出结构化证据 |
 
-六周完成后必须再用一个不同玩法验证复用性，例如“钥匙 + 双人压力板”，不能只重复更换双人收集 Demo 的
-名称和颜色。第二个用例未通过前，不宣称 Agent 已具备通用游戏制作能力，也不提前进入 ECS 主线。
+八周完成后按主路线先完成 Render Architecture、AI 视觉资产和受控 Code Harness，再在阶段 A.2 用一个不同玩法
+验证复用性，例如“钥匙 + 双人压力板”。不能只重复更换双人收集 Demo 的名称和颜色。第二个用例未通过前，
+不宣称 Agent 已具备通用游戏制作能力，也不提前进入 ECS 主线。
 
 ## Skill、RAG 与模型路由
 
 - Skill 负责告诉 Agent 何时使用 Recipe、步骤顺序、常见失败和验收方式；实际能力和权限仍来自 Catalog/Policy。
 - RAG Lite 索引 Catalog、Recipe、Graph/GAS Schema、验证结果和项目事实，并返回来源；不把聊天猜测写成事实。
 - 明确意图、否定词和安全规则继续使用确定性路由。仅当出现真实候选歧义时，才让模型从已筛选 Skill ID 中选择。
-- MCP Adapter 只作为未来外部客户端的协议适配层，不参与核心正确性，也不列入六周完成门槛。
+- MCP Adapter 只作为外部客户端的协议适配层，不参与核心正确性，也不列入八周完成门槛。
 
 ## 未来 Code Harness 接入条件
 

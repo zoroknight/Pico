@@ -57,6 +57,18 @@ void TestEditorAssetWorkflow(FTestRunner& Runner)
     const std::filesystem::path ExternalTexture = Root / "External" / "Colors.ppm";
     WriteText(ProjectFile,
         "[Project]\nName=EditorAssetTest\nFileVersion=1\nEngineVersion=0.1.0\n");
+    WriteText(Root / "Content/Characters/TestCharacter.pblueprint",
+        "[Blueprint]\n"
+        "Version=1\n"
+        "ParentClass=PActor\n"
+        "GeneratedClass=PBG_Game_Characters_TestCharacter_C\n"
+        "Components=Visual;Script\n\n"
+        "[Component.Visual]\n"
+        "ComponentClass=PStaticMeshComponent\n"
+        "StaticMeshAsset=/Game/Meshes/Triangle.pmesh\n\n"
+        "[Component.Script]\n"
+        "ComponentClass=PScriptComponent\n"
+        "GraphAsset=/Game/Graphs/Test.pgraph\n");
     WriteText(ExternalObj, MakeTriangleObj(1.0f));
     std::string Ppm = "P6\n2 1\n255\n";
     constexpr unsigned char TexturePixels[] = {255, 0, 0, 0, 255, 0};
@@ -221,6 +233,20 @@ void TestEditorAssetWorkflow(FTestRunner& Runner)
                         && Reference.PropertyName == Pico::FName("MaterialAsset");
                 }),
         "Dependency service discovers asset-to-asset and world-to-asset references");
+    Pico::FAssetPath BlueprintPath;
+    Pico::FAssetPath GraphPath;
+    Pico::FAssetPath::TryParse(
+        "/Game/Characters/TestCharacter.pblueprint", BlueprintPath);
+    Pico::FAssetPath::TryParse("/Game/Graphs/Test.pgraph", GraphPath);
+    const std::vector<Pico::FAssetPath> BlueprintDependencies =
+        Pico::FAssetDependencyService::GetAssetDependencies(
+            BlueprintPath, EngineLoop.GetAssetRegistry());
+    Runner.Expect(
+        std::find(BlueprintDependencies.begin(), BlueprintDependencies.end(), AssetPath)
+                != BlueprintDependencies.end()
+            && std::find(BlueprintDependencies.begin(), BlueprintDependencies.end(), GraphPath)
+                != BlueprintDependencies.end(),
+        "Dependency service discovers reflected asset paths in Actor Blueprint defaults");
     Runner.Expect(
         Commands.Undo().bSucceeded
             && ObjectSelection.Resolve() != nullptr

@@ -772,7 +772,10 @@ the existing `PClass`, `PProperty`, and `PFunction` runtime. Generated files liv
 
 See:
 
-- [AI-First Development Roadmap, including the next four-week MCP slice (Chinese)](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)
+- [AI-First Development Roadmap, including the current game-assembly and later render/asset/code stages (Chinese)](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md)
+- [Agent Game Assembly Weeks 1-4: typed planning and recoverable execution foundation (Chinese)](Docs/AgentGameAssemblyWeeks01_04.zh-CN.md)
+- [Agent ReAct Lightweight Hardening Roadmap: bounded context, evidence, memory, retrieval, and loop control (Chinese)](Docs/AgentReActLightweightHardeningRoadmap.zh-CN.md)
+- [Algorithm Research Extension Roadmap: Semantic Skills, Object World Models, and AI Companion (Chinese)](Docs/Pico_Algorithm_Research_Extension_Roadmap.zh-CN.md)
 - [MCP Week 1: Shared Editor Agent Execution Service (Chinese)](Docs/McpWeek01_SharedEditorAgentExecutionService.zh-CN.md)
 - [MCP Week 2: Transport-Independent Dual-Era Protocol Core (Chinese)](Docs/McpWeek02_TransportIndependentCore.zh-CN.md)
 - [MCP Week 3: Toolset Adapter and Safety Closure (Chinese)](Docs/McpWeek03_ToolsetAdapterAndSafety.zh-CN.md)
@@ -787,7 +790,7 @@ See:
 - [Engineering Depth Week 6: GC and Adversarial Evaluation (Chinese)](Docs/EngineeringDepthWeek06_GcAndAdversarialEvaluation.zh-CN.md)
 - [Engineering Depth Week 7: Revision, Context, and Visualization (Chinese)](Docs/EngineeringDepthWeek07_RevisionContextAndVisualization.zh-CN.md)
 - [Engineering Depth Week 8: Final Acceptance and Engineering Decisions (Chinese)](Docs/EngineeringDepthWeek08_FinalAcceptance.zh-CN.md)
-- [Agent Game Creation Pipeline and Six-Week Plan (Chinese)](Docs/AgentGameCreationPipeline.zh-CN.md)
+- [Agent Game Creation Pipeline and Eight-Week Plan (Chinese)](Docs/AgentGameCreationPipeline.zh-CN.md)
 - [PicoTasks and Game Thread Dispatcher (Chinese)](Docs/AIPhase01_PicoTasksAndGameThreadDispatcher.md)
 - [Pico Agent Core and Recoverable Sessions (Chinese)](Docs/AIPhase02_PicoAgentCoreAndSessions.md)
 - [Agent Tool Safety Pipeline and Editor Transactions (Chinese)](Docs/AIPhase03_AgentToolPipeline.md)
@@ -905,9 +908,10 @@ has also passed a two-PC LAN session with one separate server and two playable c
 
 The remaining learning path is:
 
-- Dedicated-server/WAN validation, dependency-pruned Cook, Shipping, and clean-machine packaging
-- Expand deterministic AI tools for assets, materials, lights, save, Play, and Package
-- Build the AI game-assembly loop on the completed PicoGraph Lite latent, Cook, Agent, and reflection-driven vertical slice
+- Build the eight-week AI game-assembly loop around typed asset understanding, capability discovery, recoverable Build Plans, and a packaged two-player cooperative vertical slice
+- Refactor rendering through SceneProxy, RenderScene, RenderGraph Lite, RHI, and the existing OpenGL backend before attempting Vulkan
+- Add controlled texture and simple 3D artifact producers, then a staged and reviewable code producer with mandatory build, runtime validation, and rollback
+- Validate a second non-isomorphic cooperative game before considering ECS; retain dedicated-server/WAN, replay, and production Vulkan work behind explicit readiness gates
 
 The maintained schedule and acceptance criteria are in the
 [AI-First Development Roadmap](Docs/Pico_AI_First_Development_Roadmap.zh-CN.md). Detailed milestone
