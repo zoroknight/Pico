@@ -78,6 +78,11 @@ private:
     bool RecordActionAndDetectOscillation(
         const FAgentObservation& Observation);
     bool HasRequiredCompletionEvidence() const;
+    bool TryEnterReflection(
+        std::string Trigger,
+        std::string Diagnosis,
+        EAgentFailureClass FailureClass,
+        std::string& OutError);
     std::string BuildProgressLedgerJson() const;
     std::string BuildTaskStateJson() const;
     bool WriteCheckpoint(EAgentStatus Status, std::string& OutError);
@@ -110,6 +115,8 @@ private:
     std::vector<FRecentAction> RecentActions;
     std::uint64_t RevisionEpoch = 0;
     std::uint64_t ToolReplaySequenceFloor = 0;
+    std::string ReflectionJson = "{}";
+    bool bReflectionUsed = false;
     bool bObservedToolActivity = false;
     std::chrono::steady_clock::time_point StartTime;
     std::string RunId;

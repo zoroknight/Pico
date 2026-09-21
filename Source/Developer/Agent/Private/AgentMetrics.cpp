@@ -60,6 +60,8 @@ std::string FAgentRunMetrics::ToJson() const
             {"observations", ObservationCount},
             {"evidence_bindings", EvidenceBindingCount},
             {"oscillations", OscillationCount},
+            {"reflections", ReflectionCount},
+            {"recovery_escalations", RecoveryEscalationCount},
             {"forbidden_tools", ForbiddenToolCount}}},
         {"latency", {{"provider", LatencyToJson(ProviderLatency)},
             {"approval", LatencyToJson(ApprovalLatency)},
@@ -126,6 +128,8 @@ FAgentRunMetrics BuildAgentRunMetrics(
     Metrics.ObservationCount = Result.Counters.Observations;
     Metrics.EvidenceBindingCount = Result.Counters.EvidenceBindings;
     Metrics.OscillationCount = Result.Counters.OscillationsDetected;
+    Metrics.ReflectionCount = Result.Counters.ReflectionAttempts;
+    Metrics.RecoveryEscalationCount = Result.Counters.RecoveryEscalations;
     Metrics.CompletionRate = Result.Status == EAgentStatus::Completed ? 1.0 : 0.0;
     Metrics.FailureClass = Result.FailureClass;
     Metrics.RecoveryAction = Result.RecoveryAction;

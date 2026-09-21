@@ -581,6 +581,119 @@ void TestFailureTaxonomyAndRecoveryPolicy(FTestRunner& Runner)
         "Runtime preserves failure semantics and stops non-retryable tool failures immediately");
 }
 
+void TestConditionalReflectionAndRecoveryEscalation(FTestRunner& Runner)
+{
+    const auto MakeRepeatedRead = [](std::string Id)
+    {
+        return ToolCalls({{std::move(Id), "editor.world.describe", "{}"}});
+    };
+
+    {
+        const auto Path = MakeLogPath("conditional-reflection-recovers");
+        auto Session = Pico::FAgentSession::OpenOrCreate(
+            "conditional-reflection-recovers", Path);
+        FRecordingProvider Provider;
+        Provider.Responses = {
+            MakeRepeatedRead("read-1"),
+            MakeRepeatedRead("read-2"),
+            MakeRepeatedRead("read-3"),
+            Final("Used the existing evidence and finished")};
+        FCountingToolExecutor Executor;
+        Executor.bReadOnly = true;
+        Pico::FAgentRuntime Runtime(*Session, Provider, Executor);
+        const Pico::FAgentRunResult Result = Runtime.Run("describe the world once");
+
+        bool bReflectionVisible = false;
+        if (Provider.Requests.size() >= 4)
+        {
+            const std::string& Ledger = Provider.Requests[3].ProgressLedgerJson;
+            bReflectionVisible = Ledger.find("\"active\":true")
+                    != std::string::npos
+                && Ledger.find("\"trigger\":\"action_oscillation\"")
+                    != std::string::npos;
+        }
+        Runner.Expect(
+            Result.Status == Pico::EAgentStatus::Completed
+                && Result.Counters.ReflectionAttempts == 1
+                && Result.Counters.RecoveryEscalations == 0
+                && Executor.Count == 1 && bReflectionVisible,
+            "A no-progress oscillation receives one structured reflection turn and can recover from cached evidence");
+    }
+
+    {
+        const auto Path = MakeLogPath("conditional-reflection-escalates");
+        auto Session = Pico::FAgentSession::OpenOrCreate(
+            "conditional-reflection-escalates", Path);
+        FRecordingProvider Provider;
+        Provider.Responses = {
+            MakeRepeatedRead("read-1"),
+            MakeRepeatedRead("read-2"),
+            MakeRepeatedRead("read-3"),
+            MakeRepeatedRead("read-4"),
+            Final("must not be reached")};
+        FCountingToolExecutor Executor;
+        Executor.bReadOnly = true;
+        Pico::FAgentRuntime Runtime(*Session, Provider, Executor);
+        const Pico::FAgentRunResult Result = Runtime.Run("keep repeating the read");
+        Runner.Expect(
+            Result.Status == Pico::EAgentStatus::Failed
+                && Result.Counters.ReflectionAttempts == 1
+                && Result.Counters.RecoveryEscalations == 1
+                && Result.Counters.OscillationsDetected >= 2,
+            "A repeated failure after reflection escalates and stops instead of entering a reflection loop");
+    }
+
+    {
+        const auto Path = MakeLogPath("conditional-reflection-disabled");
+        auto Session = Pico::FAgentSession::OpenOrCreate(
+            "conditional-reflection-disabled", Path);
+        FRecordingProvider Provider;
+        Provider.Responses = {
+            MakeRepeatedRead("read-1"),
+            MakeRepeatedRead("read-2"),
+            MakeRepeatedRead("read-3")};
+        FCountingToolExecutor Executor;
+        Executor.bReadOnly = true;
+        Pico::FAgentRuntimeContext Context;
+        Context.Features.bConditionalReflection = false;
+        Pico::FAgentRuntime Runtime(*Session, Provider, Executor, {}, Context);
+        const Pico::FAgentRunResult Result = Runtime.Run("use the R4 baseline");
+        Runner.Expect(
+            Result.Status == Pico::EAgentStatus::Failed
+                && Result.Counters.ReflectionAttempts == 0
+                && Provider.Requests.size() == 3,
+            "Disabling conditional reflection preserves the earlier ReAct stop behavior");
+    }
+
+    {
+        const auto Path = MakeLogPath("conditional-reflection-checkpoint");
+        auto Session = Pico::FAgentSession::OpenOrCreate(
+            "conditional-reflection-checkpoint", Path);
+        Pico::FAgentTaskState State;
+        State.Goal = "resume reflected work";
+        State.CurrentStep = "Conditional reflection and recovery";
+        State.Revision = 2;
+        Pico::FAgentCounters Counters;
+        Counters.ReflectionAttempts = 1;
+        std::string Error;
+        Session->WriteCheckpoint(Pico::EAgentStatus::Planning, Counters,
+            &Error, Pico::SerializeAgentTaskState(State));
+        FRecordingProvider Provider;
+        Provider.Responses = {Final("resumed without another reflection")};
+        FCountingToolExecutor Executor;
+        Pico::FAgentRuntime Runtime(*Session, Provider, Executor);
+        const Pico::FAgentRunResult Result = Runtime.Run("");
+        const bool bRestoredDirective = !Provider.Requests.empty()
+            && Provider.Requests.front().ProgressLedgerJson.find(
+                "\"trigger\":\"checkpoint_resume\"") != std::string::npos;
+        Runner.Expect(Error.empty()
+                && Result.Status == Pico::EAgentStatus::Completed
+                && Result.Counters.ReflectionAttempts == 1
+                && bRestoredDirective,
+            "Checkpoint recovery restores the pending reflection directive without granting a second attempt");
+    }
+}
+
 void TestUnifiedTraceSpans(FTestRunner& Runner)
 {
     const auto Path = MakeLogPath("unified-trace");
@@ -932,8 +1045,10 @@ void TestSemanticReadCacheAndNoProgressGuard(FTestRunner& Runner)
     LoopExecutor.bReadOnly = true;
     Pico::FAgentBudget LoopBudget;
     LoopBudget.MaxConsecutiveNoProgressSteps = 2;
+    Pico::FAgentRuntimeContext LoopContext;
+    LoopContext.Features.bConditionalReflection = false;
     Pico::FAgentRuntime LoopRuntime(
-        *LoopSession, LoopProvider, LoopExecutor, LoopBudget);
+        *LoopSession, LoopProvider, LoopExecutor, LoopBudget, LoopContext);
     const Pico::FAgentRunResult LoopResult = LoopRuntime.Run("do not loop");
     Runner.Expect(LoopResult.Status == Pico::EAgentStatus::Failed
             && LoopExecutor.Count == 1
@@ -1095,8 +1210,10 @@ void TestReActObservationsEvidenceAndOscillation(FTestRunner& Runner)
     EmptyProvider.Responses = {
         ToolCalls({{"empty-success", "scene.fake", "{}"}}),
         Final("completed")};
+    Pico::FAgentRuntimeContext R2BaselineContext;
+    R2BaselineContext.Features.bConditionalReflection = false;
     Pico::FAgentRuntime EmptyRuntime(
-        *EmptySession, EmptyProvider, EmptyExecutor);
+        *EmptySession, EmptyProvider, EmptyExecutor, {}, R2BaselineContext);
     const Pico::FAgentRunResult EmptyResult = EmptyRuntime.Run(
         "Perform and verify the requested change");
     bool bPersistedUnsupportedClaim = false;
@@ -1128,7 +1245,7 @@ void TestReActObservationsEvidenceAndOscillation(FTestRunner& Runner)
     FRecordingProvider RestartProvider;
     RestartProvider.Responses = {Final("unsupported completion after restart")};
     Pico::FAgentRuntime RestartRuntime(
-        *RestartSession, RestartProvider, EmptyExecutor);
+        *RestartSession, RestartProvider, EmptyExecutor, {}, R2BaselineContext);
     const Pico::FAgentRunResult RestartResult = RestartRuntime.Run("");
     Runner.Expect(RestartError.empty()
             && RestartResult.Status == Pico::EAgentStatus::Failed
@@ -1147,7 +1264,8 @@ void TestReActObservationsEvidenceAndOscillation(FTestRunner& Runner)
     FCountingToolExecutor AlternatingExecutor;
     AlternatingExecutor.bReadOnly = true;
     Pico::FAgentRuntime AlternatingRuntime(
-        *AlternatingSession, AlternatingProvider, AlternatingExecutor);
+        *AlternatingSession, AlternatingProvider, AlternatingExecutor, {},
+        R2BaselineContext);
     const Pico::FAgentRunResult AlternatingResult = AlternatingRuntime.Run(
         "Inspect two pages without oscillating");
     Runner.Expect(AlternatingResult.Status == Pico::EAgentStatus::Failed
@@ -2051,6 +2169,7 @@ void TestGoldenTaskRunner(FTestRunner& Runner)
     if (!bLoaded) return;
 
     Pico::FAgentGoldenTaskHooks Hooks;
+    Hooks.RuntimeContext.Features.bConditionalReflection = false;
     Hooks.Prepare = [](const Pico::FAgentGoldenTask& Task, std::string& OutError)
     {
         const bool bKnownFixture = Task.FixtureId == "empty-world"
@@ -2723,6 +2842,7 @@ int main()
     FTestRunner Runner;
     TestDeterministicCompletionAndRecovery(Runner);
     TestFailureTaxonomyAndRecoveryPolicy(Runner);
+    TestConditionalReflectionAndRecoveryEscalation(Runner);
     TestUnifiedTraceSpans(Runner);
     TestToolCallIdempotency(Runner);
     TestBoundedRepairAndBudget(Runner);

@@ -133,6 +133,8 @@ $failureInjection = if (Test-Path $failurePath)
 $agentTurns = 0
 $agentToolCalls = 0
 $agentRepairs = 0
+$agentReflections = 0
+$agentRecoveryEscalations = 0
 $agentContextBytes = 0
 $agentProviderMicroseconds = 0
 $agentForbiddenTools = 0
@@ -147,6 +149,14 @@ if ($null -ne $golden)
         $agentTurns += [int]$metric.counts.turns
         $agentToolCalls += [int]$metric.counts.tool_calls
         $agentRepairs += [int]$metric.counts.repairs
+        if ($null -ne $metric.counts.reflections)
+        {
+            $agentReflections += [int]$metric.counts.reflections
+        }
+        if ($null -ne $metric.counts.recovery_escalations)
+        {
+            $agentRecoveryEscalations += [int]$metric.counts.recovery_escalations
+        }
         $agentContextBytes += [int64]$metric.context_bytes
         $agentProviderMicroseconds += [int64]$metric.latency.provider.total_us
         $agentForbiddenTools += [int]$metric.counts.forbidden_tools
@@ -184,7 +194,7 @@ if ($testSummary -match "out of\s+(\d+)") { $testCount = [int]$Matches[1] }
 $hierarchyRecords = @($runtime.records | Where-Object `
     { $_.suite -eq "HierarchyLayoutAB" })
 $summary = [ordered]@{
-    format_version = 1
+    format_version = 2
     generated_utc = [DateTime]::UtcNow.ToString("o")
     configuration = $Configuration
     samples = $Samples
@@ -217,6 +227,8 @@ $summary = [ordered]@{
             turns = $agentTurns
             tool_calls = $agentToolCalls
             repair_count = $agentRepairs
+            reflection_count = $agentReflections
+            recovery_escalation_count = $agentRecoveryEscalations
             repair_rate_per_turn = if ($agentTurns -gt 0)
                 { $agentRepairs / $agentTurns } else { 0.0 }
             context_bytes = $agentContextBytes

@@ -48,6 +48,8 @@ FJson ToJson(const FAgentEvent& Event, std::string_view SessionId)
         {"evidence_bindings", Event.Counters.EvidenceBindings},
         {"oscillations_detected", Event.Counters.OscillationsDetected},
         {"repair_attempts", Event.Counters.RepairAttempts},
+        {"reflection_attempts", Event.Counters.ReflectionAttempts},
+        {"recovery_escalations", Event.Counters.RecoveryEscalations},
         {"context_messages", Event.Counters.ContextMessages},
         {"trimmed_context_messages", Event.Counters.TrimmedContextMessages}
     };
@@ -109,6 +111,8 @@ bool FromJson(const FJson& Json, std::string_view SessionId, FAgentEvent& Out, s
         Out.Counters.OscillationsDetected =
             Json.value("oscillations_detected", 0U);
         Out.Counters.RepairAttempts = Json.value("repair_attempts", 0U);
+        Out.Counters.ReflectionAttempts = Json.value("reflection_attempts", 0U);
+        Out.Counters.RecoveryEscalations = Json.value("recovery_escalations", 0U);
         Out.Counters.ContextMessages = Json.value("context_messages", 0U);
         Out.Counters.TrimmedContextMessages =
             Json.value("trimmed_context_messages", 0U);

@@ -44,6 +44,7 @@ struct FAgentContextFeatureFlags
     bool bObservationMapping = true;
     bool bEvidenceCompletionGate = true;
     bool bActionOscillationGuard = true;
+    bool bConditionalReflection = true;
 };
 
 struct FAgentObservation

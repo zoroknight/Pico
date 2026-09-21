@@ -85,6 +85,8 @@ FAgentRunResult FAgentRuntime::Run(
     ToolExecutor.BeginRun(RunId);
     std::string Error;
     ToolReplaySequenceFloor = 0;
+    bReflectionUsed = Counters.ReflectionAttempts > 0;
+    ReflectionJson = "{}";
     if (!Prompt.empty())
     {
         const std::vector<FAgentEvent>& ExistingEvents = Session.GetEvents();
@@ -100,6 +102,7 @@ FAgentRunResult FAgentRuntime::Run(
             "The final answer is supported by verified observations when tools are used"};
         TaskState.CriterionEvidence = {{TaskState.SuccessCriteria.front(), {}, false}};
         TaskState.Revision = 1;
+        bReflectionUsed = false;
         FAgentEvent UserMessage;
         UserMessage.Type = EAgentEventType::Message;
         UserMessage.Role = EAgentRole::User;
@@ -122,6 +125,21 @@ FAgentRunResult FAgentRuntime::Run(
                 break;
             }
         }
+    }
+    if (bReflectionUsed && ReflectionJson == "{}"
+        && TaskState.CurrentStep == "Conditional reflection and recovery")
+    {
+        ReflectionJson = FJson {
+            {"active", true},
+            {"attempt", Counters.ReflectionAttempts},
+            {"trigger", "checkpoint_resume"},
+            {"failure_class", "None"},
+            {"diagnosis", "Resume the single reflection attempt persisted by the latest checkpoint."},
+            {"instructions", FJson::array({
+                "Use the existing verified observations before requesting another read.",
+                "Choose one different next action; do not restart the failed path."
+            })}
+        }.dump();
     }
 
     if (!Transition(EAgentStatus::Planning, Error))
@@ -195,6 +213,7 @@ FAgentRunResult FAgentRuntime::Run(
             EAgentFailureInjectionPoint::ProviderTimeout);
         if (bInjectedProviderTimeout)
         {
+            Response.bSucceeded = false;
             Response.Error = "Injected provider timeout";
             Response.FailureClass = EAgentFailureClass::Infrastructure;
         }
@@ -206,6 +225,7 @@ FAgentRunResult FAgentRuntime::Run(
                 EAgentFailureInjectionPoint::ProviderInvalidJson))
         {
             Response = {};
+            Response.bSucceeded = false;
             Response.Error = "Injected invalid provider JSON";
             Response.FailureClass = EAgentFailureClass::ModelProtocol;
         }
@@ -257,6 +277,16 @@ FAgentRunResult FAgentRuntime::Run(
 
         if (Response.bFinal && !HasRequiredCompletionEvidence())
         {
+            if (TryEnterReflection(
+                    "missing_completion_evidence",
+                    "The proposed final answer is not supported by verified evidence "
+                    "bound to every success criterion.",
+                    EAgentFailureClass::VerificationFailed,
+                    Error))
+            {
+                EndTurn(false, "Conditional reflection: missing completion evidence");
+                continue;
+            }
             return Finish(EAgentStatus::Failed,
                 "Agent final answer was rejected because tool activity has no "
                 "verified evidence bound to the task success criteria",
@@ -585,6 +615,17 @@ FAgentRunResult FAgentRuntime::Run(
             {
                 const FAgentRecoveryPolicy Recovery =
                     GetAgentRecoveryPolicy(ToolFailureClass);
+                if (!Recovery.bAutomaticallyRetryable
+                    && ToolFailureClass == EAgentFailureClass::VerificationFailed
+                    && TryEnterReflection(
+                        "verification_failed",
+                        Error.empty() ? "A tool postcondition was not verified." : Error,
+                        ToolFailureClass,
+                        Error))
+                {
+                    EndTurn(false, "Conditional reflection: verification failed");
+                    continue;
+                }
                 if (!Recovery.bAutomaticallyRetryable)
                 {
                     return Finish(EAgentStatus::Failed, Error, ToolFailureClass);
@@ -609,6 +650,16 @@ FAgentRunResult FAgentRuntime::Run(
 
             if (bOscillationDetected)
             {
+                if (TryEnterReflection(
+                        "action_oscillation",
+                        "An A-A or A-B-A action pattern repeated at an unchanged "
+                        "revision without producing progress.",
+                        EAgentFailureClass::BudgetExceeded,
+                        Error))
+                {
+                    EndTurn(false, "Conditional reflection: action oscillation");
+                    continue;
+                }
                 return Finish(EAgentStatus::Failed,
                     "Agent stopped after repeated actions made no progress: an A-A "
                     "or A-B-A oscillation was detected at an unchanged revision; "
@@ -620,6 +671,19 @@ FAgentRunResult FAgentRuntime::Run(
             if (bMadeProgress)
             {
                 Counters.ConsecutiveNoProgressSteps = 0;
+                if (bReflectionUsed && ReflectionJson != "{}")
+                {
+                    FJson Reflection = FJson::parse(ReflectionJson);
+                    Reflection["active"] = false;
+                    Reflection["resolved_by_progress"] = true;
+                    Reflection["resolved_revision_epoch"] = RevisionEpoch;
+                    ReflectionJson = Reflection.dump();
+                    if (Context.Features.bTaskState)
+                    {
+                        TaskState.CurrentStep = "Validate recovered progress";
+                        ++TaskState.Revision;
+                    }
+                }
             }
             else
             {
@@ -628,6 +692,17 @@ FAgentRunResult FAgentRuntime::Run(
                     && Counters.ConsecutiveNoProgressSteps
                     >= Budget.MaxConsecutiveNoProgressSteps)
                 {
+                    if (TryEnterReflection(
+                            "no_progress",
+                            "The recent tool sequence consumed the no-progress budget "
+                            "without a new verified fact or revision change.",
+                            EAgentFailureClass::BudgetExceeded,
+                            Error))
+                    {
+                        Counters.ConsecutiveNoProgressSteps = 0;
+                        EndTurn(false, "Conditional reflection: no progress");
+                        continue;
+                    }
                     return Finish(EAgentStatus::Failed,
                         "Agent stopped after repeated tool calls made no progress; "
                         "use the cached facts, perform a state-changing action, ask the "
@@ -657,6 +732,15 @@ FAgentRunResult FAgentRuntime::Run(
             return Result;
         }
 
+        if (TryEnterReflection(
+                "empty_model_action",
+                "The model returned neither a final answer nor a tool call.",
+                EAgentFailureClass::ModelProtocol,
+                Error))
+        {
+            EndTurn(false, "Conditional reflection: empty model action");
+            continue;
+        }
         if (Counters.RepairAttempts >= Budget.MaxRepairAttempts)
         {
             return Finish(EAgentStatus::Failed,
@@ -730,6 +814,44 @@ bool FAgentRuntime::HasRequiredCompletionEvidence() const
     return HasAgentCompletionEvidence(TaskState);
 }
 
+bool FAgentRuntime::TryEnterReflection(
+    std::string Trigger,
+    std::string Diagnosis,
+    EAgentFailureClass FailureClass,
+    std::string& OutError)
+{
+    if (!Context.Features.bConditionalReflection || bReflectionUsed)
+    {
+        if (bReflectionUsed) ++Counters.RecoveryEscalations;
+        return false;
+    }
+
+    bReflectionUsed = true;
+    ++Counters.ReflectionAttempts;
+    ReflectionJson = FJson {
+        {"active", true},
+        {"attempt", Counters.ReflectionAttempts},
+        {"trigger", std::move(Trigger)},
+        {"failure_class", ToString(FailureClass)},
+        {"diagnosis", std::move(Diagnosis)},
+        {"instructions", FJson::array({
+            "Use the existing verified observations before requesting another read.",
+            "Identify the failed assumption and choose one different next action.",
+            "Do not repeat an unchanged action fingerprint.",
+            "If evidence or authorization is unavailable, ask the user or stop honestly."
+        })}
+    }.dump();
+    if (Context.Features.bTaskState)
+    {
+        TaskState.CurrentStep = "Conditional reflection and recovery";
+        ++TaskState.Revision;
+    }
+
+    return Transition(EAgentStatus::Repairing, OutError)
+        && WriteCheckpoint(EAgentStatus::Repairing, OutError)
+        && Transition(EAgentStatus::Planning, OutError);
+}
+
 std::string FAgentRuntime::BuildProgressLedgerJson() const
 {
     FJson Actions = FJson::array();
@@ -756,6 +878,7 @@ std::string FAgentRuntime::BuildProgressLedgerJson() const
         {"revisions", Revisions},
         {"revision_epoch", RevisionEpoch},
         {"recent_failure", Session.GetMostRecentError()},
+        {"reflection", FJson::parse(ReflectionJson)},
         {"pending_approval", Session.GetStatus() == EAgentStatus::AwaitingApproval},
         {"completed_actions", std::move(Actions)},
         {"latest_observations", std::move(Observations)},
@@ -775,6 +898,8 @@ std::string FAgentRuntime::BuildProgressLedgerJson() const
             {"observations", Counters.Observations},
             {"evidence_bindings", Counters.EvidenceBindings},
             {"oscillations_detected", Counters.OscillationsDetected},
+            {"reflection_attempts", Counters.ReflectionAttempts},
+            {"recovery_escalations", Counters.RecoveryEscalations},
             {"consecutive_no_progress_steps",
                 Counters.ConsecutiveNoProgressSteps},
             {"context_messages", Counters.ContextMessages},

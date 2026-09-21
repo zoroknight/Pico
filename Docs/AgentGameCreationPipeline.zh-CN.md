@@ -13,8 +13,8 @@
 涉及 Agent 游戏搭建的范围、架构、周计划和验收标准时，以本文档为准。
 
 > 状态：**进行中**。第 1～4 周结构化规划与可恢复执行底座已完成，详见
-> [第 1～4 周交付记录](AgentGameAssemblyWeeks01_04.zh-CN.md)；当前先完成 ReAct R5，随后执行资产理解与安全创作
-> 七周纵向切片，通过后再进入第 5 周 Gameplay Starter Template 与首批真实 Producers。
+> [第 1～4 周交付记录](AgentGameAssemblyWeeks01_04.zh-CN.md)；ReAct R1～R5 加固门已完成，当前进入资产理解与
+> 安全创作七周纵向切片，通过后再进入第 5 周 Gameplay Starter Template 与首批真实 Producers。
 
 当前目标不是让模型自由创造任意游戏，也不是让模型直接修改引擎源码。目标是在 Pico 已有反射、Data-Only
 Actor Blueprint、PicoGraph、GAS、Replication、编辑器事务、Play 和 Package 链路上，让 Agent 可靠组装以下

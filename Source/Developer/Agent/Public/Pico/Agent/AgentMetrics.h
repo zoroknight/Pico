@@ -31,6 +31,8 @@ struct FAgentRunMetrics
     std::uint64_t ObservationCount = 0;
     std::uint64_t EvidenceBindingCount = 0;
     std::uint64_t OscillationCount = 0;
+    std::uint64_t ReflectionCount = 0;
+    std::uint64_t RecoveryEscalationCount = 0;
     std::uint64_t ForbiddenToolCount = 0;
     double CompletionRate = 0.0;
     EAgentFailureClass FailureClass = EAgentFailureClass::None;

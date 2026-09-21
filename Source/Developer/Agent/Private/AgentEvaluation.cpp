@@ -140,11 +140,13 @@ std::vector<FAgentGoldenTaskResult> FAgentGoldenTaskRunner::Run(
         Budget.MaxReadOnlyToolCalls = Task.MaxToolCalls;
         Budget.MaxMutationToolCalls = Task.MaxToolCalls;
         Budget.MaxSteps = std::max<std::size_t>(8, Task.MaxToolCalls + 2);
-        FAgentRuntime Runtime(*Session, *Provider, *Executor, Budget);
+        FAgentRuntime Runtime(
+            *Session, *Provider, *Executor, Budget, Hooks.RuntimeContext);
         const FAgentRunResult RunResult = Runtime.Run(Task.Prompt);
         Evaluation.Status = RunResult.Status;
         Evaluation.RunId = RunResult.RunId;
         Evaluation.Counters = RunResult.Counters;
+        Evaluation.ContextBytes = RunResult.ContextBytes;
         Evaluation.Error = RunResult.Error;
         Evaluation.FailureClass = RunResult.FailureClass;
         Evaluation.RecoveryAction = RunResult.RecoveryAction;
@@ -195,9 +197,21 @@ bool FAgentGoldenTaskRunner::WriteReport(
     {
         FJson Tasks = FJson::array();
         std::size_t Passed = 0;
+        std::uint64_t TotalDurationMilliseconds = 0;
+        std::uint64_t TotalContextBytes = 0;
+        std::uint64_t TotalToolCalls = 0;
+        std::uint64_t TotalCacheHits = 0;
+        std::uint64_t TotalReflections = 0;
+        std::uint64_t TotalRecoveryEscalations = 0;
         for (const FAgentGoldenTaskResult& Result : Results)
         {
             if (Result.bSucceeded) ++Passed;
+            TotalDurationMilliseconds += Result.DurationMilliseconds;
+            TotalContextBytes += Result.ContextBytes;
+            TotalToolCalls += Result.Counters.ToolCalls;
+            TotalCacheHits += Result.Counters.SemanticCacheHits;
+            TotalReflections += Result.Counters.ReflectionAttempts;
+            TotalRecoveryEscalations += Result.Counters.RecoveryEscalations;
             Tasks.push_back({{"id", Result.TaskId}, {"succeeded", Result.bSucceeded},
                 {"status", ToString(Result.Status)}, {"run_id", Result.RunId},
                 {"duration_ms", Result.DurationMilliseconds},
@@ -205,6 +219,9 @@ bool FAgentGoldenTaskRunner::WriteReport(
                 {"read_only_tool_calls", Result.Counters.ReadOnlyToolCalls},
                 {"mutation_tool_calls", Result.Counters.MutationToolCalls},
                 {"repair_attempts", Result.Counters.RepairAttempts},
+                {"reflection_attempts", Result.Counters.ReflectionAttempts},
+                {"recovery_escalations", Result.Counters.RecoveryEscalations},
+                {"context_bytes", Result.ContextBytes},
                 {"failure_class", ToString(Result.FailureClass)},
                 {"recovery_action", ToString(Result.RecoveryAction)},
                 {"error", Result.Error},
@@ -212,8 +229,23 @@ bool FAgentGoldenTaskRunner::WriteReport(
                 {"event_log", Result.EventLogPath.generic_string()}});
             Tasks.back()["metrics"] = Result.MetricsPath.generic_string();
         }
-        const FJson Report = {{"format_version", 1}, {"passed", Passed},
-            {"failed", Results.size() - Passed}, {"tasks", std::move(Tasks)}};
+        const double Count = static_cast<double>(Results.size());
+        const FJson Report = {{"format_version", 2}, {"passed", Passed},
+            {"failed", Results.size() - Passed},
+            {"summary", {
+                {"verified_success_rate", Count == 0.0 ? 0.0 : Passed / Count},
+                {"average_duration_ms", Count == 0.0 ? 0.0
+                    : TotalDurationMilliseconds / Count},
+                {"average_context_bytes", Count == 0.0 ? 0.0
+                    : TotalContextBytes / Count},
+                {"average_tool_calls", Count == 0.0 ? 0.0
+                    : TotalToolCalls / Count},
+                {"semantic_cache_hit_rate", TotalToolCalls == 0 ? 0.0
+                    : static_cast<double>(TotalCacheHits)
+                        / static_cast<double>(TotalToolCalls + TotalCacheHits)},
+                {"reflection_attempts", TotalReflections},
+                {"recovery_escalations", TotalRecoveryEscalations}}},
+            {"tasks", std::move(Tasks)}};
         std::filesystem::create_directories(Path.parent_path());
         const std::filesystem::path StagingPath = Path.string() + ".tmp";
         {

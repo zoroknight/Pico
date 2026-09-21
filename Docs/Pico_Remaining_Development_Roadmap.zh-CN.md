@@ -998,7 +998,7 @@ Delay、GameplayEvent/Montage 等待、Ability 激活、Cook、Agent Graph Tools
 Trigger/拾取节点库可以在顺延后的 Agent 游戏搭建阶段通过同一 Schema/Extension 机制增量加入。
 
 8 周 [Pico 工程深度阶段](Pico_Engineering_Depth_Roadmap.zh-CN.md)、通用 Actor Replication/碰撞语义与 MCP
-纵向切片均已完成。当前先完成 ReAct R5，再执行
+纵向切片均已完成，ReAct R1～R5 加固门也已通过。当前执行
 [Agent 资产理解与安全创作纵向切片](AgentAssetUnderstandingAndSafeAuthoring.zh-CN.md)，补齐安全写入、Material、
 通用组件、语义元数据、预览和可选视觉分析；随后恢复八周“Agent 游戏制作链路”的第 5～8 周，完成通用双人协作
 玩法积木、三进程 Scenario Runner 和 Package Evidence。之后依次进入 Render Architecture、AI 视觉资产、受控 Code Harness 和第二玩法综合验收；

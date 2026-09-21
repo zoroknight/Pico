@@ -34,6 +34,7 @@ struct FAgentGoldenTaskResult
     EAgentFailureClass FailureClass = EAgentFailureClass::None;
     EAgentRecoveryAction RecoveryAction = EAgentRecoveryAction::Abort;
     FAgentCounters Counters;
+    std::uint64_t ContextBytes = 0;
     std::uint64_t DurationMilliseconds = 0;
     std::filesystem::path EventLogPath;
     std::filesystem::path MetricsPath;
@@ -41,6 +42,7 @@ struct FAgentGoldenTaskResult
 
 struct FAgentGoldenTaskHooks
 {
+    FAgentRuntimeContext RuntimeContext;
     std::function<bool(const FAgentGoldenTask&, std::string&)> Prepare;
     std::function<std::unique_ptr<IAgentProvider>(const FAgentGoldenTask&)>
         CreateProvider;

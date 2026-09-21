@@ -171,6 +171,8 @@ struct FAgentCounters
     std::size_t EvidenceBindings = 0;
     std::size_t OscillationsDetected = 0;
     std::size_t RepairAttempts = 0;
+    std::size_t ReflectionAttempts = 0;
+    std::size_t RecoveryEscalations = 0;
     std::size_t ContextMessages = 0;
     std::size_t TrimmedContextMessages = 0;
 };
