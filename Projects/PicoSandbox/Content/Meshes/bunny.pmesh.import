@@ -1,0 +1,6 @@
+[PicoStaticMeshImport]
+Version=1
+Source=/Game/Source/Meshes/bunny.obj
+UniformScale=644.499
+ConvertYUpToZUp=true
+FlipTexCoordV=true

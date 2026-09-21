@@ -50,7 +50,8 @@ public:
     bool WriteCheckpoint(
         EAgentStatus Status,
         const FAgentCounters& Counters,
-        std::string* OutError = nullptr);
+        std::string* OutError = nullptr,
+        std::string TaskStateJson = "{}");
     void SetTraceContext(
         std::string RunId,
         std::string TurnId = {},
@@ -61,6 +62,7 @@ public:
     const std::vector<FAgentEvent>& GetEvents() const;
     EAgentStatus GetStatus() const;
     const FAgentCounters& GetCounters() const;
+    std::string GetLatestTaskStateJson() const;
     std::vector<FAgentMessage> BuildMessageHistory() const;
     std::vector<FAgentMessage> BuildBoundedMessageHistory(
         std::size_t MaxMessages,
@@ -68,9 +70,15 @@ public:
         std::size_t* OutTrimmedMessages = nullptr) const;
     std::string GetMostRecentError() const;
     std::unordered_map<std::string, std::uint64_t> BuildRevisionSnapshot() const;
-    std::optional<FAgentToolCall> FindToolCall(std::string_view CallId) const;
-    bool MatchesToolCall(const FAgentToolCall& Call) const;
-    std::optional<FAgentToolResult> FindToolResult(std::string_view CallId) const;
+    std::optional<FAgentToolCall> FindToolCall(
+        std::string_view CallId,
+        std::uint64_t MinSequence = 0) const;
+    bool MatchesToolCall(
+        const FAgentToolCall& Call,
+        std::uint64_t MinSequence = 0) const;
+    std::optional<FAgentToolResult> FindToolResult(
+        std::string_view CallId,
+        std::uint64_t MinSequence = 0) const;
     bool ExternalizeLargeToolResult(
         FAgentToolResult& Result,
         std::size_t ThresholdBytes = 64 * 1024,

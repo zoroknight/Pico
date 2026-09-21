@@ -266,6 +266,12 @@ bool FAgentRagBenchmarkRunner::LoadFixture(
             Record.Content = Json.value("content", "");
             Record.Tags = Json.value("tags", std::vector<std::string> {});
             Record.Provenance = Json.value("provenance", Record.SourcePath);
+            Record.SourceRevision = Json.value("source_revision", 0ULL);
+            Record.EntityIds = Json.value(
+                "entity_ids", std::vector<std::string> {});
+            Record.RevisionDomain = Json.value("revision_domain", "");
+            Record.Fields = Json.value("fields",
+                std::unordered_map<std::string, std::string> {});
             if (Record.Id.empty() || Record.SourceType.empty()
                 || Record.Title.empty() || Record.Content.empty()
                 || !RecordIds.insert(Record.Id).second)
@@ -287,6 +293,12 @@ bool FAgentRagBenchmarkRunner::LoadFixture(
                 "allowed_source_types", std::vector<std::string> {});
             Case.ForbiddenSourceTypes = Json.value(
                 "forbidden_source_types", std::vector<std::string> {});
+            Case.ExactIdentifiers = Json.value(
+                "exact_identifiers", std::vector<std::string> {});
+            Case.EntityIds = Json.value(
+                "entity_ids", std::vector<std::string> {});
+            Case.Revisions = Json.value("revisions",
+                std::unordered_map<std::string, std::uint64_t> {});
             if (!IsSafeTaskId(Case.Id) || Case.Query.empty()
                 || Case.ExpectedRecordIds.empty()
                 || !CaseIds.insert(Case.Id).second)
@@ -324,6 +336,7 @@ FAgentRagBenchmarkReport FAgentRagBenchmarkRunner::Run(
 
     std::size_t TotalRetrieved = 0;
     std::size_t TotalForbidden = 0;
+    std::size_t RewrittenCases = 0;
     for (const FAgentRagBenchmarkCase& Case : Fixture.Cases)
     {
         FAgentKnowledgeQuery Query;
@@ -331,8 +344,12 @@ FAgentRagBenchmarkReport FAgentRagBenchmarkRunner::Run(
         Query.MaxResults = 8;
         Query.MaxContextBytes = 12000;
         Query.SourceTypes = Case.AllowedSourceTypes;
+        Query.ExactIdentifiers = Case.ExactIdentifiers;
+        Query.EntityIds = Case.EntityIds;
+        Query.Revisions = Case.Revisions;
         const auto StartedAt = std::chrono::steady_clock::now();
-        const std::vector<FAgentKnowledgeHit> Hits = Store.Query(Query);
+        const FAgentKnowledgeQueryResult QueryResult = Store.QueryDetailed(Query);
+        const std::vector<FAgentKnowledgeHit>& Hits = QueryResult.Hits;
         const std::uint64_t RetrievalNanoseconds =
             static_cast<std::uint64_t>(std::chrono::duration_cast<
                 std::chrono::nanoseconds>(
@@ -343,6 +360,8 @@ FAgentRagBenchmarkReport FAgentRagBenchmarkRunner::Run(
         Result.Id = Case.Id;
         Result.ContextBytes = Context.size();
         Result.RetrievalNanoseconds = RetrievalNanoseconds;
+        Result.bRewriteApplied = QueryResult.bRewriteApplied;
+        if (Result.bRewriteApplied) ++RewrittenCases;
         std::set<std::string> Expected(
             Case.ExpectedRecordIds.begin(), Case.ExpectedRecordIds.end());
         const auto RecallAt = [&](std::size_t K)
@@ -359,6 +378,28 @@ FAgentRagBenchmarkReport FAgentRagBenchmarkRunner::Run(
         Result.RecallAt1 = RecallAt(1);
         Result.RecallAt3 = RecallAt(3);
         Result.RecallAt8 = RecallAt(8);
+
+        FAgentKnowledgeQuery BaselineQuery = Query;
+        BaselineQuery.bEnableBm25 = false;
+        BaselineQuery.bEnableQueryRewrite = false;
+        BaselineQuery.ExactIdentifiers.clear();
+        BaselineQuery.EntityIds.clear();
+        BaselineQuery.Revisions.clear();
+        const std::vector<FAgentKnowledgeHit> BaselineHits =
+            Store.Query(BaselineQuery);
+        std::size_t BaselineFoundAt3 = 0;
+        double BaselineReciprocalRank = 0.0;
+        for (std::size_t Index = 0; Index < BaselineHits.size(); ++Index)
+        {
+            if (!Expected.contains(BaselineHits[Index].Record.Id)) continue;
+            if (Index < 3) ++BaselineFoundAt3;
+            if (BaselineReciprocalRank == 0.0)
+                BaselineReciprocalRank = 1.0
+                    / static_cast<double>(Index + 1);
+        }
+        Report.BaselineRecallAt3 += static_cast<double>(BaselineFoundAt3)
+            / static_cast<double>(Expected.size());
+        Report.BaselineMeanReciprocalRank += BaselineReciprocalRank;
         for (std::size_t Index = 0; Index < Hits.size(); ++Index)
         {
             Result.RetrievedRecordIds.push_back(Hits[Index].Record.Id);
@@ -396,10 +437,18 @@ FAgentRagBenchmarkReport FAgentRagBenchmarkRunner::Run(
         Report.MeanReciprocalRank /= Count;
         Report.MeanContextBytes /= Report.Cases.size();
         Report.MeanRetrievalNanoseconds /= Report.Cases.size();
+        Report.BaselineRecallAt3 /= Count;
+        Report.BaselineMeanReciprocalRank /= Count;
     }
     Report.ForbiddenSourceRate = TotalRetrieved == 0 ? 0.0
         : static_cast<double>(TotalForbidden)
             / static_cast<double>(TotalRetrieved);
+    Report.RecallAt3Gain = Report.RecallAt3 - Report.BaselineRecallAt3;
+    Report.MeanReciprocalRankGain = Report.MeanReciprocalRank
+        - Report.BaselineMeanReciprocalRank;
+    Report.RewriteRate = Report.Cases.empty() ? 0.0
+        : static_cast<double>(RewrittenCases)
+            / static_cast<double>(Report.Cases.size());
     return Report;
 }
 
@@ -422,7 +471,8 @@ bool FAgentRagBenchmarkRunner::WriteReport(
                 {"reciprocal_rank", Result.ReciprocalRank},
                 {"context_bytes", Result.ContextBytes},
                 {"retrieval_nanoseconds", Result.RetrievalNanoseconds},
-                {"forbidden_source_hits", Result.ForbiddenSourceHits}});
+                {"forbidden_source_hits", Result.ForbiddenSourceHits},
+                {"rewrite_applied", Result.bRewriteApplied}});
         }
         const FJson Json = {{"format_version", 1},
             {"recall_at_1", Report.RecallAt1},
@@ -432,6 +482,11 @@ bool FAgentRagBenchmarkRunner::WriteReport(
             {"mean_context_bytes", Report.MeanContextBytes},
             {"mean_retrieval_nanoseconds", Report.MeanRetrievalNanoseconds},
             {"forbidden_source_rate", Report.ForbiddenSourceRate},
+            {"baseline_recall_at_3", Report.BaselineRecallAt3},
+            {"baseline_mrr", Report.BaselineMeanReciprocalRank},
+            {"recall_at_3_gain", Report.RecallAt3Gain},
+            {"mrr_gain", Report.MeanReciprocalRankGain},
+            {"rewrite_rate", Report.RewriteRate},
             {"cases", std::move(Cases)}};
         std::filesystem::create_directories(Path.parent_path());
         const std::filesystem::path Staging = Path.string() + ".tmp";

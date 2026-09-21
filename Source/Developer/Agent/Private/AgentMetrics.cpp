@@ -57,12 +57,26 @@ std::string FAgentRunMetrics::ToJson() const
         {"counts", {{"runs", RunCount}, {"turns", TurnCount},
             {"tool_calls", ToolCallCount}, {"tool_results", ToolResultCount},
             {"repairs", RepairCount}, {"cache_hits", CacheHitCount},
+            {"observations", ObservationCount},
+            {"evidence_bindings", EvidenceBindingCount},
+            {"oscillations", OscillationCount},
             {"forbidden_tools", ForbiddenToolCount}}},
         {"latency", {{"provider", LatencyToJson(ProviderLatency)},
             {"approval", LatencyToJson(ApprovalLatency)},
             {"tool", LatencyToJson(ToolLatency)},
             {"validation", LatencyToJson(ValidationLatency)}}},
         {"context_bytes", ContextBytes},
+        {"context_assembly", {
+            {"count", ContextMetrics.AssemblyCount},
+            {"total_us", ContextMetrics.TotalAssemblyMicroseconds},
+            {"max_us", ContextMetrics.MaxAssemblyMicroseconds},
+            {"instructions_bytes", ContextMetrics.InstructionBytes},
+            {"task_state_bytes", ContextMetrics.TaskStateBytes},
+            {"conversation_bytes", ContextMetrics.ConversationBytes},
+            {"memory_bytes", ContextMetrics.MemoryBytes},
+            {"observation_bytes", ContextMetrics.ObservationBytes},
+            {"dropped_bytes", ContextMetrics.DroppedBytes},
+            {"total_bytes", ContextMetrics.TotalBytes}}},
         {"failure_class", ToString(FailureClass)},
         {"recovery_action", ToString(RecoveryAction)},
         {"automatically_retryable", bAutomaticallyRetryable},
@@ -106,8 +120,12 @@ FAgentRunMetrics BuildAgentRunMetrics(
     Metrics.RunId = Result.RunId;
     Metrics.Status = Result.Status;
     Metrics.ContextBytes = ContextBytes;
+    Metrics.ContextMetrics = Result.ContextMetrics;
     Metrics.RepairCount = Result.Counters.RepairAttempts;
     Metrics.CacheHitCount = Result.Counters.SemanticCacheHits;
+    Metrics.ObservationCount = Result.Counters.Observations;
+    Metrics.EvidenceBindingCount = Result.Counters.EvidenceBindings;
+    Metrics.OscillationCount = Result.Counters.OscillationsDetected;
     Metrics.CompletionRate = Result.Status == EAgentStatus::Completed ? 1.0 : 0.0;
     Metrics.FailureClass = Result.FailureClass;
     Metrics.RecoveryAction = Result.RecoveryAction;

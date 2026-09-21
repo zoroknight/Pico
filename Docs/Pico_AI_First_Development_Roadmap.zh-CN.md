@@ -37,7 +37,8 @@ Pico 已经通过本机多进程和两台真实 Windows 电脑验证 UDP、Repli
  -> 通用 Actor Replication 与碰撞语义收尾（已完成）
  -> Pico MCP 四周纵向切片（已完成）
  -> 阶段 A 第 1～4 周：资产理解、规格、Build Plan 与恢复（已完成）
- -> ReAct 轻量化加固门（下一优先级，五周）
+ -> ReAct 轻量化加固门（进行中，R1、R2、R3、R4 已完成）
+ -> 资产理解与安全创作纵向切片（新增最高优先级，七周）
  -> 阶段 A 第 5～8 周：玩法积木、Graph、组装与真实验收
  -> 阶段 C：Render Architecture（提前，四周）
  -> 阶段 D：AI 视觉资产生产（两周）
@@ -51,7 +52,8 @@ Pico 已经通过本机多进程和两台真实 Windows 电脑验证 UDP、Repli
 固定优先级为：
 
 ```text
-AI 双人协作游戏闭环与 Harness 可靠性
+Harness 可靠性与资产安全创作
+ > AI 双人协作游戏闭环
  > Render Architecture
  > AI 视觉资产与受控 Code Harness
  > ECS / Vulkan / Multi-Agent
@@ -697,6 +699,24 @@ DisplayName、Category、范围和权限元数据后，再将该适配器完全�
 [ReAct 轻量化加固门](AgentReActLightweightHardeningRoadmap.zh-CN.md)：它强化现有 Agent Runtime，但不计为
 第二套 Harness 或新的执行模式。加固门通过前，不以继续增加玩法 Tool、独立 Memory Service 或额外模型调用掩盖
 上下文、证据、振荡和恢复问题。
+
+ReAct R5 通过后，执行
+[Agent 资产理解与安全创作纵向切片](AgentAssetUnderstandingAndSafeAuthoring.zh-CN.md)。该七周插入项是阶段 A
+第 5 周前的最高优先级门：先补齐稳定目标、Revision 校验、字段级更新、引用影响分析、复合事务和读回验证，再依次
+开放 Material、通用组件、Actor 装配、语义元数据、标准预览和可选视觉分析。视觉 Provider 只提供只读候选语义，
+不成为第二套 Agent，不直接写项目，也不改变现有 Build Plan、Tool Policy、审批、Checkpoint 和验证边界。
+
+```text
+ReAct R5
+ -> S0 Safety Foundation
+ -> S1 Material / Reference Tools
+ -> S2 Component / Actor Assembly
+ -> S3 Semantic Metadata
+ -> S4 Preview Artifacts
+ -> S5 Optional Vision Provider
+ -> S6 Editor Golden Tasks
+ -> 阶段 A 第 5～8 周
+```
 
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |

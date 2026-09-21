@@ -142,6 +142,7 @@ else()
 endif()
 
 add_library(PicoAgentCore STATIC
+    Source/Developer/Agent/Private/AgentContext.cpp
     Source/Developer/Agent/Private/AgentCredentialStore.cpp
     Source/Developer/Agent/Private/AgentEvaluation.cpp
     Source/Developer/Agent/Private/AgentGameAssembly.cpp
@@ -1032,6 +1033,7 @@ if(PICO_BUILD_INSPECTOR)
             PicoReflectionTools
             PicoAssetImport
             PicoGraph
+            glad
     )
 
     if(WIN32)

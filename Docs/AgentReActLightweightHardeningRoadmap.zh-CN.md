@@ -4,6 +4,13 @@
 ReAct 链路更可靠、可恢复和可评测，同时保持 Harness 独立、简单任务低延迟以及未来 Provider、外部 Agent 和
 Code Harness 的扩展空间。
 
+> 状态：**进行中**。R1、R2、R3、R4 已完成，交付与验收见
+> [ReAct 加固 R1：Task State 与 Context Assembler](AgentReActHardeningR1_TaskStateAndContextAssembler.zh-CN.md)；
+> [ReAct 加固 R2：Observation、Evidence 与行动振荡控制](AgentReActHardeningR2_ObservationEvidenceAndOscillation.zh-CN.md)；
+> [ReAct 加固 R3：分块检索、BM25 与低置信 Query Rewrite](AgentReActHardeningR3_RagAndQueryRewrite.zh-CN.md)；
+> [ReAct 加固 R4：Memory 视图、阈值压缩与 Revision 失效](AgentReActHardeningR4_MemoryViewsCompressionAndInvalidation.zh-CN.md)；
+> 下一项为 R5 条件式 Reflection、恢复阶梯与真实场景 Eval。
+
 ## 固定决策
 
 - 当前只维护一种 Agent 执行模式：`ReAct`。暂不实现 Direct、Plan-Execute、GoT、多 Agent、Handoff 或模式路由器。
@@ -131,10 +138,10 @@ VerifiedFacts
 
 | 周次 | 工作 | 验收标准 |
 | --- | --- | --- |
-| R1 | 最小 `FAgentTaskState`、轻量 `FAgentContextAssembler`、上下文/Token/延迟基线和 Feature Flags | 简单任务的模型轮次、工具次数不增加；上下文来源与裁剪可解释 |
-| R2 | Harness 结果到 Observation 的统一映射、成功条件/Evidence 绑定、最近行动指纹和 Revision 进展判断 | Agent 不能仅凭 `succeeded` 宣称完成；A-A、A-B-A 可受控停止且不误杀正常连续读取 |
-| R3 | 文档切块、精确字段/BM25、Entity/Revision 索引和低召回 Query Rewrite | RAG Benchmark 提升；普通工具任务不增加额外模型调用；原始用户指令保持不变 |
-| R4 | Knowledge `Kind`、Episode/Entity 轻量视图、阈值式摘要压缩和 Revision 失效 | 重启后任务可恢复；资源变化后旧事实不再进入上下文；不出现重复事实库 |
+| R1（已完成） | 最小 `FAgentTaskState`、轻量 `FAgentContextAssembler`、上下文/Token/延迟基线和 Feature Flags | 简单任务的模型轮次、工具次数不增加；上下文来源与裁剪可解释 |
+| R2（已完成） | Harness 结果到 Observation 的统一映射、成功条件/Evidence 绑定、最近行动指纹和 Revision 进展判断 | Agent 不能仅凭 `succeeded` 宣称完成；A-A、A-B-A 可受控停止且不误杀正常连续读取 |
+| R3（已完成） | 文档切块、精确字段/BM25、Entity/Revision 索引和低召回 Query Rewrite | RAG Benchmark 的 Recall@3/MRR 从 0.8571 提升到 1.0；Rewrite 为本地确定性扩展；原始用户指令保持不变 |
+| R4（已完成） | Knowledge `Kind`、Episode/Entity 轻量视图、阈值式摘要压缩和 Revision 失效 | Session Episode 可从 Event Log 重建；旧 Revision 默认退出上下文；四类视图共用一个 Store；压缩按阈值触发且可关闭 |
 | R5 | 条件式 Reflection、恢复阶梯、真实 Editor/Play/联机/Package Eval 和性能回归门 | 最多一次反思修正；仍失败时询问或停止；形成成功率、Token、延迟和重复调用对照报告 |
 
 ## 防膨胀质量门

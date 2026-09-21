@@ -104,6 +104,11 @@ std::size_t FEditorSelection::Num() const
     return Handles.size();
 }
 
+std::uint64_t FEditorSelection::GetRevision() const
+{
+    return Revision;
+}
+
 bool FEditorSelection::IsValid() const
 {
     return PrimaryHandle.IsValid() && !Handles.empty();
@@ -135,6 +140,7 @@ bool FEditorSelection::Set(PObject* Object)
     }
     PrimaryHandle = NewHandle;
     RangeAnchorHandle = NewHandle;
+    ++Revision;
     return true;
 }
 
@@ -146,13 +152,15 @@ bool FEditorSelection::Add(PObject* Object)
         return false;
     }
     const bool bAlreadySelected = Contains(NewHandle);
+    const bool bPrimaryChanged = PrimaryHandle != NewHandle;
     if (!bAlreadySelected)
     {
         Handles.push_back(NewHandle);
     }
     PrimaryHandle = NewHandle;
     RangeAnchorHandle = NewHandle;
-    return !bAlreadySelected;
+    if (!bAlreadySelected || bPrimaryChanged) ++Revision;
+    return !bAlreadySelected || bPrimaryChanged;
 }
 
 bool FEditorSelection::Remove(PObject* Object)
@@ -172,6 +180,7 @@ bool FEditorSelection::Remove(PObject* Object)
     {
         RangeAnchorHandle = PrimaryHandle;
     }
+    ++Revision;
     return true;
 }
 
@@ -222,19 +231,25 @@ bool FEditorSelection::SetRange(
     const bool bChanged = NewHandles != Handles || PrimaryHandle != TargetHandle;
     Handles = std::move(NewHandles);
     PrimaryHandle = TargetHandle;
+    if (bChanged) ++Revision;
     return bChanged;
 }
 
 void FEditorSelection::Clear()
 {
+    const bool bChanged = !Handles.empty() || PrimaryHandle.IsValid()
+        || RangeAnchorHandle.IsValid();
     Handles.clear();
     PrimaryHandle = {};
     RangeAnchorHandle = {};
+    if (bChanged) ++Revision;
 }
 
 bool FEditorSelection::Validate()
 {
     const std::size_t PreviousSize = Handles.size();
+    const FObjectHandle PreviousPrimary = PrimaryHandle;
+    const FObjectHandle PreviousAnchor = RangeAnchorHandle;
     std::erase_if(
         Handles,
         [](FObjectHandle Handle) { return ResolveObject(Handle) == nullptr; });
@@ -246,6 +261,9 @@ bool FEditorSelection::Validate()
     {
         RangeAnchorHandle = PrimaryHandle;
     }
+    if (PreviousSize != Handles.size() || PreviousPrimary != PrimaryHandle
+        || PreviousAnchor != RangeAnchorHandle)
+        ++Revision;
     return PreviousSize == Handles.size();
 }
 

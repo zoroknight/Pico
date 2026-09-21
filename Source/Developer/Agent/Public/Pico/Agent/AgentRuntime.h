@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Pico/Agent/AgentContext.h"
 #include "Pico/Agent/AgentProvider.h"
 #include "Pico/Agent/AgentSession.h"
 
@@ -29,6 +30,7 @@ struct FAgentRuntimeContext
     std::string SkillContextJson = "[]";
     std::function<void(std::string_view)> OnAssistantDelta;
     std::vector<EAgentFailureInjectionPoint> FailureInjections;
+    FAgentContextFeatureFlags Features;
 };
 
 class FAgentRuntime
@@ -54,6 +56,13 @@ private:
         std::vector<FAgentRevisionChange> RevisionChanges;
     };
 
+    struct FRecentAction
+    {
+        std::string Fingerprint;
+        bool bMadeProgress = false;
+        std::uint64_t RevisionEpoch = 0;
+    };
+
     struct FActiveSpan
     {
         std::string Id;
@@ -66,7 +75,13 @@ private:
     bool IsCancelled(const FCancellationToken* CancellationToken) const;
     bool CheckBudget(std::string& OutError) const;
     std::string MakeSemanticKey(const FAgentToolCall& Call) const;
+    bool RecordActionAndDetectOscillation(
+        const FAgentObservation& Observation);
+    bool HasRequiredCompletionEvidence() const;
     std::string BuildProgressLedgerJson() const;
+    std::string BuildTaskStateJson() const;
+    bool WriteCheckpoint(EAgentStatus Status, std::string& OutError);
+    void AccumulateContextMetrics(const FAgentContextMetrics& Metrics);
     FAgentToolResult MakeSemanticCacheResult(
         const FAgentToolCall& Call,
         const FAgentToolResult& Cached) const;
@@ -87,13 +102,19 @@ private:
     FAgentBudget Budget;
     FAgentRuntimeContext Context;
     FAgentCounters Counters;
-    std::string CurrentGoal;
+    FAgentTaskState TaskState;
     std::unordered_map<std::string, std::uint64_t> Revisions;
     std::unordered_map<std::string, FAgentToolResult> ReadOnlyCache;
     std::vector<FProgressAction> ProgressActions;
+    std::vector<FAgentObservation> RecentObservations;
+    std::vector<FRecentAction> RecentActions;
+    std::uint64_t RevisionEpoch = 0;
+    std::uint64_t ToolReplaySequenceFloor = 0;
+    bool bObservedToolActivity = false;
     std::chrono::steady_clock::time_point StartTime;
     std::string RunId;
     std::uint64_t ContextBytes = 0;
+    FAgentContextMetrics ContextMetrics;
     std::string TurnId;
     FActiveSpan RunSpan;
     FActiveSpan TurnSpan;

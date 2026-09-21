@@ -41,6 +41,12 @@ Store 不保存裸 `PObject*`。未来 GAS/ECS 通过提交稳定 Record 扩展�
 
 ## RAG Lite
 
+> 后续的 R3 加固已在同一 Knowledge Store 上加入文档切块、BM25、Entity/Revision 索引和低置信确定性
+> Query Rewrite，详见 [ReAct 加固 R3](AgentReActHardeningR3_RagAndQueryRewrite.zh-CN.md)。本文保留初始
+> RAG Lite 纵向切片的设计与验收记录。
+> 后续 R4 又在同一 Store 上增加了类型化 Memory 视图、Revision 失效和阈值压缩，详见
+> [ReAct 加固 R4](AgentReActHardeningR4_MemoryViewsCompressionAndInvalidation.zh-CN.md)。
+
 每轮发送前以用户原始目标查询 Store。第一版使用确定性 Metadata Filter、路径/标题/Tag 加权与关键词匹配，最多
 返回 8 条证据并限制证据 JSON 为 12 KB。过长 UTF-8 内容在完整字符边界截断。证据使用 `[K:<KnowledgeId>]`
 引用，并被明确标记为不可信数据；其中出现的指令不能覆盖 System Prompt、Skill、Tool Policy 或用户审批。

@@ -2,6 +2,7 @@
 
 #include "Pico/Object/ObjectTypes.h"
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -32,6 +33,7 @@ public:
     std::string GetObjectPath() const;
     std::vector<std::string> GetObjectPaths() const;
     std::size_t Num() const;
+    std::uint64_t GetRevision() const;
     bool IsValid() const;
     bool Contains(const PObject* Object) const;
     bool Contains(FObjectHandle ObjectHandle) const;
@@ -52,5 +54,6 @@ private:
     std::vector<FObjectHandle> Handles;
     FObjectHandle PrimaryHandle;
     FObjectHandle RangeAnchorHandle;
+    std::uint64_t Revision = 0;
 };
 }

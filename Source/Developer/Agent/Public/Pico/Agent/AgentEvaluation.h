@@ -77,6 +77,9 @@ struct FAgentRagBenchmarkCase
     std::vector<std::string> ExpectedRecordIds;
     std::vector<std::string> AllowedSourceTypes;
     std::vector<std::string> ForbiddenSourceTypes;
+    std::vector<std::string> ExactIdentifiers;
+    std::vector<std::string> EntityIds;
+    std::unordered_map<std::string, std::uint64_t> Revisions;
 };
 
 struct FAgentRagBenchmarkFixture
@@ -96,6 +99,7 @@ struct FAgentRagBenchmarkCaseResult
     std::size_t ContextBytes = 0;
     std::uint64_t RetrievalNanoseconds = 0;
     std::size_t ForbiddenSourceHits = 0;
+    bool bRewriteApplied = false;
 };
 
 struct FAgentRagBenchmarkReport
@@ -105,6 +109,11 @@ struct FAgentRagBenchmarkReport
     double RecallAt8 = 0.0;
     double MeanReciprocalRank = 0.0;
     double ForbiddenSourceRate = 0.0;
+    double BaselineRecallAt3 = 0.0;
+    double BaselineMeanReciprocalRank = 0.0;
+    double RecallAt3Gain = 0.0;
+    double MeanReciprocalRankGain = 0.0;
+    double RewriteRate = 0.0;
     std::uint64_t MeanContextBytes = 0;
     std::uint64_t MeanRetrievalNanoseconds = 0;
     std::vector<FAgentRagBenchmarkCaseResult> Cases;

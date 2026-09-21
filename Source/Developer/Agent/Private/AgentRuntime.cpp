@@ -32,7 +32,8 @@ std::int64_t NowMilliseconds()
 
 std::uint64_t MeasureRequestContextBytes(const FAgentProviderRequest& Request)
 {
-    std::uint64_t Bytes = Request.ProgressLedgerJson.size()
+    std::uint64_t Bytes = Request.TaskStateJson.size()
+        + Request.ProgressLedgerJson.size()
         + Request.KnowledgeContextJson.size() + Request.SkillContextJson.size();
     for (const FAgentMessage& Message : Request.Messages)
     {
@@ -64,6 +65,11 @@ FAgentRuntime::FAgentRuntime(
         ? InSession.GetCounters()
         : FAgentCounters {})
 {
+    const std::string SavedTaskState = InSession.GetLatestTaskStateJson();
+    if (SavedTaskState != "{}")
+        DeserializeAgentTaskState(SavedTaskState, TaskState);
+    for (const auto& [Domain, Revision] : Revisions)
+        RevisionEpoch += Revision;
 }
 
 FAgentRunResult FAgentRuntime::Run(
@@ -72,14 +78,28 @@ FAgentRunResult FAgentRuntime::Run(
 {
     StartTime = std::chrono::steady_clock::now();
     ContextBytes = 0;
+    ContextMetrics = {};
     RunId = MakeTraceId("run");
     TurnId.clear();
     RunSpan = BeginSpan("AgentRun", {});
     ToolExecutor.BeginRun(RunId);
     std::string Error;
+    ToolReplaySequenceFloor = 0;
     if (!Prompt.empty())
     {
-        CurrentGoal = Prompt;
+        const std::vector<FAgentEvent>& ExistingEvents = Session.GetEvents();
+        ToolReplaySequenceFloor = ExistingEvents.empty()
+            ? 0 : ExistingEvents.back().Sequence + 1;
+        ProgressActions.clear();
+        RecentObservations.clear();
+        RecentActions.clear();
+        bObservedToolActivity = false;
+        TaskState = {};
+        TaskState.Goal = Prompt;
+        TaskState.SuccessCriteria = {
+            "The final answer is supported by verified observations when tools are used"};
+        TaskState.CriterionEvidence = {{TaskState.SuccessCriteria.front(), {}, false}};
+        TaskState.Revision = 1;
         FAgentEvent UserMessage;
         UserMessage.Type = EAgentEventType::Message;
         UserMessage.Role = EAgentRole::User;
@@ -90,14 +110,15 @@ FAgentRunResult FAgentRuntime::Run(
                 EAgentFailureClass::Infrastructure);
         }
     }
-    else if (CurrentGoal.empty())
+    else if (TaskState.Goal.empty())
     {
         const std::vector<FAgentMessage> History = Session.BuildMessageHistory();
         for (auto It = History.rbegin(); It != History.rend(); ++It)
         {
             if (It->Role == EAgentRole::User)
             {
-                CurrentGoal = It->Content;
+                TaskState.Goal = It->Content;
+                TaskState.Revision = 1;
                 break;
             }
         }
@@ -125,20 +146,49 @@ FAgentRunResult FAgentRuntime::Run(
         ++Counters.Steps;
         BeginTurn();
         FAgentProviderRequest Request;
-        std::size_t TrimmedMessages = 0;
-        Request.Messages = Session.BuildBoundedMessageHistory(
-            Budget.MaxContextMessages,
-            Budget.MaxContextBytesPerRequest,
-            &TrimmedMessages);
-        Counters.ContextMessages = Request.Messages.size();
-        Counters.TrimmedContextMessages = TrimmedMessages;
-        Request.ProgressLedgerJson = BuildProgressLedgerJson();
-        Request.KnowledgeContextJson = Context.KnowledgeContextJson;
-        Request.SkillContextJson = Context.SkillContextJson;
+        if (Context.Features.bContextAssembler)
+        {
+            FAgentContextAssemblyInput AssemblyInput;
+            AssemblyInput.Messages = Session.BuildMessageHistory();
+            AssemblyInput.TaskStateJson = BuildTaskStateJson();
+            AssemblyInput.ObservationContextJson = BuildProgressLedgerJson();
+            AssemblyInput.KnowledgeContextJson = Context.KnowledgeContextJson;
+            AssemblyInput.SkillContextJson = Context.SkillContextJson;
+            AssemblyInput.MaxMessages = Budget.MaxContextMessages;
+            AssemblyInput.MaxBytes = Budget.MaxContextBytesPerRequest;
+            FAgentAssembledContext Assembled =
+                FAgentContextAssembler::Assemble(std::move(AssemblyInput));
+            Request.Messages = std::move(Assembled.Messages);
+            Request.TaskStateJson = std::move(Assembled.TaskStateJson);
+            Request.ProgressLedgerJson =
+                std::move(Assembled.ObservationContextJson);
+            Request.KnowledgeContextJson =
+                std::move(Assembled.KnowledgeContextJson);
+            Request.SkillContextJson = std::move(Assembled.SkillContextJson);
+            Counters.ContextMessages = Request.Messages.size();
+            Counters.TrimmedContextMessages = Assembled.TrimmedMessages;
+            ContextBytes += Assembled.Metrics.TotalBytes;
+            if (Context.Features.bContextMetrics)
+                AccumulateContextMetrics(Assembled.Metrics);
+        }
+        else
+        {
+            std::size_t TrimmedMessages = 0;
+            Request.Messages = Session.BuildBoundedMessageHistory(
+                Budget.MaxContextMessages,
+                Budget.MaxContextBytesPerRequest,
+                &TrimmedMessages);
+            Counters.ContextMessages = Request.Messages.size();
+            Counters.TrimmedContextMessages = TrimmedMessages;
+            Request.TaskStateJson = BuildTaskStateJson();
+            Request.ProgressLedgerJson = BuildProgressLedgerJson();
+            Request.KnowledgeContextJson = Context.KnowledgeContextJson;
+            Request.SkillContextJson = Context.SkillContextJson;
+            ContextBytes += MeasureRequestContextBytes(Request);
+        }
         Request.OnTextDelta = Context.OnAssistantDelta;
         Request.Step = Counters.Steps;
         Request.RepairAttempt = Counters.RepairAttempts;
-        ContextBytes += MeasureRequestContextBytes(Request);
         FActiveSpan ModelSpan = BeginSpan("Model.Generate", TurnSpan.Id);
         FAgentProviderResponse Response;
         const bool bInjectedProviderTimeout = ConsumeFailureInjection(
@@ -195,7 +245,7 @@ FAgentRunResult FAgentRuntime::Run(
             }
             ++Counters.RepairAttempts;
             if (!Transition(EAgentStatus::Repairing, Error)
-                || !Session.WriteCheckpoint(EAgentStatus::Repairing, Counters, &Error)
+                || !WriteCheckpoint(EAgentStatus::Repairing, Error)
                 || !Transition(EAgentStatus::Planning, Error))
             {
                 return Finish(EAgentStatus::Failed, std::move(Error),
@@ -203,6 +253,14 @@ FAgentRunResult FAgentRuntime::Run(
             }
             EndTurn(false, Response.Error.empty() ? "Provider failed" : Response.Error);
             continue;
+        }
+
+        if (Response.bFinal && !HasRequiredCompletionEvidence())
+        {
+            return Finish(EAgentStatus::Failed,
+                "Agent final answer was rejected because tool activity has no "
+                "verified evidence bound to the task success criteria",
+                EAgentFailureClass::VerificationFailed);
         }
 
         if (!Response.Content.empty())
@@ -235,8 +293,9 @@ FAgentRunResult FAgentRuntime::Run(
             for (const FAgentToolCall& Call : Response.ToolCalls)
             {
                 const std::optional<FAgentToolResult> ExistingResult =
-                    Session.FindToolResult(Call.Id);
-                if (ExistingResult && !Session.MatchesToolCall(Call))
+                    Session.FindToolResult(Call.Id, ToolReplaySequenceFloor);
+                if (ExistingResult
+                    && !Session.MatchesToolCall(Call, ToolReplaySequenceFloor))
                 {
                     return Finish(EAgentStatus::Failed,
                         "ToolCall id was reused with different tool or arguments: " + Call.Id,
@@ -288,7 +347,7 @@ FAgentRunResult FAgentRuntime::Run(
                 }
                 for (const FAgentToolCall& Call : Response.ToolCalls)
                 {
-                    if (!Session.FindToolResult(Call.Id)
+                    if (!Session.FindToolResult(Call.Id, ToolReplaySequenceFloor)
                         && ToolExecutor.RequiresApproval(Call))
                     {
                         ToolExecutor.PrepareApproval(Call);
@@ -303,6 +362,7 @@ FAgentRunResult FAgentRuntime::Run(
             }
             bool bToolFailed = false;
             bool bMadeProgress = false;
+            bool bOscillationDetected = false;
             EAgentFailureClass ToolFailureClass = EAgentFailureClass::None;
             for (const FAgentToolCall& Call : Response.ToolCalls)
             {
@@ -322,7 +382,8 @@ FAgentRunResult FAgentRuntime::Run(
                 FActiveSpan ToolSpan = BeginSpan(
                     "Tool." + Call.Name, TurnSpan.Id);
 
-                std::optional<FAgentToolResult> Existing = Session.FindToolResult(Call.Id);
+                std::optional<FAgentToolResult> Existing = Session.FindToolResult(
+                    Call.Id, ToolReplaySequenceFloor);
                 FAgentToolResult Result;
                 const bool bReadOnly = ToolExecutor.IsReadOnly(Call);
                 const std::string SemanticKey = bReadOnly
@@ -390,7 +451,6 @@ FAgentRunResult FAgentRuntime::Run(
                         NormalizeAgentToolResult(Result);
                         if (Result.bSucceeded)
                         {
-                            bMadeProgress = true;
                             if (bReadOnly)
                                 ReadOnlyCache[SemanticKey] = Result;
                             else
@@ -409,6 +469,7 @@ FAgentRunResult FAgentRuntime::Run(
                                     Change.Before = Revision;
                                     Change.After = ++Revision;
                                 }
+                                ++RevisionEpoch;
                             }
                         }
                     }
@@ -473,6 +534,41 @@ FAgentRunResult FAgentRuntime::Run(
                         EAgentFailureClass::Infrastructure);
                 }
                 ToolExecutor.CommitDurableResult(Call);
+                if (Context.Features.bObservationMapping)
+                {
+                    const FAgentObservation Observation = BuildAgentObservation(
+                        Call, Result, bReadOnly, true);
+                    ++Counters.Observations;
+                    bObservedToolActivity = true;
+                    if (Context.Features.bTaskState)
+                    {
+                        ++TaskState.ObservationCount;
+                        ++TaskState.Revision;
+                    }
+                    bMadeProgress |= Observation.bMadeProgress;
+                    RecentObservations.push_back(Observation);
+                    if (RecentObservations.size() > 8)
+                        RecentObservations.erase(RecentObservations.begin());
+                    if (Context.Features.bTaskState && Observation.bVerified)
+                    {
+                        const std::size_t EvidenceCount =
+                            TaskState.EvidenceRefs.size();
+                        BindAgentObservationEvidence(Observation, TaskState);
+                        if (TaskState.EvidenceRefs.size() > EvidenceCount)
+                            ++Counters.EvidenceBindings;
+                    }
+                    if (Context.Features.bActionOscillationGuard
+                        && RecordActionAndDetectOscillation(Observation))
+                    {
+                        ++Counters.OscillationsDetected;
+                        bOscillationDetected = true;
+                    }
+                }
+                else
+                {
+                    bMadeProgress |= Result.bSucceeded
+                        && !(Existing.has_value() || bSemanticCacheHit);
+                }
                 EndSpan(ToolSpan, Result.bSucceeded, Result.Error);
                 if (!Result.bSucceeded)
                 {
@@ -482,6 +578,7 @@ FAgentRunResult FAgentRuntime::Run(
                     Error = Result.Error.empty() ? "Tool execution failed" : Result.Error;
                     break;
                 }
+                if (bOscillationDetected) break;
             }
 
             if (bToolFailed)
@@ -500,7 +597,7 @@ FAgentRunResult FAgentRuntime::Run(
                 }
                 ++Counters.RepairAttempts;
                 if (!Transition(EAgentStatus::Repairing, Error)
-                    || !Session.WriteCheckpoint(EAgentStatus::Repairing, Counters, &Error)
+                    || !WriteCheckpoint(EAgentStatus::Repairing, Error)
                     || !Transition(EAgentStatus::Planning, Error))
                 {
                     return Finish(EAgentStatus::Failed, std::move(Error),
@@ -508,6 +605,16 @@ FAgentRunResult FAgentRuntime::Run(
                 }
                 EndTurn(false, Error);
                 continue;
+            }
+
+            if (bOscillationDetected)
+            {
+                return Finish(EAgentStatus::Failed,
+                    "Agent stopped after repeated actions made no progress: an A-A "
+                    "or A-B-A oscillation was detected at an unchanged revision; "
+                    "use the existing observations, perform a "
+                    "state-changing action, ask for missing information, or finish",
+                    EAgentFailureClass::BudgetExceeded);
             }
 
             if (bMadeProgress)
@@ -531,7 +638,7 @@ FAgentRunResult FAgentRuntime::Run(
 
             FActiveSpan ValidationSpan = BeginSpan("Run.Validation", TurnSpan.Id);
             if (!Transition(EAgentStatus::Validating, Error)
-                || !Session.WriteCheckpoint(EAgentStatus::Validating, Counters, &Error)
+                || !WriteCheckpoint(EAgentStatus::Validating, Error)
                 || !Transition(EAgentStatus::Planning, Error))
             {
                 EndSpan(ValidationSpan, false, Error);
@@ -558,7 +665,7 @@ FAgentRunResult FAgentRuntime::Run(
         }
         ++Counters.RepairAttempts;
         if (!Transition(EAgentStatus::Repairing, Error)
-            || !Session.WriteCheckpoint(EAgentStatus::Repairing, Counters, &Error)
+            || !WriteCheckpoint(EAgentStatus::Repairing, Error)
             || !Transition(EAgentStatus::Planning, Error))
         {
             return Finish(EAgentStatus::Failed, std::move(Error),
@@ -591,6 +698,38 @@ std::string FAgentRuntime::MakeSemanticKey(const FAgentToolCall& Call) const
     return RevisionKey + "\n" + Call.Name + "\n" + CanonicalArguments;
 }
 
+bool FAgentRuntime::RecordActionAndDetectOscillation(
+    const FAgentObservation& Observation)
+{
+    RecentActions.push_back({Observation.ActionFingerprint,
+        Observation.bMadeProgress, RevisionEpoch});
+    if (RecentActions.size() > 12)
+        RecentActions.erase(RecentActions.begin());
+    if (Observation.bMadeProgress || RecentActions.size() < 2) return false;
+
+    const FRecentAction& Current = RecentActions.back();
+    const FRecentAction& Previous = RecentActions[RecentActions.size() - 2];
+    if (!Previous.bMadeProgress && Current.Fingerprint == Previous.Fingerprint
+        && Current.RevisionEpoch == Previous.RevisionEpoch)
+        return true;
+
+    if (RecentActions.size() < 3) return false;
+    const FRecentAction& TwoBack = RecentActions[RecentActions.size() - 3];
+    return !Previous.bMadeProgress && Current.Fingerprint == TwoBack.Fingerprint
+        && Current.RevisionEpoch == Previous.RevisionEpoch
+        && Current.RevisionEpoch == TwoBack.RevisionEpoch;
+}
+
+bool FAgentRuntime::HasRequiredCompletionEvidence() const
+{
+    if (!Context.Features.bEvidenceCompletionGate
+        || !Context.Features.bTaskState
+        || !Context.Features.bObservationMapping
+        || (!bObservedToolActivity && TaskState.ObservationCount == 0))
+        return true;
+    return HasAgentCompletionEvidence(TaskState);
+}
+
 std::string FAgentRuntime::BuildProgressLedgerJson() const
 {
     FJson Actions = FJson::array();
@@ -605,11 +744,22 @@ std::string FAgentRuntime::BuildProgressLedgerJson() const
             {"reused", Action.bReused},
             {"revision_changes", std::move(RevisionChanges)}});
     }
-    return FJson {{"goal", CurrentGoal},
+    FJson Observations = FJson::array();
+    for (const FAgentObservation& Observation : RecentObservations)
+        Observations.push_back(FJson::parse(SerializeAgentObservation(Observation)));
+    FJson Criteria = FJson::array();
+    for (const FAgentCriterionEvidence& Binding : TaskState.CriterionEvidence)
+        Criteria.push_back({{"criterion", Binding.Criterion},
+            {"satisfied", Binding.bSatisfied},
+            {"evidence_refs", Binding.EvidenceRefs}});
+    return FJson {{"goal", TaskState.Goal},
         {"revisions", Revisions},
+        {"revision_epoch", RevisionEpoch},
         {"recent_failure", Session.GetMostRecentError()},
         {"pending_approval", Session.GetStatus() == EAgentStatus::AwaitingApproval},
         {"completed_actions", std::move(Actions)},
+        {"latest_observations", std::move(Observations)},
+        {"success_criteria", std::move(Criteria)},
         {"budget", {{"steps_used", Counters.Steps},
             {"steps_remaining", Counters.Steps < Budget.MaxSteps
                 ? Budget.MaxSteps - Counters.Steps : 0},
@@ -622,6 +772,9 @@ std::string FAgentRuntime::BuildProgressLedgerJson() const
                     < Budget.MaxMutationToolCalls
                 ? Budget.MaxMutationToolCalls - Counters.MutationToolCalls : 0},
             {"semantic_cache_hits", Counters.SemanticCacheHits},
+            {"observations", Counters.Observations},
+            {"evidence_bindings", Counters.EvidenceBindings},
+            {"oscillations_detected", Counters.OscillationsDetected},
             {"consecutive_no_progress_steps",
                 Counters.ConsecutiveNoProgressSteps},
             {"context_messages", Counters.ContextMessages},
@@ -629,6 +782,38 @@ std::string FAgentRuntime::BuildProgressLedgerJson() const
         {"next_action_rule",
             "Do not repeat a completed read at the same relevant revision. Mutate once "
             "arguments are known, ask for missing information, or finish."}}.dump();
+}
+
+std::string FAgentRuntime::BuildTaskStateJson() const
+{
+    return Context.Features.bTaskState
+        ? SerializeAgentTaskState(TaskState) : std::string("{}");
+}
+
+bool FAgentRuntime::WriteCheckpoint(
+    EAgentStatus Status,
+    std::string& OutError)
+{
+    return Session.WriteCheckpoint(
+        Status, Counters, &OutError, BuildTaskStateJson());
+}
+
+void FAgentRuntime::AccumulateContextMetrics(
+    const FAgentContextMetrics& Metrics)
+{
+    ContextMetrics.AssemblyCount += Metrics.AssemblyCount;
+    ContextMetrics.TotalAssemblyMicroseconds +=
+        Metrics.TotalAssemblyMicroseconds;
+    ContextMetrics.MaxAssemblyMicroseconds = std::max(
+        ContextMetrics.MaxAssemblyMicroseconds,
+        Metrics.MaxAssemblyMicroseconds);
+    ContextMetrics.InstructionBytes += Metrics.InstructionBytes;
+    ContextMetrics.TaskStateBytes += Metrics.TaskStateBytes;
+    ContextMetrics.ConversationBytes += Metrics.ConversationBytes;
+    ContextMetrics.MemoryBytes += Metrics.MemoryBytes;
+    ContextMetrics.ObservationBytes += Metrics.ObservationBytes;
+    ContextMetrics.DroppedBytes += Metrics.DroppedBytes;
+    ContextMetrics.TotalBytes += Metrics.TotalBytes;
 }
 
 FAgentToolResult FAgentRuntime::MakeSemanticCacheResult(
@@ -737,7 +922,8 @@ FAgentRunResult FAgentRuntime::Finish(
         Session.Append(std::move(Event), &PersistenceError);
     }
     Session.SetStatus(Status, &PersistenceError);
-    Session.WriteCheckpoint(Status, Counters, &PersistenceError);
+    Session.WriteCheckpoint(
+        Status, Counters, &PersistenceError, BuildTaskStateJson());
     if (!PersistenceError.empty() && Error.empty()) Error = PersistenceError;
     ToolExecutor.EndRun(RunId, Status);
     EndTurn(Status == EAgentStatus::Completed, Error);
@@ -749,6 +935,7 @@ FAgentRunResult FAgentRuntime::Finish(
     Result.Counters = Counters;
     Result.RunId = RunId;
     Result.ContextBytes = ContextBytes;
+    Result.ContextMetrics = ContextMetrics;
     Result.FailureClass = FailureClass;
     Result.RecoveryAction = Recovery.Action;
     const FAgentRunMetrics Metrics = BuildAgentRunMetrics(

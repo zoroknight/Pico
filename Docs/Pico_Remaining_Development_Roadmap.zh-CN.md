@@ -1,7 +1,6 @@
 # Pico 剩余开发路线
 
-> 8 周工程深度、通用 Actor Replication/碰撞语义和 MCP 四周纵向切片均已完成；下一阶段任务仍以
-> 任务、实施顺序和验收标准以
+> 8 周工程深度、通用 Actor Replication/碰撞语义和 MCP 四周纵向切片均已完成；后续任务、实施顺序和验收标准以
 > [`Pico_AI_First_Development_Roadmap.zh-CN.md`](Pico_AI_First_Development_Roadmap.zh-CN.md) 为准。
 > 本文档继续保留已完成基线、历史计划和长期架构决策；文档冲突时优先采用新的专项路线。
 
@@ -999,9 +998,10 @@ Delay、GameplayEvent/Montage 等待、Ability 激活、Cook、Agent Graph Tools
 Trigger/拾取节点库可以在顺延后的 Agent 游戏搭建阶段通过同一 Schema/Extension 机制增量加入。
 
 8 周 [Pico 工程深度阶段](Pico_Engineering_Depth_Roadmap.zh-CN.md)、通用 Actor Replication/碰撞语义与 MCP
-纵向切片均已完成。当前恢复扩展后的八周“Agent 游戏制作链路”：Asset Descriptor、Capability Catalog、
-Gameplay Recipe、PicoGameSpec、Build Plan、Checkpoint、通用双人协作玩法积木、三进程 Scenario Runner 和
-Package Evidence。之后依次进入 Render Architecture、AI 视觉资产、受控 Code Harness 和第二玩法综合验收；
+纵向切片均已完成。当前先完成 ReAct R5，再执行
+[Agent 资产理解与安全创作纵向切片](AgentAssetUnderstandingAndSafeAuthoring.zh-CN.md)，补齐安全写入、Material、
+通用组件、语义元数据、预览和可选视觉分析；随后恢复八周“Agent 游戏制作链路”的第 5～8 周，完成通用双人协作
+玩法积木、三进程 Scenario Runner 和 Package Evidence。之后依次进入 Render Architecture、AI 视觉资产、受控 Code Harness 和第二玩法综合验收；
 ECS 继续延后，Vulkan 仅在 RHI/OpenGL Backend 边界验收后启动。详细范围与验收以
 [Agent 游戏制作链路规划](AgentGameCreationPipeline.zh-CN.md) 为准。
 
@@ -1009,6 +1009,7 @@ ECS 继续延后，Vulkan 仅在 RHI/OpenGL Backend 边界验收后启动。详�
 
 以下内容已进入当前 AI-first 后续顺序，但必须逐阶段通过准入门槛，不能并行铺开：
 
+- Agent 资产理解与安全创作：先完成稳定目标、Revision、字段级更新、引用影响和复合事务，再开放 Material、通用组件、预览与可选视觉分析。
 - Render Architecture：PrimitiveSceneProxy、MeshBatch、RenderScene、RenderPass/RenderGraph Lite、RHI 和 OpenGL Backend；现已提前到 Agent 首个双人协作切片之后。
 - AI 视觉资产生产：受控纹理生成、参数化几何和外部 glTF/GLB Producer。
 - 受控 Code Harness：隔离 Patch、Diff 审批、构建验证、有限修复、回滚和能力注册。

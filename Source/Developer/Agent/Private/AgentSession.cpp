@@ -1,5 +1,7 @@
 #include "Pico/Agent/AgentSession.h"
 
+#include "Pico/Agent/AgentContext.h"
+
 #include <nlohmann/json.hpp>
 
 #include <chrono>
@@ -42,6 +44,9 @@ FJson ToJson(const FAgentEvent& Event, std::string_view SessionId)
         {"mutation_tool_calls", Event.Counters.MutationToolCalls},
         {"semantic_cache_hits", Event.Counters.SemanticCacheHits},
         {"consecutive_no_progress_steps", Event.Counters.ConsecutiveNoProgressSteps},
+        {"observations", Event.Counters.Observations},
+        {"evidence_bindings", Event.Counters.EvidenceBindings},
+        {"oscillations_detected", Event.Counters.OscillationsDetected},
         {"repair_attempts", Event.Counters.RepairAttempts},
         {"context_messages", Event.Counters.ContextMessages},
         {"trimmed_context_messages", Event.Counters.TrimmedContextMessages}
@@ -99,6 +104,10 @@ bool FromJson(const FJson& Json, std::string_view SessionId, FAgentEvent& Out, s
         Out.Counters.SemanticCacheHits = Json.value("semantic_cache_hits", 0U);
         Out.Counters.ConsecutiveNoProgressSteps =
             Json.value("consecutive_no_progress_steps", 0U);
+        Out.Counters.Observations = Json.value("observations", 0U);
+        Out.Counters.EvidenceBindings = Json.value("evidence_bindings", 0U);
+        Out.Counters.OscillationsDetected =
+            Json.value("oscillations_detected", 0U);
         Out.Counters.RepairAttempts = Json.value("repair_attempts", 0U);
         Out.Counters.ContextMessages = Json.value("context_messages", 0U);
         Out.Counters.TrimmedContextMessages =
@@ -199,12 +208,14 @@ bool FAgentSession::SetStatus(EAgentStatus InStatus, std::string* OutError)
 bool FAgentSession::WriteCheckpoint(
     EAgentStatus InStatus,
     const FAgentCounters& InCounters,
-    std::string* OutError)
+    std::string* OutError,
+    std::string TaskStateJson)
 {
     FAgentEvent Event;
     Event.Type = EAgentEventType::Checkpoint;
     Event.Status = InStatus;
     Event.Counters = InCounters;
+    Event.PayloadJson = std::move(TaskStateJson);
     return Append(std::move(Event), OutError);
 }
 
@@ -213,6 +224,19 @@ const std::filesystem::path& FAgentSession::GetEventLogPath() const { return Eve
 const std::vector<FAgentEvent>& FAgentSession::GetEvents() const { return Events; }
 EAgentStatus FAgentSession::GetStatus() const { return Status; }
 const FAgentCounters& FAgentSession::GetCounters() const { return Counters; }
+
+std::string FAgentSession::GetLatestTaskStateJson() const
+{
+    for (auto It = Events.rbegin(); It != Events.rend(); ++It)
+    {
+        if (It->Type == EAgentEventType::Checkpoint
+            && !It->PayloadJson.empty() && It->PayloadJson != "{}")
+        {
+            return It->PayloadJson;
+        }
+    }
+    return "{}";
+}
 
 std::vector<FAgentMessage> FAgentSession::BuildMessageHistory() const
 {
@@ -260,33 +284,8 @@ std::vector<FAgentMessage> FAgentSession::BuildBoundedMessageHistory(
     std::uint64_t MaxBytes,
     std::size_t* OutTrimmedMessages) const
 {
-    std::vector<FAgentMessage> History = BuildMessageHistory();
-    const std::size_t OriginalCount = History.size();
-    std::uint64_t UsedBytes = 0;
-    std::size_t FirstKept = History.size();
-    while (FirstKept > 0 && History.size() - FirstKept < MaxMessages)
-    {
-        const FAgentMessage& Message = History[FirstKept - 1];
-        std::uint64_t MessageBytes = Message.Content.size()
-            + Message.ToolCallId.size();
-        for (const FAgentToolCall& Call : Message.ToolCalls)
-            MessageBytes += Call.Id.size() + Call.Name.size()
-                + Call.ArgumentsJson.size();
-        if (UsedBytes + MessageBytes > MaxBytes)
-            break;
-        UsedBytes += MessageBytes;
-        --FirstKept;
-    }
-    if (FirstKept > 0)
-        History.erase(History.begin(), History.begin() + FirstKept);
-    // OpenAI-compatible providers require every Tool message to follow the
-    // Assistant message that declared its tool_call_id. If the byte/message
-    // boundary split that group, discard the orphaned old results.
-    while (!History.empty() && History.front().Role == EAgentRole::Tool)
-        History.erase(History.begin());
-    if (OutTrimmedMessages)
-        *OutTrimmedMessages = OriginalCount - History.size();
-    return History;
+    return BuildBoundedAgentMessageHistory(BuildMessageHistory(),
+        MaxMessages, MaxBytes, OutTrimmedMessages);
 }
 
 std::string FAgentSession::GetMostRecentError() const
@@ -317,10 +316,13 @@ FAgentSession::BuildRevisionSnapshot() const
     return Revisions;
 }
 
-std::optional<FAgentToolResult> FAgentSession::FindToolResult(std::string_view CallId) const
+std::optional<FAgentToolResult> FAgentSession::FindToolResult(
+    std::string_view CallId,
+    std::uint64_t MinSequence) const
 {
     for (auto It = Events.rbegin(); It != Events.rend(); ++It)
     {
+        if (It->Sequence < MinSequence) break;
         if (It->Type == EAgentEventType::ToolResult && It->CallId == CallId)
         {
             FAgentToolResult Result;
@@ -391,10 +393,13 @@ bool FAgentSession::ExternalizeLargeToolResult(
     }
 }
 
-std::optional<FAgentToolCall> FAgentSession::FindToolCall(std::string_view CallId) const
+std::optional<FAgentToolCall> FAgentSession::FindToolCall(
+    std::string_view CallId,
+    std::uint64_t MinSequence) const
 {
     for (auto It = Events.rbegin(); It != Events.rend(); ++It)
     {
+        if (It->Sequence < MinSequence) break;
         if (It->Type == EAgentEventType::ToolCall && It->CallId == CallId)
         {
             return FAgentToolCall {It->CallId, It->ToolName, It->PayloadJson};
@@ -403,9 +408,12 @@ std::optional<FAgentToolCall> FAgentSession::FindToolCall(std::string_view CallI
     return std::nullopt;
 }
 
-bool FAgentSession::MatchesToolCall(const FAgentToolCall& Call) const
+bool FAgentSession::MatchesToolCall(
+    const FAgentToolCall& Call,
+    std::uint64_t MinSequence) const
 {
-    const std::optional<FAgentToolCall> Existing = FindToolCall(Call.Id);
+    const std::optional<FAgentToolCall> Existing = FindToolCall(
+        Call.Id, MinSequence);
     if (!Existing || Existing->Name != Call.Name) return false;
     try
     {

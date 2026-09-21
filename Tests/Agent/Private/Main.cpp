@@ -1,5 +1,6 @@
 #include "TestRunner.h"
 
+#include "Pico/Agent/AgentContext.h"
 #include "Pico/Agent/AgentRuntime.h"
 #include "Pico/Agent/AgentCredentialStore.h"
 #include "Pico/Agent/AgentEvaluation.h"
@@ -693,6 +694,26 @@ void TestToolCallIdempotency(FTestRunner& Runner)
         Restored && Restored->FindToolResult("stable-call").has_value()
             && Restored->BuildMessageHistory().size() == 4,
         "Tool result idempotency cache survives restart without duplicating provider history");
+
+    const std::uint64_t PreviousLastSequence =
+        Session->GetEvents().empty() ? 0 : Session->GetEvents().back().Sequence;
+    Pico::FAgentProviderResponse FreshTurnCall = First;
+    Pico::FFakeAgentProvider FreshTurnProvider(
+        {{FreshTurnCall, {}}, {Final("fresh done"), {}}});
+    Pico::FAgentRuntime FreshTurnRuntime(
+        *Session, FreshTurnProvider, Executor);
+    const Pico::FAgentRunResult FreshTurnResult =
+        FreshTurnRuntime.Run("new user turn with provider-reused call id");
+    bool bFreshResultWasReused = false;
+    for (const Pico::FAgentEvent& Event : Session->GetEvents())
+        if (Event.Sequence > PreviousLastSequence
+            && Event.Type == Pico::EAgentEventType::ToolResult)
+            bFreshResultWasReused |= Event.bReused;
+    Runner.Expect(FreshTurnResult.Status == Pico::EAgentStatus::Completed
+            && Executor.Count == 2
+            && FreshTurnResult.Counters.ToolCalls == 1
+            && !bFreshResultWasReused,
+        "A new user turn scopes ToolCall idempotency so provider-reused ids observe fresh editor state");
 }
 
 void TestBoundedRepairAndBudget(FTestRunner& Runner)
@@ -919,6 +940,244 @@ void TestSemanticReadCacheAndNoProgressGuard(FTestRunner& Runner)
             && LoopResult.Counters.SemanticCacheHits == 2
             && LoopResult.Error.find("made no progress") != std::string::npos,
         "Two repeated no-progress query steps stop before exhausting the global budget");
+}
+
+void TestReActTaskStateAndContextAssembler(FTestRunner& Runner)
+{
+    Pico::FAgentTaskState OriginalState;
+    OriginalState.Goal = "Inspect the world without changing it";
+    OriginalState.SuccessCriteria = {"World facts are cited"};
+    OriginalState.Constraints = {"No mutations"};
+    OriginalState.CurrentStep = "Read the current World";
+    OriginalState.RemainingSteps = {"Summarize verified facts"};
+    OriginalState.EvidenceRefs = {"tool-result:existing"};
+    OriginalState.OpenQuestions = {"Which map is active?"};
+    OriginalState.Revision = 7;
+    const std::string StateJson = Pico::SerializeAgentTaskState(OriginalState);
+    Pico::FAgentTaskState RestoredState;
+    std::string Error;
+    Runner.Expect(Pico::DeserializeAgentTaskState(
+            StateJson, RestoredState, &Error)
+            && RestoredState.Goal == OriginalState.Goal
+            && RestoredState.SuccessCriteria == OriginalState.SuccessCriteria
+            && RestoredState.Constraints == OriginalState.Constraints
+            && RestoredState.Revision == 7,
+        "Task State has a versioned deterministic JSON round trip");
+
+    Pico::FAgentContextAssemblyInput AssemblyInput;
+    for (int Index = 0; Index < 8; ++Index)
+    {
+        AssemblyInput.Messages.push_back({Index % 2 == 0
+            ? Pico::EAgentRole::User : Pico::EAgentRole::Assistant,
+            "message-" + std::to_string(Index)});
+    }
+    AssemblyInput.TaskStateJson = StateJson;
+    AssemblyInput.ObservationContextJson = R"({"revision":4})";
+    AssemblyInput.KnowledgeContextJson =
+        std::string("{\"large\":\"") + std::string(2048, 'k') + "\"}";
+    AssemblyInput.SkillContextJson = R"([{"id":"inspect"}])";
+    AssemblyInput.MaxMessages = 4;
+    AssemblyInput.MaxBytes = 1024;
+    const Pico::FAgentAssembledContext Assembled =
+        Pico::FAgentContextAssembler::Assemble(std::move(AssemblyInput));
+    Runner.Expect(Assembled.Messages.size() == 4
+            && Assembled.TrimmedMessages == 4
+            && Assembled.Metrics.AssemblyCount == 1
+            && Assembled.Metrics.TotalBytes <= 1024
+            && Assembled.Metrics.TaskStateBytes > 0
+            && Assembled.Metrics.ConversationBytes > 0
+            && Assembled.Metrics.DroppedBytes > 0
+            && Assembled.KnowledgeContextJson == "{}",
+        "Context Assembler reserves conversation space and drops oversized low-priority evidence");
+
+    const auto Path = MakeLogPath("react-r1-context");
+    auto Session = Pico::FAgentSession::OpenOrCreate(
+        "react-r1-context", Path);
+    FRecordingProvider Provider;
+    Provider.Responses = {Final("done")};
+    FCountingToolExecutor Executor;
+    Pico::FAgentRuntimeContext RuntimeContext;
+    RuntimeContext.KnowledgeContextJson = R"({"facts":[{"id":"world"}]})";
+    RuntimeContext.SkillContextJson = R"([{"id":"inspect-world"}])";
+    Pico::FAgentRuntime Runtime(
+        *Session, Provider, Executor, {}, std::move(RuntimeContext));
+    const Pico::FAgentRunResult Result =
+        Runtime.Run("Describe the current world");
+    Runner.Expect(Result.Status == Pico::EAgentStatus::Completed
+            && Provider.Requests.size() == 1
+            && Provider.Requests.front().TaskStateJson.find(
+                "Describe the current world") != std::string::npos
+            && Result.ContextMetrics.AssemblyCount == 1
+            && Result.ContextMetrics.MaxAssemblyMicroseconds < 5000
+            && Result.ContextMetrics.TotalBytes == Result.ContextBytes,
+        "A simple ReAct task uses one model turn and assembles context below the 5 ms gate");
+
+    auto RestoredSession = Pico::FAgentSession::OpenOrCreate(
+        "react-r1-context", Path);
+    Pico::FAgentTaskState PersistedState;
+    Runner.Expect(RestoredSession
+            && Pico::DeserializeAgentTaskState(
+                RestoredSession->GetLatestTaskStateJson(), PersistedState)
+            && PersistedState.Goal == "Describe the current world",
+        "Task State survives a JSONL checkpoint and session restart");
+
+    std::ifstream MetricsStream(Result.MetricsPath);
+    const std::string MetricsJson {
+        std::istreambuf_iterator<char>(MetricsStream),
+        std::istreambuf_iterator<char>()};
+    Runner.Expect(MetricsJson.find("\"context_assembly\"")
+            != std::string::npos
+            && MetricsJson.find("\"task_state_bytes\"")
+                != std::string::npos,
+        "Run metrics persist Context Assembler latency and partition sizes");
+
+    auto LegacySession = Pico::FAgentSession::OpenOrCreate(
+        "react-r1-legacy", MakeLogPath("react-r1-legacy"));
+    FRecordingProvider LegacyProvider;
+    LegacyProvider.Responses = {Final("legacy done")};
+    Pico::FAgentRuntimeContext LegacyContext;
+    LegacyContext.Features.bTaskState = false;
+    LegacyContext.Features.bContextAssembler = false;
+    LegacyContext.Features.bContextMetrics = false;
+    Pico::FAgentRuntime LegacyRuntime(
+        *LegacySession, LegacyProvider, Executor, {}, std::move(LegacyContext));
+    const Pico::FAgentRunResult LegacyResult = LegacyRuntime.Run("legacy path");
+    Runner.Expect(LegacyResult.Status == Pico::EAgentStatus::Completed
+            && LegacyProvider.Requests.size() == 1
+            && LegacyProvider.Requests.front().TaskStateJson == "{}"
+            && LegacyResult.ContextMetrics.AssemblyCount == 0,
+        "Feature flags restore the pre-R1 context path without an extra model turn");
+}
+
+void TestReActObservationsEvidenceAndOscillation(FTestRunner& Runner)
+{
+    Pico::FAgentToolCall Call {
+        "describe-world", "editor.world.describe", R"({"b":2,"a":1})"};
+    Pico::FAgentToolResult ToolResult {
+        Call.Id, true, R"({"actors":3})", {}, false};
+    Pico::NormalizeAgentToolResult(ToolResult);
+    const Pico::FAgentObservation Observation = Pico::BuildAgentObservation(
+        Call, ToolResult, true, true);
+    Pico::FAgentTaskState State;
+    State.Goal = "Describe the world";
+    State.SuccessCriteria = {"World facts are supported"};
+    State.CriterionEvidence = {{State.SuccessCriteria.front(), {}, false}};
+    Pico::BindAgentObservationEvidence(Observation, State);
+    Runner.Expect(Observation.bVerified && Observation.bMadeProgress
+            && Observation.ActionFingerprint
+                == Pico::BuildAgentActionFingerprint({"different-id",
+                    "editor.world.describe", R"({"a":1,"b":2})"})
+            && Pico::HasAgentCompletionEvidence(State)
+            && State.CriterionEvidence.front().EvidenceRefs.front()
+                == "observation:describe-world",
+        "Observation mapping canonicalizes actions and binds verified evidence to success criteria");
+    Runner.Expect(Pico::SerializeAgentObservation(Observation).find(
+            "\"revision_changes\"") != std::string::npos,
+        "Observation serialization exposes structured facts and progress metadata");
+
+    class FEmptySuccessExecutor final : public Pico::IAgentToolExecutor
+    {
+    public:
+        bool IsReadOnly(const Pico::FAgentToolCall&) const override
+        {
+            return true;
+        }
+
+        Pico::FAgentToolResult Execute(const Pico::FAgentToolCall& Call,
+            const Pico::FCancellationToken*) override
+        {
+            return {Call.Id, true, "{}", {}, false};
+        }
+    } EmptyExecutor;
+    auto EmptySession = Pico::FAgentSession::OpenOrCreate(
+        "react-r2-empty-evidence", MakeLogPath("react-r2-empty-evidence"));
+    FRecordingProvider EmptyProvider;
+    EmptyProvider.Responses = {
+        ToolCalls({{"empty-success", "scene.fake", "{}"}}),
+        Final("completed")};
+    Pico::FAgentRuntime EmptyRuntime(
+        *EmptySession, EmptyProvider, EmptyExecutor);
+    const Pico::FAgentRunResult EmptyResult = EmptyRuntime.Run(
+        "Perform and verify the requested change");
+    bool bPersistedUnsupportedClaim = false;
+    for (const Pico::FAgentEvent& Event : EmptySession->GetEvents())
+        bPersistedUnsupportedClaim |= Event.Type == Pico::EAgentEventType::Message
+            && Event.Role == Pico::EAgentRole::Assistant
+            && Event.Content == "completed";
+    Runner.Expect(EmptyResult.Status == Pico::EAgentStatus::Failed
+            && EmptyResult.FailureClass
+                == Pico::EAgentFailureClass::VerificationFailed
+            && EmptyResult.Error.find("no verified evidence")
+                != std::string::npos && !bPersistedUnsupportedClaim,
+        "A successful tool status without facts, artifacts, or revisions cannot justify completion");
+
+    auto RestartSession = Pico::FAgentSession::OpenOrCreate(
+        "react-r2-restart-gate", MakeLogPath("react-r2-restart-gate"));
+    Pico::FAgentTaskState RestartState;
+    RestartState.Goal = "Verify after restart";
+    RestartState.SuccessCriteria = {"Verified evidence exists"};
+    RestartState.CriterionEvidence = {
+        {RestartState.SuccessCriteria.front(), {}, false}};
+    RestartState.ObservationCount = 1;
+    RestartState.Revision = 2;
+    Pico::FAgentCounters RestartCounters;
+    std::string RestartError;
+    RestartSession->WriteCheckpoint(Pico::EAgentStatus::Planning,
+        RestartCounters, &RestartError,
+        Pico::SerializeAgentTaskState(RestartState));
+    FRecordingProvider RestartProvider;
+    RestartProvider.Responses = {Final("unsupported completion after restart")};
+    Pico::FAgentRuntime RestartRuntime(
+        *RestartSession, RestartProvider, EmptyExecutor);
+    const Pico::FAgentRunResult RestartResult = RestartRuntime.Run("");
+    Runner.Expect(RestartError.empty()
+            && RestartResult.Status == Pico::EAgentStatus::Failed
+            && RestartResult.FailureClass
+                == Pico::EAgentFailureClass::VerificationFailed,
+        "Checkpoint recovery preserves tool activity and cannot bypass the evidence gate");
+
+    auto AlternatingSession = Pico::FAgentSession::OpenOrCreate(
+        "react-r2-oscillation", MakeLogPath("react-r2-oscillation"));
+    FRecordingProvider AlternatingProvider;
+    AlternatingProvider.Responses = {
+        ToolCalls({{"read-a-1", "scene.describe", R"({"page":1})"}}),
+        ToolCalls({{"read-b-1", "scene.describe", R"({"page":2})"}}),
+        ToolCalls({{"read-a-2", "scene.describe", R"({"page":1})"}}),
+        ToolCalls({{"read-b-2", "scene.describe", R"({"page":2})"}})};
+    FCountingToolExecutor AlternatingExecutor;
+    AlternatingExecutor.bReadOnly = true;
+    Pico::FAgentRuntime AlternatingRuntime(
+        *AlternatingSession, AlternatingProvider, AlternatingExecutor);
+    const Pico::FAgentRunResult AlternatingResult = AlternatingRuntime.Run(
+        "Inspect two pages without oscillating");
+    Runner.Expect(AlternatingResult.Status == Pico::EAgentStatus::Failed
+            && AlternatingResult.Counters.OscillationsDetected == 1
+            && AlternatingResult.Counters.SemanticCacheHits == 2
+            && AlternatingExecutor.Count == 2
+            && AlternatingResult.Error.find("A-B-A") != std::string::npos,
+        "A-B-A action oscillation stops at an unchanged revision without repeating handlers");
+
+    auto DistinctSession = Pico::FAgentSession::OpenOrCreate(
+        "react-r2-distinct-reads", MakeLogPath("react-r2-distinct-reads"));
+    FRecordingProvider DistinctProvider;
+    DistinctProvider.Responses = {
+        ToolCalls({{"distinct-a", "scene.describe", R"({"page":1})"}}),
+        ToolCalls({{"distinct-b", "scene.describe", R"({"page":2})"}}),
+        Final("two distinct pages inspected")};
+    FCountingToolExecutor DistinctExecutor;
+    DistinctExecutor.bReadOnly = true;
+    Pico::FAgentRuntime DistinctRuntime(
+        *DistinctSession, DistinctProvider, DistinctExecutor);
+    const Pico::FAgentRunResult DistinctResult = DistinctRuntime.Run(
+        "Inspect two distinct pages");
+    Runner.Expect(DistinctResult.Status == Pico::EAgentStatus::Completed
+            && DistinctResult.Counters.OscillationsDetected == 0
+            && DistinctResult.Counters.Observations == 2
+            && DistinctResult.Counters.EvidenceBindings == 2
+            && DistinctExecutor.Count == 2
+            && DistinctProvider.Requests.back().ProgressLedgerJson.find(
+                "latest_observations") != std::string::npos,
+        "Different read actions remain legal and expose bounded observations to the next turn");
 }
 
 void TestCategorizedBudgetBeforeSideEffects(FTestRunner& Runner)
@@ -1454,6 +1713,19 @@ void TestKnowledgeStoreAndRagLite(FTestRunner& Runner)
     const bool bSaved = Store.ReplaceSource(
         "project-file", {Movement, Packaging}, &Error);
     const auto Hits = Store.Query({"character movement", 4, 4096, {}});
+    Pico::FAgentKnowledgeQuery HighConfidenceQuery;
+    HighConfidenceQuery.Text = "character movement";
+    HighConfidenceQuery.MaxResults = 4;
+    HighConfidenceQuery.MaxContextBytes = 4096;
+    const auto HighConfidenceResult = Store.QueryDetailed(HighConfidenceQuery);
+    Pico::FAgentKnowledgeQuery PartialQuery;
+    PartialQuery.Text = "character unrelated";
+    PartialQuery.SourceTypes = {"project-file"};
+    const auto PartialResult = Store.QueryDetailed(PartialQuery);
+    Pico::FAgentKnowledgeQuery LegacyQuery = HighConfidenceQuery;
+    LegacyQuery.bEnableBm25 = false;
+    LegacyQuery.bEnableQueryRewrite = false;
+    const auto LegacyResult = Store.QueryDetailed(LegacyQuery);
     const std::string Context = Store.BuildGroundingContextJson(
         {"character movement", 4, 4096, {}});
     std::size_t AuditLinesBefore = 0;
@@ -1468,9 +1740,18 @@ void TestKnowledgeStoreAndRagLite(FTestRunner& Runner)
     Runner.Expect(
         bSaved && bLoaded && Restored.GetRecordCount() == 2
             && !Hits.empty() && Hits.front().Record.Title == "Character movement"
+            && Hits.front().Bm25Score > 0.0
+            && !HighConfidenceResult.bRewriteApplied
+            && HighConfidenceResult.EffectiveQueries.size() == 1
+            && !PartialResult.Hits.empty()
+            && PartialResult.Hits.front().ExactScore < 20.0
+            && !LegacyResult.bRewriteApplied
+            && LegacyResult.EffectiveQueries.size() == 1
             && Context.find("K:") != std::string::npos
+            && Context.find("\"bm25_score\"") != std::string::npos
+            && Context.find("\"rewrite_applied\":false") != std::string::npos
             && Context.find("Untrusted project evidence") != std::string::npos,
-        "Project Knowledge Store persists stable records and RAG Lite returns cited untrusted evidence");
+        "Project Knowledge Store distinguishes partial terms from exact identifiers, preserves legacy flags, and returns cited scored evidence without rewriting confident queries");
     Runner.Expect(
         AuditLinesBefore == 2 && AuditLinesAfter == AuditLinesBefore,
         "Knowledge audit is append-only for real changes and ignores identical refreshes");
@@ -1488,14 +1769,155 @@ void TestKnowledgeStoreAndRagLite(FTestRunner& Runner)
                 || Record.Content.find("SECRET-MUST-NOT-INDEX") != std::string::npos;
         });
     Pico::FAgentKnowledgeRecord Large = Movement;
-    Large.Content.assign(16000, 'x');
+    Large.Id = "large-movement-guide";
+    Large.Content.assign(9000, 'x');
+    Large.Content += "\n\nrare_fragment_token describes the final movement section.";
     Store.ReplaceSource("large", {Large}, &Error);
+    Pico::FAgentKnowledgeQuery ChunkQuery;
+    ChunkQuery.Text = "rare_fragment_token";
+    ChunkQuery.MaxResults = 4;
+    ChunkQuery.MaxContextBytes = 1200;
+    ChunkQuery.SourceTypes = {"large"};
+    const Pico::FAgentKnowledgeQueryResult ChunkResult =
+        Store.QueryDetailed(ChunkQuery);
     const std::string Bounded = Store.BuildGroundingContextJson(
-        {"movement", 4, 512, {"large"}});
+        ChunkQuery);
     Runner.Expect(
-        bExcludedSavedSecret && Bounded.size() < 900
-            && Bounded.find("[truncated]") != std::string::npos,
-        "Project retrieval excludes Saved secrets and enforces a bounded evidence payload");
+        bExcludedSavedSecret && !ChunkResult.Hits.empty()
+            && ChunkResult.Hits.front().Record.ParentId
+                == "large-movement-guide"
+            && ChunkResult.Hits.front().Record.ChunkCount > 1
+            && ChunkResult.Hits.front().Record.Content.size() <= 4096
+            && Bounded.size() < 2200
+            && Bounded.find("rare_fragment_token") != std::string::npos,
+        "Project retrieval excludes Saved secrets, chunks long documents, and bounds evidence");
+
+    Pico::FAgentKnowledgeRecord CurrentDoor;
+    CurrentDoor.Id = "door-current";
+    CurrentDoor.SourcePath = "World.NetworkDoor";
+    CurrentDoor.Title = "Current network door";
+    CurrentDoor.Content = "Authoritative replicated door state";
+    CurrentDoor.EntityIds = {"World.NetworkDoor"};
+    CurrentDoor.RevisionDomain = "World.Revision";
+    CurrentDoor.SourceRevision = 9;
+    CurrentDoor.Fields = {{"replication", "authoritative"}};
+    CurrentDoor.Kind = Pico::EAgentKnowledgeKind::Entity;
+    Pico::FAgentKnowledgeRecord StaleDoor = CurrentDoor;
+    StaleDoor.Id = "door-stale";
+    StaleDoor.Title = "Stale network door";
+    StaleDoor.SourceRevision = 8;
+    Store.ReplaceSource("entity-test", {CurrentDoor, StaleDoor}, &Error);
+    Pico::FAgentKnowledgeQuery EntityQuery;
+    EntityQuery.Text = "door";
+    EntityQuery.SourceTypes = {"entity-test"};
+    EntityQuery.EntityIds = {"World.NetworkDoor"};
+    EntityQuery.Revisions = {{"World.Revision", 9}};
+    const auto EntityHits = Store.Query(EntityQuery);
+    Pico::FAgentKnowledgeQuery LatestEntityQuery = EntityQuery;
+    LatestEntityQuery.Revisions.clear();
+    LatestEntityQuery.Kinds = {Pico::EAgentKnowledgeKind::Entity};
+    const auto LatestEntityHits = Store.Query(LatestEntityQuery);
+    Runner.Expect(EntityHits.size() == 1
+            && EntityHits.front().Record.Id == "door-current"
+            && EntityHits.front().EntityScore > 0.0
+            && std::find(EntityHits.front().MatchedFields.begin(),
+                EntityHits.front().MatchedFields.end(), "entity_id")
+                != EntityHits.front().MatchedFields.end()
+            && LatestEntityHits.size() == 1
+            && LatestEntityHits.front().Record.Id == "door-current",
+        "Entity and Revision views exclude stale records with explicit or derived latest revisions");
+
+    Pico::FAgentKnowledgeRecord Gas;
+    Gas.Id = "gas-rewrite";
+    Gas.SourcePath = "Schema/GameplayAbilities.json";
+    Gas.Title = "Gameplay ability loadout";
+    Gas.Content = "gameplay ability system configures character abilities";
+    Gas.Kind = Pico::EAgentKnowledgeKind::Procedure;
+    Store.ReplaceSource("rewrite-test", {Gas}, &Error);
+    Pico::FAgentKnowledgeQuery RewriteQuery;
+    RewriteQuery.Text =
+        "\xE8\xA7\x92\xE8\x89\xB2\xE6\x8A\x80\xE8\x83\xBD\xE7\xB3\xBB\xE7\xBB\x9F";
+    RewriteQuery.SourceTypes = {"rewrite-test"};
+    const Pico::FAgentKnowledgeQueryResult RewriteResult =
+        Store.QueryDetailed(RewriteQuery);
+    Runner.Expect(RewriteResult.bRewriteApplied
+            && RewriteResult.EffectiveQueries.size() == 2
+            && RewriteResult.OriginalQuery == RewriteQuery.Text
+            && !RewriteResult.Hits.empty()
+            && RewriteResult.Hits.front().Record.Id == "gas-rewrite"
+            && RewriteResult.Hits.front().bFromRewrite,
+        "Low-confidence deterministic Query Rewrite improves retrieval without changing the original query");
+
+    Pico::FAgentKnowledgeRecord Episode;
+    Episode.Id = "episode-session-1";
+    Episode.SourcePath = "Sessions/editor-chat.jsonl";
+    Episode.Title = "Recent conversation episode";
+    Episode.Content = "The user configured the replicated network door.";
+    Episode.Kind = Pico::EAgentKnowledgeKind::Episode;
+    Episode.EntityIds = {"AgentSession:editor-chat"};
+    Episode.RevisionDomain = "AgentSession.editor-chat";
+    Episode.SourceRevision = 4;
+    Store.ReplaceSource("session-episode", {Episode}, &Error);
+
+    std::vector<Pico::FAgentKnowledgeRecord> CompressionRecords;
+    for (int Index = 0; Index < 3; ++Index)
+    {
+        Pico::FAgentKnowledgeRecord Record;
+        Record.Id = "compression-" + std::to_string(Index);
+        Record.SourcePath = "Docs/Compression" + std::to_string(Index) + ".md";
+        Record.Title = "Compression memory " + std::to_string(Index);
+        Record.Content = "compression_token ";
+        Record.Content.append(1800, static_cast<char>('a' + Index));
+        CompressionRecords.push_back(std::move(Record));
+    }
+    Store.ReplaceSource("compression-test", std::move(CompressionRecords), &Error);
+    Pico::FAgentKnowledgeQuery CompressionQuery;
+    CompressionQuery.Text = "compression_token";
+    CompressionQuery.SourceTypes = {"compression-test"};
+    CompressionQuery.MaxResults = 3;
+    CompressionQuery.MaxContextBytes = 12000;
+    CompressionQuery.CompressionThresholdBytes = 2000;
+    CompressionQuery.SummaryMaxBytes = 128;
+    Pico::FAgentKnowledgeQueryResult CompressionResult;
+    const std::string CompressedContext = Store.BuildGroundingContextJson(
+        CompressionQuery, nullptr, &CompressionResult);
+    Pico::FAgentKnowledgeQuery UncompressedQuery = CompressionQuery;
+    UncompressedQuery.bEnableSummaryCompression = false;
+    Pico::FAgentKnowledgeQueryResult UncompressedResult;
+    Store.BuildGroundingContextJson(
+        UncompressedQuery, nullptr, &UncompressedResult);
+    Runner.Expect(CompressionResult.bCompressionApplied
+            && CompressionResult.CompressedRecordCount > 0
+            && CompressionResult.FinalEvidenceBytes
+                < CompressionResult.OriginalEvidenceBytes
+            && CompressedContext.find("\"content_mode\":\"summary\"")
+                != std::string::npos
+            && !UncompressedResult.bCompressionApplied
+            && UncompressedResult.OriginalEvidenceBytes
+                == UncompressedResult.FinalEvidenceBytes,
+        "Knowledge summaries are deterministic, threshold-triggered, observable, and feature-flagged");
+
+    Pico::FAgentKnowledgeStore MemoryRestored(Root);
+    const bool bMemoryReloaded = MemoryRestored.Load(&Error);
+    const auto EpisodeView = MemoryRestored.GetKindView(
+        Pico::EAgentKnowledgeKind::Episode);
+    const auto EntityView = MemoryRestored.GetKindView(
+        Pico::EAgentKnowledgeKind::Entity);
+    const Pico::FAgentKnowledgeViewStats ViewStats =
+        MemoryRestored.GetViewStats();
+    const std::string MemoryViews = MemoryRestored.BuildMemoryViewsJson();
+    Runner.Expect(bMemoryReloaded && EpisodeView.size() == 1
+            && EpisodeView.front().Id == "episode-session-1"
+            && EntityView.size() == 1
+            && EntityView.front().Id == "door-current"
+            && ViewStats.ActiveByKind[static_cast<std::size_t>(
+                Pico::EAgentKnowledgeKind::Episode)] == 1
+            && ViewStats.StaleByKind[static_cast<std::size_t>(
+                Pico::EAgentKnowledgeKind::Entity)] == 1
+            && ViewStats.EntityCount == 1
+            && MemoryViews.find("\"episode\"") != std::string::npos
+            && MemoryViews.find("\"entity\"") != std::string::npos,
+        "Episode and Entity memory are persistent derived views over one revision-aware Knowledge Store");
     std::filesystem::remove_all(Root, ErrorCode);
 }
 
@@ -1766,7 +2188,7 @@ void TestDeterministicRagBenchmark(FTestRunner& Runner)
     const bool bLoaded = Pico::FAgentRagBenchmarkRunner::LoadFixture(
         "Tests/Agent/Fixtures/RagBenchmark.json", Fixture, &Error);
     Runner.Expect(
-        bLoaded && Fixture.Records.size() == 6 && Fixture.Cases.size() == 5,
+        bLoaded && Fixture.Records.size() == 7 && Fixture.Cases.size() == 7,
         "RAG benchmark loads versioned records, expected evidence, and source policy");
     if (!bLoaded) return;
 
@@ -1777,9 +2199,12 @@ void TestDeterministicRagBenchmark(FTestRunner& Runner)
             && Report.RecallAt8 == 1.0
             && Report.MeanReciprocalRank == 1.0
             && Report.ForbiddenSourceRate == 0.0
+            && Report.RecallAt3Gain > 0.0
+            && Report.MeanReciprocalRankGain >= 0.0
+            && Report.RewriteRate > 0.0
             && Report.MeanContextBytes > 0
             && Report.MeanRetrievalNanoseconds > 0,
-        "Deterministic RAG benchmark reports perfect fixture recall and excludes forbidden credential sources");
+        "R3 retrieval improves the fixed baseline while preserving perfect recall and source safety");
 
     const std::filesystem::path ReportPath =
         std::filesystem::temp_directory_path()
@@ -1792,8 +2217,10 @@ void TestDeterministicRagBenchmark(FTestRunner& Runner)
         bWritten && Text.find("\"recall_at_1\": 1.0") != std::string::npos
             && Text.find("\"forbidden_source_rate\": 0.0")
                 != std::string::npos
-            && Text.find("retrieval_nanoseconds") != std::string::npos,
-        "RAG benchmark persists recall, MRR, context, latency, and forbidden-source metrics");
+            && Text.find("retrieval_nanoseconds") != std::string::npos
+            && Text.find("recall_at_3_gain") != std::string::npos
+            && Text.find("rewrite_rate") != std::string::npos,
+        "RAG benchmark persists baseline gains, rewrite, recall, latency, and source metrics");
 }
 
 void TestCredentialStoreRejectsInvalidInput(FTestRunner& Runner)
@@ -2300,6 +2727,8 @@ int main()
     TestToolCallIdempotency(Runner);
     TestBoundedRepairAndBudget(Runner);
     TestSemanticReadCacheAndNoProgressGuard(Runner);
+    TestReActTaskStateAndContextAssembler(Runner);
+    TestReActObservationsEvidenceAndOscillation(Runner);
     TestCategorizedBudgetBeforeSideEffects(Runner);
     TestProjectHandoffIsOneShotAndCredentialFree(Runner);
     TestCheckpointResume(Runner);

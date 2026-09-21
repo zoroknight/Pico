@@ -1,8 +1,9 @@
 # Pico Agent 游戏制作链路规划
 
 > 当前执行顺序：本链路第 1～4 周完成后，先通过
-> [Pico Agent ReAct 轻量化加固路线](AgentReActLightweightHardeningRoadmap.zh-CN.md)，再继续玩法积木、Graph、
-> 端到端组装和真实 Scenario Runner。加固只扩展现有单 ReAct Runtime；Harness、审批、事务和验证边界不变，
+> [Pico Agent ReAct 轻量化加固路线](AgentReActLightweightHardeningRoadmap.zh-CN.md)，再完成
+> [资产理解与安全创作纵向切片](AgentAssetUnderstandingAndSafeAuthoring.zh-CN.md)，最后继续玩法积木、Graph、
+> 端到端组装和真实 Scenario Runner。两项前置门均复用现有单 ReAct Runtime；Harness、审批、事务和验证边界不变，
 > MCP stdio 暂不实现。
 
 ## 文档定位
@@ -12,8 +13,8 @@
 涉及 Agent 游戏搭建的范围、架构、周计划和验收标准时，以本文档为准。
 
 > 状态：**进行中**。第 1～4 周结构化规划与可恢复执行底座已完成，详见
-> [第 1～4 周交付记录](AgentGameAssemblyWeeks01_04.zh-CN.md)；下一项为 ReAct 轻量化加固门，通过后再进入第 5 周
-> Gameplay Starter Template 与首批真实 Producers。
+> [第 1～4 周交付记录](AgentGameAssemblyWeeks01_04.zh-CN.md)；当前先完成 ReAct R5，随后执行资产理解与安全创作
+> 七周纵向切片，通过后再进入第 5 周 Gameplay Starter Template 与首批真实 Producers。
 
 当前目标不是让模型自由创造任意游戏，也不是让模型直接修改引擎源码。目标是在 Pico 已有反射、Data-Only
 Actor Blueprint、PicoGraph、GAS、Replication、编辑器事务、Play 和 Package 链路上，让 Agent 可靠组装以下
@@ -190,6 +191,28 @@ Package 成功必须同时满足退出码、`PackageReport.ini`、`PicoPackage.c
 
 所有节点继续由 Schema、反射元数据和权限规则生成或注册。禁止为某个 Demo 编写名称匹配的隐藏节点，禁止
 Graph 直接发送任意网络包或调用未标记 Callable 的函数。
+
+## 第 5 周前置门：资产理解与安全创作
+
+在继续增加玩法积木前，先完成
+[Agent 资产理解与安全创作纵向切片](AgentAssetUnderstandingAndSafeAuthoring.zh-CN.md)。该切片把已有
+`AssetDescriptor` 从“能列出结构化事实”推进到“能安全选择、解释和使用资产”，并补齐 Material、通用组件和
+Actor 装配工具。固定顺序为：
+
+```text
+ReAct R5
+ -> 安全第 0 阶段：稳定目标、Revision、字段级 Diff、影响分析、复合事务和读回验证
+ -> Material 与引用工具
+ -> 通用组件和 Actor 分步装配
+ -> 人工语义元数据与 RAG 来源治理
+ -> 标准预览 Artifact
+ -> 可选视觉 Provider
+ -> 真实 Editor Golden Tasks
+ -> 原阶段 A 第 5～8 周
+```
+
+视觉 Provider 只是只读分析服务，不是第二套 Agent；模型推断不会自动成为项目事实。该前置门完成前，不开放新的
+Material/Component 写工具，也不把视觉 API 接入会产生项目副作用的流程。
 
 ## 八周实施计划
 

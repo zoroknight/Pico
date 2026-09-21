@@ -167,9 +167,26 @@ struct FAgentCounters
     std::size_t MutationToolCalls = 0;
     std::size_t SemanticCacheHits = 0;
     std::size_t ConsecutiveNoProgressSteps = 0;
+    std::size_t Observations = 0;
+    std::size_t EvidenceBindings = 0;
+    std::size_t OscillationsDetected = 0;
     std::size_t RepairAttempts = 0;
     std::size_t ContextMessages = 0;
     std::size_t TrimmedContextMessages = 0;
+};
+
+struct FAgentContextMetrics
+{
+    std::uint64_t AssemblyCount = 0;
+    std::uint64_t TotalAssemblyMicroseconds = 0;
+    std::uint64_t MaxAssemblyMicroseconds = 0;
+    std::uint64_t InstructionBytes = 0;
+    std::uint64_t TaskStateBytes = 0;
+    std::uint64_t ConversationBytes = 0;
+    std::uint64_t MemoryBytes = 0;
+    std::uint64_t ObservationBytes = 0;
+    std::uint64_t DroppedBytes = 0;
+    std::uint64_t TotalBytes = 0;
 };
 
 struct FAgentRunResult
@@ -180,6 +197,7 @@ struct FAgentRunResult
     FAgentCounters Counters;
     std::string RunId;
     std::uint64_t ContextBytes = 0;
+    FAgentContextMetrics ContextMetrics;
     std::string MetricsPath;
     EAgentFailureClass FailureClass = EAgentFailureClass::None;
     EAgentRecoveryAction RecoveryAction = EAgentRecoveryAction::Abort;

@@ -864,6 +864,7 @@ struct FAgentChatWorkspace::FImpl
     std::string RefreshKnowledge(
         const std::string& Prompt,
         std::vector<FAgentKnowledgeHit>& OutHits,
+        FAgentKnowledgeQueryResult& OutQueryResult,
         std::string& OutError)
     {
         OutError.clear();
@@ -873,6 +874,7 @@ struct FAgentChatWorkspace::FImpl
         Sources["selection"] = {};
         Sources["message-log"] = {};
         Sources["tool-schema"] = {};
+        Sources["session-episode"] = {};
         Sources["project-file"] = CollectProjectTextKnowledge(
             FPaths::GetProjectRootDir(), 64 * 1024, 64);
         for (FAgentKnowledgeRecord& Record : EditorTools.CollectKnowledgeRecords())
@@ -884,7 +886,59 @@ struct FAgentChatWorkspace::FImpl
         ToolRecord.Content = EditorTools.BuildToolCatalogJson();
         ToolRecord.Tags = {"agent", "tool", "schema", "reflection"};
         ToolRecord.Provenance = "Live AgentToolRegistry catalog";
+        ToolRecord.EntityIds = {"AgentToolRegistry"};
+        ToolRecord.RevisionDomain = "Tool.SchemaRevision";
+        ToolRecord.Fields = {{"catalog", "AgentToolRegistry"}};
+        ToolRecord.Kind = EAgentKnowledgeKind::Procedure;
         Sources["tool-schema"].push_back(std::move(ToolRecord));
+
+        std::vector<std::pair<std::string, std::filesystem::path>> EpisodeSessions;
+        for (const FChatSessionEntry& Entry : SessionEntries)
+        {
+            if (EpisodeSessions.size() >= 8) break;
+            EpisodeSessions.emplace_back(Entry.Id, Entry.Path);
+        }
+        if (!SessionId.empty() && !SessionPath.empty()
+            && std::none_of(EpisodeSessions.begin(), EpisodeSessions.end(),
+                [this](const auto& Entry) { return Entry.first == SessionId; }))
+            EpisodeSessions.emplace_back(SessionId, SessionPath);
+        for (const auto& [EpisodeSessionId, EpisodeSessionPath] : EpisodeSessions)
+        {
+            std::error_code SessionFileError;
+            if (!std::filesystem::exists(EpisodeSessionPath, SessionFileError)
+                || SessionFileError)
+                continue;
+            std::string SessionError;
+            std::optional<FAgentSession> Session = FAgentSession::OpenOrCreate(
+                EpisodeSessionId, EpisodeSessionPath, &SessionError);
+            if (Session)
+            {
+                FJson EpisodeMessages = FJson::array();
+                for (const FAgentMessage& Message :
+                    Session->BuildBoundedMessageHistory(16, 16 * 1024))
+                {
+                    if (Message.Role == EAgentRole::Tool) continue;
+                    EpisodeMessages.push_back({{"role", ToString(Message.Role)},
+                        {"content", Message.Content}});
+                }
+                if (!EpisodeMessages.empty())
+                {
+                    FAgentKnowledgeRecord Episode;
+                    Episode.SourcePath = EpisodeSessionPath.filename().generic_string();
+                    Episode.Title = "Conversation episode " + EpisodeSessionId;
+                    Episode.Content = EpisodeMessages.dump();
+                    Episode.SourceRevision = Session->GetEvents().size();
+                    Episode.Tags = {"conversation", "session", "episode"};
+                    Episode.Provenance = "Persistent Agent Session Event Log";
+                    Episode.EntityIds = {"AgentSession:" + EpisodeSessionId};
+                    Episode.RevisionDomain = "AgentSession." + EpisodeSessionId;
+                    Episode.Fields = {{"session_id", EpisodeSessionId},
+                        {"message_count", std::to_string(EpisodeMessages.size())}};
+                    Episode.Kind = EAgentKnowledgeKind::Episode;
+                    Sources["session-episode"].push_back(std::move(Episode));
+                }
+            }
+        }
 
         for (auto& [SourceType, Records] : Sources)
             if (!KnowledgeStore.ReplaceSource(
@@ -895,7 +949,8 @@ struct FAgentChatWorkspace::FImpl
         Query.Text = Prompt;
         Query.MaxResults = 8;
         Query.MaxContextBytes = 12000;
-        return KnowledgeStore.BuildGroundingContextJson(Query, &OutHits);
+        return KnowledgeStore.BuildGroundingContextJson(
+            Query, &OutHits, &OutQueryResult);
     }
 
     void Send()
@@ -911,9 +966,10 @@ struct FAgentChatWorkspace::FImpl
         const std::string SelectedSessionId = SessionId;
         const std::filesystem::path SelectedSessionPath = SessionPath;
         std::vector<FAgentKnowledgeHit> KnowledgeHits;
+        FAgentKnowledgeQueryResult KnowledgeQueryResult;
         std::string KnowledgeError;
         const std::string KnowledgeContext = RefreshKnowledge(
-            Prompt, KnowledgeHits, KnowledgeError);
+            Prompt, KnowledgeHits, KnowledgeQueryResult, KnowledgeError);
         if (!KnowledgeError.empty())
         {
             std::lock_guard Lock(ViewMutex);
@@ -944,6 +1000,7 @@ struct FAgentChatWorkspace::FImpl
             Lines.push_back({"You", Prompt, ImVec4(0.45f, 0.78f, 1.0f, 1.0f)});
             StreamingText.clear();
             LastKnowledgeHits = KnowledgeHits;
+            LastKnowledgeQueryResult = KnowledgeQueryResult;
             LastActiveSkillIds.clear();
             for (const FAgentSkill& Skill : ActiveSkills)
                 LastActiveSkillIds.push_back(Skill.Id + "@" + Skill.Version);
@@ -1049,6 +1106,7 @@ struct FAgentChatWorkspace::FImpl
                     if (!Result.Error.empty()) Status += ": " + Result.Error;
                     LastRunCounters = Result.Counters;
                     LastRunContextBytes = Result.ContextBytes;
+                    LastRunContextMetrics = Result.ContextMetrics;
                     LastRunId = Result.RunId;
                 }
                 bRunning.store(false);
@@ -1258,6 +1316,7 @@ struct FAgentChatWorkspace::FImpl
         std::vector<FChatLine> CurrentLines;
         std::string CurrentStreamingText;
         std::vector<FAgentKnowledgeHit> CurrentKnowledgeHits;
+        FAgentKnowledgeQueryResult CurrentKnowledgeQueryResult;
         std::vector<std::string> CurrentSkillIds;
         {
             std::lock_guard Lock(ViewMutex);
@@ -1265,6 +1324,7 @@ struct FAgentChatWorkspace::FImpl
             CurrentLines = Lines;
             CurrentStreamingText = StreamingText;
             CurrentKnowledgeHits = LastKnowledgeHits;
+            CurrentKnowledgeQueryResult = LastKnowledgeQueryResult;
             CurrentSkillIds = LastActiveSkillIds;
         }
         ImGui::SetNextItemOpen(bGroundingSkillsOpen, ImGuiCond_Always);
@@ -1276,16 +1336,43 @@ struct FAgentChatWorkspace::FImpl
         }
         if (bGroundingOpen)
         {
+            const FAgentKnowledgeViewStats ViewStats =
+                KnowledgeStore.GetViewStats();
             ImGui::Text("Knowledge records: %zu | Retrieved: %zu | Skills: %zu",
                 KnowledgeStore.GetRecordCount(), CurrentKnowledgeHits.size(),
                 CurrentSkillIds.size());
+            ImGui::Text("Memory Semantic %zu | Episode %zu",
+                ViewStats.ActiveByKind[static_cast<std::size_t>(
+                    EAgentKnowledgeKind::Semantic)],
+                ViewStats.ActiveByKind[static_cast<std::size_t>(
+                    EAgentKnowledgeKind::Episode)]);
+            ImGui::Text("Memory Procedure %zu | Entity %zu (%zu IDs) | Stale %zu",
+                ViewStats.ActiveByKind[static_cast<std::size_t>(
+                    EAgentKnowledgeKind::Procedure)],
+                ViewStats.ActiveByKind[static_cast<std::size_t>(
+                    EAgentKnowledgeKind::Entity)],
+                ViewStats.EntityCount,
+                ViewStats.StaleByKind[0] + ViewStats.StaleByKind[1]
+                    + ViewStats.StaleByKind[2] + ViewStats.StaleByKind[3]);
+            ImGui::Text("Retrieval confidence %.2f | rewrite %s",
+                CurrentKnowledgeQueryResult.Confidence,
+                CurrentKnowledgeQueryResult.bRewriteApplied ? "yes" : "no");
+            ImGui::Text("Compression %s | %zu record(s) | %zu -> %zu bytes | stale filtered %zu",
+                CurrentKnowledgeQueryResult.bCompressionApplied ? "yes" : "no",
+                CurrentKnowledgeQueryResult.CompressedRecordCount,
+                CurrentKnowledgeQueryResult.OriginalEvidenceBytes,
+                CurrentKnowledgeQueryResult.FinalEvidenceBytes,
+                CurrentKnowledgeQueryResult.StaleRecordsExcluded);
             ImGui::TextWrapped("Store: %s",
                 KnowledgeStore.GetDirectory().string().c_str());
             for (const std::string& Skill : CurrentSkillIds)
                 ImGui::BulletText("Skill %s", Skill.c_str());
             for (const FAgentKnowledgeHit& Hit : CurrentKnowledgeHits)
-                ImGui::BulletText("[K:%s] %.1f  %s",
-                    Hit.Record.Id.c_str(), Hit.Score, Hit.Record.Title.c_str());
+                ImGui::BulletText("[K:%s] %s %.1f (exact %.1f / bm25 %.1f / entity %.1f)%s  %s",
+                    Hit.Record.Id.c_str(), ToString(Hit.Record.Kind).data(),
+                    Hit.Score, Hit.ExactScore, Hit.Bm25Score, Hit.EntityScore,
+                    Hit.bFromRewrite ? " [rewrite]" : "",
+                    Hit.Record.Title.c_str());
         }
         ImGui::SetNextItemOpen(bAgentMetricsOpen, ImGuiCond_Always);
         const bool bMetricsOpen = ImGui::CollapsingHeader("Agent Metrics");
@@ -1297,21 +1384,41 @@ struct FAgentChatWorkspace::FImpl
         if (bMetricsOpen)
         {
             FAgentCounters MetricsCounters;
+            FAgentContextMetrics MetricsContext;
             std::uint64_t MetricsContextBytes = 0;
             std::string MetricsRunId;
             {
                 std::lock_guard Lock(ViewMutex);
                 MetricsCounters = LastRunCounters;
+                MetricsContext = LastRunContextMetrics;
                 MetricsContextBytes = LastRunContextBytes;
                 MetricsRunId = LastRunId;
             }
             ImGui::Text("Steps %zu | tools %zu | cache hits %zu",
                 MetricsCounters.Steps, MetricsCounters.ToolCalls,
                 MetricsCounters.SemanticCacheHits);
+            ImGui::Text("Observations %zu | evidence %zu | oscillations %zu",
+                MetricsCounters.Observations,
+                MetricsCounters.EvidenceBindings,
+                MetricsCounters.OscillationsDetected);
             ImGui::Text("Context messages %zu | trimmed %zu | cumulative %.1f KB",
                 MetricsCounters.ContextMessages,
                 MetricsCounters.TrimmedContextMessages,
                 static_cast<double>(MetricsContextBytes) / 1024.0);
+            if (MetricsContext.AssemblyCount > 0)
+            {
+                ImGui::Text("Assembly %llu | max %.3f ms | dropped %.1f KB",
+                    static_cast<unsigned long long>(MetricsContext.AssemblyCount),
+                    static_cast<double>(MetricsContext.MaxAssemblyMicroseconds)
+                        / 1000.0,
+                    static_cast<double>(MetricsContext.DroppedBytes) / 1024.0);
+                ImGui::TextDisabled(
+                    "Task %.1f | chat %.1f | memory %.1f | observation %.1f KB",
+                    static_cast<double>(MetricsContext.TaskStateBytes) / 1024.0,
+                    static_cast<double>(MetricsContext.ConversationBytes) / 1024.0,
+                    static_cast<double>(MetricsContext.MemoryBytes) / 1024.0,
+                    static_cast<double>(MetricsContext.ObservationBytes) / 1024.0);
+            }
             if (!MetricsRunId.empty()) ImGui::TextDisabled("Run: %s", MetricsRunId.c_str());
         }
         const std::vector<FAgentOperationRecord> IncompleteOperations =
@@ -1498,10 +1605,12 @@ struct FAgentChatWorkspace::FImpl
     std::vector<FChatLine> Lines;
     std::string StreamingText;
     std::vector<FAgentKnowledgeHit> LastKnowledgeHits;
+    FAgentKnowledgeQueryResult LastKnowledgeQueryResult;
     std::vector<std::string> LastActiveSkillIds;
     std::string Status = "Idle";
     FAgentCounters LastRunCounters;
     std::uint64_t LastRunContextBytes = 0;
+    FAgentContextMetrics LastRunContextMetrics;
     std::string LastRunId;
     std::array<char, 2048> Input {};
     std::array<char, 128> Model {};

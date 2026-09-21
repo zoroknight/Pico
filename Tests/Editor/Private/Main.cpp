@@ -2276,6 +2276,35 @@ void TestEditorWorldDocument(FTestRunner& Runner)
     AgentApproval.bApprove = true;
     Pico::FEditorAgentToolExecutor AgentTools(
         &EngineLoop, &AgentSelection, &AgentTransactions, &AgentApproval);
+    std::vector<Pico::PObject*> MultiSelectedObjects;
+    for (Pico::PLevel* Level : EngineLoop.GetWorld()->GetLevels())
+        if (Level) for (Pico::PActor* Actor : Level->GetActors())
+            if (Actor && MultiSelectedObjects.size() < 3)
+                MultiSelectedObjects.push_back(Actor);
+    if (!MultiSelectedObjects.empty()) AgentSelection.Set(MultiSelectedObjects[0]);
+    for (std::size_t Index = 1; Index < MultiSelectedObjects.size(); ++Index)
+        AgentSelection.Add(MultiSelectedObjects[Index]);
+    const std::vector<Pico::FAgentKnowledgeRecord> SelectionKnowledge =
+        AgentTools.CollectKnowledgeRecords();
+    const auto SelectionRecord = std::find_if(
+        SelectionKnowledge.begin(), SelectionKnowledge.end(),
+        [](const Pico::FAgentKnowledgeRecord& Record)
+        {
+            return Record.SourceType == "selection";
+        });
+    bool bSelectionContainsEveryObject = SelectionRecord != SelectionKnowledge.end()
+        && SelectionRecord->EntityIds.size() == MultiSelectedObjects.size()
+        && SelectionRecord->SourceRevision == AgentSelection.GetRevision();
+    if (SelectionRecord != SelectionKnowledge.end())
+        for (Pico::PObject* Object : MultiSelectedObjects)
+            bSelectionContainsEveryObject &= Object
+                && SelectionRecord->Content.find(Object->GetPathName())
+                    != std::string::npos;
+    Runner.Expect(MultiSelectedObjects.size() == 3
+            && AgentSelection.Num() == 3
+            && bSelectionContainsEveryObject
+            && SelectionRecord->Fields.at("selection_count") == "3",
+        "Agent Selection knowledge preserves every selected object and its monotonic revision");
     const Pico::FAgentToolResult TypedCatalogResult = AgentTools.Execute(
         {"typed-project-asset-catalog", "editor.asset.describe_catalog", "{}"},
         nullptr);

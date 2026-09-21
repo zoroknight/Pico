@@ -14,6 +14,7 @@ class FCancellationToken;
 struct FAgentProviderRequest
 {
     std::vector<FAgentMessage> Messages;
+    std::string TaskStateJson = "{}";
     std::string ProgressLedgerJson = "{}";
     std::string KnowledgeContextJson = "{}";
     std::string SkillContextJson = "[]";

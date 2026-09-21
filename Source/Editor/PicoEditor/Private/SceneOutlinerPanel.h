@@ -2,7 +2,9 @@
 
 #include "Pico/Object/ObjectTypes.h"
 
+#include <cstdint>
 #include <functional>
+#include <limits>
 #include <vector>
 
 namespace Pico
@@ -77,5 +79,7 @@ private:
     std::vector<PObject*> OrderedObjects;
     ESortColumn SortColumn = ESortColumn::Name;
     bool bSortAscending = true;
+    std::uint64_t LastSelectionRevision = std::numeric_limits<std::uint64_t>::max();
+    bool bRevealSelectionThisFrame = false;
 };
 }

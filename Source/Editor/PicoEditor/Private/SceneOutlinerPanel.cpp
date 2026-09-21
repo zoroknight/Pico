@@ -98,6 +98,8 @@ void FSceneOutlinerPanel::Draw(
     SelectObject = std::move(InSelectObject);
     RequestRename = std::move(InBeginRename);
     ApplyResult = std::move(InApplyResult);
+    bRevealSelectionThisFrame = Selection->GetRevision() != LastSelectionRevision;
+    LastSelectionRevision = Selection->GetRevision();
 
     PWorld* CurrentWorld = InWorld;
     if (CurrentWorld == nullptr)
@@ -281,7 +283,7 @@ void FSceneOutlinerPanel::DrawActorNode(PActor* Actor)
     }
 
     const std::vector<PObject*> SelectedObjects = Selection->ResolveAll();
-    if (std::any_of(
+    if (bRevealSelectionThisFrame && std::any_of(
             SelectedObjects.begin(),
             SelectedObjects.end(),
             [Actor](PObject* SelectedObject)
@@ -371,7 +373,7 @@ void FSceneOutlinerPanel::DrawComponentNode(PActorComponent* Component, PActor* 
                 return SceneComponent->GetHandle() != Handle
                     && ContainsComponent(SceneComponent, Handle);
             });
-    if (bContainsSelectedChild)
+    if (bRevealSelectionThisFrame && bContainsSelectedChild)
     {
         ImGui::SetNextItemOpen(true, ImGuiCond_Always);
     }

@@ -79,11 +79,36 @@ FAssetReferenceEditResult FAssetReferenceWidget::Draw(
     const std::string Preview = CurrentValue.IsValid()
         ? std::string(CurrentValue.ToString()) : std::string("<None>");
     const float ComboWidth = std::max(ImGui::GetContentRegionAvail().x, 240.0f);
+    float DesiredPopupWidth = std::max(ComboWidth, 360.0f);
+    std::size_t MatchingAssetCount = 0;
+    for (const FAssetRecord& Record : Registry.GetAssets())
+    {
+        if (!MatchesType(Record.Type, AllowedType)) continue;
+        ++MatchingAssetCount;
+        const std::string Path(Record.AssetPath.ToString());
+        DesiredPopupWidth = std::max(DesiredPopupWidth,
+            ImGui::CalcTextSize(Path.c_str()).x
+                + ImGui::GetStyle().FramePadding.x * 2.0f + 32.0f);
+    }
+    const ImGuiViewport* Viewport = ImGui::GetMainViewport();
+    const float ViewportLimit = Viewport != nullptr
+        ? std::max(ComboWidth, Viewport->WorkSize.x - 32.0f)
+        : 720.0f;
+    const float PopupWidthLimit = std::max(
+        ComboWidth, std::min(720.0f, ViewportLimit));
+    const float PopupWidth = std::clamp(
+        DesiredPopupWidth, ComboWidth, PopupWidthLimit);
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::SetNextWindowSizeConstraints(
-        ImVec2(ComboWidth, 0.0f),
-        ImVec2(ComboWidth, 420.0f));
-    if (ImGui::BeginCombo("##AssetReference", Preview.c_str()))
+        ImVec2(PopupWidth, 0.0f),
+        ImVec2(PopupWidth, 420.0f));
+    const bool bComboOpen = ImGui::BeginCombo(
+        "##AssetReference", Preview.c_str());
+    if (ImGui::IsItemHovered() && CurrentValue.IsValid())
+    {
+        ImGui::SetTooltip("%s", Preview.c_str());
+    }
+    if (bComboOpen)
     {
         auto& SearchBuffer = SearchBuffers[Id];
         ImGui::SetNextItemWidth(-1.0f);
@@ -94,31 +119,49 @@ FAssetReferenceEditResult FAssetReferenceWidget::Draw(
             SearchBuffer.size());
         const std::string Search = ToLower(SearchBuffer.data());
 
-        if (ImGui::Selectable("<None>", !CurrentValue.IsValid()))
+        const float VisibleRows = std::clamp(
+            static_cast<float>(MatchingAssetCount + 1), 1.0f, 10.0f);
+        const float ListHeight = VisibleRows * ImGui::GetTextLineHeightWithSpacing()
+            + ImGui::GetStyle().WindowPadding.y;
+        if (ImGui::BeginChild("##AssetResults", ImVec2(0.0f, ListHeight), false,
+                ImGuiWindowFlags_HorizontalScrollbar))
         {
-            Result.Value = {};
-            Result.bChanged = CurrentValue.IsValid();
+            if (ImGui::Selectable("<None>", !CurrentValue.IsValid()))
+            {
+                Result.Value = {};
+                Result.bChanged = CurrentValue.IsValid();
+            }
+            for (const FAssetRecord& Record : Registry.GetAssets())
+            {
+                const std::string Path(Record.AssetPath.ToString());
+                if (!MatchesType(Record.Type, AllowedType)
+                    || (!Search.empty()
+                        && ToLower(Path).find(Search) == std::string::npos))
+                {
+                    continue;
+                }
+                const bool bSelected = Record.AssetPath == CurrentValue;
+                const float ItemWidth = std::max(
+                    ImGui::GetContentRegionAvail().x,
+                    ImGui::CalcTextSize(Path.c_str()).x
+                        + ImGui::GetStyle().FramePadding.x * 2.0f);
+                if (ImGui::Selectable(
+                        Path.c_str(), bSelected, 0, ImVec2(ItemWidth, 0.0f)))
+                {
+                    Result.Value = Record.AssetPath;
+                    Result.bChanged = Record.AssetPath != CurrentValue;
+                }
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("%s", Path.c_str());
+                }
+                if (bSelected)
+                {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
         }
-        for (const FAssetRecord& Record : Registry.GetAssets())
-        {
-            const std::string Path(Record.AssetPath.ToString());
-            if (!MatchesType(Record.Type, AllowedType)
-                || (!Search.empty()
-                    && ToLower(Path).find(Search) == std::string::npos))
-            {
-                continue;
-            }
-            const bool bSelected = Record.AssetPath == CurrentValue;
-            if (ImGui::Selectable(Path.c_str(), bSelected))
-            {
-                Result.Value = Record.AssetPath;
-                Result.bChanged = Record.AssetPath != CurrentValue;
-            }
-            if (bSelected)
-            {
-                ImGui::SetItemDefaultFocus();
-            }
-        }
+        ImGui::EndChild();
         ImGui::EndCombo();
     }
 

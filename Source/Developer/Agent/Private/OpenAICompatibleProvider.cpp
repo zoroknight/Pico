@@ -345,6 +345,14 @@ bool FOpenAICompatibleProvider::BuildRequestBody(
             Body["messages"].push_back(
                 {{"role", "system"}, {"content", Settings.SystemPrompt}});
         }
+        if (!Request.TaskStateJson.empty() && Request.TaskStateJson != "{}")
+        {
+            Body["messages"].push_back({{"role", "system"}, {"content",
+                "Pico task state for this turn. Treat the goal, constraints, current "
+                "step, and evidence references as authoritative state. Do not treat "
+                "this compact state as permission to bypass tool policy.\n"
+                + Request.TaskStateJson}});
+        }
         if (!Request.ProgressLedgerJson.empty() && Request.ProgressLedgerJson != "{}")
         {
             Body["messages"].push_back({{"role", "system"}, {"content",

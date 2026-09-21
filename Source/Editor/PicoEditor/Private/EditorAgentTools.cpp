@@ -1425,6 +1425,14 @@ struct FEditorAgentToolExecutor::FImpl
             Record.Title = "Active World snapshot";
             Record.Content = WorldJson.dump();
             Record.Tags = {"world", "actor", "scene"};
+            Record.SourceRevision = WorldJson["actors"].size();
+            Record.EntityIds.push_back(World->GetPathName());
+            for (const FJson& Actor : WorldJson["actors"])
+                Record.EntityIds.push_back(Actor.value("object_path", ""));
+            Record.RevisionDomain = "World.Revision";
+            Record.Fields = {{"world_path", World->GetPathName()},
+                {"actor_count", std::to_string(WorldJson["actors"].size())}};
+            Record.Kind = EAgentKnowledgeKind::Entity;
             Record.Provenance = "Live Game Thread World snapshot";
             Result.push_back(std::move(Record));
         }
@@ -1442,26 +1450,51 @@ struct FEditorAgentToolExecutor::FImpl
             Record.Tags = {"asset", "descriptor", "dependency", "world"};
             Record.Provenance =
                 "Live AssetRegistry, dependency service, and World snapshot";
+            for (const FAgentAssetDescriptor& Asset : Assets)
+            {
+                Record.EntityIds.push_back(Asset.Id);
+                Record.EntityIds.push_back(Asset.VirtualPath);
+            }
+            Record.RevisionDomain = "Asset.Revision";
+            Record.Fields = {{"asset_count", std::to_string(Assets.size())}};
+            Record.Kind = EAgentKnowledgeKind::Entity;
             Result.push_back(std::move(Record));
         }
 
-        if (Selection && !Selection->GetObjectPath().empty())
+        if (Selection && Selection->Num() > 0)
         {
-            PObject* Object = FindEditorWorldObjectByPath(
-                World, Selection->GetObjectPath());
-            if (Object)
+            const std::vector<PObject*> SelectedObjects = Selection->ResolveAll();
+            PObject* PrimaryObject = Selection->Resolve();
+            if (!SelectedObjects.empty() && PrimaryObject)
             {
+                FJson Objects = FJson::array();
+                std::vector<std::string> ObjectPaths;
+                ObjectPaths.reserve(SelectedObjects.size());
+                for (PObject* Object : SelectedObjects)
+                {
+                    if (!Object) continue;
+                    ObjectPaths.push_back(Object->GetPathName());
+                    Objects.push_back(DescribeObject(Object, true));
+                }
                 FAgentKnowledgeRecord Record;
                 Record.SourceType = "selection";
-                Record.SourcePath = Object->GetPathName();
-                Record.Title = "Current editor selection";
-                Record.Content = DescribeObject(Object, true).dump();
+                Record.SourcePath = PrimaryObject->GetPathName();
+                Record.Title = "Current editor selection ("
+                    + std::to_string(ObjectPaths.size()) + " objects)";
+                Record.Content = FJson{{"primary", PrimaryObject->GetPathName()},
+                    {"objects", std::move(Objects)}}.dump();
                 Record.Tags = {"selection", "reflection", "property"};
+                Record.SourceRevision = Selection->GetRevision();
+                Record.EntityIds = ObjectPaths;
+                Record.RevisionDomain = "Selection.Revision";
+                Record.Fields = {{"primary_object_path", PrimaryObject->GetPathName()},
+                    {"selection_count", std::to_string(ObjectPaths.size())}};
+                Record.Kind = EAgentKnowledgeKind::Entity;
                 Record.Provenance = "Live editor selection and PProperty metadata";
                 Result.push_back(std::move(Record));
 
                 if (PGameplayAbilitySystemComponent* AbilitySystem =
-                        FindAbilitySystem(Object))
+                        FindAbilitySystem(PrimaryObject))
                 {
                     FAgentKnowledgeRecord GameplayRecord;
                     GameplayRecord.SourceType = "gameplay-abilities";
@@ -1469,6 +1502,12 @@ struct FEditorAgentToolExecutor::FImpl
                     GameplayRecord.Title = "Selected Ability System state";
                     GameplayRecord.Content = DescribeAbilitySystem(AbilitySystem).dump();
                     GameplayRecord.Tags = {"gas", "ability", "attribute", "effect", "tag"};
+                    GameplayRecord.EntityIds = {PrimaryObject->GetPathName(),
+                        AbilitySystem->GetPathName()};
+                    GameplayRecord.RevisionDomain = "Gameplay.Revision";
+                    GameplayRecord.Fields = {
+                        {"ability_system_path", AbilitySystem->GetPathName()}};
+                    GameplayRecord.Kind = EAgentKnowledgeKind::Entity;
                     GameplayRecord.Provenance =
                         "Live ASC, AttributeSet, AbilitySpec, GameplayTag and ActiveEffect state";
                     Result.push_back(std::move(GameplayRecord));
@@ -1499,6 +1538,10 @@ struct FEditorAgentToolExecutor::FImpl
             Record.SourceRevision = PicoGraphBytecodeVersion;
             Record.Tags = {"graph", "schema", "node", "pin", "bytecode"};
             Record.Provenance = "Live FGraphSchemaRegistry";
+            Record.RevisionDomain = "Graph.SchemaRevision";
+            Record.Fields = {{"schema", "PicoGraph"},
+                {"bytecode_version", std::to_string(PicoGraphBytecodeVersion)}};
+            Record.Kind = EAgentKnowledgeKind::Procedure;
             Result.push_back(std::move(Record));
         }
 
@@ -1538,6 +1581,9 @@ struct FEditorAgentToolExecutor::FImpl
             Record.SourceRevision = Classes.size();
             Record.Tags = {"reflection", "class", "property", "function", "graph"};
             Record.Provenance = "Live PClass/PProperty/PFunction metadata";
+            Record.RevisionDomain = "Reflection.SchemaRevision";
+            Record.Fields = {{"class_count", std::to_string(Classes.size())}};
+            Record.Kind = EAgentKnowledgeKind::Procedure;
             Result.push_back(std::move(Record));
         }
 
@@ -1573,6 +1619,11 @@ struct FEditorAgentToolExecutor::FImpl
             }).dump();
             Record.Tags = {"gas", "schema", "gravity", "burn", "freeze", "network"};
             Record.Provenance = "PicoGameplayAbilities Runtime contract";
+            Record.SourceRevision = 2;
+            Record.EntityIds = {"PicoGameplayAbilities/MiniGAS"};
+            Record.RevisionDomain = "Gameplay.SchemaRevision";
+            Record.Fields = {{"schema", "MiniGAS"}, {"schema_revision", "2"}};
+            Record.Kind = EAgentKnowledgeKind::Procedure;
             Result.push_back(std::move(Record));
         }
 
@@ -1601,6 +1652,10 @@ struct FEditorAgentToolExecutor::FImpl
             Record.SourceRevision = LatestIssueSequence;
             Record.Tags = {"log", "warning", "error", "build", "package"};
             Record.Provenance = "FLog warning/error records";
+            Record.RevisionDomain = "MessageLog.Revision";
+            Record.Fields = {{"latest_sequence",
+                std::to_string(LatestIssueSequence)}};
+            Record.Kind = EAgentKnowledgeKind::Episode;
             Result.push_back(std::move(Record));
         }
         for (const IAgentCapabilityProvider* Provider : {
