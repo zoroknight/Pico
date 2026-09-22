@@ -7,7 +7,7 @@ Pico 是一个以学习为目的、参考 Unreal Engine 架构设计的小型 C+
 
 Pico 不以替代成熟商业引擎为目标。每个系统都会尽量保持小而清晰，同时保留可以完整运行和继续扩展的架构边界。
 
-![Pico 编辑器场景工作区与恢复的骨骼资产预览](Docs/Images/PicoEditorSkeletalWorkspace.png)
+![Pico 编辑器的场景大纲、视口、AI Chat 与平铺式内容浏览器](Docs/Images/PicoEditorAgentWorkspace.png)
 
 ## 当前状态
 
