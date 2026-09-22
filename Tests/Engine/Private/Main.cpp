@@ -1607,6 +1607,13 @@ void TestPrimitiveComponentSceneData(FTestRunner& Runner)
         Runner.Expect(
             Cube->GetColor().Equals(Pico::FVector3(0.8f, 0.2f, 0.1f)),
             "Cube color is editable scene data");
+        Cube->SetColor(Pico::FVector3(
+            -0.5f,
+            1.5f,
+            std::numeric_limits<float>::quiet_NaN()));
+        Runner.Expect(
+            Cube->GetColor().Equals(Pico::FVector3(0.0f, 1.0f, 0.0f)),
+            "Primitive color setter clamps legacy and invalid channels to linear RGB range");
         Runner.Expect(
             Cube->GetExtent().Equals(Pico::FVector3(20.0f, 30.0f, 40.0f)),
             "Cube extent is editable scene data");

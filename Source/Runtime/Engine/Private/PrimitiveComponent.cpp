@@ -12,6 +12,23 @@
 
 namespace Pico
 {
+namespace
+{
+FVector3 SanitizeLinearColor(const FVector3& Value)
+{
+    const auto SanitizeChannel = [](float Channel)
+    {
+        return std::isfinite(Channel)
+            ? std::clamp(Channel, 0.0f, 1.0f)
+            : 0.0f;
+    };
+    return FVector3(
+        SanitizeChannel(Value.X),
+        SanitizeChannel(Value.Y),
+        SanitizeChannel(Value.Z));
+}
+}
+
 PICO_DEFINE_CLASS(PPrimitiveComponent)
 
 bool PPrimitiveComponent::RegisterProperties(PClass& Class)
@@ -92,7 +109,7 @@ const FVector3& PPrimitiveComponent::GetColor() const
 
 void PPrimitiveComponent::SetColor(const FVector3& InColor)
 {
-    Color = InColor;
+    Color = SanitizeLinearColor(InColor);
 }
 
 ECollisionEnabled PPrimitiveComponent::GetCollisionEnabled() const
@@ -376,9 +393,7 @@ void PPrimitiveComponent::PostEditChangeProperty(
     const FName PropertyName = Event.Property->GetName();
     if (PropertyName == FName("Color"))
     {
-        Color.X = std::clamp(Color.X, 0.0f, 1.0f);
-        Color.Y = std::clamp(Color.Y, 0.0f, 1.0f);
-        Color.Z = std::clamp(Color.Z, 0.0f, 1.0f);
+        Color = SanitizeLinearColor(Color);
     }
     else if (PropertyName == FName("CollisionProfileValue"))
     {
@@ -438,6 +453,7 @@ void PPrimitiveComponent::PostEditChangeProperty(
 void PPrimitiveComponent::PostLoad()
 {
     PSceneComponent::PostLoad();
+    Color = SanitizeLinearColor(Color);
     CollisionProfileValue = std::clamp(
         CollisionProfileValue,
         static_cast<int32>(ECollisionProfile::Custom),

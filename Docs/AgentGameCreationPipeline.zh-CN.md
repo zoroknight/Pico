@@ -197,13 +197,13 @@ Graph 直接发送任意网络包或调用未标记 Callable 的函数。
 在继续增加玩法积木前，先完成
 [Agent 资产理解与安全创作纵向切片](AgentAssetUnderstandingAndSafeAuthoring.zh-CN.md)。该切片把已有
 `AssetDescriptor` 从“能列出结构化事实”推进到“能安全选择、解释和使用资产”，并补齐 Material、通用组件和
-Actor 装配工具。固定顺序为：
+Actor 装配工具。当前 S0～S2 已完成，S3～S6 待实施。固定顺序为：
 
 ```text
 ReAct R5
- -> 安全第 0 阶段：稳定目标、Revision、字段级 Diff、影响分析、复合事务和读回验证
- -> Material 与引用工具
- -> 通用组件和 Actor 分步装配
+ -> 安全第 0 阶段：稳定目标、Revision、字段级 Diff、影响分析、分步事务和读回验证（已完成）
+ -> Material 与引用工具（已完成）
+ -> 通用组件和 Actor 分步装配（已完成）
  -> 人工语义元数据与 RAG 来源治理
  -> 标准预览 Artifact
  -> 可选视觉 Provider
@@ -211,8 +211,8 @@ ReAct R5
  -> 原阶段 A 第 5～8 周
 ```
 
-视觉 Provider 只是只读分析服务，不是第二套 Agent；模型推断不会自动成为项目事实。该前置门完成前，不开放新的
-Material/Component 写工具，也不把视觉 API 接入会产生项目副作用的流程。
+视觉 Provider 只是只读分析服务，不是第二套 Agent；模型推断不会自动成为项目事实。Material/Component 工具现已
+在 S0 保护下开放；视觉 API 仍需等待 S3～S5 的元数据、预览、隐私和来源治理完成后再接入。
 
 ## 八周实施计划
 

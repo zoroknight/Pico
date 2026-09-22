@@ -17,6 +17,7 @@
 #include "Pico/Agent/AgentRuntime.h"
 #include "Pico/Agent/AgentCredentialStore.h"
 #include "Pico/Agent/FakeAgentProvider.h"
+#include "Pico/Asset/Material.h"
 #include "Pico/Core/Config.h"
 #include "Pico/Core/GameThread.h"
 #include "Pico/Core/Paths.h"
@@ -30,6 +31,7 @@
 #include "Pico/Engine/Level.h"
 #include "Pico/Engine/Pawn.h"
 #include "Pico/Engine/PlayerStart.h"
+#include "Pico/Engine/PointLightComponent.h"
 #include "Pico/Engine/SceneComponent.h"
 #include "Pico/Engine/StaticMeshComponent.h"
 #include "Pico/Engine/SpringArmComponent.h"
@@ -48,6 +50,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -58,6 +61,19 @@
 
 namespace
 {
+std::string ExtractJsonString(
+    std::string_view Json,
+    std::string_view Field)
+{
+    const std::string Prefix = "\"" + std::string(Field) + "\":\"";
+    const std::size_t Start = Json.find(Prefix);
+    if (Start == std::string_view::npos) return {};
+    const std::size_t ValueStart = Start + Prefix.size();
+    const std::size_t End = Json.find('"', ValueStart);
+    return End == std::string_view::npos
+        ? std::string {} : std::string(Json.substr(ValueStart, End - ValueStart));
+}
+
 void TestExternalAgentConnector(FTestRunner& Runner)
 {
     Pico::FCodexExternalAgentConnector Connector;
@@ -1237,9 +1253,18 @@ void TestEditorCommandService(FTestRunner& Runner)
     };
     Runner.Expect(
         AgentTools.IsInitialized()
-            && AgentToolNames.size() == 34
+            && AgentToolNames.size() == 43
             && HasAgentTool("editor.world.describe")
             && HasAgentTool("editor.asset.describe_catalog")
+            && HasAgentTool("editor.asset.describe")
+            && HasAgentTool("editor.asset.find_references")
+            && HasAgentTool("editor.material.describe")
+            && HasAgentTool("editor.material.create")
+            && HasAgentTool("editor.material.duplicate")
+            && HasAgentTool("editor.material.update")
+            && HasAgentTool("editor.component.list_types")
+            && HasAgentTool("editor.component.add")
+            && HasAgentTool("editor.component.remove")
             && HasAgentTool("editor.actor.spawn")
             && HasAgentTool("editor.gameplay.asc.describe")
             && HasAgentTool("editor.actor_blueprint.describe_defaults")
@@ -1438,6 +1463,75 @@ void TestEditorCommandService(FTestRunner& Runner)
                 != std::string::npos
             && DescribeAgentCube.OutputJson.find("BoxExtent") != std::string::npos,
         "Generic object description exposes component paths, inherited properties, values, and semantics");
+
+    const auto ComponentTypes = AgentTools.Execute(
+        {"agent-component-types", "editor.component.list_types", "{}"}, nullptr);
+    const std::string AgentCubeRevision = DescribeAgentCube.bSucceeded
+        ? ExtractJsonString(DescribeAgentCube.OutputJson, "revision") : "";
+    const Pico::FAgentToolCall AddPointLight {
+        "agent-add-point-light", "editor.component.add",
+        "{\"actor_path\":\"" + AgentCubePath
+            + "\",\"expected_revision\":\"" + AgentCubeRevision
+            + "\",\"component_class\":\"PPointLightComponent\","
+              "\"component_name\":\"AgentPointLight\"}"
+    };
+    AgentTools.PrepareApproval(AddPointLight);
+    const auto AddPointLightResult = AgentTools.Execute(AddPointLight, nullptr);
+    const std::string AgentPointLightPath = AddPointLightResult.bSucceeded
+        ? ExtractJsonString(AddPointLightResult.OutputJson, "component_path") : "";
+    auto* AgentPointLight = dynamic_cast<Pico::PPointLightComponent*>(
+        Pico::FindEditorWorldObjectByPath(
+            EngineLoop.GetWorld(), AgentPointLightPath));
+    Runner.Expect(
+        ComponentTypes.bSucceeded
+            && ComponentTypes.OutputJson.find("PPointLightComponent")
+                != std::string::npos
+            && AddPointLightResult.bSucceeded && AgentPointLight != nullptr
+            && AgentPointLight->GetOwner() != nullptr
+            && AgentPointLight->GetAttachParent()
+                == AgentPointLight->GetOwner()->GetRootComponent(),
+        "Agent discovers reflected component types and assembles a Point Light onto an explicit Actor");
+
+    const Pico::FAgentToolCall StaleAdd {
+        "agent-add-stale-component", "editor.component.add",
+        "{\"actor_path\":\"" + AgentCubePath
+            + "\",\"expected_revision\":\"" + AgentCubeRevision
+            + "\",\"component_class\":\"PSceneComponent\","
+              "\"component_name\":\"MustNotExist\"}"
+    };
+    AgentTools.PrepareApproval(StaleAdd);
+    const auto StaleAddResult = AgentTools.Execute(StaleAdd, nullptr);
+    Runner.Expect(
+        !StaleAddResult.bSucceeded
+            && StaleAddResult.Error.find("changed") != std::string::npos
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), AgentCubePath + ".MustNotExist") == nullptr,
+        "Stale component writes are rejected without a side effect");
+
+    const std::string RevisionAfterAdd =
+        ExtractJsonString(AddPointLightResult.OutputJson, "revision_after");
+    const Pico::FAgentToolCall RemovePointLight {
+        "agent-remove-point-light", "editor.component.remove",
+        "{\"component_path\":\"" + AgentPointLightPath
+            + "\",\"expected_actor_revision\":\"" + RevisionAfterAdd + "\"}"
+    };
+    AgentTools.PrepareApproval(RemovePointLight);
+    const auto RemovePointLightResult = AgentTools.Execute(
+        RemovePointLight, nullptr);
+    Runner.Expect(
+        RemovePointLightResult.bSucceeded
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), AgentPointLightPath) == nullptr,
+        "Agent removes one exact non-root component with revision and read-back checks");
+    Runner.Expect(
+        Commands.Undo().bSucceeded && Commands.Undo().bSucceeded
+            && Pico::FindEditorWorldObjectByPath(
+                EngineLoop.GetWorld(), AgentPointLightPath) == nullptr,
+        "Component remove and add remain two normal editor Undo checkpoints");
+    AgentCube = dynamic_cast<Pico::PActor*>(
+        Pico::FindEditorWorldObjectByPath(EngineLoop.GetWorld(), AgentCubePath));
+    AgentCubeComponent = AgentCube != nullptr
+        ? dynamic_cast<Pico::PCubeComponent*>(AgentCube->GetRootComponent()) : nullptr;
 
     const Pico::FAgentToolCall SetReplicationPolicy {
         "agent-set-replication", "editor.object.set_properties",
@@ -2325,6 +2419,98 @@ void TestEditorWorldDocument(FTestRunner& Runner)
             && TypedCatalogResult.OutputJson.find("asset.typed-descriptor.v1")
                 != std::string::npos,
         "Project AssetDescriptor catalog exposes deterministic per-type technical characteristics");
+
+    const Pico::FAgentToolCall CreateMaterialCall {
+        "agent-create-material", "editor.material.create",
+        R"({"asset_path":"/Game/Materials/AgentSafeAuthoringTest.pmat","values":{"base_color":{"x":0.2,"y":0.4,"z":0.8},"metallic":0.1,"roughness":0.7}})"};
+    AgentTools.PrepareApproval(CreateMaterialCall);
+    const auto CreateMaterialResult = AgentTools.Execute(
+        CreateMaterialCall, nullptr);
+    const auto DescribeMaterialResult = AgentTools.Execute(
+        {"agent-describe-material", "editor.material.describe",
+            R"({"asset_path":"/Game/Materials/AgentSafeAuthoringTest.pmat"})"},
+        nullptr);
+    const std::string MaterialRevision =
+        ExtractJsonString(DescribeMaterialResult.OutputJson, "revision");
+    Pico::FAssetPath AgentMaterialPath;
+    Pico::FAssetPath::TryParse(
+        "/Game/Materials/AgentSafeAuthoringTest.pmat", AgentMaterialPath);
+    const Pico::FAssetRecord* AgentMaterialRecord =
+        EngineLoop.GetAssetRegistry().Find(AgentMaterialPath);
+    Pico::FMaterialData CreatedMaterialData;
+    const bool bLoadedCreatedMaterial = AgentMaterialRecord != nullptr
+        && Pico::LoadMaterialFromFile(
+            AgentMaterialRecord->FilePath, CreatedMaterialData);
+    Runner.Expect(
+        CreateMaterialResult.bSucceeded && DescribeMaterialResult.bSucceeded
+            && bLoadedCreatedMaterial
+            && std::abs(CreatedMaterialData.Roughness - 0.7f) < 0.0001f
+            && !MaterialRevision.empty(),
+        "Agent creates and reads back an isolated Material with a stable content revision");
+
+    const Pico::FAgentToolCall UpdateMaterialCall {
+        "agent-update-material", "editor.material.update",
+        "{\"asset_path\":\"/Game/Materials/AgentSafeAuthoringTest.pmat\","
+          "\"expected_revision\":\"" + MaterialRevision + "\","
+          "\"update_mask\":[\"metallic\",\"roughness\"],"
+          "\"values\":{\"metallic\":0.85,\"roughness\":0.2}}"};
+    AgentTools.PrepareApproval(UpdateMaterialCall);
+    const auto UpdateMaterialResult = AgentTools.Execute(
+        UpdateMaterialCall, nullptr);
+    AgentMaterialRecord = EngineLoop.GetAssetRegistry().Find(AgentMaterialPath);
+    Pico::FMaterialData UpdatedMaterialData;
+    const bool bLoadedUpdatedMaterial = AgentMaterialRecord != nullptr
+        && Pico::LoadMaterialFromFile(
+            AgentMaterialRecord->FilePath, UpdatedMaterialData);
+    Runner.Expect(
+        UpdateMaterialResult.bSucceeded
+            && bLoadedUpdatedMaterial
+            && std::abs(UpdatedMaterialData.Roughness - 0.2f) < 0.0001f
+            && std::abs(UpdatedMaterialData.Metallic - 0.85f) < 0.0001f
+            && UpdatedMaterialData.BaseColor.Equals(
+                Pico::FVector3(0.2f, 0.4f, 0.8f))
+            && UpdateMaterialResult.OutputJson.find("revision_before")
+                != std::string::npos
+            && UpdateMaterialResult.OutputJson.find("revision_after")
+                != std::string::npos,
+        "Material update mask preserves untouched fields and reports before/after values");
+
+    const Pico::FAgentToolCall StaleMaterialCall {
+        "agent-stale-material", "editor.material.update",
+        "{\"asset_path\":\"/Game/Materials/AgentSafeAuthoringTest.pmat\","
+          "\"expected_revision\":\"" + MaterialRevision + "\","
+          "\"update_mask\":[\"roughness\"],\"values\":{\"roughness\":0.9}}"};
+    AgentTools.PrepareApproval(StaleMaterialCall);
+    const auto StaleMaterialResult = AgentTools.Execute(
+        StaleMaterialCall, nullptr);
+    const std::string UpdatedRevision =
+        ExtractJsonString(UpdateMaterialResult.OutputJson, "revision_after");
+    const Pico::FAgentToolCall DuplicateMaterialCall {
+        "agent-duplicate-material", "editor.material.duplicate",
+        "{\"source_path\":\"/Game/Materials/AgentSafeAuthoringTest.pmat\","
+          "\"destination_path\":\"/Game/Materials/AgentSafeAuthoringCopy.pmat\","
+          "\"expected_revision\":\"" + UpdatedRevision + "\"}"};
+    AgentTools.PrepareApproval(DuplicateMaterialCall);
+    const auto DuplicateMaterialResult = AgentTools.Execute(
+        DuplicateMaterialCall, nullptr);
+    const auto DescribeAssetResult = AgentTools.Execute(
+        {"agent-describe-created-asset", "editor.asset.describe",
+            R"({"asset_path":"/Game/Materials/AgentSafeAuthoringCopy.pmat"})"},
+        nullptr);
+    const auto FindReferencesResult = AgentTools.Execute(
+        {"agent-find-created-references", "editor.asset.find_references",
+            R"({"asset_path":"/Game/Materials/AgentSafeAuthoringCopy.pmat"})"},
+        nullptr);
+    Runner.Expect(
+        !StaleMaterialResult.bSucceeded
+            && StaleMaterialResult.Error.find("changed") != std::string::npos
+            && DuplicateMaterialResult.bSucceeded
+            && DescribeAssetResult.bSucceeded
+            && DescribeAssetResult.OutputJson.find("PicoLitPBR")
+                != std::string::npos
+            && FindReferencesResult.bSucceeded,
+        "Material CAS rejects stale writes while duplicate and asset-impact inspection remain available");
+
     const Pico::FAgentToolCall SpawnBlueprintCall {
         "spawn-blueprint-npc", "editor.actor.spawn_blueprint",
         R"({"blueprint_asset":"/Game/Characters/BP_Knight.pblueprint","name":"AgentBlueprintNpc","x":1300,"y":0,"z":95})"

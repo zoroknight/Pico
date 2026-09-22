@@ -8,6 +8,7 @@
 #include "Pico/Asset/Texture.h"
 #include "Pico/Asset/ThirdPersonControlProfile.h"
 #include "Pico/Editor/AssetDependencyService.h"
+#include "Pico/Editor/EditorAssetService.h"
 #include "Pico/Editor/EditorCommandService.h"
 #include "Pico/Editor/EditorPropertyService.h"
 #include "Pico/Editor/EditorSelection.h"
@@ -49,6 +50,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <optional>
 #include <set>
@@ -71,6 +73,28 @@ FAgentToolResult Success(const FAgentToolCall& Call, FJson Output)
 FAgentToolResult Failure(const FAgentToolCall& Call, std::string Error)
 {
     return {Call.Id, false, "{}", std::move(Error), false};
+}
+
+std::string StableRevision(std::string_view Bytes)
+{
+    std::uint64_t Hash = 14695981039346656037ull;
+    for (const unsigned char Byte : Bytes)
+    {
+        Hash ^= Byte;
+        Hash *= 1099511628211ull;
+    }
+    std::ostringstream Stream;
+    Stream << std::hex << std::setfill('0') << std::setw(16) << Hash;
+    return Stream.str();
+}
+
+std::string FileRevision(const std::filesystem::path& File)
+{
+    std::ifstream Stream(File, std::ios::binary);
+    if (!Stream) return {};
+    std::ostringstream Bytes;
+    Bytes << Stream.rdbuf();
+    return Stream ? StableRevision(Bytes.str()) : std::string {};
 }
 
 bool IsSafeObjectName(std::string_view Name)
@@ -783,6 +807,77 @@ FJson DescribeObject(PObject* Object, bool bIncludeComponents)
             ? FJson(Actor->GetRootComponent()->GetPathName()) : FJson(nullptr);
     }
     return Result;
+}
+
+std::string ObjectRevision(PObject* Object)
+{
+    return Object != nullptr
+        ? StableRevision(DescribeObject(Object, true).dump()) : std::string {};
+}
+
+bool ReadFiniteNumber(const FJson& Json, float& Out);
+bool JsonToVector(const FJson& Json, FVector3& Out);
+
+FJson MaterialToJson(const FMaterialData& Material)
+{
+    return {{"base_color", VectorToJson(Material.BaseColor)},
+        {"metallic", Material.Metallic}, {"roughness", Material.Roughness},
+        {"base_color_texture", Material.BaseColorTexture.IsEmpty()
+            ? FJson(nullptr)
+            : FJson(std::string(Material.BaseColorTexture.ToString()))}};
+}
+
+bool JsonToMaterialField(
+    std::string_view Field,
+    const FJson& Value,
+    FMaterialData& Material,
+    std::string& OutError)
+{
+    if (Field == "base_color")
+    {
+        FVector3 Color;
+        if (!JsonToVector(Value, Color) || Color.X < 0.0f || Color.X > 1.0f
+            || Color.Y < 0.0f || Color.Y > 1.0f
+            || Color.Z < 0.0f || Color.Z > 1.0f)
+        {
+            OutError = "base_color must contain x/y/z values in [0, 1]";
+            return false;
+        }
+        Material.BaseColor = Color;
+        return true;
+    }
+    if (Field == "metallic" || Field == "roughness")
+    {
+        float Number = 0.0f;
+        if (!ReadFiniteNumber(Value, Number) || Number < 0.0f || Number > 1.0f)
+        {
+            OutError = std::string(Field) + " must be in [0, 1]";
+            return false;
+        }
+        if (Field == "metallic") Material.Metallic = Number;
+        else Material.Roughness = Number;
+        return true;
+    }
+    if (Field == "base_color_texture")
+    {
+        if (Value.is_null())
+        {
+            Material.BaseColorTexture = {};
+            return true;
+        }
+        FAssetPath Texture;
+        if (!Value.is_string()
+            || !FAssetPath::TryParse(Value.get<std::string>(), Texture)
+            || Texture.GetExtension() != ".ptex")
+        {
+            OutError = "base_color_texture must be null or a /Game/*.ptex path";
+            return false;
+        }
+        Material.BaseColorTexture = Texture;
+        return true;
+    }
+    OutError = "Unsupported material update field: " + std::string(Field);
+    return false;
 }
 
 bool ReadFiniteNumber(const FJson& Json, float& Out)
@@ -1683,9 +1778,11 @@ struct FEditorAgentToolExecutor::FImpl
             || Name.starts_with("editor.scene."))
             return WorldTools.AddTool(std::move(Definition));
         if (Name.starts_with("editor.object.")
-            || Name.starts_with("editor.selection."))
+            || Name.starts_with("editor.selection.")
+            || Name.starts_with("editor.component."))
             return ObjectTools.AddTool(std::move(Definition));
-        if (Name.starts_with("editor.asset."))
+        if (Name.starts_with("editor.asset.")
+            || Name.starts_with("editor.material."))
             return AssetTools.AddTool(std::move(Definition));
         if (Name.starts_with("editor.graph."))
             return BlueprintGraphTools.AddTool(std::move(Definition));
@@ -2238,6 +2335,336 @@ struct FEditorAgentToolExecutor::FImpl
         bInitialized = RegisterTool(std::move(DescribeAssetCatalog))
             && bInitialized;
 
+        FAgentToolDefinition DescribeAsset;
+        DescribeAsset.Name = "editor.asset.describe";
+        DescribeAsset.Description =
+            "Describe one exact registered asset with its typed technical summary, dependencies, references, and content revision";
+        DescribeAsset.Schema.Fields = {
+            {"asset_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath}};
+        DescribeAsset.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            FAssetPath Path;
+            if (!FAssetPath::TryParse(
+                    Arguments.at("asset_path").get<std::string>(), Path))
+                return Failure(Call, "Asset path is invalid");
+            const FAssetRecord* Record = EngineLoop
+                ? EngineLoop->GetAssetRegistry().Find(Path) : nullptr;
+            if (Record == nullptr) return Failure(Call, "Asset was not found");
+            FJson Dependencies = FJson::array();
+            for (const FAssetPath& Dependency :
+                FAssetDependencyService::GetAssetDependencies(
+                    Path, EngineLoop->GetAssetRegistry()))
+                Dependencies.push_back(std::string(Dependency.ToString()));
+            FJson Referencers = FJson::array();
+            for (const FAssetPath& Referencer :
+                FAssetDependencyService::FindAssetReferencers(
+                    Path, EngineLoop->GetAssetRegistry()))
+                Referencers.push_back(std::string(Referencer.ToString()));
+            FJson WorldReferences = FJson::array();
+            for (const FObjectAssetReference& Reference :
+                FAssetDependencyService::FindWorldReferencers(
+                    EngineLoop->GetWorld(), Path))
+                WorldReferences.push_back({{"object_path", Reference.ObjectPath},
+                    {"property", Reference.PropertyName.ToString()}});
+            return Success(Call, {{"asset_path", Path.ToString()},
+                {"type", ToString(Record->Type)},
+                {"revision", FileRevision(Record->FilePath)},
+                {"file_size", Record->FileSize},
+                {"summary", BuildTypedAssetSummary(*Record)},
+                {"dependencies", std::move(Dependencies)},
+                {"asset_referencers", std::move(Referencers)},
+                {"world_references", std::move(WorldReferences)}});
+        };
+        bInitialized = RegisterTool(std::move(DescribeAsset)) && bInitialized;
+
+        FAgentToolDefinition FindAssetReferences;
+        FindAssetReferences.Name = "editor.asset.find_references";
+        FindAssetReferences.Description =
+            "Report project assets and active-World properties that explicitly reference one exact asset; does not modify anything";
+        FindAssetReferences.Schema.Fields = {
+            {"asset_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath}};
+        FindAssetReferences.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            FAssetPath Path;
+            const std::string Text = FJson::parse(Call.ArgumentsJson)
+                .at("asset_path").get<std::string>();
+            if (!FAssetPath::TryParse(Text, Path) || !EngineLoop
+                || EngineLoop->GetAssetRegistry().Find(Path) == nullptr)
+                return Failure(Call, "Asset was not found");
+            FJson Assets = FJson::array();
+            for (const FAssetPath& Referencer :
+                FAssetDependencyService::FindAssetReferencers(
+                    Path, EngineLoop->GetAssetRegistry()))
+                Assets.push_back(std::string(Referencer.ToString()));
+            FJson World = FJson::array();
+            for (const FObjectAssetReference& Reference :
+                FAssetDependencyService::FindWorldReferencers(
+                    EngineLoop->GetWorld(), Path))
+                World.push_back({{"object_path", Reference.ObjectPath},
+                    {"property", Reference.PropertyName.ToString()}});
+            return Success(Call, {{"asset_path", Path.ToString()},
+                {"asset_referencers", std::move(Assets)},
+                {"world_references", std::move(World)}});
+        };
+        bInitialized = RegisterTool(std::move(FindAssetReferences)) && bInitialized;
+
+        FAgentToolDefinition DescribeMaterial;
+        DescribeMaterial.Name = "editor.material.describe";
+        DescribeMaterial.Description =
+            "Read one exact Material's editable PBR inputs, content revision, and reference impact before changing it";
+        DescribeMaterial.Schema.Fields = {
+            {"asset_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath}};
+        DescribeMaterial.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            FAssetPath Path;
+            const std::string Text = FJson::parse(Call.ArgumentsJson)
+                .at("asset_path").get<std::string>();
+            if (!FAssetPath::TryParse(Text, Path) || !EngineLoop)
+                return Failure(Call, "Material path is invalid");
+            const FAssetRecord* Record = EngineLoop->GetAssetRegistry().Find(Path);
+            FMaterialData Material;
+            EMaterialError Error = EMaterialError::None;
+            if (Record == nullptr || Record->Type != EAssetType::Material
+                || !LoadMaterialFromFile(Record->FilePath, Material, &Error))
+                return Failure(Call, "Material could not be loaded: "
+                    + std::string(ToString(Error)));
+            const auto AssetRefs = FAssetDependencyService::FindAssetReferencers(
+                Path, EngineLoop->GetAssetRegistry());
+            const auto WorldRefs = FAssetDependencyService::FindWorldReferencers(
+                EngineLoop->GetWorld(), Path);
+            return Success(Call, {{"asset_path", Path.ToString()},
+                {"revision", FileRevision(Record->FilePath)},
+                {"values", MaterialToJson(Material)},
+                {"asset_reference_count", AssetRefs.size()},
+                {"world_reference_count", WorldRefs.size()},
+                {"shared", AssetRefs.size() + WorldRefs.size() > 1}});
+        };
+        bInitialized = RegisterTool(std::move(DescribeMaterial)) && bInitialized;
+
+        FAgentToolDefinition CreateMaterial;
+        CreateMaterial.Name = "editor.material.create";
+        CreateMaterial.Description =
+            "Create one new Material at an unused explicit path. Never overwrites an existing asset and verifies the saved values";
+        CreateMaterial.Permission = EAgentToolPermission::WriteProject;
+        CreateMaterial.Schema.Fields = {
+            {"asset_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath},
+            {"values", EAgentToolValueType::Object, true}};
+        CreateMaterial.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            FAssetPath Path;
+            if (!FAssetPath::TryParse(
+                    Arguments.at("asset_path").get<std::string>(), Path)
+                || Path.GetExtension() != ".pmat")
+                return Failure(Call, "Material path must end in .pmat");
+            FMaterialData Material;
+            const FJson& Values = Arguments.at("values");
+            if (Values.size() > 4)
+                return Failure(Call, "Material values contain unsupported fields");
+            for (auto It = Values.begin(); It != Values.end(); ++It)
+            {
+                std::string Error;
+                if (!JsonToMaterialField(It.key(), It.value(), Material, Error))
+                    return Failure(Call, Error);
+            }
+            if (!Material.BaseColorTexture.IsEmpty())
+            {
+                const FAssetRecord* Texture = EngineLoop
+                    ? EngineLoop->GetAssetRegistry().Find(
+                        Material.BaseColorTexture) : nullptr;
+                if (Texture == nullptr || Texture->Type != EAssetType::Texture)
+                    return Failure(Call,
+                        "base_color_texture is not a registered Texture asset");
+            }
+            FEditorAssetService Service(EngineLoop);
+            const FEditorAssetResult Created = Service.CreateMaterial(Path, Material);
+            if (!Created.bSucceeded) return Failure(Call, Created.Message);
+            const FAssetRecord* Record = EngineLoop->GetAssetRegistry().Find(Path);
+            FMaterialData ReadBack;
+            EMaterialError Error = EMaterialError::None;
+            if (Record == nullptr
+                || !LoadMaterialFromFile(Record->FilePath, ReadBack, &Error)
+                || MaterialToJson(ReadBack) != MaterialToJson(Material))
+            {
+                const std::filesystem::path CreatedFile = Record != nullptr
+                    ? Record->FilePath
+                    : FPaths::GetProjectContentDir()
+                        / std::filesystem::path(
+                            std::string(Path.GetGameRelativePath()));
+                std::error_code RemoveError;
+                std::filesystem::remove(CreatedFile, RemoveError);
+                Service.RefreshRegistry();
+                return Failure(Call, "Created Material failed read-back verification");
+            }
+            return Success(Call, {{"asset_path", Path.ToString()},
+                {"operation_id", Call.Id}, {"before", nullptr},
+                {"after", MaterialToJson(ReadBack)},
+                {"changed_fields", Values.is_object()
+                    ? FJson(Values) : FJson::object()},
+                {"revision", FileRevision(Record->FilePath)}});
+        };
+        bInitialized = RegisterTool(std::move(CreateMaterial)) && bInitialized;
+
+        FAgentToolDefinition DuplicateMaterial;
+        DuplicateMaterial.Name = "editor.material.duplicate";
+        DuplicateMaterial.Description =
+            "Duplicate one exact Material to an unused explicit path after checking the source content revision";
+        DuplicateMaterial.Permission = EAgentToolPermission::WriteProject;
+        DuplicateMaterial.Schema.Fields = {
+            {"source_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath},
+            {"destination_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath},
+            {"expected_revision", EAgentToolValueType::String, true, {}, {}, 32}};
+        DuplicateMaterial.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            FAssetPath Source; FAssetPath Destination;
+            if (!FAssetPath::TryParse(
+                    Arguments.at("source_path").get<std::string>(), Source)
+                || !FAssetPath::TryParse(
+                    Arguments.at("destination_path").get<std::string>(), Destination)
+                || Destination.GetExtension() != ".pmat" || !EngineLoop)
+                return Failure(Call, "Material source or destination path is invalid");
+            const FAssetRecord* Record = EngineLoop->GetAssetRegistry().Find(Source);
+            const std::string Revision = Record ? FileRevision(Record->FilePath) : "";
+            if (Record == nullptr || Record->Type != EAssetType::Material)
+                return Failure(Call, "Source Material was not found");
+            if (Revision != Arguments.at("expected_revision").get<std::string>())
+                return Failure(Call, "Source Material changed; describe it again before duplicating");
+            FMaterialData Material;
+            EMaterialError Error = EMaterialError::None;
+            if (!LoadMaterialFromFile(Record->FilePath, Material, &Error))
+                return Failure(Call, "Source Material could not be loaded");
+            FEditorAssetService Service(EngineLoop);
+            const FEditorAssetResult Created = Service.CreateMaterial(
+                Destination, Material);
+            if (!Created.bSucceeded) return Failure(Call, Created.Message);
+            const FAssetRecord* CreatedRecord =
+                EngineLoop->GetAssetRegistry().Find(Destination);
+            FMaterialData ReadBack;
+            if (CreatedRecord == nullptr
+                || !LoadMaterialFromFile(CreatedRecord->FilePath, ReadBack, &Error)
+                || MaterialToJson(ReadBack) != MaterialToJson(Material))
+            {
+                std::error_code RemoveError;
+                if (CreatedRecord != nullptr)
+                    std::filesystem::remove(CreatedRecord->FilePath, RemoveError);
+                Service.RefreshRegistry();
+                return Failure(Call,
+                    "Duplicated Material failed read-back verification and was removed");
+            }
+            return Success(Call, {{"source_path", Source.ToString()},
+                {"asset_path", Destination.ToString()}, {"operation_id", Call.Id},
+                {"after", MaterialToJson(ReadBack)},
+                {"revision", CreatedRecord
+                    ? FileRevision(CreatedRecord->FilePath) : std::string {}}});
+        };
+        bInitialized = RegisterTool(std::move(DuplicateMaterial)) && bInitialized;
+
+        FAgentToolDefinition UpdateMaterial;
+        UpdateMaterial.Name = "editor.material.update";
+        UpdateMaterial.Description =
+            "Update only explicitly masked PBR fields on one exact Material after revision and shared-impact checks; saves atomically and verifies by reloading";
+        UpdateMaterial.Permission = EAgentToolPermission::WriteProject;
+        UpdateMaterial.Schema.Fields = {
+            {"asset_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath},
+            {"expected_revision", EAgentToolValueType::String, true, {}, {}, 32},
+            {"update_mask", EAgentToolValueType::Array, true},
+            {"values", EAgentToolValueType::Object, true},
+            {"allow_shared_update", EAgentToolValueType::Boolean, false}};
+        UpdateMaterial.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            FAssetPath Path;
+            if (!FAssetPath::TryParse(
+                    Arguments.at("asset_path").get<std::string>(), Path) || !EngineLoop)
+                return Failure(Call, "Material path is invalid");
+            const FAssetRecord* Record = EngineLoop->GetAssetRegistry().Find(Path);
+            if (Record == nullptr || Record->Type != EAssetType::Material)
+                return Failure(Call, "Material was not found");
+            const std::string BeforeRevision = FileRevision(Record->FilePath);
+            if (BeforeRevision != Arguments.at("expected_revision").get<std::string>())
+                return Failure(Call, "Material changed; describe it again before updating");
+            const auto AssetRefs = FAssetDependencyService::FindAssetReferencers(
+                Path, EngineLoop->GetAssetRegistry());
+            const auto WorldRefs = FAssetDependencyService::FindWorldReferencers(
+                EngineLoop->GetWorld(), Path);
+            if (AssetRefs.size() + WorldRefs.size() > 1
+                && !Arguments.value("allow_shared_update", false))
+                return Failure(Call,
+                    "Material is shared by multiple references; duplicate it or explicitly allow a shared update");
+            const FJson& Mask = Arguments.at("update_mask");
+            const FJson& Values = Arguments.at("values");
+            if (!Mask.is_array() || Mask.empty() || Mask.size() > 4
+                || !Values.is_object() || Values.size() != Mask.size())
+                return Failure(Call, "update_mask and values must name the same 1-4 fields");
+            FMaterialData Before;
+            EMaterialError MaterialError = EMaterialError::None;
+            if (!LoadMaterialFromFile(Record->FilePath, Before, &MaterialError))
+                return Failure(Call, "Material could not be loaded");
+            FMaterialData After = Before;
+            std::unordered_set<std::string> Seen;
+            for (const FJson& Entry : Mask)
+            {
+                if (!Entry.is_string()) return Failure(Call, "update_mask entries must be strings");
+                const std::string Field = Entry.get<std::string>();
+                if (!Seen.insert(Field).second || !Values.contains(Field))
+                    return Failure(Call, "update_mask contains duplicates or missing values");
+                std::string Error;
+                if (!JsonToMaterialField(Field, Values.at(Field), After, Error))
+                    return Failure(Call, Error);
+            }
+            for (auto It = Values.begin(); It != Values.end(); ++It)
+                if (!Seen.contains(It.key()))
+                    return Failure(Call, "values contains a field outside update_mask");
+            if (!After.BaseColorTexture.IsEmpty())
+            {
+                const FAssetRecord* Texture = EngineLoop->GetAssetRegistry().Find(
+                    After.BaseColorTexture);
+                if (Texture == nullptr || Texture->Type != EAssetType::Texture)
+                    return Failure(Call,
+                        "base_color_texture is not a registered Texture asset");
+            }
+            const std::filesystem::path File = Record->FilePath;
+            FEditorAssetService Service(EngineLoop);
+            const FEditorAssetResult Saved = Service.SaveMaterial(Path, After);
+            if (!Saved.bSucceeded) return Failure(Call, Saved.Message);
+            const FAssetRecord* SavedRecord = EngineLoop->GetAssetRegistry().Find(Path);
+            FMaterialData ReadBack;
+            if (SavedRecord == nullptr
+                || !LoadMaterialFromFile(SavedRecord->FilePath, ReadBack, &MaterialError)
+                || MaterialToJson(ReadBack) != MaterialToJson(After))
+            {
+                SaveMaterialToFile(File, Before);
+                Service.RefreshRegistry();
+                return Failure(Call,
+                    "Material read-back verification failed; the previous file was restored");
+            }
+            FJson Changed = FJson::object();
+            for (const std::string& Field : Seen)
+                Changed[Field] = Values.at(Field);
+            return Success(Call, {{"asset_path", Path.ToString()},
+                {"operation_id", Call.Id}, {"before", MaterialToJson(Before)},
+                {"after", MaterialToJson(ReadBack)},
+                {"changed_fields", std::move(Changed)},
+                {"revision_before", BeforeRevision},
+                {"revision_after", FileRevision(SavedRecord->FilePath)}});
+        };
+        bInitialized = RegisterTool(std::move(UpdateMaterial)) && bInitialized;
+
         const auto ResolveGraphFile = [](std::string_view Text,
                                          FAssetPath& OutPath,
                                          std::filesystem::path& OutFile,
@@ -2528,7 +2955,9 @@ struct FEditorAgentToolExecutor::FImpl
                 EngineLoop ? EngineLoop->GetWorld() : nullptr,
                 Arguments.at("object_path").get<std::string>());
             if (!Object) return Failure(Call, "Object path was not found in the active World");
-            return Success(Call, DescribeObject(Object, true));
+            FJson Description = DescribeObject(Object, true);
+            Description["revision"] = ObjectRevision(Object);
+            return Success(Call, std::move(Description));
         };
         bInitialized = RegisterTool(std::move(DescribeObjectTool)) && bInitialized;
 
@@ -2570,7 +2999,8 @@ struct FEditorAgentToolExecutor::FImpl
         SetProperties.Permission = EAgentToolPermission::ModifyWorld;
         SetProperties.Schema.Fields = {
             {"object_path", EAgentToolValueType::String, true, {}, {}, 512},
-            {"properties", EAgentToolValueType::Object, true}
+            {"properties", EAgentToolValueType::Object, true},
+            {"expected_revision", EAgentToolValueType::String, false, {}, {}, 32}
         };
         SetProperties.Handler = [this](
             const FAgentToolCall& Call, const FCancellationToken*)
@@ -2581,6 +3011,12 @@ struct FEditorAgentToolExecutor::FImpl
                 Arguments.at("object_path").get<std::string>());
             const FJson& PropertyValues = Arguments.at("properties");
             if (!Object) return Failure(Call, "Object path was not found in the active World");
+            const std::string RevisionBefore = ObjectRevision(Object);
+            if (Arguments.contains("expected_revision")
+                && Arguments.at("expected_revision").get<std::string>()
+                    != RevisionBefore)
+                return Failure(Call,
+                    "Object changed; describe it again before setting properties");
             if (PropertyValues.empty() || PropertyValues.size() > 32)
                 return Failure(Call, "Properties must contain between 1 and 32 entries");
 
@@ -2605,6 +3041,14 @@ struct FEditorAgentToolExecutor::FImpl
                 Pending.push_back({Property, std::move(Value)});
             }
 
+            FJson Before = FJson::object();
+            for (const FPendingValue& Entry : Pending)
+            {
+                FJson Value;
+                if (!PropertyValueToJson(*Entry.Property, Object, Value))
+                    return Failure(Call, "Could not capture property before-state");
+                Before[Entry.Property->GetName().ToString()] = std::move(Value);
+            }
             FJson Applied = FJson::object();
             for (FPendingValue& Entry : Pending)
             {
@@ -2620,7 +3064,10 @@ struct FEditorAgentToolExecutor::FImpl
             }
             if (Selection) Selection->Set(Object);
             return Success(Call, {{"object_path", Object->GetPathName()},
-                {"properties", std::move(Applied)}});
+                {"properties", Applied}, {"before", std::move(Before)},
+                {"after", Applied}, {"changed_fields", PropertyValues},
+                {"operation_id", Call.Id}, {"revision_before", RevisionBefore},
+                {"revision_after", ObjectRevision(Object)}});
         };
         SetProperties.Verifier = [this](
             const FAgentToolCall&, const FAgentToolResult& Result, std::string& Error)
@@ -2860,10 +3307,11 @@ struct FEditorAgentToolExecutor::FImpl
             std::size_t TotalProperties = 0;
             for (const FJson& Edit : Edits)
             {
-                if (!Edit.is_object() || Edit.size() != 2
+                if (!Edit.is_object() || (Edit.size() != 2 && Edit.size() != 3)
                     || !Edit.contains("object_path") || !Edit.at("object_path").is_string()
                     || !Edit.contains("properties") || !Edit.at("properties").is_object())
-                    return Failure(Call, "Each edit requires object_path and properties only");
+                    return Failure(Call,
+                        "Each edit requires object_path, properties, and optional expected_revision only");
                 const std::string Path = Edit.at("object_path").get<std::string>();
                 if (Path.empty() || Path.size() > 512 || !SeenPaths.insert(Path).second)
                     return Failure(Call, "Edit object paths must be unique and valid");
@@ -2873,6 +3321,12 @@ struct FEditorAgentToolExecutor::FImpl
                 if (!Object || Values.empty() || Values.size() > 32
                     || TotalProperties + Values.size() > 128)
                     return Failure(Call, "Batch property target or property count is invalid");
+                if (Edit.contains("expected_revision")
+                    && (!Edit.at("expected_revision").is_string()
+                        || Edit.at("expected_revision").get<std::string>()
+                            != ObjectRevision(Object)))
+                    return Failure(Call, Path
+                        + ": object changed; describe it again before batch editing");
                 FPendingObject Pending;
                 Pending.Object = Object;
                 Pending.Path = Path;
@@ -2947,6 +3401,223 @@ struct FEditorAgentToolExecutor::FImpl
             return true;
         };
         bInitialized = RegisterTool(std::move(BatchSetProperties)) && bInitialized;
+
+        FAgentToolDefinition ListComponentTypes;
+        ListComponentTypes.Name = "editor.component.list_types";
+        ListComponentTypes.Description =
+            "Discover constructible Actor Component classes from the live reflection registry, including editable defaults; does not use a hard-coded component list";
+        ListComponentTypes.Handler = [](const FAgentToolCall& Call,
+            const FCancellationToken*)
+        {
+            FJson Types = FJson::array();
+            for (const PClass* Class : FClassRegistry::GetClasses())
+            {
+                if (Class == nullptr || !Class->CanConstruct()
+                    || !Class->IsChildOf(PActorComponent::StaticClass()))
+                    continue;
+                FJson Properties = FJson::object();
+                const PObject* Defaults = Class->GetDefaultObject();
+                std::vector<const PProperty*> Reflected;
+                GatherProperties(Class, Reflected);
+                for (const PProperty* Property : Reflected)
+                    if (Property != nullptr && Defaults != nullptr
+                        && Property->HasAnyFlags(EPropertyFlags::Editable))
+                        Properties[Property->GetName().ToString()] =
+                            DescribeProperty(*Property, Defaults);
+                Types.push_back({{"class", Class->GetName().ToString()},
+                    {"scene_component", Class->IsChildOf(
+                        PSceneComponent::StaticClass())},
+                    {"editable_defaults", std::move(Properties)}});
+            }
+            std::sort(Types.begin(), Types.end(),
+                [](const FJson& Left, const FJson& Right)
+                {
+                    return Left.at("class").get<std::string>()
+                        < Right.at("class").get<std::string>();
+                });
+            return Success(Call, {{"component_types", std::move(Types)}});
+        };
+        bInitialized = RegisterTool(std::move(ListComponentTypes)) && bInitialized;
+
+        FAgentToolDefinition AddComponent;
+        AddComponent.Name = "editor.component.add";
+        AddComponent.Description =
+            "Add one reflected constructible component to one exact Actor after checking its revision; scene components attach to an explicit parent or the current root";
+        AddComponent.Permission = EAgentToolPermission::ModifyWorld;
+        AddComponent.Schema.Fields = {
+            {"actor_path", EAgentToolValueType::String, true, {}, {}, 512},
+            {"expected_revision", EAgentToolValueType::String, true, {}, {}, 32},
+            {"component_class", EAgentToolValueType::String, true, {}, {}, 128},
+            {"component_name", EAgentToolValueType::String, true, {}, {}, 64},
+            {"parent_component_path", EAgentToolValueType::String, false, {}, {}, 512},
+            {"socket_name", EAgentToolValueType::String, false, {}, {}, 64}};
+        AddComponent.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            PObject* Object = FindEditorWorldObjectByPath(
+                EngineLoop ? EngineLoop->GetWorld() : nullptr,
+                Arguments.at("actor_path").get<std::string>());
+            PActor* Actor = Object && Object->IsA(PActor::StaticClass())
+                ? static_cast<PActor*>(Object) : nullptr;
+            if (Actor == nullptr) return Failure(Call, "Actor path was not found");
+            const std::string RevisionBefore = ObjectRevision(Actor);
+            if (RevisionBefore
+                != Arguments.at("expected_revision").get<std::string>())
+                return Failure(Call, "Actor changed; describe it again before adding a component");
+            const std::string Name = Arguments.at("component_name").get<std::string>();
+            const PClass* ComponentClass = FClassRegistry::FindClass(
+                FName(Arguments.at("component_class").get<std::string>()));
+            if (!IsSafeObjectName(Name) || ComponentClass == nullptr
+                || !ComponentClass->CanConstruct()
+                || !ComponentClass->IsChildOf(PActorComponent::StaticClass()))
+                return Failure(Call, "Component name or reflected class is invalid");
+            for (PActorComponent* Existing : Actor->GetComponents())
+                if (Existing != nullptr && Existing->GetName().ToString() == Name)
+                    return Failure(Call, "Actor already has a component with that name");
+
+            PSceneComponent* Parent = nullptr;
+            const std::string ParentPath =
+                Arguments.value("parent_component_path", "");
+            if (!ParentPath.empty())
+            {
+                PObject* ParentObject = FindEditorWorldObjectByPath(
+                    EngineLoop->GetWorld(), ParentPath);
+                Parent = ParentObject && ParentObject->IsA(PSceneComponent::StaticClass())
+                    ? static_cast<PSceneComponent*>(ParentObject) : nullptr;
+                if (Parent == nullptr || Parent->GetOwner() != Actor)
+                    return Failure(Call,
+                        "Parent component must be an explicit scene component owned by the Actor");
+            }
+
+            const FJson Before = DescribeObject(Actor, true);
+            PActorComponent* Component = Actor->CreateComponent(ComponentClass, Name);
+            if (Component == nullptr) return Failure(Call, "Could not create component");
+            if (Component->IsA(PSceneComponent::StaticClass()))
+            {
+                auto* Scene = static_cast<PSceneComponent*>(Component);
+                if (Actor->GetRootComponent() == nullptr)
+                {
+                    if (!Actor->SetRootComponent(Scene))
+                        return Failure(Call, "Could not set the new scene component as root");
+                }
+                else
+                {
+                    if (Parent == nullptr) Parent = Actor->GetRootComponent();
+                    const std::string Socket = Arguments.value("socket_name", "");
+                    if (!Scene->AttachToComponent(Parent,
+                            EAttachmentTransformRule::KeepRelative, FName(Socket)))
+                        return Failure(Call, "Could not attach the new scene component");
+                }
+            }
+            if (Selection) Selection->Set(Component);
+            return Success(Call, {{"actor_path", Actor->GetPathName()},
+                {"component_path", Component->GetPathName()},
+                {"component_class", ComponentClass->GetName().ToString()},
+                {"operation_id", Call.Id}, {"before", Before},
+                {"after", DescribeObject(Actor, true)},
+                {"changed_fields", FJson::array({"components"})},
+                {"revision_before", RevisionBefore},
+                {"revision_after", ObjectRevision(Actor)}});
+        };
+        AddComponent.Verifier = [this](const FAgentToolCall&,
+            const FAgentToolResult& Result, std::string& Error)
+        {
+            const FJson Output = FJson::parse(Result.OutputJson);
+            PObject* Object = FindEditorWorldObjectByPath(
+                EngineLoop ? EngineLoop->GetWorld() : nullptr,
+                Output.at("component_path").get<std::string>());
+            if (Object == nullptr || !Object->IsA(PActorComponent::StaticClass())
+                || Object->GetClass()->GetName().ToString()
+                    != Output.at("component_class").get<std::string>())
+            {
+                Error = "Added component failed read-back verification";
+                return false;
+            }
+            return true;
+        };
+        bInitialized = RegisterTool(std::move(AddComponent)) && bInitialized;
+
+        FAgentToolDefinition RemoveComponent;
+        RemoveComponent.Name = "editor.component.remove";
+        RemoveComponent.Description =
+            "Remove one exact non-root component after checking its owner revision; attached descendants require explicit subtree consent and the whole change is Undoable";
+        RemoveComponent.Permission = EAgentToolPermission::ModifyWorld;
+        RemoveComponent.Schema.Fields = {
+            {"component_path", EAgentToolValueType::String, true, {}, {}, 512},
+            {"expected_actor_revision", EAgentToolValueType::String, true, {}, {}, 32},
+            {"allow_remove_subtree", EAgentToolValueType::Boolean, false}};
+        RemoveComponent.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            const std::string ComponentPath =
+                Arguments.at("component_path").get<std::string>();
+            PObject* Object = FindEditorWorldObjectByPath(
+                EngineLoop ? EngineLoop->GetWorld() : nullptr, ComponentPath);
+            PActorComponent* Component =
+                Object && Object->IsA(PActorComponent::StaticClass())
+                    ? static_cast<PActorComponent*>(Object) : nullptr;
+            PActor* Actor = Component ? Component->GetOwner() : nullptr;
+            if (Actor == nullptr) return Failure(Call, "Component path was not found");
+            const std::string RevisionBefore = ObjectRevision(Actor);
+            if (RevisionBefore
+                != Arguments.at("expected_actor_revision").get<std::string>())
+                return Failure(Call, "Actor changed; describe it again before removing a component");
+            if (Component == Actor->GetRootComponent())
+                return Failure(Call,
+                    "Removing the root component is not allowed; replace or reorganize the Actor first");
+            FJson Removed = FJson::array({ComponentPath});
+            if (Component->IsA(PSceneComponent::StaticClass()))
+            {
+                const auto Children = static_cast<PSceneComponent*>(Component)
+                    ->GetAttachChildren();
+                if (!Children.empty()
+                    && !Arguments.value("allow_remove_subtree", false))
+                    return Failure(Call,
+                        "Component has attached descendants; inspect impact and explicitly allow subtree removal");
+                std::function<void(PSceneComponent*)> Gather =
+                    [&Removed, &Gather](PSceneComponent* Parent)
+                    {
+                        for (PSceneComponent* Child : Parent->GetAttachChildren())
+                        {
+                            Removed.push_back(Child->GetPathName());
+                            Gather(Child);
+                        }
+                    };
+                Gather(static_cast<PSceneComponent*>(Component));
+            }
+            const FJson Before = DescribeObject(Actor, true);
+            const std::string ActorPath = Actor->GetPathName();
+            if (!Actor->DestroyComponent(Component))
+                return Failure(Call,
+                    "Component cannot be removed, usually because it is an inherited default component");
+            if (Selection) Selection->Set(Actor);
+            return Success(Call, {{"actor_path", ActorPath},
+                {"removed_component_paths", std::move(Removed)},
+                {"operation_id", Call.Id}, {"before", Before},
+                {"after", DescribeObject(Actor, true)},
+                {"changed_fields", FJson::array({"components"})},
+                {"revision_before", RevisionBefore},
+                {"revision_after", ObjectRevision(Actor)}});
+        };
+        RemoveComponent.Verifier = [this](const FAgentToolCall&,
+            const FAgentToolResult& Result, std::string& Error)
+        {
+            const FJson Output = FJson::parse(Result.OutputJson);
+            for (const FJson& Path : Output.at("removed_component_paths"))
+            {
+                if (FindEditorWorldObjectByPath(
+                        EngineLoop ? EngineLoop->GetWorld() : nullptr,
+                        Path.get<std::string>()) != nullptr)
+                {
+                    Error = "Removed component still exists after the operation";
+                    return false;
+                }
+            }
+            return true;
+        };
+        bInitialized = RegisterTool(std::move(RemoveComponent)) && bInitialized;
 
         FAgentToolDefinition SpawnActor;
         SpawnActor.Name = "editor.actor.spawn";

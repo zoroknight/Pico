@@ -18,6 +18,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -121,12 +122,19 @@ std::vector<PObject*> GatherWorldObjects(PObject* Owner)
 FEditorControlState DrawFloat3Control(
     const char* Label,
     float* Components,
-    float Speed)
+    float Speed,
+    std::optional<float> Minimum = std::nullopt,
+    std::optional<float> Maximum = std::nullopt)
 {
     FEditorControlState State;
     const float Spacing = ImGui::GetStyle().ItemInnerSpacing.x;
     const float ComponentWidth =
         std::max((ImGui::GetContentRegionAvail().x - Spacing * 2.0f) / 3.0f, 1.0f);
+    const bool bHasRange = Minimum.has_value() && Maximum.has_value();
+    const float MinimumValue = bHasRange ? *Minimum : 0.0f;
+    const float MaximumValue = bHasRange ? *Maximum : 0.0f;
+    const ImGuiSliderFlags Flags = bHasRange
+        ? ImGuiSliderFlags_AlwaysClamp : ImGuiSliderFlags_None;
 
     ImGui::PushID(Label);
     for (int ComponentIndex = 0; ComponentIndex < 3; ++ComponentIndex)
@@ -137,8 +145,14 @@ FEditorControlState DrawFloat3Control(
         }
         ImGui::PushID(ComponentIndex);
         ImGui::SetNextItemWidth(ComponentWidth);
-        const bool bChanged =
-            ImGui::DragFloat("##Value", &Components[ComponentIndex], Speed);
+        const bool bChanged = ImGui::DragFloat(
+            "##Value",
+            &Components[ComponentIndex],
+            Speed,
+            MinimumValue,
+            MaximumValue,
+            "%.3f",
+            Flags);
         State.IncludeLastItem(bChanged);
         ImGui::PopID();
     }
@@ -149,11 +163,13 @@ FEditorControlState DrawFloat3Control(
 FEditorControlState DrawVector3Control(
     const char* Label,
     FVector3& Value,
-    float Speed = 0.1f)
+    float Speed = 0.1f,
+    std::optional<float> Minimum = std::nullopt,
+    std::optional<float> Maximum = std::nullopt)
 {
     float Components[] = { Value.X, Value.Y, Value.Z };
     const FEditorControlState State =
-        DrawFloat3Control(Label, Components, Speed);
+        DrawFloat3Control(Label, Components, Speed, Minimum, Maximum);
     if (State.bChanged)
     {
         Value = FVector3(Components[0], Components[1], Components[2]);
@@ -663,6 +679,13 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
     const std::string Description =
         "Edit " + Object->GetPathName() + "." + PropertyName;
     const bool bReadOnly = Property->HasAnyFlags(EPropertyFlags::ReadOnly);
+    const FPropertyMetadata& Metadata = Property->GetMetadata();
+    const std::optional<float> Minimum = Metadata.Minimum
+        ? std::optional<float>(static_cast<float>(*Metadata.Minimum))
+        : std::nullopt;
+    const std::optional<float> Maximum = Metadata.Maximum
+        ? std::optional<float>(static_cast<float>(*Metadata.Maximum))
+        : std::nullopt;
     ImGui::BeginDisabled(bReadOnly);
     const auto ApplyValue =
         [this, &EditKey, &Description, &bChanged, &bChangeApplied](
@@ -740,7 +763,16 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
         if (Property->GetValue(Object, Value))
         {
             FEditorControlState State;
-            State.IncludeLastItem(ImGui::DragFloat("##Value", &Value, 0.1f));
+            const bool bHasRange = Minimum.has_value() && Maximum.has_value();
+            State.IncludeLastItem(ImGui::DragFloat(
+                "##Value",
+                &Value,
+                0.1f,
+                bHasRange ? *Minimum : 0.0f,
+                bHasRange ? *Maximum : 0.0f,
+                "%.3f",
+                bHasRange ? ImGuiSliderFlags_AlwaysClamp
+                          : ImGuiSliderFlags_None));
             ApplyValue(
                 State,
                 [Object, Property, Value]()
@@ -773,7 +805,8 @@ void FDetailsPanel::DrawPropertyEditor(PObject* Object, const PProperty* Propert
         if (Property->GetValue(Object, Value))
         {
             const FEditorControlState State =
-                DrawVector3Control("##Value", Value);
+                DrawVector3Control(
+                    "##Value", Value, 0.1f, Minimum, Maximum);
             ApplyValue(
                 State,
                 [Object, Property, Value]()

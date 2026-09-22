@@ -6,7 +6,7 @@
 它位于 [ReAct 轻量化加固门](AgentReActLightweightHardeningRoadmap.zh-CN.md) 之后、
 [Agent 游戏制作链路](AgentGameCreationPipeline.zh-CN.md) 第 5～8 周之前，是后续玩法组装与 AI 视觉资产生产的前置门。
 
-> 状态：**规划中，最高优先级插入项**。先完成安全第 0 阶段，再开放任何 Material/Component 写工具或外部视觉 API。
+> 状态：**S0～S2 已完成，S3～S6 待实施**。安全写入、Material 工具与反射驱动的通用组件装配已经进入主线；语义元数据、预览和外部视觉 API 尚未开放。
 
 本切片解决的不是“为奶牛写一个专用命令”，而是建立一条可复用链路，使 Agent 能够：
 
@@ -29,14 +29,39 @@
 - Build Plan、PlanHash、Tool Policy、审批、事务、Checkpoint、Artifact Handle 和 Unified Trace 已存在；
 - World 与 Blueprint 已有保存、重开和静态验证基础。
 
-### 仍需补齐
+### S0～S2 后仍需补齐
 
-- 缺少单资产详细描述、引用影响分析、预览生成和语义元数据工具；
-- 缺少通用 Material 创建、复制和字段级更新工具；
-- 缺少通用组件添加/删除工具，现有 Actor 创建能力不足以完成完整渲染 Actor 装配；
+- 单资产详细描述和引用影响分析已完成；预览生成和语义元数据工具仍待 S3～S4；
+- 通用 Material 创建、复制和字段级更新已完成；Material Graph、更多贴图槽不属于本阶段；
+- 通用组件发现、添加和删除已完成，可通过 Empty Actor 分步装配；Blueprint 默认组件持久化仍沿用现有 Blueprint 链路；
 - Descriptor 中视觉语义仍可能为 `unknown`，Agent 不能只凭文件名可靠判断“奶牛”“陶瓷”“金属”；
 - 缺少跨轮澄清状态，模型可能在用户尚未选定候选项时直接执行；
-- 项目资产修改与场景实例修改还需要统一的复合事务和验证边界。
+- 单步项目资产写入使用原子文件替换，World 写入使用 Undo 事务，Agent Run 使用 ChangeSet 留痕；跨资产与 World 的多步创作继续以分步 Checkpoint 恢复，不伪装成一个不可观察的大事务。
+
+## S0～S2 交付记录
+
+### S0 安全写入
+
+- `editor.object.describe`、`editor.asset.describe` 和 `editor.material.describe` 返回基于当前内容计算的 Revision；新 Material 与组件写工具强制携带 `expected_revision`，旧版本写入在产生副作用前失败。
+- `editor.material.update` 强制使用 `update_mask`，只更新明确列出的 Base Color、Metallic、Roughness 或 Base Color Texture；颜色与 PBR 标量限制在 `[0, 1]`，贴图必须是已注册 Texture。
+- 创建和复制拒绝覆盖同名资产；共享 Material 默认拒绝原地更新，只有调用方显式传入 `allow_shared_update` 才能继续。
+- 写结果包含 `operation_id`、Before/After、Changed Fields 和前后 Revision；Material 保存后重新加载验证，失败时恢复旧文件或删除本次半成品；组件写入由现有 World 事务和 Verifier 回滚。
+- PlanHash 继续绑定完整工具参数，稳定 ToolCall ID 继续作为幂等键，审批、Operation Journal、Run ChangeSet 与 Unified Trace 复用现有 Harness，不新增第二套协议。
+
+### S1 资产与 Material
+
+已新增 `editor.asset.describe`、`editor.asset.find_references`、`editor.material.describe/create/duplicate/update`。资产描述同时返回确定性技术摘要、依赖、项目资产引用、活动 World 引用和内容 Revision；Material 修改可以先判断共享影响，再选择复制或显式修改共享资产。
+
+### S2 组件与 Actor 装配
+
+已新增 `editor.component.list_types/add/remove`。类型列表来自实时反射注册表，不维护 PointLight、StaticMesh 等硬编码白名单；添加组件使用显式 Actor 路径、类名、名称和可选父组件/Socket，删除组件禁止直接删除 Root，并要求对附着子树显式授权。每次增删都是独立 Undo Checkpoint，因此 Agent 可以按“创建 Empty Actor -> 添加组件 -> 设置反射属性 -> 保存 World”逐步执行和验收。
+
+### 自动化证据
+
+- Editor Agent 工具总数由 34 增至 43；
+- 覆盖 PointLight 反射发现/装配、陈旧 Revision 零副作用拒写、组件删除与 Undo；
+- 在隔离项目中覆盖 Material 创建、读回、字段掩码更新、陈旧 Revision、复制、资产描述与引用查询；
+- `PicoEditorTests`：`170 passed, 0 failed`。
 
 ## 固定架构决策
 
@@ -251,9 +276,9 @@ Destructive
 
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |
-| S0 第 1 周 | 稳定目标、`expected_revision`、字段更新掩码、引用影响查询、禁止覆盖、PlanHash 参数绑定、幂等键与复合事务 | 并发修改、同名资产、共享 Material 和中途失败均不会静默覆盖或删除用户内容；所有写操作可读回验证和撤销 |
-| S1 第 2 周 | `asset.describe/find_references`、Material describe/create/duplicate/update 与统一字段 Diff | Agent 可解释材质当前状态；共享材质修改前必定给出影响范围；创建和修改结果可保存、重开、验证 |
-| S2 第 3 周 | 通用组件发现、添加/删除、Empty Actor 装配、目标域区分和分步 Checkpoint | 不增加项目专用工具即可创建 Actor、添加 StaticMeshComponent、绑定 Mesh/Material；每步可独立停止与恢复 |
+| S0 第 1 周（已完成） | 稳定目标、`expected_revision`、字段更新掩码、引用影响查询、禁止覆盖、PlanHash 参数绑定、幂等键与分步事务 | 陈旧版本、同名资产、共享 Material 和中途失败不会静默覆盖用户内容；写操作可读回验证并通过原子文件或 World Undo 恢复 |
+| S1 第 2 周（已完成） | `asset.describe/find_references`、Material describe/create/duplicate/update 与统一字段 Diff | Agent 可解释材质当前状态；共享材质原地修改需要显式授权；创建和修改结果经过保存与重新加载验证 |
+| S2 第 3 周（已完成） | 通用组件发现、添加/删除、Empty Actor 装配、目标域区分和分步 Checkpoint | 不增加项目专用工具即可发现并添加 PointLight、StaticMesh 等反射组件；每步是独立 Undo Checkpoint |
 | S3 第 4 周 | `.pmeta.json` Schema、AssetService 生命周期、Content Browser/Details 编辑、Knowledge Store 来源与 Revision | 用户可维护资产描述和标签；移动/复制/删除资产时 Sidecar 不孤立；RAG 区分人工事实与模型推断 |
 | S4 第 5 周 | Mesh/Material/Texture 标准化预览、Artifact Handle、缓存与失效 | 预览可在 UI 和 Agent 会话中查看；大图片不进入普通上下文；资产变化后旧预览与分析自动过期 |
 | S5 第 6 周 | `IAssetVisionProvider`、DeepSeek 多模态 Adapter、隐私授权、置信度与人工接受/拒绝 | 视觉模型不可用时安全降级；未经授权零上传；推断不会自动写入正式元数据或修改项目 |

@@ -15,7 +15,14 @@ bool PLightComponent::RegisterProperties(PClass& Class)
 {
     std::vector<PProperty> Properties;
     PICO_ADD_PROPERTY(Properties, bEnabled);
-    PICO_ADD_PROPERTY(Properties, LightColor);
+    FPropertyMetadata ColorMetadata;
+    ColorMetadata.Description =
+        "Normalized linear RGB light color; use Intensity for brightness";
+    ColorMetadata.Semantic = "Color";
+    ColorMetadata.Units = "LinearRGB";
+    ColorMetadata.Minimum = 0.0;
+    ColorMetadata.Maximum = 1.0;
+    PICO_ADD_PROPERTY_METADATA(Properties, LightColor, ColorMetadata);
     PICO_ADD_PROPERTY(Properties, Intensity);
     return Class.AddProperties(std::move(Properties));
 }
@@ -74,9 +81,9 @@ void PLightComponent::SanitizeLightParameters()
     if (!std::isfinite(LightColor.X)) LightColor.X = 1.0f;
     if (!std::isfinite(LightColor.Y)) LightColor.Y = 1.0f;
     if (!std::isfinite(LightColor.Z)) LightColor.Z = 1.0f;
-    LightColor.X = std::max(LightColor.X, 0.0f);
-    LightColor.Y = std::max(LightColor.Y, 0.0f);
-    LightColor.Z = std::max(LightColor.Z, 0.0f);
+    LightColor.X = std::clamp(LightColor.X, 0.0f, 1.0f);
+    LightColor.Y = std::clamp(LightColor.Y, 0.0f, 1.0f);
+    LightColor.Z = std::clamp(LightColor.Z, 0.0f, 1.0f);
     if (!std::isfinite(Intensity)) Intensity = 3.0f;
     Intensity = std::max(Intensity, 0.0f);
 }
