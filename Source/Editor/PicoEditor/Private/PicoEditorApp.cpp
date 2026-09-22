@@ -659,6 +659,15 @@ void FPicoEditorApp::Draw()
 
     if (ImGui::Begin("Content Browser"))
     {
+        const FAssetRecord* MetadataAsset =
+            AssetSelection.Resolve(EngineLoop->GetAssetRegistry());
+        ImGui::BeginDisabled(MetadataAsset == nullptr);
+        if (ImGui::Button("Metadata"))
+        {
+            AssetWorkflow.OpenSemanticMetadata(MetadataAsset->AssetPath);
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
         ContentBrowserPanel.Draw(
             EngineLoop->GetAssetRegistry(),
             AssetSelection,

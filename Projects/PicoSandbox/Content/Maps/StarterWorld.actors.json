@@ -1,0 +1,180 @@
+{
+  "format": "PicoActorCatalog",
+  "version": 1,
+  "world_asset": "/Game/Maps/StarterWorld.pworld",
+  "provenance": "user-confirmed",
+  "description": "Human-maintained semantic descriptions for authored Actor instances in StarterWorld. Runtime properties remain authoritative for class, transform, replication, collision, and asset references.",
+  "actors": [
+    {
+      "object_path": "StarterWorld.PersistentLevel.Floor",
+      "class": "PActor",
+      "description": "Main walkable floor and visual ground surface for the sandbox arena.",
+      "tags": [
+        "actor.environment",
+        "level.floor",
+        "collision.static"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.WallNorth",
+      "class": "PActor",
+      "description": "North boundary wall for the sandbox arena.",
+      "tags": [
+        "actor.environment",
+        "level.wall",
+        "collision.static"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.WallEast",
+      "class": "PActor",
+      "description": "East boundary wall for the sandbox arena.",
+      "tags": [
+        "actor.environment",
+        "level.wall",
+        "collision.static"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.WallWest",
+      "class": "PActor",
+      "description": "West boundary wall for the sandbox arena.",
+      "tags": [
+        "actor.environment",
+        "level.wall",
+        "collision.static"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.PhysicsCrate",
+      "class": "PActor",
+      "description": "Shared physics crate used to validate collision, server authority, Actor replication, and replicated movement between clients.",
+      "tags": [
+        "actor.gameplay",
+        "physics.dynamic",
+        "network.replicated"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.PlayerStart",
+      "class": "PPlayerStart",
+      "description": "Spawn point for player index 0 in multiplayer Play sessions.",
+      "tags": [
+        "actor.spawn",
+        "player.index_0",
+        "network.player"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.PlayerStart_1",
+      "class": "PPlayerStart",
+      "description": "Spawn point for player index 1 in multiplayer Play sessions.",
+      "tags": [
+        "actor.spawn",
+        "player.index_1",
+        "network.player"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.DirectionalLight",
+      "class": "PActor",
+      "description": "Directional light providing broad scene illumination for the sandbox world.",
+      "tags": [
+        "actor.light",
+        "light.directional",
+        "scene.lighting"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.PointLight",
+      "class": "PActor",
+      "description": "Authored point light providing local illumination in the sandbox scene.",
+      "tags": [
+        "actor.light",
+        "light.point",
+        "scene.lighting"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.PointLight_1",
+      "class": "PActor",
+      "description": "Second authored point light providing local illumination in the sandbox scene.",
+      "tags": [
+        "actor.light",
+        "light.point",
+        "scene.lighting"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.NetworkDoor",
+      "class": "PSandboxReplicationLabActor",
+      "description": "Network replication test door. Its open state and collision-enabled state are server-authoritative and shared between clients.",
+      "tags": [
+        "actor.gameplay",
+        "gameplay.door",
+        "network.replicated",
+        "collision.dynamic"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.Cow_1",
+      "class": "PActor",
+      "description": "Spot cow display Actor using the preferred triangulated cow mesh and natural material variant.",
+      "tags": [
+        "actor.prop",
+        "subject.cow",
+        "material.natural"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.Cow_2",
+      "class": "PActor",
+      "description": "Spot cow display Actor using the preferred triangulated cow mesh and toy material variant.",
+      "tags": [
+        "actor.prop",
+        "subject.cow",
+        "material.toy"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.Rock_1",
+      "class": "PActor",
+      "description": "Rock display Actor using the dry rock material variant.",
+      "tags": [
+        "actor.prop",
+        "subject.rock",
+        "material.dry"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.Rock_2",
+      "class": "PActor",
+      "description": "Rock display Actor using the wet rock material variant.",
+      "tags": [
+        "actor.prop",
+        "subject.rock",
+        "material.wet"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.Bunny_1",
+      "class": "PActor",
+      "description": "Bunny display Actor using the bronze material variant.",
+      "tags": [
+        "actor.prop",
+        "subject.rabbit",
+        "material.bronze"
+      ]
+    },
+    {
+      "object_path": "StarterWorld.PersistentLevel.Bunny_2",
+      "class": "PActor",
+      "description": "Bunny display Actor using the ceramic material variant.",
+      "tags": [
+        "actor.prop",
+        "subject.rabbit",
+        "material.ceramic"
+      ]
+    }
+  ]
+}

@@ -900,6 +900,7 @@ if(PICO_BUILD_INSPECTOR)
 
     add_library(PicoEditorCore STATIC
         Source/Editor/PicoEditor/Private/AssetDependencyService.cpp
+        Source/Editor/PicoEditor/Private/AssetSemanticMetadataService.cpp
         Source/Editor/PicoEditor/Private/EditorAgentExecutionService.cpp
         Source/Editor/PicoEditor/Private/EditorAgentTools.cpp
         Source/Editor/PicoEditor/Private/EditorAssetSelection.cpp
@@ -922,6 +923,7 @@ if(PICO_BUILD_INSPECTOR)
         Source/Editor/PicoEditor/Public/Pico/Editor/EditorRuntimeFreshness.h
         Source/Editor/PicoEditor/Public/Pico/Editor/PlaySession.h
         Source/Editor/PicoEditor/Public/Pico/Editor/AssetDependencyService.h
+        Source/Editor/PicoEditor/Public/Pico/Editor/AssetSemanticMetadataService.h
         Source/Editor/PicoEditor/Public/Pico/Editor/EditorAgentExecutionService.h
     )
 

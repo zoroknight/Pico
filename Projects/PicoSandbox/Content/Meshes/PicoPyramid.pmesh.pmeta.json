@@ -1,0 +1,1 @@
+{"schema_version":1,"display_name":"Pico Pyramid Mesh","description":"Simple pyramid static mesh used for Pico rendering and material experiments.","semantic_tags":["asset.static_mesh","shape.pyramid","test.rendering"],"intended_use":["environment_prop","rendering_test"],"surface_tags":[],"provenance":"user-confirmed","source_asset_revision":"85ef075165c64408"}

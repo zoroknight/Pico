@@ -6,7 +6,7 @@
 它位于 [ReAct 轻量化加固门](AgentReActLightweightHardeningRoadmap.zh-CN.md) 之后、
 [Agent 游戏制作链路](AgentGameCreationPipeline.zh-CN.md) 第 5～8 周之前，是后续玩法组装与 AI 视觉资产生产的前置门。
 
-> 状态：**S0～S2 已完成，S3～S6 待实施**。安全写入、Material 工具与反射驱动的通用组件装配已经进入主线；语义元数据、预览和外部视觉 API 尚未开放。
+> 状态：**S0～S3 已完成，S4～S6 待实施**。安全写入、Material 工具、反射驱动的通用组件装配和人工语义元数据已经进入主线；标准预览和外部视觉 API 尚未开放。
 
 本切片解决的不是“为奶牛写一个专用命令”，而是建立一条可复用链路，使 Agent 能够：
 
@@ -29,16 +29,16 @@
 - Build Plan、PlanHash、Tool Policy、审批、事务、Checkpoint、Artifact Handle 和 Unified Trace 已存在；
 - World 与 Blueprint 已有保存、重开和静态验证基础。
 
-### S0～S2 后仍需补齐
+### S0～S3 后仍需补齐
 
-- 单资产详细描述和引用影响分析已完成；预览生成和语义元数据工具仍待 S3～S4；
+- 单资产详细描述、引用影响分析和人工语义元数据已完成；预览生成仍待 S4；
 - 通用 Material 创建、复制和字段级更新已完成；Material Graph、更多贴图槽不属于本阶段；
 - 通用组件发现、添加和删除已完成，可通过 Empty Actor 分步装配；Blueprint 默认组件持久化仍沿用现有 Blueprint 链路；
 - Descriptor 中视觉语义仍可能为 `unknown`，Agent 不能只凭文件名可靠判断“奶牛”“陶瓷”“金属”；
 - 缺少跨轮澄清状态，模型可能在用户尚未选定候选项时直接执行；
 - 单步项目资产写入使用原子文件替换，World 写入使用 Undo 事务，Agent Run 使用 ChangeSet 留痕；跨资产与 World 的多步创作继续以分步 Checkpoint 恢复，不伪装成一个不可观察的大事务。
 
-## S0～S2 交付记录
+## S0～S3 交付记录
 
 ### S0 安全写入
 
@@ -56,12 +56,21 @@
 
 已新增 `editor.component.list_types/add/remove`。类型列表来自实时反射注册表，不维护 PointLight、StaticMesh 等硬编码白名单；添加组件使用显式 Actor 路径、类名、名称和可选父组件/Socket，删除组件禁止直接删除 Root，并要求对附着子树显式授权。每次增删都是独立 Undo Checkpoint，因此 Agent 可以按“创建 Empty Actor -> 添加组件 -> 设置反射属性 -> 保存 World”逐步执行和验收。
 
+### S3 人工语义元数据与知识来源
+
+- 每个正式资产可拥有同目录 `<asset>.pmeta.json` Sidecar，Schema v1 保存 Display Name、Description、Semantic Tags、Intended Use、Surface Tags、固定的 `user-confirmed` 来源以及对应资产内容 Revision；元数据自身另有独立 Revision。
+- Content Browser 的 `Metadata` 入口提供字段编辑。保存前同时比较资产 Revision 与元数据 Revision，避免编辑窗口打开后被其他操作覆盖；保存采用临时文件发布并重新加载验证。
+- `editor.asset.semantic_metadata.get/set` 向内置 AI Chat 和 MCP 外部 Agent 暴露同一份数据。写工具要求显式资产路径、双 Revision、字段更新掩码和正常的 `WriteProject` 审批，不允许把模型推断伪装成正式事实。
+- `editor.asset.describe`、AssetDescriptor Catalog 与 Knowledge Store 会纳入人工元数据、来源、元数据 Revision 和过期状态，人工标签参与检索；视觉模型的推断缓存尚未实现，因此当前不存在推断自动进入正式知识视图的旁路。
+- AssetService 在重命名、暂存删除、删除回滚和最终删除时同步处理 Sidecar；Material 复制会复制元数据并重新绑定目标资产 Revision。任一环节失败时恢复本次文件变化，避免孤立或串错资产的元数据。
+
 ### 自动化证据
 
-- Editor Agent 工具总数由 34 增至 43；
+- Editor Agent 工具总数由 34 增至 45；
 - 覆盖 PointLight 反射发现/装配、陈旧 Revision 零副作用拒写、组件删除与 Undo；
 - 在隔离项目中覆盖 Material 创建、读回、字段掩码更新、陈旧 Revision、复制、资产描述与引用查询；
-- `PicoEditorTests`：`170 passed, 0 failed`。
+- 覆盖语义元数据双 Revision、字段掩码、正式来源、Knowledge Store 摄取，以及复制、重命名、暂存删除回滚和最终删除；
+- `PicoEditorTests`：`172 passed, 0 failed`；`Release PicoEditor` 完整构建通过。
 
 ## 固定架构决策
 
@@ -119,7 +128,8 @@ Saved/DerivedData/AssetUnderstanding/<asset-hash>.json
   "semantic_tags": ["animal.cow", "prop.decorative"],
   "intended_use": ["environment", "display"],
   "surface_tags": ["ceramic", "glazed"],
-  "provenance": "user-confirmed"
+  "provenance": "user-confirmed",
+  "source_asset_revision": "<content-hash>"
 }
 ```
 
@@ -279,7 +289,7 @@ Destructive
 | S0 第 1 周（已完成） | 稳定目标、`expected_revision`、字段更新掩码、引用影响查询、禁止覆盖、PlanHash 参数绑定、幂等键与分步事务 | 陈旧版本、同名资产、共享 Material 和中途失败不会静默覆盖用户内容；写操作可读回验证并通过原子文件或 World Undo 恢复 |
 | S1 第 2 周（已完成） | `asset.describe/find_references`、Material describe/create/duplicate/update 与统一字段 Diff | Agent 可解释材质当前状态；共享材质原地修改需要显式授权；创建和修改结果经过保存与重新加载验证 |
 | S2 第 3 周（已完成） | 通用组件发现、添加/删除、Empty Actor 装配、目标域区分和分步 Checkpoint | 不增加项目专用工具即可发现并添加 PointLight、StaticMesh 等反射组件；每步是独立 Undo Checkpoint |
-| S3 第 4 周 | `.pmeta.json` Schema、AssetService 生命周期、Content Browser/Details 编辑、Knowledge Store 来源与 Revision | 用户可维护资产描述和标签；移动/复制/删除资产时 Sidecar 不孤立；RAG 区分人工事实与模型推断 |
+| S3 第 4 周（已完成） | `.pmeta.json` Schema、AssetService 生命周期、Content Browser 编辑、Knowledge Store 来源与 Revision | 用户可维护资产描述和标签；重命名/复制/删除资产时 Sidecar 不孤立；RAG 只把 `user-confirmed` Sidecar 作为正式人工事实，并保留来源、双 Revision 与过期状态 |
 | S4 第 5 周 | Mesh/Material/Texture 标准化预览、Artifact Handle、缓存与失效 | 预览可在 UI 和 Agent 会话中查看；大图片不进入普通上下文；资产变化后旧预览与分析自动过期 |
 | S5 第 6 周 | `IAssetVisionProvider`、DeepSeek 多模态 Adapter、隐私授权、置信度与人工接受/拒绝 | 视觉模型不可用时安全降级；未经授权零上传；推断不会自动写入正式元数据或修改项目 |
 | S6 第 7 周 | 交互状态机、Asset Authoring Skill、真实 Editor Golden Tasks、回滚/迁移/性能验收 | 模糊需求必先澄清；“陶瓷奶牛”等端到端任务按步骤完成；错误分类、失败恢复和禁止副作用均有结构化证据 |

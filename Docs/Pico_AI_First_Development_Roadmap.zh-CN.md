@@ -700,7 +700,7 @@ DisplayName、Category、范围和权限元数据后，再将该适配器完全�
 第二套 Harness 或新的执行模式。加固门通过前，不以继续增加玩法 Tool、独立 Memory Service 或额外模型调用掩盖
 上下文、证据、振荡和恢复问题。
 
-ReAct R1～R5 已通过，资产理解与安全创作的 S0～S2 也已完成，接下来执行 S3～S6：
+ReAct R1～R5 已通过，资产理解与安全创作的 S0～S3 也已完成，接下来执行 S4～S6：
 [Agent 资产理解与安全创作纵向切片](AgentAssetUnderstandingAndSafeAuthoring.zh-CN.md)。该七周插入项是阶段 A
 第 5 周前的最高优先级门：先补齐稳定目标、Revision 校验、字段级更新、引用影响分析、复合事务和读回验证，再依次
 开放 Material、通用组件、Actor 装配、语义元数据、标准预览和可选视觉分析。视觉 Provider 只提供只读候选语义，
@@ -711,7 +711,7 @@ ReAct R5
  -> S0 Safety Foundation（已完成）
  -> S1 Material / Reference Tools（已完成）
  -> S2 Component / Actor Assembly（已完成）
- -> S3 Semantic Metadata
+ -> S3 Semantic Metadata（已完成）
  -> S4 Preview Artifacts
  -> S5 Optional Vision Provider
  -> S6 Editor Golden Tasks

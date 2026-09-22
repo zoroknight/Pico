@@ -40,6 +40,7 @@ public:
     void OpenReimportOptions(const FAssetPath& AssetPath);
     void OpenDelete(const std::vector<FAssetPath>& AssetPaths);
     void OpenRename(const FAssetPath& AssetPath);
+    void OpenSemanticMetadata(const FAssetPath& AssetPath);
     void RefreshRegistry();
     void Reimport(const FAssetPath& AssetPath);
     bool CanReimport(const FAssetPath& AssetPath) const;
@@ -50,6 +51,8 @@ private:
     void ConfirmMaterial(const FMaterialSaveRequest& Request);
     void DrawRenameDialog();
     void ConfirmRename();
+    void DrawSemanticMetadataDialog();
+    void ConfirmSemanticMetadata();
     FAssetPath FindUniqueAssetPath(
         std::string_view Folder,
         std::string_view BaseName,
@@ -70,6 +73,15 @@ private:
     FMaterialDialog MaterialDialog;
     FAssetPath RenameAssetPath;
     std::array<char, 128> RenameBuffer {};
+    FAssetPath SemanticMetadataAssetPath;
+    std::array<char, 128> SemanticDisplayName {};
+    std::array<char, 2048> SemanticDescription {};
+    std::array<char, 1024> SemanticTags {};
+    std::array<char, 1024> SemanticIntendedUse {};
+    std::array<char, 1024> SemanticSurfaceTags {};
+    std::string SemanticMetadataRevision;
+    std::string SemanticAssetRevision;
     bool bOpenRenamePopup = false;
+    bool bOpenSemanticMetadataPopup = false;
 };
 }

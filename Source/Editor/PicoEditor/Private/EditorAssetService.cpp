@@ -1,4 +1,5 @@
 #include "Pico/Editor/EditorAssetService.h"
+#include "Pico/Editor/AssetSemanticMetadataService.h"
 #include "Pico/Editor/AssetDependencyService.h"
 
 #include "Pico/Core/Config.h"
@@ -410,8 +411,19 @@ FEditorAssetResult FEditorAssetService::RenameAsset(
 
     const std::filesystem::path OldSidecar = OldFile.string() + ".import";
     const std::filesystem::path NewSidecar = NewFile.string() + ".import";
+    const std::filesystem::path OldSemanticSidecar =
+        FAssetSemanticMetadataService::GetSidecarPath(OldFile);
+    const std::filesystem::path NewSemanticSidecar =
+        FAssetSemanticMetadataService::GetSidecarPath(NewFile);
     std::error_code Error;
     const bool bHasSidecar = std::filesystem::is_regular_file(OldSidecar, Error);
+    Error.clear();
+    const bool bHasSemanticSidecar =
+        std::filesystem::is_regular_file(OldSemanticSidecar, Error);
+    if (bHasSemanticSidecar && std::filesystem::exists(NewSemanticSidecar, Error))
+    {
+        return Failure("Renamed asset semantic metadata already exists");
+    }
     Error.clear();
     std::filesystem::rename(OldFile, NewFile, Error);
     if (Error)
@@ -426,6 +438,20 @@ FEditorAssetResult FEditorAssetService::RenameAsset(
             std::error_code RollbackError;
             std::filesystem::rename(NewFile, OldFile, RollbackError);
             return Failure("Could not rename the asset import metadata");
+        }
+    }
+    if (bHasSemanticSidecar)
+    {
+        Error.clear();
+        std::filesystem::rename(OldSemanticSidecar, NewSemanticSidecar, Error);
+        if (Error)
+        {
+            std::error_code RollbackError;
+            if (bHasSidecar)
+                std::filesystem::rename(NewSidecar, OldSidecar, RollbackError);
+            RollbackError.clear();
+            std::filesystem::rename(NewFile, OldFile, RollbackError);
+            return Failure("Could not rename asset semantic metadata");
         }
     }
 
@@ -444,6 +470,12 @@ FEditorAssetResult FEditorAssetService::RenameAsset(
             if (bHasSidecar)
             {
                 std::filesystem::rename(NewSidecar, OldSidecar, RollbackError);
+            }
+            if (bHasSemanticSidecar)
+            {
+                RollbackError.clear();
+                std::filesystem::rename(
+                    NewSemanticSidecar, OldSemanticSidecar, RollbackError);
             }
             RollbackError.clear();
             std::filesystem::rename(NewFile, OldFile, RollbackError);
@@ -469,6 +501,12 @@ FEditorAssetResult FEditorAssetService::RenameAsset(
         if (bHasSidecar)
         {
             std::filesystem::rename(NewSidecar, OldSidecar, RollbackError);
+        }
+        if (bHasSemanticSidecar)
+        {
+            RollbackError.clear();
+            std::filesystem::rename(
+                NewSemanticSidecar, OldSemanticSidecar, RollbackError);
         }
         RollbackError.clear();
         std::filesystem::rename(NewFile, OldFile, RollbackError);
@@ -548,6 +586,13 @@ FEditorAssetResult FEditorAssetService::StageDeleteAssets(
         if (std::filesystem::is_regular_file(MetadataFile, Error))
         {
             FilesToDelete.push_back(MetadataFile);
+        }
+        const std::filesystem::path SemanticMetadataFile =
+            FAssetSemanticMetadataService::GetSidecarPath(DestinationFile);
+        Error.clear();
+        if (std::filesystem::is_regular_file(SemanticMetadataFile, Error))
+        {
+            FilesToDelete.push_back(SemanticMetadataFile);
         }
         if (bDeleteProjectSources)
         {

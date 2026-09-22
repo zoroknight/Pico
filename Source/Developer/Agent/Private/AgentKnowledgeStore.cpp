@@ -938,6 +938,9 @@ std::vector<FAgentKnowledgeRecord> CollectProjectTextKnowledge(
             continue;
         }
         if (!It->is_regular_file() || !HasAllowedExtension(It->path())) continue;
+        const std::string FileName =
+            LowerAscii(It->path().filename().string());
+        if (FileName.ends_with(".pmeta.json")) continue;
         const std::uintmax_t Size = It->file_size(Error);
         if (Error || Size > MaxFileBytes) { Error.clear(); continue; }
         std::ifstream Stream(It->path(), std::ios::binary);

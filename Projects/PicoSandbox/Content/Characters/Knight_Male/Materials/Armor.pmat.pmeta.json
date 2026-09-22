@@ -1,0 +1,1 @@
+{"schema_version":1,"display_name":"Knight Armor Material","description":"Primary armor material assigned to the knight character mesh.","semantic_tags":["asset.material","character.knight","material.armor"],"intended_use":["character_rendering"],"surface_tags":["armor"],"provenance":"user-confirmed","source_asset_revision":"19c21dd504ca476a"}

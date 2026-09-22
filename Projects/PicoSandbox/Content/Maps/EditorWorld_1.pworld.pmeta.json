@@ -1,0 +1,1 @@
+{"schema_version":1,"display_name":"Alternate Editor World","description":"Secondary editor-authored world retained for world loading and scene persistence tests.","semantic_tags":["asset.world","scene.editor_test","workflow.persistence"],"intended_use":["editor_testing","scene_authoring"],"surface_tags":[],"provenance":"user-confirmed","source_asset_revision":"283fb1a07068d9dc"}

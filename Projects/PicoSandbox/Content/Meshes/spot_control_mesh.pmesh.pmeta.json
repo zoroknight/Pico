@@ -1,0 +1,1 @@
+{"schema_version":1,"display_name":"Spot Cow Control Mesh","description":"Original Catmull-Clark control mesh for the public-domain Spot cow surface dataset.","semantic_tags":["asset.static_mesh","subject.cow","mesh.control"],"intended_use":["mesh_analysis","subdivision_source"],"surface_tags":[],"provenance":"user-confirmed","source_asset_revision":"5b7902b995a0753d"}

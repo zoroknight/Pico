@@ -1,0 +1,1 @@
+{"schema_version":1,"display_name":"Spot Cow Triangulated Mesh","description":"Triangular tessellation of the public-domain Spot cow surface dataset.","semantic_tags":["asset.static_mesh","subject.cow","mesh.triangulated"],"intended_use":["environment_prop","mesh_comparison"],"surface_tags":[],"provenance":"user-confirmed","source_asset_revision":"1cce9a66d35fc973"}

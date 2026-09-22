@@ -1,5 +1,6 @@
 #include "EditorAssetWorkflowController.h"
 #include "Pico/Editor/AssetDependencyService.h"
+#include "Pico/Editor/AssetSemanticMetadataService.h"
 
 #include "NativeFileDialog.h"
 
@@ -35,6 +36,46 @@ std::string MakeAssetName(const std::filesystem::path& SourceFile)
     }
     return Name.empty() ? "StaticMesh" : Name;
 }
+
+template <std::size_t Size>
+void SetBuffer(std::array<char, Size>& Buffer, std::string_view Value)
+{
+    Buffer.fill('\0');
+    std::copy_n(Value.data(), std::min(Value.size(), Size - 1), Buffer.data());
+}
+
+std::string JoinValues(const std::vector<std::string>& Values)
+{
+    std::string Result;
+    for (const std::string& Value : Values)
+    {
+        if (!Result.empty()) Result += ", ";
+        Result += Value;
+    }
+    return Result;
+}
+
+std::vector<std::string> ParseValues(std::string_view Text)
+{
+    std::vector<std::string> Result;
+    std::size_t Start = 0;
+    while (Start <= Text.size())
+    {
+        const std::size_t End = Text.find(',', Start);
+        std::string Value(Text.substr(
+            Start, End == std::string_view::npos ? Text.size() - Start : End - Start));
+        const auto IsSpace = [](unsigned char Character)
+        {
+            return std::isspace(Character) != 0;
+        };
+        Value.erase(Value.begin(), std::find_if_not(Value.begin(), Value.end(), IsSpace));
+        Value.erase(std::find_if_not(Value.rbegin(), Value.rend(), IsSpace).base(), Value.end());
+        if (!Value.empty()) Result.push_back(std::move(Value));
+        if (End == std::string_view::npos) break;
+        Start = End + 1;
+    }
+    return Result;
+}
 }
 
 FEditorAssetWorkflowController::FEditorAssetWorkflowController(
@@ -68,6 +109,7 @@ void FEditorAssetWorkflowController::Draw()
         ConfirmMaterial(*Request);
     }
     DrawRenameDialog();
+    DrawSemanticMetadataDialog();
 }
 
 void FEditorAssetWorkflowController::OpenTextureImport()
@@ -201,6 +243,114 @@ void FEditorAssetWorkflowController::OpenRename(const FAssetPath& AssetPath)
     const std::size_t CopyLength = std::min(Name.size(), RenameBuffer.size() - 1);
     std::copy_n(Name.data(), CopyLength, RenameBuffer.data());
     bOpenRenamePopup = true;
+}
+
+void FEditorAssetWorkflowController::OpenSemanticMetadata(
+    const FAssetPath& AssetPath)
+{
+    const FAssetRecord* Record = EngineLoop != nullptr
+        ? EngineLoop->GetAssetRegistry().Find(AssetPath) : nullptr;
+    if (Record == nullptr)
+    {
+        SetStatus("Select one registered asset to edit metadata", true);
+        return;
+    }
+    FAssetSemanticMetadata Metadata;
+    const FAssetSemanticMetadataResult Loaded =
+        FAssetSemanticMetadataService::Load(Record->FilePath, Metadata);
+    if (!Loaded.bSucceeded)
+    {
+        SetStatus(Loaded.Message, true);
+        return;
+    }
+    SemanticMetadataAssetPath = Record->AssetPath;
+    SemanticMetadataRevision = Loaded.Revision;
+    SemanticAssetRevision =
+        FAssetSemanticMetadataService::ComputeAssetRevision(Record->FilePath);
+    SetBuffer(SemanticDisplayName, Metadata.DisplayName);
+    SetBuffer(SemanticDescription, Metadata.Description);
+    SetBuffer(SemanticTags, JoinValues(Metadata.SemanticTags));
+    SetBuffer(SemanticIntendedUse, JoinValues(Metadata.IntendedUse));
+    SetBuffer(SemanticSurfaceTags, JoinValues(Metadata.SurfaceTags));
+    bOpenSemanticMetadataPopup = true;
+}
+
+void FEditorAssetWorkflowController::DrawSemanticMetadataDialog()
+{
+    if (bOpenSemanticMetadataPopup)
+    {
+        ImGui::OpenPopup("Asset Semantic Metadata");
+        bOpenSemanticMetadataPopup = false;
+    }
+    if (!ImGui::BeginPopupModal(
+            "Asset Semantic Metadata", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    ImGui::TextUnformatted(SemanticMetadataAssetPath.ToString().data());
+    ImGui::Separator();
+    ImGui::SetNextItemWidth(520.0f);
+    ImGui::InputText("Display Name", SemanticDisplayName.data(), SemanticDisplayName.size());
+    ImGui::SetNextItemWidth(520.0f);
+    ImGui::InputTextMultiline("Description", SemanticDescription.data(),
+        SemanticDescription.size(), ImVec2(520.0f, 90.0f));
+    ImGui::SetNextItemWidth(520.0f);
+    ImGui::InputText("Semantic Tags", SemanticTags.data(), SemanticTags.size());
+    ImGui::SetNextItemWidth(520.0f);
+    ImGui::InputText("Intended Use", SemanticIntendedUse.data(),
+        SemanticIntendedUse.size());
+    ImGui::SetNextItemWidth(520.0f);
+    ImGui::InputText("Surface Tags", SemanticSurfaceTags.data(),
+        SemanticSurfaceTags.size());
+    ImGui::TextDisabled("Use commas to separate tags. Saved facts are user-confirmed.");
+    if (ImGui::Button("Save"))
+    {
+        ConfirmSemanticMetadata();
+        if (!SemanticMetadataAssetPath.IsValid()) ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel"))
+    {
+        SemanticMetadataAssetPath = {};
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void FEditorAssetWorkflowController::ConfirmSemanticMetadata()
+{
+    const FAssetRecord* Record = EngineLoop != nullptr
+        ? EngineLoop->GetAssetRegistry().Find(SemanticMetadataAssetPath) : nullptr;
+    if (Record == nullptr)
+    {
+        SetStatus("Selected asset is no longer available", true);
+        return;
+    }
+    FAssetSemanticMetadata Current;
+    const FAssetSemanticMetadataResult Loaded =
+        FAssetSemanticMetadataService::Load(Record->FilePath, Current);
+    const std::string CurrentAssetRevision =
+        FAssetSemanticMetadataService::ComputeAssetRevision(Record->FilePath);
+    if (!Loaded.bSucceeded || Loaded.Revision != SemanticMetadataRevision
+        || CurrentAssetRevision != SemanticAssetRevision)
+    {
+        SetStatus("Asset or metadata changed; reopen the metadata editor", true);
+        return;
+    }
+    FAssetSemanticMetadata Metadata;
+    Metadata.DisplayName = SemanticDisplayName.data();
+    Metadata.Description = SemanticDescription.data();
+    Metadata.SemanticTags = ParseValues(SemanticTags.data());
+    Metadata.IntendedUse = ParseValues(SemanticIntendedUse.data());
+    Metadata.SurfaceTags = ParseValues(SemanticSurfaceTags.data());
+    Metadata.SourceAssetRevision = CurrentAssetRevision;
+    const FAssetSemanticMetadataResult Saved =
+        FAssetSemanticMetadataService::Save(Record->FilePath, Metadata);
+    if (!Saved.bSucceeded)
+    {
+        SetStatus(Saved.Message, true);
+        return;
+    }
+    SemanticMetadataAssetPath = {};
+    SetStatus("Saved user-confirmed asset semantic metadata", false);
 }
 
 void FEditorAssetWorkflowController::DrawRenameDialog()

@@ -1,6 +1,8 @@
 #include "Pico/Editor/EditorCommandService.h"
 #include "Pico/Editor/EditorAgentExecutionService.h"
 #include "Pico/Editor/EditorAgentTools.h"
+#include "Pico/Editor/AssetSemanticMetadataService.h"
+#include "Pico/Editor/EditorAssetService.h"
 #include "Pico/Editor/ExternalAgentConnector.h"
 #include "Pico/Editor/EditorRuntimeFreshness.h"
 #include "Pico/Mcp/McpServerCore.h"
@@ -1253,11 +1255,13 @@ void TestEditorCommandService(FTestRunner& Runner)
     };
     Runner.Expect(
         AgentTools.IsInitialized()
-            && AgentToolNames.size() == 43
+            && AgentToolNames.size() == 45
             && HasAgentTool("editor.world.describe")
             && HasAgentTool("editor.asset.describe_catalog")
             && HasAgentTool("editor.asset.describe")
             && HasAgentTool("editor.asset.find_references")
+            && HasAgentTool("editor.asset.semantic_metadata.get")
+            && HasAgentTool("editor.asset.semantic_metadata.set")
             && HasAgentTool("editor.material.describe")
             && HasAgentTool("editor.material.create")
             && HasAgentTool("editor.material.duplicate")
@@ -2485,6 +2489,66 @@ void TestEditorWorldDocument(FTestRunner& Runner)
         StaleMaterialCall, nullptr);
     const std::string UpdatedRevision =
         ExtractJsonString(UpdateMaterialResult.OutputJson, "revision_after");
+    const auto EmptyMetadataResult = AgentTools.Execute(
+        {"agent-get-empty-metadata", "editor.asset.semantic_metadata.get",
+            R"({"asset_path":"/Game/Materials/AgentSafeAuthoringTest.pmat"})"},
+        nullptr);
+    const std::string EmptyMetadataRevision = ExtractJsonString(
+        EmptyMetadataResult.OutputJson, "metadata_revision");
+    const std::string MetadataAssetRevision = ExtractJsonString(
+        EmptyMetadataResult.OutputJson, "asset_revision");
+    const Pico::FAgentToolCall SetMetadataCall {
+        "agent-set-semantic-metadata", "editor.asset.semantic_metadata.set",
+        "{\"asset_path\":\"/Game/Materials/AgentSafeAuthoringTest.pmat\","
+          "\"expected_metadata_revision\":\"" + EmptyMetadataRevision + "\","
+          "\"expected_asset_revision\":\"" + MetadataAssetRevision + "\","
+          "\"update_mask\":[\"display_name\",\"description\","
+          "\"semantic_tags\",\"intended_use\",\"surface_tags\"],"
+          "\"values\":{\"display_name\":\"Blue Metal Test\","
+          "\"description\":\"User-confirmed test surface\","
+          "\"semantic_tags\":[\"material.blue_metal\"],"
+          "\"intended_use\":[\"environment\"],"
+          "\"surface_tags\":[\"metal\",\"blue\"]}}"};
+    AgentTools.PrepareApproval(SetMetadataCall);
+    const auto SetMetadataResult = AgentTools.Execute(SetMetadataCall, nullptr);
+    const auto ReadMetadataResult = AgentTools.Execute(
+        {"agent-read-semantic-metadata", "editor.asset.semantic_metadata.get",
+            R"({"asset_path":"/Game/Materials/AgentSafeAuthoringTest.pmat"})"},
+        nullptr);
+    const std::vector<Pico::FAgentKnowledgeRecord> MetadataKnowledge =
+        AgentTools.CollectKnowledgeRecords();
+    const auto MetadataKnowledgeRecord = std::find_if(
+        MetadataKnowledge.begin(), MetadataKnowledge.end(),
+        [](const Pico::FAgentKnowledgeRecord& Record)
+        {
+            return Record.SourceType == "asset-descriptor";
+        });
+    const Pico::FAgentToolCall StaleMetadataCall {
+        "agent-stale-semantic-metadata", "editor.asset.semantic_metadata.set",
+        "{\"asset_path\":\"/Game/Materials/AgentSafeAuthoringTest.pmat\","
+          "\"expected_metadata_revision\":\"" + EmptyMetadataRevision + "\","
+          "\"expected_asset_revision\":\"" + MetadataAssetRevision + "\","
+          "\"update_mask\":[\"display_name\"],"
+          "\"values\":{\"display_name\":\"Must Not Replace\"}}"};
+    AgentTools.PrepareApproval(StaleMetadataCall);
+    const auto StaleMetadataResult = AgentTools.Execute(
+        StaleMetadataCall, nullptr);
+    Runner.Expect(
+        EmptyMetadataResult.bSucceeded && EmptyMetadataRevision == "none"
+            && SetMetadataResult.bSucceeded && ReadMetadataResult.bSucceeded
+            && ReadMetadataResult.OutputJson.find("Blue Metal Test")
+                != std::string::npos
+            && ReadMetadataResult.OutputJson.find("user-confirmed")
+                != std::string::npos
+            && MetadataKnowledgeRecord != MetadataKnowledge.end()
+            && MetadataKnowledgeRecord->Content.find("Blue Metal Test")
+                != std::string::npos
+            && MetadataKnowledgeRecord->Content.find("user-confirmed")
+                != std::string::npos
+            && !StaleMetadataResult.bSucceeded
+            && StaleMetadataResult.Error.find("changed") != std::string::npos,
+        "Semantic metadata uses field masks, formal provenance, Knowledge Store descriptors, and stale-write rejection");
+
     const Pico::FAgentToolCall DuplicateMaterialCall {
         "agent-duplicate-material", "editor.material.duplicate",
         "{\"source_path\":\"/Game/Materials/AgentSafeAuthoringTest.pmat\","
@@ -2508,8 +2572,64 @@ void TestEditorWorldDocument(FTestRunner& Runner)
             && DescribeAssetResult.bSucceeded
             && DescribeAssetResult.OutputJson.find("PicoLitPBR")
                 != std::string::npos
+            && DescribeAssetResult.OutputJson.find("Blue Metal Test")
+                != std::string::npos
             && FindReferencesResult.bSucceeded,
         "Material CAS rejects stale writes while duplicate and asset-impact inspection remain available");
+
+    Pico::FAssetPath CopiedMaterialPath;
+    Pico::FAssetPath::TryParse(
+        "/Game/Materials/AgentSafeAuthoringCopy.pmat", CopiedMaterialPath);
+    const Pico::FAssetRecord* CopiedRecord =
+        EngineLoop.GetAssetRegistry().Find(CopiedMaterialPath);
+    Pico::FAssetSemanticMetadata CopiedMetadata;
+    const Pico::FAssetSemanticMetadataResult CopiedMetadataResult =
+        CopiedRecord != nullptr
+            ? Pico::FAssetSemanticMetadataService::Load(
+                CopiedRecord->FilePath, CopiedMetadata)
+            : Pico::FAssetSemanticMetadataResult {};
+    const std::filesystem::path OldMetadataFile = CopiedRecord != nullptr
+        ? Pico::FAssetSemanticMetadataService::GetSidecarPath(
+            CopiedRecord->FilePath)
+        : std::filesystem::path {};
+    Pico::FEditorAssetService LifecycleService(&EngineLoop);
+    const Pico::FEditorAssetResult RenameCopy = LifecycleService.RenameAsset(
+        CopiedMaterialPath, "AgentSafeAuthoringRenamed");
+    const Pico::FAssetRecord* RenamedRecord = RenameCopy.bSucceeded
+        ? EngineLoop.GetAssetRegistry().Find(RenameCopy.AssetPath) : nullptr;
+    const std::filesystem::path RenamedMetadataFile = RenamedRecord != nullptr
+        ? Pico::FAssetSemanticMetadataService::GetSidecarPath(
+            RenamedRecord->FilePath)
+        : std::filesystem::path {};
+    Pico::FStagedAssetDeletion StagedMetadataDelete;
+    const Pico::FEditorAssetResult StageMetadataDelete = RenamedRecord != nullptr
+        ? LifecycleService.StageDeleteAssets(
+            {RenamedRecord->AssetPath}, false, StagedMetadataDelete)
+        : Pico::FEditorAssetResult {};
+    const bool bMetadataWasStaged = StageMetadataDelete.bSucceeded
+        && !std::filesystem::exists(RenamedMetadataFile);
+    const Pico::FEditorAssetResult RollbackMetadataDelete =
+        StageMetadataDelete.bSucceeded
+            ? LifecycleService.RollbackStagedDelete(StagedMetadataDelete)
+            : Pico::FEditorAssetResult {};
+    const bool bMetadataWasRestored = RollbackMetadataDelete.bSucceeded
+        && std::filesystem::is_regular_file(RenamedMetadataFile);
+    Pico::FStagedAssetDeletion FinalMetadataDelete;
+    const Pico::FEditorAssetResult RestageMetadataDelete =
+        LifecycleService.StageDeleteAssets(
+            {RenameCopy.AssetPath}, false, FinalMetadataDelete);
+    const Pico::FEditorAssetResult CommitMetadataDelete =
+        RestageMetadataDelete.bSucceeded
+            ? LifecycleService.CommitStagedDelete(FinalMetadataDelete)
+            : Pico::FEditorAssetResult {};
+    Runner.Expect(
+        CopiedMetadataResult.bSucceeded && CopiedMetadataResult.bExists
+            && CopiedMetadata.DisplayName == "Blue Metal Test"
+            && RenameCopy.bSucceeded && !std::filesystem::exists(OldMetadataFile)
+            && bMetadataWasStaged && bMetadataWasRestored
+            && CommitMetadataDelete.bSucceeded
+            && !std::filesystem::exists(RenamedMetadataFile),
+        "Semantic metadata follows duplicate, rename, staged delete rollback, and delete commit");
 
     const Pico::FAgentToolCall SpawnBlueprintCall {
         "spawn-blueprint-npc", "editor.actor.spawn_blueprint",

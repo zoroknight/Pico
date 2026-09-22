@@ -8,6 +8,7 @@
 #include "Pico/Asset/Texture.h"
 #include "Pico/Asset/ThirdPersonControlProfile.h"
 #include "Pico/Editor/AssetDependencyService.h"
+#include "Pico/Editor/AssetSemanticMetadataService.h"
 #include "Pico/Editor/EditorAssetService.h"
 #include "Pico/Editor/EditorCommandService.h"
 #include "Pico/Editor/EditorPropertyService.h"
@@ -827,6 +828,62 @@ FJson MaterialToJson(const FMaterialData& Material)
             : FJson(std::string(Material.BaseColorTexture.ToString()))}};
 }
 
+FJson SemanticMetadataToJson(const FAssetSemanticMetadata& Metadata)
+{
+    return {{"schema_version", Metadata.SchemaVersion},
+        {"display_name", Metadata.DisplayName},
+        {"description", Metadata.Description},
+        {"semantic_tags", Metadata.SemanticTags},
+        {"intended_use", Metadata.IntendedUse},
+        {"surface_tags", Metadata.SurfaceTags},
+        {"provenance", Metadata.Provenance},
+        {"source_asset_revision", Metadata.SourceAssetRevision}};
+}
+
+bool SetSemanticMetadataField(
+    std::string_view Field,
+    const FJson& Value,
+    FAssetSemanticMetadata& Metadata,
+    std::string& OutError)
+{
+    if (Field == "display_name" || Field == "description")
+    {
+        if (!Value.is_string())
+        {
+            OutError = std::string(Field) + " must be a string";
+            return false;
+        }
+        if (Field == "display_name") Metadata.DisplayName = Value.get<std::string>();
+        else Metadata.Description = Value.get<std::string>();
+        return true;
+    }
+    if (Field == "semantic_tags" || Field == "intended_use"
+        || Field == "surface_tags")
+    {
+        if (!Value.is_array())
+        {
+            OutError = std::string(Field) + " must be a string array";
+            return false;
+        }
+        std::vector<std::string> Values;
+        for (const FJson& Entry : Value)
+        {
+            if (!Entry.is_string())
+            {
+                OutError = std::string(Field) + " must contain only strings";
+                return false;
+            }
+            Values.push_back(Entry.get<std::string>());
+        }
+        if (Field == "semantic_tags") Metadata.SemanticTags = std::move(Values);
+        else if (Field == "intended_use") Metadata.IntendedUse = std::move(Values);
+        else Metadata.SurfaceTags = std::move(Values);
+        return true;
+    }
+    OutError = "Unsupported semantic metadata field: " + std::string(Field);
+    return false;
+}
+
 bool JsonToMaterialField(
     std::string_view Field,
     const FJson& Value,
@@ -1463,6 +1520,22 @@ struct FEditorAgentToolExecutor::FImpl
             FJson Summary = Cached->second.Summary;
             Summary["file_size"] = Descriptor.SizeBytes;
             Summary["dependency_count"] = Descriptor.Dependencies.size();
+            FAssetSemanticMetadata Metadata;
+            const FAssetSemanticMetadataResult MetadataResult =
+                FAssetSemanticMetadataService::Load(Asset.FilePath, Metadata);
+            if (MetadataResult.bSucceeded && MetadataResult.bExists)
+            {
+                const std::string AssetRevision = FileRevision(Asset.FilePath);
+                Summary["semantic_metadata"] = SemanticMetadataToJson(Metadata);
+                Summary["semantic_metadata"]["revision"] = MetadataResult.Revision;
+                Summary["semantic_metadata"]["stale"] =
+                    !Metadata.SourceAssetRevision.empty()
+                    && Metadata.SourceAssetRevision != AssetRevision;
+                Descriptor.Tags.insert(Descriptor.Tags.end(),
+                    Metadata.SemanticTags.begin(), Metadata.SemanticTags.end());
+                Descriptor.Tags.insert(Descriptor.Tags.end(),
+                    Metadata.SurfaceTags.begin(), Metadata.SurfaceTags.end());
+            }
             Descriptor.SummaryJson = std::move(Summary).dump();
             Descriptor.Provenance =
                 "Live AssetRegistry, typed asset loader, and asset dependency service";
@@ -2369,11 +2442,25 @@ struct FEditorAgentToolExecutor::FImpl
                     EngineLoop->GetWorld(), Path))
                 WorldReferences.push_back({{"object_path", Reference.ObjectPath},
                     {"property", Reference.PropertyName.ToString()}});
+            FJson Summary = BuildTypedAssetSummary(*Record);
+            FAssetSemanticMetadata Metadata;
+            const FAssetSemanticMetadataResult MetadataResult =
+                FAssetSemanticMetadataService::Load(Record->FilePath, Metadata);
+            if (!MetadataResult.bSucceeded)
+                return Failure(Call, MetadataResult.Message);
+            if (MetadataResult.bExists)
+            {
+                Summary["semantic_metadata"] = SemanticMetadataToJson(Metadata);
+                Summary["semantic_metadata"]["revision"] = MetadataResult.Revision;
+                Summary["semantic_metadata"]["stale"] =
+                    !Metadata.SourceAssetRevision.empty()
+                    && Metadata.SourceAssetRevision != FileRevision(Record->FilePath);
+            }
             return Success(Call, {{"asset_path", Path.ToString()},
                 {"type", ToString(Record->Type)},
                 {"revision", FileRevision(Record->FilePath)},
                 {"file_size", Record->FileSize},
-                {"summary", BuildTypedAssetSummary(*Record)},
+                {"summary", std::move(Summary)},
                 {"dependencies", std::move(Dependencies)},
                 {"asset_referencers", std::move(Referencers)},
                 {"world_references", std::move(WorldReferences)}});
@@ -2412,6 +2499,142 @@ struct FEditorAgentToolExecutor::FImpl
                 {"world_references", std::move(World)}});
         };
         bInitialized = RegisterTool(std::move(FindAssetReferences)) && bInitialized;
+
+        FAgentToolDefinition GetSemanticMetadata;
+        GetSemanticMetadata.Name = "editor.asset.semantic_metadata.get";
+        GetSemanticMetadata.Description =
+            "Read user-confirmed semantic metadata for one exact asset, including independent metadata and source-asset revisions";
+        GetSemanticMetadata.Schema.Fields = {
+            {"asset_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath}};
+        GetSemanticMetadata.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            FAssetPath Path;
+            const std::string Text = FJson::parse(Call.ArgumentsJson)
+                .at("asset_path").get<std::string>();
+            if (!FAssetPath::TryParse(Text, Path) || !EngineLoop)
+                return Failure(Call, "Asset path is invalid");
+            const FAssetRecord* Record = EngineLoop->GetAssetRegistry().Find(Path);
+            if (Record == nullptr) return Failure(Call, "Asset was not found");
+            FAssetSemanticMetadata Metadata;
+            const FAssetSemanticMetadataResult Loaded =
+                FAssetSemanticMetadataService::Load(Record->FilePath, Metadata);
+            if (!Loaded.bSucceeded) return Failure(Call, Loaded.Message);
+            const std::string AssetRevision = FileRevision(Record->FilePath);
+            return Success(Call, {{"asset_path", Path.ToString()},
+                {"exists", Loaded.bExists},
+                {"metadata_revision", Loaded.Revision},
+                {"asset_revision", AssetRevision},
+                {"stale", Loaded.bExists
+                    && !Metadata.SourceAssetRevision.empty()
+                    && Metadata.SourceAssetRevision != AssetRevision},
+                {"metadata", SemanticMetadataToJson(Metadata)}});
+        };
+        bInitialized = RegisterTool(std::move(GetSemanticMetadata)) && bInitialized;
+
+        FAgentToolDefinition SetSemanticMetadata;
+        SetSemanticMetadata.Name = "editor.asset.semantic_metadata.set";
+        SetSemanticMetadata.Description =
+            "Update only explicitly masked user-confirmed semantic metadata fields after checking both metadata and source-asset revisions; never writes model inference as formal fact";
+        SetSemanticMetadata.Permission = EAgentToolPermission::WriteProject;
+        SetSemanticMetadata.Schema.Fields = {
+            {"asset_path", EAgentToolValueType::String, true, {}, {}, 512,
+                EAgentToolStringFormat::AssetPath},
+            {"expected_metadata_revision", EAgentToolValueType::String,
+                true, {}, {}, 32},
+            {"expected_asset_revision", EAgentToolValueType::String,
+                true, {}, {}, 32},
+            {"update_mask", EAgentToolValueType::Array, true},
+            {"values", EAgentToolValueType::Object, true}};
+        SetSemanticMetadata.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            const FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            FAssetPath Path;
+            if (!FAssetPath::TryParse(
+                    Arguments.at("asset_path").get<std::string>(), Path)
+                || !EngineLoop)
+                return Failure(Call, "Asset path is invalid");
+            const FAssetRecord* Record = EngineLoop->GetAssetRegistry().Find(Path);
+            if (Record == nullptr) return Failure(Call, "Asset was not found");
+            const std::string AssetRevision = FileRevision(Record->FilePath);
+            if (AssetRevision
+                != Arguments.at("expected_asset_revision").get<std::string>())
+                return Failure(Call,
+                    "Source asset changed; describe it again before editing metadata");
+            FAssetSemanticMetadata Before;
+            const FAssetSemanticMetadataResult Loaded =
+                FAssetSemanticMetadataService::Load(Record->FilePath, Before);
+            if (!Loaded.bSucceeded) return Failure(Call, Loaded.Message);
+            if (Loaded.Revision
+                != Arguments.at("expected_metadata_revision").get<std::string>())
+                return Failure(Call,
+                    "Semantic metadata changed; read it again before updating");
+            const FJson& Mask = Arguments.at("update_mask");
+            const FJson& Values = Arguments.at("values");
+            if (!Mask.is_array() || Mask.empty() || Mask.size() > 5
+                || !Values.is_object() || Values.size() != Mask.size())
+                return Failure(Call,
+                    "update_mask and values must name the same 1-5 metadata fields");
+            FAssetSemanticMetadata After = Before;
+            After.Provenance = "user-confirmed";
+            After.SourceAssetRevision = AssetRevision;
+            std::unordered_set<std::string> Seen;
+            for (const FJson& Entry : Mask)
+            {
+                if (!Entry.is_string())
+                    return Failure(Call, "update_mask entries must be strings");
+                const std::string Field = Entry.get<std::string>();
+                if (!Seen.insert(Field).second || !Values.contains(Field))
+                    return Failure(Call,
+                        "update_mask contains duplicates or missing values");
+                std::string Error;
+                if (!SetSemanticMetadataField(
+                        Field, Values.at(Field), After, Error))
+                    return Failure(Call, Error);
+            }
+            for (auto It = Values.begin(); It != Values.end(); ++It)
+                if (!Seen.contains(It.key()))
+                    return Failure(Call,
+                        "values contains a field outside update_mask");
+            std::string ValidationError;
+            if (!FAssetSemanticMetadataService::Validate(
+                    After, &ValidationError))
+                return Failure(Call, ValidationError);
+            const FAssetSemanticMetadataResult Saved =
+                FAssetSemanticMetadataService::Save(Record->FilePath, After);
+            if (!Saved.bSucceeded) return Failure(Call, Saved.Message);
+            FAssetSemanticMetadata ReadBack;
+            const FAssetSemanticMetadataResult Verified =
+                FAssetSemanticMetadataService::Load(Record->FilePath, ReadBack);
+            if (!Verified.bSucceeded || !Verified.bExists || ReadBack != After)
+            {
+                if (Loaded.bExists)
+                    FAssetSemanticMetadataService::Save(Record->FilePath, Before);
+                else
+                {
+                    std::error_code RemoveError;
+                    std::filesystem::remove(
+                        FAssetSemanticMetadataService::GetSidecarPath(
+                            Record->FilePath), RemoveError);
+                }
+                return Failure(Call,
+                    "Semantic metadata failed read-back verification and was restored");
+            }
+            FJson Changed = FJson::object();
+            for (const std::string& Field : Seen) Changed[Field] = Values.at(Field);
+            return Success(Call, {{"asset_path", Path.ToString()},
+                {"operation_id", Call.Id},
+                {"before", SemanticMetadataToJson(Before)},
+                {"after", SemanticMetadataToJson(ReadBack)},
+                {"changed_fields", std::move(Changed)},
+                {"asset_revision", AssetRevision},
+                {"metadata_revision_before", Loaded.Revision},
+                {"metadata_revision_after", Verified.Revision},
+                {"provenance", "user-confirmed"}});
+        };
+        bInitialized = RegisterTool(std::move(SetSemanticMetadata)) && bInitialized;
 
         FAgentToolDefinition DescribeMaterial;
         DescribeMaterial.Name = "editor.material.describe";
@@ -2542,6 +2765,7 @@ struct FEditorAgentToolExecutor::FImpl
                 return Failure(Call, "Source Material was not found");
             if (Revision != Arguments.at("expected_revision").get<std::string>())
                 return Failure(Call, "Source Material changed; describe it again before duplicating");
+            const std::filesystem::path SourceFile = Record->FilePath;
             FMaterialData Material;
             EMaterialError Error = EMaterialError::None;
             if (!LoadMaterialFromFile(Record->FilePath, Material, &Error))
@@ -2563,6 +2787,20 @@ struct FEditorAgentToolExecutor::FImpl
                 Service.RefreshRegistry();
                 return Failure(Call,
                     "Duplicated Material failed read-back verification and was removed");
+            }
+            const FAssetSemanticMetadataResult MetadataCopy =
+                FAssetSemanticMetadataService::Copy(
+                    SourceFile, CreatedRecord->FilePath);
+            if (!MetadataCopy.bSucceeded)
+            {
+                std::error_code RemoveError;
+                std::filesystem::remove(CreatedRecord->FilePath, RemoveError);
+                std::filesystem::remove(
+                    FAssetSemanticMetadataService::GetSidecarPath(
+                        CreatedRecord->FilePath), RemoveError);
+                Service.RefreshRegistry();
+                return Failure(Call,
+                    "Could not copy semantic metadata; duplicated Material was removed");
             }
             return Success(Call, {{"source_path", Source.ToString()},
                 {"asset_path", Destination.ToString()}, {"operation_id", Call.Id},

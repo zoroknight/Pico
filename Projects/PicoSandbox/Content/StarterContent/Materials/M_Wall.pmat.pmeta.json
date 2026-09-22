@@ -1,0 +1,1 @@
+{"schema_version":1,"display_name":"Starter Wall Material","description":"General wall material used by the StarterWorld boundary geometry.","semantic_tags":["asset.material","starter_content","material.wall"],"intended_use":["environment_surface","level_blockout"],"surface_tags":["wall"],"provenance":"user-confirmed","source_asset_revision":"8939e2dd08fbe563"}
