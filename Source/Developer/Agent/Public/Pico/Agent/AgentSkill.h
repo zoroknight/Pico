@@ -15,7 +15,7 @@ struct FAgentSkill
     std::string Version;
     std::string Description;
     std::vector<std::string> Triggers;
-    std::vector<std::string> AllowedTools;
+    std::vector<std::string> RecommendedTools;
     std::vector<std::string> Preconditions;
     std::vector<std::string> Workflow;
     std::vector<std::string> CompletionCriteria;
@@ -32,7 +32,7 @@ public:
     std::vector<FAgentSkill> Select(std::string_view Prompt) const;
     std::string BuildSkillContextJson(
         const std::vector<FAgentSkill>& Skills) const;
-    std::string FilterToolCatalogJson(
+    std::string PrioritizeToolCatalogJson(
         std::string_view CatalogJson,
         const std::vector<FAgentSkill>& Skills) const;
     const std::vector<FAgentSkill>& GetSkills() const;

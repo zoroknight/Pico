@@ -37,7 +37,6 @@ public:
 
     void SetSessionId(std::string SessionId);
     void SetTurnIntent(EAgentTurnIntent Intent);
-    void SetAllowedTools(const std::vector<FAgentSkill>& Skills);
     std::vector<FAgentOperationRecord> ListIncompleteOperations() const;
     void Shutdown();
 

@@ -68,9 +68,26 @@ std::string ExtractJsonString(
     std::string_view Field)
 {
     const std::string Prefix = "\"" + std::string(Field) + "\":\"";
-    const std::size_t Start = Json.find(Prefix);
+    const std::size_t Start = Json.rfind(Prefix);
     if (Start == std::string_view::npos) return {};
     const std::size_t ValueStart = Start + Prefix.size();
+    const std::size_t End = Json.find('"', ValueStart);
+    return End == std::string_view::npos
+        ? std::string {} : std::string(Json.substr(ValueStart, End - ValueStart));
+}
+
+std::string ExtractObjectRevision(
+    std::string_view Json,
+    std::string_view ObjectPath)
+{
+    const std::string ObjectMarker =
+        "\"object_path\":\"" + std::string(ObjectPath) + "\"";
+    const std::size_t ObjectStart = Json.find(ObjectMarker);
+    if (ObjectStart == std::string_view::npos) return {};
+    constexpr std::string_view RevisionMarker = "\"revision\":\"";
+    const std::size_t RevisionStart = Json.find(RevisionMarker, ObjectStart);
+    if (RevisionStart == std::string_view::npos) return {};
+    const std::size_t ValueStart = RevisionStart + RevisionMarker.size();
     const std::size_t End = Json.find('"', ValueStart);
     return End == std::string_view::npos
         ? std::string {} : std::string(Json.substr(ValueStart, End - ValueStart));
@@ -1468,6 +1485,27 @@ void TestEditorCommandService(FTestRunner& Runner)
             && DescribeAgentCube.OutputJson.find("BoxExtent") != std::string::npos,
         "Generic object description exposes component paths, inherited properties, values, and semantics");
 
+    const std::string DescribedComponentRevision = ExtractObjectRevision(
+        DescribeAgentCube.OutputJson, AgentCubeComponentPath);
+    const Pico::FAgentToolCall RevisionMatchedBatch {
+        "agent-component-revision-batch", "editor.object.batch_set_properties",
+        "{\"edits\":[{\"object_path\":\"" + AgentCubeComponentPath
+            + "\",\"expected_revision\":\"" + DescribedComponentRevision
+            + "\",\"properties\":{\"Color\":{\"x\":1,\"y\":0,\"z\":0}}}]}"};
+    AgentTools.PrepareApproval(RevisionMatchedBatch);
+    const auto RevisionMatchedBatchResult = AgentTools.Execute(
+        RevisionMatchedBatch, nullptr);
+    Runner.Expect(
+        !DescribedComponentRevision.empty()
+            && RevisionMatchedBatchResult.bSucceeded
+            && AgentCubeComponent != nullptr
+            && AgentCubeComponent->GetColor().Equals(
+                Pico::FVector3(1.0f, 0.0f, 0.0f)),
+        "Actor description exposes a matching component revision for atomic edits: "
+            + RevisionMatchedBatchResult.Error);
+    Runner.Expect(Commands.Undo().bSucceeded,
+        "Component revision regression edit is independently undoable");
+
     const auto ComponentTypes = AgentTools.Execute(
         {"agent-component-types", "editor.component.list_types", "{}"}, nullptr);
     const std::string AgentCubeRevision = DescribeAgentCube.bSucceeded
@@ -2515,6 +2553,9 @@ void TestEditorWorldDocument(FTestRunner& Runner)
         {"agent-read-semantic-metadata", "editor.asset.semantic_metadata.get",
             R"({"asset_path":"/Game/Materials/AgentSafeAuthoringTest.pmat"})"},
         nullptr);
+    const auto SemanticSearchResult = AgentTools.Execute(
+        {"agent-search-semantic-metadata", "editor.asset.search",
+            R"({"query":"blue_metal","type":"Material"})"}, nullptr);
     const std::vector<Pico::FAgentKnowledgeRecord> MetadataKnowledge =
         AgentTools.CollectKnowledgeRecords();
     const auto MetadataKnowledgeRecord = std::find_if(
@@ -2539,6 +2580,12 @@ void TestEditorWorldDocument(FTestRunner& Runner)
             && ReadMetadataResult.OutputJson.find("Blue Metal Test")
                 != std::string::npos
             && ReadMetadataResult.OutputJson.find("user-confirmed")
+                != std::string::npos
+            && SemanticSearchResult.bSucceeded
+            && SemanticSearchResult.OutputJson.find(
+                "/Game/Materials/AgentSafeAuthoringTest.pmat")
+                != std::string::npos
+            && SemanticSearchResult.OutputJson.find("Blue Metal Test")
                 != std::string::npos
             && MetadataKnowledgeRecord != MetadataKnowledge.end()
             && MetadataKnowledgeRecord->Content.find("Blue Metal Test")

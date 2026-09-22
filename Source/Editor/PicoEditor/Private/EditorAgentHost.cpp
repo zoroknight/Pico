@@ -217,10 +217,10 @@ FEditorAgentExecutionService& FEditorAgentHost::GetExecutionService()
 void FEditorAgentHost::ConfigureSession(std::string SessionId,
     EAgentTurnIntent Intent, const std::vector<FAgentSkill>& Skills)
 {
+    (void)Skills;
     Impl->Approval.SetSession(SessionId);
     Impl->Execution.SetSessionId(std::move(SessionId));
     Impl->Execution.SetTurnIntent(Intent);
-    Impl->Execution.SetAllowedTools(Skills);
 }
 
 void FEditorAgentHost::CancelPendingApproval() { Impl->Approval.Decide(false); }

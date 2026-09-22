@@ -810,6 +810,8 @@ struct FAgentChatWorkspace::FImpl
             "Inspect before modifying, make the smallest requested change, and report the result. "
             "Use editor.world.describe for live World Actors and their locations; asset search finds project assets, not Actor instances. "
             "Use editor.asset.describe_catalog for versioned project asset and active World descriptors, dependencies, provenance, and validator ids. "
+            "Treat Skills as recommended workflows rather than hard capability boundaries. When no Skill fully covers the request, inspect the available tools and current evidence, then propose or execute the safest concrete next step under normal approval. "
+            "If no single tool completes the request, compose available tools into explicit steps. If a real capability is missing, identify the missing operation and offer concrete executable alternatives instead of stopping with a generic inability. Ask the user only when ambiguity or risk requires a choice. "
             "Do not repeat a read-only query when its result cannot provide the missing information, and execute once the requested tool arguments are known. "
             "When the user requests an Actor Blueprint instance or additional character/NPC, use editor.actor.spawn_blueprint; never substitute a Cube. "
             "When the user asks to run, play, preview, or launch the active project, use editor.play.start; never substitute validation or packaging. "
@@ -818,7 +820,9 @@ struct FAgentChatWorkspace::FImpl
             "Use editor.gameplay.create_third_person_character only when authoring the unique playable Player 0 Pawn and PlayerStart. "
             "For scene assembly, search assets before referencing them, create structural room geometry before gameplay Actors, then validate and save before packaging. "
             "After creating a project from the third-person template, finish the current answer concisely; Pico will open a clean editor process and restore this conversation in the new project. "
-            "Before editing reflected properties, call editor.object.describe and use the exact component object path, property name, current compound value, units, semantic, and range it returns. "
+            "Before editing reflected properties, call editor.object.describe and use the exact component object path, that same component entry's revision, property name, current compound value, units, semantic, and range it returns. Never use an Actor revision when editing one of its components. "
+            "Treat compound Actor requests as incomplete until every requested component and property has a successful Tool Result. Creating an Empty Actor proves only that its scene root exists; it never proves that a light, camera, mesh, or other specialized component exists. "
+            "After the final mutation, inspect the exact changed Actor or component with a fresh read-only describe or validation tool before claiming completion. "
             "Use plain Markdown without Emoji; the editor deliberately omits unsupported color Emoji. "
             "Do not repeat raw tool arguments, Tool Results, or execution traces in assistant prose; the editor provides one expandable tool summary after the turn. "
             "Never invent object paths or claim a tool succeeded before receiving its result.";
@@ -981,7 +985,7 @@ struct FAgentChatWorkspace::FImpl
         const std::vector<FAgentSkill> ActiveSkills = SkillRegistry.Select(Prompt);
         const std::string SkillContext =
             SkillRegistry.BuildSkillContextJson(ActiveSkills);
-        const std::string ToolCatalog = SkillRegistry.FilterToolCatalogJson(
+        const std::string ToolCatalog = SkillRegistry.PrioritizeToolCatalogJson(
             EditorTools.BuildToolCatalogJson(), ActiveSkills);
         std::string ProviderError;
         std::unique_ptr<IAgentProvider> NewProvider = CreateProvider(
@@ -1026,15 +1030,16 @@ struct FAgentChatWorkspace::FImpl
                 {
                     const std::size_t FirstNewEvent = Session->GetEvents().size();
                     FAgentBudget Budget;
-                    Budget.MaxSteps = 12;
-                    Budget.MaxToolCalls = 16;
-                    Budget.MaxReadOnlyToolCalls = 6;
-                    Budget.MaxMutationToolCalls = 10;
+                    Budget.MaxSteps = 32;
+                    Budget.MaxToolCalls = 40;
+                    Budget.MaxReadOnlyToolCalls = 20;
+                    Budget.MaxMutationToolCalls = 20;
                     Budget.MaxConsecutiveNoProgressSteps = 2;
                     Budget.ReservedFinalSteps = 1;
-                    Budget.MaxRepairAttempts = 2;
-                    Budget.MaxElapsedMilliseconds = 120000;
+                    Budget.MaxRepairAttempts = 4;
+                    Budget.MaxElapsedMilliseconds = 180000;
                     FAgentRuntimeContext RuntimeContext;
+                    RuntimeContext.Features.bMutationReadbackGate = true;
                     RuntimeContext.KnowledgeContextJson = KnowledgeContext;
                     RuntimeContext.SkillContextJson = SkillContext;
                     RuntimeContext.OnAssistantDelta = [this](std::string_view Delta)

@@ -1,0 +1,31 @@
+{
+  "format_version": 1,
+  "id": "assemble-actor-components",
+  "version": "1.0.0",
+  "description": "Assemble specialized Actor components through the reflected component registry without hard-coded class choices.",
+  "triggers": ["组件", "点光源", "方向光", "摄像机", "弹簧臂", "component", "point light", "directional light", "camera", "spring arm"],
+  "recommended_tools": [
+    "editor.world.describe",
+    "editor.selection.describe",
+    "editor.object.describe",
+    "editor.object.set_properties",
+    "editor.object.batch_set_properties",
+    "editor.actor.spawn",
+    "editor.actor.set_location",
+    "editor.component.list_types",
+    "editor.component.add",
+    "editor.component.remove"
+  ],
+  "preconditions": ["An editable World is open."],
+  "workflow": [
+    "Inspect the target Actor and discover the reflected component class when it is not already proven by tool evidence.",
+    "For a new specialized Actor, create an Empty Actor, describe that Actor to obtain its current revision, then add the requested component with editor.component.add.",
+    "Describe the newly added component, then set only the requested reflected properties using that component path and revision.",
+    "Finish only after a fresh description proves the requested component class and final property values."
+  ],
+  "completion_criteria": [
+    "The requested Actor exists.",
+    "The requested reflected component class exists on that Actor.",
+    "A fresh read-only description verifies the requested component properties."
+  ]
+}

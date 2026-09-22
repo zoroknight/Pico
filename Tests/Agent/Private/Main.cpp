@@ -1228,6 +1228,40 @@ void TestReActObservationsEvidenceAndOscillation(FTestRunner& Runner)
                 != std::string::npos && !bPersistedUnsupportedClaim,
         "A successful tool status without facts, artifacts, or revisions cannot justify completion");
 
+    auto ReadbackSession = Pico::FAgentSession::OpenOrCreate(
+        "react-r2-mutation-readback", MakeLogPath("react-r2-mutation-readback"));
+    FRecordingProvider ReadbackProvider;
+    ReadbackProvider.Responses = {
+        ToolCalls({{"spawn-empty-light", "editor.actor.spawn",
+            R"({"name":"VisualLight","kind":"Empty"})"}}),
+        Final("The blue point light is complete"),
+        ToolCalls({{"describe-light", "editor.object.describe",
+            R"({"object_path":"World.VisualLight"})"}}),
+        Final("The Actor was read back and verified")};
+    FCountingToolExecutor ReadbackExecutor;
+    ReadbackExecutor.ReadOnlyToolName = "editor.object.describe";
+    Pico::FAgentRuntimeContext ReadbackContext;
+    ReadbackContext.Features.bMutationReadbackGate = true;
+    Pico::FAgentRuntime ReadbackRuntime(
+        *ReadbackSession, ReadbackProvider, ReadbackExecutor, {}, ReadbackContext);
+    const Pico::FAgentRunResult ReadbackResult = ReadbackRuntime.Run(
+        "Create a blue point light");
+    bool bPersistedPrematureClaim = false;
+    for (const Pico::FAgentEvent& Event : ReadbackSession->GetEvents())
+        bPersistedPrematureClaim |= Event.Type == Pico::EAgentEventType::Message
+            && Event.Role == Pico::EAgentRole::Assistant
+            && Event.Content == "The blue point light is complete";
+    Runner.Expect(ReadbackResult.Status == Pico::EAgentStatus::Completed
+            && ReadbackResult.Counters.ReflectionAttempts == 1
+            && ReadbackExecutor.Count == 2
+            && ReadbackProvider.Requests.size() == 4
+            && ReadbackProvider.Requests[2].ProgressLedgerJson.find(
+                "\"mutation_readback_pending\":true") != std::string::npos
+            && ReadbackProvider.Requests[3].ProgressLedgerJson.find(
+                "\"mutation_readback_pending\":false") != std::string::npos
+            && !bPersistedPrematureClaim,
+        "A mutation cannot be reported as complete until a fresh read-only inspection runs");
+
     auto RestartSession = Pico::FAgentSession::OpenOrCreate(
         "react-r2-restart-gate", MakeLogPath("react-r2-restart-gate"));
     Pico::FAgentTaskState RestartState;
@@ -2064,16 +2098,20 @@ void TestPicoSkillRegistry(FTestRunner& Runner)
         {"editor.world.describe", "editor.scene.create_room", "editor.project.package"},
         &Error);
     const auto Selected = Registry.Select("create a collision room");
-    const std::string Catalog = Registry.FilterToolCatalogJson(
+    const std::string Catalog = Registry.PrioritizeToolCatalogJson(
         R"([{"name":"editor.world.describe"},{"name":"editor.scene.create_room"},{"name":"editor.project.package"}])",
         Selected);
     Runner.Expect(
         bLoaded && Selected.size() == 1
             && Registry.BuildSkillContextJson(Selected).find("completion_criteria")
                 != std::string::npos
+            && Registry.BuildSkillContextJson(Selected).find("recommended_tools")
+                != std::string::npos
             && Catalog.find("editor.scene.create_room") != std::string::npos
-            && Catalog.find("editor.project.package") == std::string::npos,
-        "Pico Skill selection is deterministic and narrows the provider tool catalog");
+            && Catalog.find("editor.project.package") != std::string::npos
+            && Catalog.find("editor.scene.create_room")
+                < Catalog.find("editor.project.package"),
+        "Pico Skill selection is deterministic, prioritizes its tools, and preserves the full provider catalog");
     constexpr std::string_view PlayPrompt =
         "\xE8\xBF\x90\xE8\xA1\x8C\xE9\xA1\xB9\xE7\x9B\xAE"
         "\xE4\xBD\x86\xE4\xB8\x8D\xE8\xA6\x81\xE6\x89\x93\xE5\x8C\x85";
@@ -2104,6 +2142,8 @@ void TestIntentAndSkillEvalSet(FTestRunner& Runner)
         "editor.asset.describe_catalog",
         "editor.object.describe", "editor.object.get_property",
         "editor.object.set_properties", "editor.object.batch_set_properties",
+        "editor.component.list_types", "editor.component.add",
+        "editor.component.remove",
         "editor.actor_blueprint.describe_defaults",
         "editor.actor_blueprint.set_defaults",
         "editor.actor.spawn", "editor.actor.spawn_blueprint", "editor.actor.delete",

@@ -26,6 +26,8 @@ struct FAgentTaskState
     std::vector<std::string> EvidenceRefs;
     std::vector<FAgentCriterionEvidence> CriterionEvidence;
     std::vector<std::string> OpenQuestions;
+    bool bMutationReadbackPending = false;
+    std::string PendingMutationTool;
     std::uint64_t ObservationCount = 0;
     std::uint64_t Revision = 0;
 };
@@ -43,6 +45,7 @@ struct FAgentContextFeatureFlags
     bool bContextMetrics = true;
     bool bObservationMapping = true;
     bool bEvidenceCompletionGate = true;
+    bool bMutationReadbackGate = false;
     bool bActionOscillationGuard = true;
     bool bConditionalReflection = true;
 };

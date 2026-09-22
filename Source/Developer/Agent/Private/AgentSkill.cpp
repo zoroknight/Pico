@@ -103,7 +103,8 @@ bool FAgentSkillRegistry::LoadDirectory(
             Skill.Version = Json.value("version", "");
             Skill.Description = Json.value("description", "");
             Skill.Triggers = Json.value("triggers", std::vector<std::string> {});
-            Skill.AllowedTools = Json.value("allowed_tools", std::vector<std::string> {});
+            Skill.RecommendedTools = Json.value("recommended_tools",
+                Json.value("allowed_tools", std::vector<std::string> {}));
             Skill.Preconditions = Json.value("preconditions", std::vector<std::string> {});
             Skill.Workflow = Json.value("workflow", std::vector<std::string> {});
             Skill.CompletionCriteria = Json.value(
@@ -111,9 +112,9 @@ bool FAgentSkillRegistry::LoadDirectory(
             Skill.SourcePath = Entry.path();
             if (!IsSafeId(Skill.Id) || Skill.Version.empty()
                 || Skill.Description.empty() || Skill.Workflow.empty()
-                || Skill.AllowedTools.empty())
+                || Skill.RecommendedTools.empty())
                 throw std::runtime_error("invalid Skill manifest: " + Entry.path().string());
-            for (const std::string& Tool : Skill.AllowedTools)
+            for (const std::string& Tool : Skill.RecommendedTools)
                 if (!ToolSet.contains(Tool))
                     throw std::runtime_error("Skill references unknown tool '" + Tool + "'");
             Skills.push_back(std::move(Skill));
@@ -151,30 +152,37 @@ std::string FAgentSkillRegistry::BuildSkillContextJson(
     FJson Result = FJson::array();
     for (const FAgentSkill& Skill : Selected)
         Result.push_back({{"id", Skill.Id}, {"version", Skill.Version},
-            {"description", Skill.Description}, {"allowed_tools", Skill.AllowedTools},
+            {"description", Skill.Description},
+            {"recommended_tools", Skill.RecommendedTools},
             {"preconditions", Skill.Preconditions}, {"workflow", Skill.Workflow},
             {"completion_criteria", Skill.CompletionCriteria},
-            {"security", "This Skill narrows available tools and never bypasses validation, approval, transactions, or verification."}});
+            {"guidance", "This Skill is soft workflow guidance. Prefer its recommended tools, but use any available tool when evidence shows that the workflow is incomplete."},
+            {"security", "Tool permissions, approval, schema validation, transactions, and verification remain the hard safety boundary."}});
     return Result.dump();
 }
 
-std::string FAgentSkillRegistry::FilterToolCatalogJson(
+std::string FAgentSkillRegistry::PrioritizeToolCatalogJson(
     std::string_view CatalogJson,
     const std::vector<FAgentSkill>& Selected) const
 {
     if (Selected.empty()) return std::string(CatalogJson);
-    std::set<std::string> Allowed;
+    std::set<std::string> Recommended;
     for (const FAgentSkill& Skill : Selected)
-        Allowed.insert(Skill.AllowedTools.begin(), Skill.AllowedTools.end());
+        Recommended.insert(
+            Skill.RecommendedTools.begin(), Skill.RecommendedTools.end());
     try
     {
         const FJson Catalog = FJson::parse(CatalogJson);
-        FJson Filtered = FJson::array();
+        FJson Prioritized = FJson::array();
         for (const FJson& Tool : Catalog)
-            if (Allowed.contains(Tool.value("name", ""))) Filtered.push_back(Tool);
-        return Filtered.dump();
+            if (Recommended.contains(Tool.value("name", "")))
+                Prioritized.push_back(Tool);
+        for (const FJson& Tool : Catalog)
+            if (!Recommended.contains(Tool.value("name", "")))
+                Prioritized.push_back(Tool);
+        return Prioritized.dump();
     }
-    catch (...) { return "[]"; }
+    catch (...) { return std::string(CatalogJson); }
 }
 
 const std::vector<FAgentSkill>& FAgentSkillRegistry::GetSkills() const { return Skills; }

@@ -12,7 +12,6 @@
 #include <optional>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 
 namespace Pico
@@ -110,12 +109,6 @@ struct FEditorAgentExecutionService::FImpl
             if (It != ExecutionContexts.end())
             {
                 Intent = It->second.Intent;
-                if (It->second.bSkillRestricted
-                    && !It->second.AllowedTools.contains(Call.Name))
-                {
-                    return "The active Pico Skill does not allow tool '"
-                        + Call.Name + "'";
-                }
             }
         }
         if (Intent == EAgentTurnIntent::Play
@@ -358,8 +351,6 @@ struct FEditorAgentExecutionService::FImpl
         std::string SessionId;
         std::string RunId;
         EAgentTurnIntent Intent = EAgentTurnIntent::General;
-        std::unordered_set<std::string> AllowedTools;
-        bool bSkillRestricted = false;
     };
     mutable std::mutex ContextMutex;
     std::string DefaultSessionId;
@@ -399,20 +390,6 @@ void FEditorAgentExecutionService::SetTurnIntent(EAgentTurnIntent Intent)
     if (!Impl) return;
     std::lock_guard Lock(Impl->ContextMutex);
     Impl->ExecutionContexts[std::this_thread::get_id()].Intent = Intent;
-}
-
-void FEditorAgentExecutionService::SetAllowedTools(
-    const std::vector<FAgentSkill>& Skills)
-{
-    if (!Impl) return;
-    std::lock_guard Lock(Impl->ContextMutex);
-    FImpl::FExecutionContext& Context =
-        Impl->ExecutionContexts[std::this_thread::get_id()];
-    Context.bSkillRestricted = !Skills.empty();
-    Context.AllowedTools.clear();
-    for (const FAgentSkill& Skill : Skills)
-        Context.AllowedTools.insert(
-            Skill.AllowedTools.begin(), Skill.AllowedTools.end());
 }
 
 std::vector<FAgentOperationRecord>

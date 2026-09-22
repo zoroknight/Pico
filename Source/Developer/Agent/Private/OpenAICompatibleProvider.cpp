@@ -373,8 +373,11 @@ bool FOpenAICompatibleProvider::BuildRequestBody(
         if (!Request.SkillContextJson.empty() && Request.SkillContextJson != "[]")
         {
             Body["messages"].push_back({{"role", "system"}, {"content",
-                "Active Pico Skills follow. They narrow the available workflow and tools; "
-                "they never bypass schema validation, approval, transactions, or verification.\n"
+                "Active Pico Skills follow. They are soft workflow guidance and recommended "
+                "tool sets, not capability restrictions. If a Skill is incomplete, inspect "
+                "the full available tool catalog and choose an evidence-based executable "
+                "next step. Skills never bypass schema validation, approval, transactions, "
+                "or verification.\n"
                 + Request.SkillContextJson}});
         }
 

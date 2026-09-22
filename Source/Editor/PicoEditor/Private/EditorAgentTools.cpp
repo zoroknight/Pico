@@ -2352,7 +2352,7 @@ struct FEditorAgentToolExecutor::FImpl
         FAgentToolDefinition SearchAssets;
         SearchAssets.Name = "editor.asset.search";
         SearchAssets.Description =
-            "Search registered project assets by case-insensitive path text and optional exact asset type; returns at most 50 results";
+            "Search registered project assets by case-insensitive path or user-confirmed semantic metadata text and optional exact asset type; returns at most 50 results";
         SearchAssets.Schema.Fields = {
             {"query", EAgentToolValueType::String, true, {}, {}, 128},
             {"type", EAgentToolValueType::String, false, {}, {}, 64}
@@ -2370,19 +2370,27 @@ struct FEditorAgentToolExecutor::FImpl
             FJson Assets = FJson::array();
             if (EngineLoop)
             {
-                for (const FAssetRecord& Record : EngineLoop->GetAssetRegistry().GetAssets())
+                for (const FAgentAssetDescriptor& Descriptor : BuildAssetDescriptors())
                 {
-                    std::string Path(Record.AssetPath.ToString());
-                    std::string LowerPath = Path;
-                    std::transform(LowerPath.begin(), LowerPath.end(), LowerPath.begin(),
+                    if (!Descriptor.Id.starts_with("asset:")) continue;
+                    std::string SearchText = Descriptor.VirtualPath + "\n"
+                        + Descriptor.SummaryJson;
+                    for (const std::string& Tag : Descriptor.Tags)
+                        SearchText += "\n" + Tag;
+                    std::transform(SearchText.begin(), SearchText.end(), SearchText.begin(),
                         [](unsigned char C) { return static_cast<char>(std::tolower(C)); });
-                    std::string RecordType(ToString(Record.Type));
+                    std::string RecordType = Descriptor.Kind;
                     std::transform(RecordType.begin(), RecordType.end(), RecordType.begin(),
                         [](unsigned char C) { return static_cast<char>(std::tolower(C)); });
-                    if ((Query.empty() || LowerPath.find(Query) != std::string::npos)
+                    if ((Query.empty() || SearchText.find(Query) != std::string::npos)
                         && (Type == "any" || Type.empty() || RecordType == Type))
                     {
-                        Assets.push_back({{"path", Path}, {"type", ToString(Record.Type)}});
+                        FJson Match = {{"path", Descriptor.VirtualPath},
+                            {"type", Descriptor.Kind}, {"tags", Descriptor.Tags}};
+                        const FJson Summary = FJson::parse(Descriptor.SummaryJson);
+                        if (Summary.contains("semantic_metadata"))
+                            Match["semantic_metadata"] = Summary.at("semantic_metadata");
+                        Assets.push_back(std::move(Match));
                         if (Assets.size() == 50) break;
                     }
                 }
@@ -3194,6 +3202,19 @@ struct FEditorAgentToolExecutor::FImpl
                 Arguments.at("object_path").get<std::string>());
             if (!Object) return Failure(Call, "Object path was not found in the active World");
             FJson Description = DescribeObject(Object, true);
+            if (Object->IsA(PActor::StaticClass())
+                && Description.contains("components"))
+            {
+                PActor* Actor = static_cast<PActor*>(Object);
+                std::size_t ComponentIndex = 0;
+                for (PActorComponent* Component : Actor->GetComponents())
+                {
+                    if (Component == nullptr) continue;
+                    Description["components"][ComponentIndex]["revision"] =
+                        ObjectRevision(Component);
+                    ++ComponentIndex;
+                }
+            }
             Description["revision"] = ObjectRevision(Object);
             return Success(Call, std::move(Description));
         };
@@ -3517,7 +3538,7 @@ struct FEditorAgentToolExecutor::FImpl
         FAgentToolDefinition BatchSetProperties;
         BatchSetProperties.Name = "editor.object.batch_set_properties";
         BatchSetProperties.Description =
-            "Set reflected Editable properties on up to 32 explicit World objects in one approved all-or-nothing Undo transaction";
+            "Set reflected Editable properties on up to 32 explicit World objects in one approved all-or-nothing Undo transaction. Each expected_revision must come from the description entry with the same object_path";
         BatchSetProperties.Permission = EAgentToolPermission::ModifyWorld;
         BatchSetProperties.Schema.Fields = {
             {"edits", EAgentToolValueType::Array, true}
@@ -3859,7 +3880,11 @@ struct FEditorAgentToolExecutor::FImpl
 
         FAgentToolDefinition SpawnActor;
         SpawnActor.Name = "editor.actor.spawn";
-        SpawnActor.Description = "Create an Empty or Cube Actor in the active World";
+        SpawnActor.Description =
+            "Create an Empty or Cube Actor in the active World. Empty creates only a "
+            "PSceneComponent root: it is not a light, camera, mesh, or other requested "
+            "component. Use editor.component.add and then set and read back exact "
+            "component properties to assemble those Actor types";
         SpawnActor.Permission = EAgentToolPermission::ModifyWorld;
         SpawnActor.Schema.Fields = {
             {"name", EAgentToolValueType::String, true, {}, {}, 64},
@@ -3887,7 +3912,11 @@ struct FEditorAgentToolExecutor::FImpl
             }
             if (Selection) Selection->Set(Actor);
             return Success(Call, {{"object_path", Actor->GetPathName()}, {"kind", Kind},
-                {"root_component_path", Root->GetPathName()}});
+                {"root_component_path", Root->GetPathName()},
+                {"assembly_state", Kind == "Empty"
+                    ? "scene_root_only" : "cube_geometry_created"},
+                {"created_component_class", Root->GetClass()->GetName().ToString()},
+                {"requires_component_add_for_specialized_actor", Kind == "Empty"}});
         };
         SpawnActor.Verifier = [this](const FAgentToolCall&, const FAgentToolResult& Result, std::string& Error)
         {

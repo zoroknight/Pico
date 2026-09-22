@@ -42,8 +42,11 @@ namespace
 class FEditorTextInputPolicy
 {
 public:
-    void Apply(bool bTextInputRequested)
+    void ApplyForCurrentFrame()
     {
+        const ImGuiIO& IO = ImGui::GetIO();
+        const bool bTextInputRequested = IO.WantTextInput
+            || ImGui::GetMouseCursor() == ImGuiMouseCursor_TextInput;
         std::unordered_set<void*> LiveWindows;
         ImGuiPlatformIO& PlatformIO = ImGui::GetPlatformIO();
         for (ImGuiViewport* Viewport : PlatformIO.Viewports)
@@ -337,7 +340,7 @@ std::optional<std::filesystem::path> RunProjectBrowser(
         }
         ImGui::End();
 
-        TextInputPolicy.Apply(ImGui::GetIO().WantTextInput);
+        TextInputPolicy.ApplyForCurrentFrame();
 
         PresentImGuiFrame(Window, ImGui::GetIO());
     }
@@ -580,7 +583,7 @@ int main(int Argc, char** Argv)
 
                 App.Draw();
 
-                TextInputPolicy.Apply(IO.WantTextInput);
+                TextInputPolicy.ApplyForCurrentFrame();
 
                 PresentImGuiFrame(Window, IO);
                 const bool bCanPresent =

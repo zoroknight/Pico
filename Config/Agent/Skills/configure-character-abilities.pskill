@@ -4,7 +4,7 @@
   "version": "1.2.0",
   "description": "Inspect and configure a character's reflected Mini GAS Profile for the current GravityShot, BurnShot, and FreezeShot projectile abilities without generating arbitrary C++.",
   "triggers": ["配置角色能力", "重力弹", "灼烧弹", "冻结弹", "重力、灼烧", "GAS", "character abilities", "configure gravity", "gravity burn freeze"],
-  "allowed_tools": [
+  "recommended_tools": [
     "editor.world.describe",
     "editor.asset.search",
     "editor.object.describe",

@@ -1,5 +1,6 @@
 # intent<TAB>comma-separated skill ids<TAB>prompt
 General	assemble-basic-scene	创建一个碰撞房间
+General	assemble-actor-components	创建一个蓝色点光源
 General	assemble-basic-scene	构建一个带地板和墙壁的房间
 General	third-person-character	创建一个第三人称可操控角色
 Play	validate-save-play	运行项目，但不要打包
@@ -44,3 +45,4 @@ General	edit-picograph	create and compile a graph asset
 General	inspect-project-assets	请生成当前项目的资产目录，并列出依赖、provenance 和 validator_id
 General	inspect-project-assets	请使用 AssetDescriptor 分析当前项目资产和当前世界
 General	inspect-project-assets	Describe the project asset catalog and its provenance
+General	inspect-project-assets	找出项目中的奶牛模型和相关材质，简单说明区别并给出推荐

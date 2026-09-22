@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Configure the unique playable third-person Player 0 character from existing Pico assets.",
   "triggers": ["第三人称", "可操控角色", "玩家角色", "third person", "playable character"],
-  "allowed_tools": [
+  "recommended_tools": [
     "editor.world.describe",
     "editor.asset.search",
     "editor.object.describe",

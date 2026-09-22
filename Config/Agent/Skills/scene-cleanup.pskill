@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Safely remove explicit groups of Actors or restore the World to the state before a recorded Agent Run.",
   "triggers": ["删除", "移除", "清理", "恢复到原来", "恢复刚才", "恢复上一轮", "撤销刚才", "delete", "remove", "clean up", "revert"],
-  "allowed_tools": [
+  "recommended_tools": [
     "editor.world.describe",
     "editor.object.describe",
     "editor.actor.delete",

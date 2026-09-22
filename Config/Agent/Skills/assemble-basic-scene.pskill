@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Inspect and assemble a small Pico scene from existing assets and primitive geometry.",
   "triggers": ["场景", "房间", "地板", "墙壁", "scene", "room", "floor", "wall"],
-  "allowed_tools": [
+  "recommended_tools": [
     "editor.world.describe",
     "editor.selection.describe",
     "editor.asset.search",

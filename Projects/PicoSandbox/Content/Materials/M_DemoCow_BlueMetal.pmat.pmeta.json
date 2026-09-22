@@ -1,0 +1,23 @@
+{
+  "description": "Blue metallic material variant using the public-domain Spot cow texture for the DemoCow Actor.",
+  "display_name": "Demo Cow Blue Metal Material",
+  "intended_use": [
+    "environment_prop",
+    "material_comparison",
+    "material_preview"
+  ],
+  "provenance": "user-confirmed",
+  "schema_version": 1,
+  "semantic_tags": [
+    "asset.material",
+    "subject.cow",
+    "material.blue_metal"
+  ],
+  "source_asset_revision": "893cd0b3e9f977a5",
+  "surface_tags": [
+    "animal",
+    "blue",
+    "metallic",
+    "smooth"
+  ]
+}

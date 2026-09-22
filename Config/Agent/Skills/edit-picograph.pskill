@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Create and edit controlled PicoGraph assets through stable node and pin identifiers, then validate and compile them without generating arbitrary C++ or writing cooked bytecode.",
   "triggers": ["创建图表", "编辑图表", "创建PicoGraph", "编辑PicoGraph", "可视化脚本", "graph asset", "create graph", "edit graph", "PicoGraph"],
-  "allowed_tools": [
+  "recommended_tools": [
     "editor.graph.create",
     "editor.graph.describe",
     "editor.graph.add_node",

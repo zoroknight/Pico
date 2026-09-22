@@ -83,7 +83,7 @@ std::string SerializeAgentTaskState(const FAgentTaskState& State)
             {"evidence_refs", Binding.EvidenceRefs},
             {"satisfied", Binding.bSatisfied}});
     }
-    return FJson {{"version", 2},
+    return FJson {{"version", 3},
         {"goal", State.Goal},
         {"success_criteria", State.SuccessCriteria},
         {"constraints", State.Constraints},
@@ -92,6 +92,8 @@ std::string SerializeAgentTaskState(const FAgentTaskState& State)
         {"evidence_refs", State.EvidenceRefs},
         {"criterion_evidence", std::move(CriterionEvidence)},
         {"open_questions", State.OpenQuestions},
+        {"mutation_readback_pending", State.bMutationReadbackPending},
+        {"pending_mutation_tool", State.PendingMutationTool},
         {"observation_count", State.ObservationCount},
         {"revision", State.Revision}}.dump();
 }
@@ -106,7 +108,8 @@ bool DeserializeAgentTaskState(
     {
         const FJson Value = FJson::parse(Json);
         const int Version = Value.value("version", 0);
-        if (!Value.is_object() || (Version != 1 && Version != 2))
+        if (!Value.is_object()
+            || (Version != 1 && Version != 2 && Version != 3))
         {
             if (OutError) *OutError = "Unsupported Agent Task State version";
             return false;
@@ -139,6 +142,13 @@ bool DeserializeAgentTaskState(
         }
         State.OpenQuestions = Value.value(
             "open_questions", std::vector<std::string>{});
+        if (Version >= 3)
+        {
+            State.bMutationReadbackPending = Value.value(
+                "mutation_readback_pending", false);
+            State.PendingMutationTool = Value.value(
+                "pending_mutation_tool", "");
+        }
         State.ObservationCount = Value.value(
             "observation_count", std::uint64_t {0});
         State.Revision = Value.value("revision", std::uint64_t {0});

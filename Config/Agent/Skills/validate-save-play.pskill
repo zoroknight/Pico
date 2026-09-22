@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Validate, save, and launch the active Pico World without invoking packaging.",
   "triggers": ["运行项目", "启动项目", "试玩", "运行游戏", "启动游戏", "预览游戏", "play project", "run project", "launch project", "preview game", "run game", "play game"],
-  "allowed_tools": [
+  "recommended_tools": [
     "editor.world.describe",
     "editor.play.validate",
     "editor.world.save",

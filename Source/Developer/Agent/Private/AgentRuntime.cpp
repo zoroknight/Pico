@@ -85,7 +85,7 @@ FAgentRunResult FAgentRuntime::Run(
     ToolExecutor.BeginRun(RunId);
     std::string Error;
     ToolReplaySequenceFloor = 0;
-    bReflectionUsed = Counters.ReflectionAttempts > 0;
+    bReflectionUsed = false;
     ReflectionJson = "{}";
     if (!Prompt.empty())
     {
@@ -126,9 +126,11 @@ FAgentRunResult FAgentRuntime::Run(
             }
         }
     }
-    if (bReflectionUsed && ReflectionJson == "{}"
+    if (Counters.ReflectionAttempts > 0
+        && ReflectionJson == "{}"
         && TaskState.CurrentStep == "Conditional reflection and recovery")
     {
+        bReflectionUsed = true;
         ReflectionJson = FJson {
             {"active", true},
             {"attempt", Counters.ReflectionAttempts},
@@ -273,6 +275,29 @@ FAgentRunResult FAgentRuntime::Run(
             }
             EndTurn(false, Response.Error.empty() ? "Provider failed" : Response.Error);
             continue;
+        }
+
+        if (Response.bFinal && Context.Features.bMutationReadbackGate
+            && TaskState.bMutationReadbackPending)
+        {
+            if (TryEnterReflection(
+                    "mutation_readback_required",
+                    "The proposed final answer follows a project or World mutation "
+                    "that has not been independently inspected. Run a fresh read-only "
+                    "describe or validation tool against the changed target before "
+                    "claiming completion.",
+                    EAgentFailureClass::VerificationFailed,
+                    Error))
+            {
+                EndTurn(false,
+                    "Conditional reflection: mutation requires independent readback");
+                continue;
+            }
+            return Finish(EAgentStatus::Failed,
+                "Agent final answer was rejected because the latest mutation from "
+                + TaskState.PendingMutationTool
+                + " was not followed by a fresh read-only inspection",
+                EAgentFailureClass::VerificationFailed);
         }
 
         if (Response.bFinal && !HasRequiredCompletionEvidence())
@@ -564,6 +589,20 @@ FAgentRunResult FAgentRuntime::Run(
                         EAgentFailureClass::Infrastructure);
                 }
                 ToolExecutor.CommitDurableResult(Call);
+                if (Result.bSucceeded && Context.Features.bMutationReadbackGate)
+                {
+                    if (!bReadOnly)
+                    {
+                        TaskState.bMutationReadbackPending = true;
+                        TaskState.PendingMutationTool = Call.Name;
+                    }
+                    else if (!Existing.has_value() && !bSemanticCacheHit
+                        && TaskState.bMutationReadbackPending)
+                    {
+                        TaskState.bMutationReadbackPending = false;
+                        TaskState.PendingMutationTool.clear();
+                    }
+                }
                 if (Context.Features.bObservationMapping)
                 {
                     const FAgentObservation Observation = BuildAgentObservation(
@@ -683,6 +722,7 @@ FAgentRunResult FAgentRuntime::Run(
                         TaskState.CurrentStep = "Validate recovered progress";
                         ++TaskState.Revision;
                     }
+                    bReflectionUsed = false;
                 }
             }
             else
@@ -820,9 +860,12 @@ bool FAgentRuntime::TryEnterReflection(
     EAgentFailureClass FailureClass,
     std::string& OutError)
 {
-    if (!Context.Features.bConditionalReflection || bReflectionUsed)
+    if (!Context.Features.bConditionalReflection || bReflectionUsed
+        || Counters.ReflectionAttempts >= Budget.MaxRepairAttempts)
     {
-        if (bReflectionUsed) ++Counters.RecoveryEscalations;
+        if (bReflectionUsed
+            || Counters.ReflectionAttempts >= Budget.MaxRepairAttempts)
+            ++Counters.RecoveryEscalations;
         return false;
     }
 
@@ -883,6 +926,8 @@ std::string FAgentRuntime::BuildProgressLedgerJson() const
         {"completed_actions", std::move(Actions)},
         {"latest_observations", std::move(Observations)},
         {"success_criteria", std::move(Criteria)},
+        {"mutation_readback_pending", TaskState.bMutationReadbackPending},
+        {"pending_mutation_tool", TaskState.PendingMutationTool},
         {"budget", {{"steps_used", Counters.Steps},
             {"steps_remaining", Counters.Steps < Budget.MaxSteps
                 ? Budget.MaxSteps - Counters.Steps : 0},
@@ -906,7 +951,11 @@ std::string FAgentRuntime::BuildProgressLedgerJson() const
             {"trimmed_context_messages", Counters.TrimmedContextMessages}}},
         {"next_action_rule",
             "Do not repeat a completed read at the same relevant revision. Mutate once "
-            "arguments are known, ask for missing information, or finish."}}.dump();
+            "arguments are known. After a mutation, inspect the exact changed target "
+            "with a fresh read-only tool before finishing. Skills are recommendations, "
+            "not capability restrictions; compose other available tools when needed. "
+            "If a required capability is truly absent, state the exact gap and provide "
+            "concrete executable alternatives instead of a generic refusal."}}.dump();
 }
 
 std::string FAgentRuntime::BuildTaskStateJson() const
