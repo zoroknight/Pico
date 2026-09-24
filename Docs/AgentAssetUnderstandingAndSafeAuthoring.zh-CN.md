@@ -6,7 +6,15 @@
 它位于 [ReAct 轻量化加固门](AgentReActLightweightHardeningRoadmap.zh-CN.md) 之后、
 [Agent 游戏制作链路](AgentGameCreationPipeline.zh-CN.md) 第 5～8 周之前，是后续玩法组装与 AI 视觉资产生产的前置门。
 
-> 状态：**S0～S3 已完成，S4～S6 待实施**。安全写入、Material 工具、反射驱动的通用组件装配和人工语义元数据已经进入主线；标准预览和外部视觉 API 尚未开放。
+> 状态：**S0～S3 已完成，S4～S6 待实施**。S4 前插入独立的 [Agent 输入缓存与长会话上下文减重门](AgentPromptCacheAndContextEfficiency.zh-CN.md) CE0～CE2；安全写入、Material 工具、反射驱动的通用组件装配和人工语义元数据已经进入主线，标准预览和外部视觉 API 尚未开放。
+
+### 模型输入缓存与 S4 资产缓存
+
+Provider 的 Prompt Cache 是模型服务端对相同输入前缀的复用，**不是** S4 将要实现的 Mesh/Material/Texture 预览与推断缓存。内置 AI Chat 现在固定工具 schema 顺序、把当轮稳定的 Skill 与知识证据置于逐步变化的任务状态之前，并避免把完整工具 schema 再作为知识片段召回。DeepSeek 流式请求采集 `usage` 中的输入/输出及缓存命中/未命中 Token；非流式响应在 Provider 返回这些字段时也会采集。单次请求数据记入 `Model.Generate` TraceSpan，Run 汇总写入 Metrics JSON，并显示在 AI Chat 的 Agent Metrics 中。只读工具的 `semantic_cache_hits` 独立统计；Provider 不返回缓存明细时显示 unavailable，不把缺失数据当作零命中。
+
+验收应固定同一 Provider/模型和一组多步任务，对比逐请求命中/未命中 Token、总输入 Token、延迟与任务成功率。已有自动化测试只验证请求前缀、响应解析和统计链路；它不代表服务端真实缓存命中率已经提高。S4 资产预览缓存仍按原计划实施。
+
+后续优化的观测数据、问题根因、三组测试的可比性与 CE0～CE2 验收门槛统一记录在 [Agent 输入缓存与长会话上下文减重](AgentPromptCacheAndContextEfficiency.zh-CN.md)。该门只精简送往模型的上下文视图；完整 Session/Event Log、资产来源、审批和回滚链不删减。
 
 本切片解决的不是“为奶牛写一个专用命令”，而是建立一条可复用链路，使 Agent 能够：
 
@@ -283,6 +291,14 @@ Destructive
 - 外部 Agent、内置 AI Chat 和未来 Provider 使用同一 Tool Policy 与审批链。
 
 ## 七周实施计划
+
+S0～S6 的编号和已完成状态保持不变；CE0～CE2 作为独立插入门，完成后再开始 S4，不把模型输入缓存优化算成 S4 的资产预览工作。
+
+| 插入门 | 工作 | 验收 |
+| --- | --- | --- |
+| CE0（待实施） | 完整请求分区、历史重放/知识刷新耗时与固定的新/长会话基线；逐响应 Provider 用量采集已完成 | 可按同类工具轨迹和回答证据解释 Token 成本，不用账户日报或零工具复述轮代替基线 |
+| CE1（待实施） | 现有 Context Assembler 中按任务边界投影历史，保留当前工具配对、审批与有效证据；去掉同会话 Episode 重复内容 | 长会话未命中输入下降，Golden Tasks、Revision 证据和恢复/回滚不退化 |
+| CE2（待实施） | Knowledge Source 无变更跳过重建、按 Revision 增量刷新，并审计 Ledger/Task State 重复信息 | 无变更不重复写 Snapshot/重建索引；刷新耗时与质量门达标 |
 
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |

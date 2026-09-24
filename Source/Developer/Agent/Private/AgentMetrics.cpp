@@ -68,6 +68,12 @@ std::string FAgentRunMetrics::ToJson() const
             {"tool", LatencyToJson(ToolLatency)},
             {"validation", LatencyToJson(ValidationLatency)}}},
         {"context_bytes", ContextBytes},
+        {"provider_usage", {{"responses", ProviderUsageResponses},
+            {"prompt_tokens", ProviderPromptTokens},
+            {"completion_tokens", ProviderCompletionTokens},
+            {"cache_detail_responses", ProviderCacheDetailResponses},
+            {"cache_hit_tokens", ProviderCacheHitTokens},
+            {"cache_miss_tokens", ProviderCacheMissTokens}}},
         {"context_assembly", {
             {"count", ContextMetrics.AssemblyCount},
             {"total_us", ContextMetrics.TotalAssemblyMicroseconds},
@@ -125,6 +131,12 @@ FAgentRunMetrics BuildAgentRunMetrics(
     Metrics.ContextMetrics = Result.ContextMetrics;
     Metrics.RepairCount = Result.Counters.RepairAttempts;
     Metrics.CacheHitCount = Result.Counters.SemanticCacheHits;
+    Metrics.ProviderUsageResponses = Result.Counters.ProviderUsageResponses;
+    Metrics.ProviderPromptTokens = Result.Counters.ProviderPromptTokens;
+    Metrics.ProviderCompletionTokens = Result.Counters.ProviderCompletionTokens;
+    Metrics.ProviderCacheDetailResponses = Result.Counters.ProviderCacheDetailResponses;
+    Metrics.ProviderCacheHitTokens = Result.Counters.ProviderCacheHitTokens;
+    Metrics.ProviderCacheMissTokens = Result.Counters.ProviderCacheMissTokens;
     Metrics.ObservationCount = Result.Counters.Observations;
     Metrics.EvidenceBindingCount = Result.Counters.EvidenceBindings;
     Metrics.OscillationCount = Result.Counters.OscillationsDetected;

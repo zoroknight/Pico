@@ -38,7 +38,9 @@ Pico 已经通过本机多进程和两台真实 Windows 电脑验证 UDP、Repli
  -> Pico MCP 四周纵向切片（已完成）
  -> 阶段 A 第 1～4 周：资产理解、规格、Build Plan 与恢复（已完成）
  -> ReAct 轻量化加固门（R1～R5 已完成）
- -> 资产理解与安全创作纵向切片（新增最高优先级，七周）
+ -> 资产理解与安全创作 S0～S3（已完成）
+ -> Agent 输入缓存与长会话上下文减重门 CE0～CE2（S4 前，待实施）
+ -> 资产理解与安全创作 S4～S6（待实施）
  -> 阶段 A 第 5～8 周：玩法积木、Graph、组装与真实验收
  -> 阶段 C：Render Architecture（提前，四周）
  -> 阶段 D：AI 视觉资产生产（两周）
@@ -52,7 +54,7 @@ Pico 已经通过本机多进程和两台真实 Windows 电脑验证 UDP、Repli
 固定优先级为：
 
 ```text
-Harness 可靠性与资产安全创作
+Harness 可靠性、上下文效率与资产安全创作
  > AI 双人协作游戏闭环
  > Render Architecture
  > AI 视觉资产与受控 Code Harness
@@ -700,8 +702,9 @@ DisplayName、Category、范围和权限元数据后，再将该适配器完全�
 第二套 Harness 或新的执行模式。加固门通过前，不以继续增加玩法 Tool、独立 Memory Service 或额外模型调用掩盖
 上下文、证据、振荡和恢复问题。
 
-ReAct R1～R5 已通过，资产理解与安全创作的 S0～S3 也已完成，接下来执行 S4～S6：
-[Agent 资产理解与安全创作纵向切片](AgentAssetUnderstandingAndSafeAuthoring.zh-CN.md)。该七周插入项是阶段 A
+ReAct R1～R5 已通过，资产理解与安全创作的 S0～S3 也已完成。在 S4 前先通过
+[Agent 输入缓存与长会话上下文减重门](AgentPromptCacheAndContextEfficiency.zh-CN.md) 的 CE0～CE2，再执行 S4～S6：
+[Agent 资产理解与安全创作纵向切片](AgentAssetUnderstandingAndSafeAuthoring.zh-CN.md)。该七周切片是阶段 A
 第 5 周前的最高优先级门：先补齐稳定目标、Revision 校验、字段级更新、引用影响分析、复合事务和读回验证，再依次
 开放 Material、通用组件、Actor 装配、语义元数据、标准预览和可选视觉分析。视觉 Provider 只提供只读候选语义，
 不成为第二套 Agent，不直接写项目，也不改变现有 Build Plan、Tool Policy、审批、Checkpoint 和验证边界。
@@ -712,11 +715,16 @@ ReAct R5
  -> S1 Material / Reference Tools（已完成）
  -> S2 Component / Actor Assembly（已完成）
  -> S3 Semantic Metadata（已完成）
+ -> CE0 完整计量与固定基线（待实施）
+ -> CE1 任务边界历史投影（待实施）
+ -> CE2 知识源增量刷新与去重（待实施）
  -> S4 Preview Artifacts
  -> S5 Optional Vision Provider
  -> S6 Editor Golden Tasks
  -> 阶段 A 第 5～8 周
 ```
+
+CE0～CE2 是独立的上下文效率质量门，不冒充 S4 的资产预览缓存，也不改变 S0～S6 的原编号。已完成的 Provider 逐响应缓存 Token 采集、固定工具顺序和稳定前缀顺序是 CE0 的现有基础；CE0 尚需补齐完整请求组成、知识刷新与历史重放耗时及可比基线。长会话 4 工具本地测试为 135,759 输入 / 102,863 未命中 Token，新会话同类测试为 63,342 / 25,454；该差异提示历史成本，但不是已完成的因果 A/B。CE1/CE2 必须在任务质量不退化的前提下降低长会话未命中输入；工具目录按需加载须另有测量与能力回归证据，不进入默认实施范围。
 
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |

@@ -166,6 +166,12 @@ struct FAgentCounters
     std::size_t ReadOnlyToolCalls = 0;
     std::size_t MutationToolCalls = 0;
     std::size_t SemanticCacheHits = 0;
+    std::uint64_t ProviderUsageResponses = 0;
+    std::uint64_t ProviderPromptTokens = 0;
+    std::uint64_t ProviderCompletionTokens = 0;
+    std::uint64_t ProviderCacheHitTokens = 0;
+    std::uint64_t ProviderCacheMissTokens = 0;
+    std::uint64_t ProviderCacheDetailResponses = 0;
     std::size_t ConsecutiveNoProgressSteps = 0;
     std::size_t Observations = 0;
     std::size_t EvidenceBindings = 0;

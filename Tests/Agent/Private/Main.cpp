@@ -7,6 +7,7 @@
 #include "Pico/Agent/AgentGameAssembly.h"
 #include "Pico/Agent/AgentIntent.h"
 #include "Pico/Agent/AgentKnowledgeStore.h"
+#include "Pico/Agent/AgentMetrics.h"
 #include "Pico/Agent/AgentOperationJournal.h"
 #include "Pico/Agent/AgentProjectHandoff.h"
 #include "Pico/Agent/AgentSkill.h"
@@ -14,6 +15,7 @@
 #include "Pico/Agent/FakeAgentProvider.h"
 #include "Pico/Agent/OpenAICompatibleProvider.h"
 #include "Pico/Tasks/TaskSystem.h"
+
 
 #include <algorithm>
 #include <array>
@@ -498,14 +500,29 @@ void TestDeterministicCompletionAndRecovery(FTestRunner& Runner)
 {
     const auto Path = MakeLogPath("completion");
     auto Session = Pico::FAgentSession::OpenOrCreate("completion", Path);
-    Pico::FFakeAgentProvider Provider({{Final("done"), {}}});
+    auto FinalResponse = Final("done");
+    FinalResponse.Usage = {120, 8, 90, 30, true, true};
+    Pico::FFakeAgentProvider Provider({{FinalResponse, {}}});
     FCountingToolExecutor Executor;
     Pico::FAgentRuntime Runtime(*Session, Provider, Executor);
     const Pico::FAgentRunResult Result = Runtime.Run("build a scene");
     Runner.Expect(
         Result.Status == Pico::EAgentStatus::Completed
-            && Result.FinalText == "done" && Result.Counters.Steps == 1,
+            && Result.FinalText == "done" && Result.Counters.Steps == 1
+            && Result.Counters.ProviderCacheHitTokens == 90
+            && Result.Counters.ProviderCacheMissTokens == 30,
         "Fake provider drives a deterministic completed run");
+    const auto Metrics = Pico::BuildAgentRunMetrics(*Session, Result, 0);
+    Runner.Expect(Metrics.ProviderCacheHitTokens == 90
+            && Metrics.ToJson().find("\"cache_miss_tokens\": 30") != std::string::npos,
+        "Provider cache usage is retained in run metrics independently of tool cache hits");
+    bool bFoundResponseUsage = false;
+    for (const auto& Event : Session->GetEvents())
+        bFoundResponseUsage |= Event.Type == Pico::EAgentEventType::TraceSpan
+            && Event.SpanName == "Model.Generate"
+            && Event.PayloadJson.find("\"cache_hit_tokens\":90") != std::string::npos;
+    Runner.Expect(bFoundResponseUsage,
+        "Each model response records its own cache usage on the correlated trace span");
 
     auto Restored = Pico::FAgentSession::OpenOrCreate("completion", Path);
     Runner.Expect(
@@ -1742,7 +1759,7 @@ void TestOpenAICompatibleProviderProtocolAndRetry(FTestRunner& Runner)
     Transport->Responses.push_back({true, 429,
         R"({"error":{"message":"rate limited"}})", 1, {}});
     Transport->Responses.push_back({true, 200,
-        R"({"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"api-call-1","type":"function","function":{"name":"editor_actor_spawn","arguments":"{\"name\":\"AIBox\",\"kind\":\"Cube\"}"}}]}}]})",
+        R"({"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"api-call-1","type":"function","function":{"name":"editor_actor_spawn","arguments":"{\"name\":\"AIBox\",\"kind\":\"Cube\"}"}}]}}],"usage":{"prompt_tokens":120,"completion_tokens":8,"prompt_cache_hit_tokens":90,"prompt_cache_miss_tokens":30}})",
         0, {}});
 
     Pico::FOpenAICompatibleProviderSettings Settings;
@@ -1762,7 +1779,10 @@ void TestOpenAICompatibleProviderProtocolAndRetry(FTestRunner& Runner)
     Runner.Expect(
         Result.bSucceeded && !Result.bFinal && Result.ToolCalls.size() == 1
             && Result.ToolCalls[0].Name == "editor.actor.spawn"
-            && Provider.GetRequestCount() == 2 && Provider.GetRetryCount() == 1,
+            && Provider.GetRequestCount() == 2 && Provider.GetRetryCount() == 1
+            && Result.Usage.bCacheDetailsAvailable
+            && Result.Usage.CacheHitTokens == 90
+            && Result.Usage.CacheMissTokens == 30,
         "OpenAI-compatible provider retries HTTP 429 and maps API-safe tool names back to Pico names");
     Runner.Expect(
         Transport->Bodies.size() == 2
@@ -1792,6 +1812,32 @@ void TestOpenAICompatibleProviderProtocolAndRetry(FTestRunner& Runner)
             && HistoryTransport->Bodies[0].find("tool_call_id") != std::string::npos
             && HistoryTransport->Bodies[0].find("api-call-1") != std::string::npos,
         "Provider reconstructs assistant ToolCall and matching tool result for multi-round chat");
+
+    auto PrefixTransport = std::make_shared<FScriptedHttpTransport>();
+    for (int Index = 0; Index < 2; ++Index)
+        PrefixTransport->Responses.push_back({true, 200,
+            R"({"choices":[{"finish_reason":"stop","message":{"content":"done"}}]})",
+            0, {}});
+    Pico::FOpenAICompatibleProvider PrefixProvider(Settings, PrefixTransport);
+    Pico::FAgentProviderRequest PrefixRequest;
+    PrefixRequest.SkillContextJson = R"([{"id":"asset-authoring"}])";
+    PrefixRequest.KnowledgeContextJson = R"({"evidence":"stable"})";
+    PrefixRequest.TaskStateJson = R"({"step":1})";
+    PrefixRequest.Messages.push_back({Pico::EAgentRole::User, "inspect"});
+    PrefixProvider.Generate(PrefixRequest, nullptr);
+    PrefixRequest.TaskStateJson = R"({"step":2})";
+    PrefixProvider.Generate(PrefixRequest, nullptr);
+    const std::string& FirstBody = PrefixTransport->Bodies[0];
+    const std::string& SecondBody = PrefixTransport->Bodies[1];
+    const auto SkillPosition = FirstBody.find("Active Pico Skills");
+    const auto KnowledgePosition = FirstBody.find("Pico Project Knowledge");
+    const auto StatePosition = FirstBody.find("Pico task state");
+    Runner.Expect(SkillPosition != std::string::npos
+            && SkillPosition < KnowledgePosition && KnowledgePosition < StatePosition
+            && FirstBody.substr(0, StatePosition)
+                == SecondBody.substr(0, SecondBody.find("Pico task state"))
+            && FirstBody != SecondBody,
+        "Stable instructions, Skills, and knowledge precede mutable per-step task state");
 }
 
 void TestStreamingProviderAggregatesSse(FTestRunner& Runner)
@@ -1801,6 +1847,7 @@ void TestStreamingProviderAggregatesSse(FTestRunner& Runner)
         "data: {\"choices\":[{\"delta\":{\"content\":\"Hel",
         "lo \"},\"finish_reason\":null}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"content\":\"Pico\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":2,\"prompt_cache_hit_tokens\":75,\"prompt_cache_miss_tokens\":25}}\n\n",
         "data: [DONE]\n\n"
     };
     Pico::FOpenAICompatibleProviderSettings Settings;
@@ -1808,6 +1855,7 @@ void TestStreamingProviderAggregatesSse(FTestRunner& Runner)
     Settings.Model = "stream-test";
     Settings.ApiKey = "not-a-real-key";
     Settings.ToolCatalogJson = "[]";
+    Settings.bRequestStreamingUsage = true;
     Pico::FOpenAICompatibleProvider Provider(Settings, Transport);
     std::string Visible;
     Pico::FAgentProviderRequest Request;
@@ -1820,8 +1868,12 @@ void TestStreamingProviderAggregatesSse(FTestRunner& Runner)
     Runner.Expect(
         Result.bSucceeded && Result.bFinal
             && Result.Content == "Hello Pico" && Visible == Result.Content
+            && Result.Usage.bCacheDetailsAvailable
+            && Result.Usage.CacheHitTokens == 75
+            && Result.Usage.CacheMissTokens == 25
             && Transport->Bodies.size() == 1
-            && Transport->Bodies[0].find("\"stream\":true") != std::string::npos,
+            && Transport->Bodies[0].find("\"stream\":true") != std::string::npos
+            && Transport->Bodies[0].find("\"include_usage\":true") != std::string::npos,
         "SSE chunks split inside JSON tokens stream visible text and persist one aggregate response");
 
     auto ToolTransport = std::make_shared<FScriptedHttpTransport>();

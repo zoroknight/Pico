@@ -28,6 +28,12 @@ struct FAgentRunMetrics
     FAgentContextMetrics ContextMetrics;
     std::uint64_t RepairCount = 0;
     std::uint64_t CacheHitCount = 0;
+    std::uint64_t ProviderUsageResponses = 0;
+    std::uint64_t ProviderPromptTokens = 0;
+    std::uint64_t ProviderCompletionTokens = 0;
+    std::uint64_t ProviderCacheDetailResponses = 0;
+    std::uint64_t ProviderCacheHitTokens = 0;
+    std::uint64_t ProviderCacheMissTokens = 0;
     std::uint64_t ObservationCount = 0;
     std::uint64_t EvidenceBindingCount = 0;
     std::uint64_t OscillationCount = 0;

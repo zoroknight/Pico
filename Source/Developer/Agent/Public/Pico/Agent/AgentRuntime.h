@@ -68,6 +68,7 @@ private:
         std::string Id;
         std::string ParentId;
         std::string Name;
+        std::string PayloadJson = "{}";
         std::int64_t StartedTimestampMilliseconds = 0;
         std::chrono::steady_clock::time_point StartedAt;
     };

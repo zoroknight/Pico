@@ -23,6 +23,16 @@ struct FAgentProviderRequest
     std::size_t RepairAttempt = 0;
 };
 
+struct FAgentProviderUsage
+{
+    std::uint64_t PromptTokens = 0;
+    std::uint64_t CompletionTokens = 0;
+    std::uint64_t CacheHitTokens = 0;
+    std::uint64_t CacheMissTokens = 0;
+    bool bAvailable = false;
+    bool bCacheDetailsAvailable = false;
+};
+
 struct FAgentProviderResponse
 {
     bool bSucceeded = true;
@@ -31,6 +41,7 @@ struct FAgentProviderResponse
     std::string Error;
     std::vector<FAgentToolCall> ToolCalls;
     EAgentFailureClass FailureClass = EAgentFailureClass::None;
+    FAgentProviderUsage Usage;
 };
 
 class IAgentProvider

@@ -834,6 +834,7 @@ struct FAgentChatWorkspace::FImpl
             Settings.ApiKey = EnvironmentValue("DEEPSEEK_API_KEY");
             Settings.bSendThinkingSetting = true;
             Settings.bThinkingEnabled = false;
+            Settings.bRequestStreamingUsage = true;
         }
         else
         {
@@ -883,18 +884,6 @@ struct FAgentChatWorkspace::FImpl
             FPaths::GetProjectRootDir(), 64 * 1024, 64);
         for (FAgentKnowledgeRecord& Record : EditorTools.CollectKnowledgeRecords())
             Sources[Record.SourceType].push_back(std::move(Record));
-
-        FAgentKnowledgeRecord ToolRecord;
-        ToolRecord.SourcePath = "AgentToolRegistry";
-        ToolRecord.Title = "Available Pico Agent tools and JSON schemas";
-        ToolRecord.Content = EditorTools.BuildToolCatalogJson();
-        ToolRecord.Tags = {"agent", "tool", "schema", "reflection"};
-        ToolRecord.Provenance = "Live AgentToolRegistry catalog";
-        ToolRecord.EntityIds = {"AgentToolRegistry"};
-        ToolRecord.RevisionDomain = "Tool.SchemaRevision";
-        ToolRecord.Fields = {{"catalog", "AgentToolRegistry"}};
-        ToolRecord.Kind = EAgentKnowledgeKind::Procedure;
-        Sources["tool-schema"].push_back(std::move(ToolRecord));
 
         std::vector<std::pair<std::string, std::filesystem::path>> EpisodeSessions;
         for (const FChatSessionEntry& Entry : SessionEntries)
@@ -985,8 +974,7 @@ struct FAgentChatWorkspace::FImpl
         const std::vector<FAgentSkill> ActiveSkills = SkillRegistry.Select(Prompt);
         const std::string SkillContext =
             SkillRegistry.BuildSkillContextJson(ActiveSkills);
-        const std::string ToolCatalog = SkillRegistry.PrioritizeToolCatalogJson(
-            EditorTools.BuildToolCatalogJson(), ActiveSkills);
+        const std::string ToolCatalog = EditorTools.BuildToolCatalogJson();
         std::string ProviderError;
         std::unique_ptr<IAgentProvider> NewProvider = CreateProvider(
             SelectedProvider, SelectedModel, ToolCatalog, ProviderError);
@@ -1399,9 +1387,33 @@ struct FAgentChatWorkspace::FImpl
                 MetricsContextBytes = LastRunContextBytes;
                 MetricsRunId = LastRunId;
             }
-            ImGui::Text("Steps %zu | tools %zu | cache hits %zu",
+            ImGui::Text("Steps %zu | tools %zu | tool cache hits %zu",
                 MetricsCounters.Steps, MetricsCounters.ToolCalls,
                 MetricsCounters.SemanticCacheHits);
+            if (MetricsCounters.ProviderCacheDetailResponses > 0)
+            {
+                const std::uint64_t InputTokens =
+                    MetricsCounters.ProviderCacheHitTokens
+                    + MetricsCounters.ProviderCacheMissTokens;
+                const double HitRate = InputTokens > 0
+                    ? 100.0 * static_cast<double>(MetricsCounters.ProviderCacheHitTokens)
+                        / static_cast<double>(InputTokens) : 0.0;
+                ImGui::Text("Provider input cache: %llu hit / %llu miss (%.1f%%, %llu/%llu responses)",
+                    static_cast<unsigned long long>(MetricsCounters.ProviderCacheHitTokens),
+                    static_cast<unsigned long long>(MetricsCounters.ProviderCacheMissTokens),
+                    HitRate,
+                    static_cast<unsigned long long>(MetricsCounters.ProviderCacheDetailResponses),
+                    static_cast<unsigned long long>(MetricsCounters.ProviderUsageResponses));
+            }
+            else
+            {
+                ImGui::TextDisabled("Provider input cache: unavailable");
+            }
+            if (MetricsCounters.ProviderUsageResponses > 0)
+                ImGui::TextDisabled("Provider usage: %llu input / %llu output tokens (%llu responses)",
+                    static_cast<unsigned long long>(MetricsCounters.ProviderPromptTokens),
+                    static_cast<unsigned long long>(MetricsCounters.ProviderCompletionTokens),
+                    static_cast<unsigned long long>(MetricsCounters.ProviderUsageResponses));
             ImGui::Text("Observations %zu | evidence %zu | oscillations %zu",
                 MetricsCounters.Observations,
                 MetricsCounters.EvidenceBindings,

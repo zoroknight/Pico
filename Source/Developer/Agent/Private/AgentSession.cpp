@@ -43,6 +43,12 @@ FJson ToJson(const FAgentEvent& Event, std::string_view SessionId)
         {"read_only_tool_calls", Event.Counters.ReadOnlyToolCalls},
         {"mutation_tool_calls", Event.Counters.MutationToolCalls},
         {"semantic_cache_hits", Event.Counters.SemanticCacheHits},
+        {"provider_usage_responses", Event.Counters.ProviderUsageResponses},
+        {"provider_prompt_tokens", Event.Counters.ProviderPromptTokens},
+        {"provider_completion_tokens", Event.Counters.ProviderCompletionTokens},
+        {"provider_cache_detail_responses", Event.Counters.ProviderCacheDetailResponses},
+        {"provider_cache_hit_tokens", Event.Counters.ProviderCacheHitTokens},
+        {"provider_cache_miss_tokens", Event.Counters.ProviderCacheMissTokens},
         {"consecutive_no_progress_steps", Event.Counters.ConsecutiveNoProgressSteps},
         {"observations", Event.Counters.Observations},
         {"evidence_bindings", Event.Counters.EvidenceBindings},
@@ -104,6 +110,13 @@ bool FromJson(const FJson& Json, std::string_view SessionId, FAgentEvent& Out, s
         Out.Counters.ReadOnlyToolCalls = Json.value("read_only_tool_calls", 0U);
         Out.Counters.MutationToolCalls = Json.value("mutation_tool_calls", 0U);
         Out.Counters.SemanticCacheHits = Json.value("semantic_cache_hits", 0U);
+        Out.Counters.ProviderUsageResponses = Json.value("provider_usage_responses", 0ULL);
+        Out.Counters.ProviderPromptTokens = Json.value("provider_prompt_tokens", 0ULL);
+        Out.Counters.ProviderCompletionTokens = Json.value("provider_completion_tokens", 0ULL);
+        Out.Counters.ProviderCacheDetailResponses = Json.value(
+            "provider_cache_detail_responses", 0ULL);
+        Out.Counters.ProviderCacheHitTokens = Json.value("provider_cache_hit_tokens", 0ULL);
+        Out.Counters.ProviderCacheMissTokens = Json.value("provider_cache_miss_tokens", 0ULL);
         Out.Counters.ConsecutiveNoProgressSteps =
             Json.value("consecutive_no_progress_steps", 0U);
         Out.Counters.Observations = Json.value("observations", 0U);

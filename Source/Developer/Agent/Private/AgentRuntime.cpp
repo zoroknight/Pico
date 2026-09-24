@@ -223,6 +223,18 @@ FAgentRunResult FAgentRuntime::Run(
         {
             Response = Provider.Generate(Request, CancellationToken);
         }
+        if (Response.Usage.bAvailable)
+        {
+            ++Counters.ProviderUsageResponses;
+            Counters.ProviderPromptTokens += Response.Usage.PromptTokens;
+            Counters.ProviderCompletionTokens += Response.Usage.CompletionTokens;
+            if (Response.Usage.bCacheDetailsAvailable)
+            {
+                ++Counters.ProviderCacheDetailResponses;
+                Counters.ProviderCacheHitTokens += Response.Usage.CacheHitTokens;
+                Counters.ProviderCacheMissTokens += Response.Usage.CacheMissTokens;
+            }
+        }
         if (!bInjectedProviderTimeout && ConsumeFailureInjection(
                 EAgentFailureInjectionPoint::ProviderInvalidJson))
         {
@@ -233,6 +245,16 @@ FAgentRunResult FAgentRuntime::Run(
         }
         const bool bProviderCancelled = IsCancelled(CancellationToken)
             || Response.Error == "Cancelled";
+        if (Response.Usage.bAvailable)
+        {
+            ModelSpan.PayloadJson = FJson {
+                {"provider_usage", {{"prompt_tokens", Response.Usage.PromptTokens},
+                    {"completion_tokens", Response.Usage.CompletionTokens},
+                    {"cache_details_available", Response.Usage.bCacheDetailsAvailable},
+                    {"cache_hit_tokens", Response.Usage.CacheHitTokens},
+                    {"cache_miss_tokens", Response.Usage.CacheMissTokens}}}
+            }.dump();
+        }
         EndSpan(ModelSpan, Response.bSucceeded && !bProviderCancelled,
             bProviderCancelled ? "Agent run was cancelled" : Response.Error);
 
@@ -1158,6 +1180,7 @@ void FAgentRuntime::EndSpan(
     Event.SpanId = Span.Id;
     Event.ParentSpanId = Span.ParentId;
     Event.SpanName = Span.Name;
+    Event.PayloadJson = std::move(Span.PayloadJson);
     Event.StartedTimestampMilliseconds = Span.StartedTimestampMilliseconds;
     Event.DurationMicroseconds = Duration > 0
         ? static_cast<std::uint64_t>(Duration) : 0;

@@ -49,6 +49,7 @@ struct FOpenAICompatibleProviderSettings
     std::string ToolCatalogJson = "[]";
     bool bSendThinkingSetting = false;
     bool bThinkingEnabled = false;
+    bool bRequestStreamingUsage = false;
     std::uint32_t TimeoutMilliseconds = 30000;
     std::size_t MaxRetries = 2;
     std::uint32_t InitialRetryDelayMilliseconds = 500;
