@@ -27,9 +27,11 @@ enum class EAgentFailureInjectionPoint
 struct FAgentRuntimeContext
 {
     std::string KnowledgeContextJson = "{}";
+    std::string CurrentEditorStateJson = "{}";
     std::string SkillContextJson = "[]";
+    std::uint64_t KnowledgeRefreshMicroseconds = 0;
     std::function<void(std::string_view)> OnAssistantDelta;
-    std::vector<EAgentFailureInjectionPoint> FailureInjections;
+    std::function<bool(EAgentFailureInjectionPoint)> FailureInjector;
     FAgentContextFeatureFlags Features;
 };
 

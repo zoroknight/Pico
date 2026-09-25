@@ -163,4 +163,24 @@ std::vector<FAgentKnowledgeRecord> CollectProjectTextKnowledge(
     const std::filesystem::path& ProjectRoot,
     std::size_t MaxFileBytes = 128 * 1024,
     std::size_t MaxFiles = 128);
+
+class FAgentProjectTextKnowledgeCollector
+{
+public:
+    std::vector<FAgentKnowledgeRecord> Collect(
+        const std::filesystem::path& ProjectRoot,
+        std::size_t MaxFileBytes = 128 * 1024,
+        std::size_t MaxFiles = 128);
+
+private:
+    struct FCachedFile
+    {
+        std::filesystem::file_time_type Modified;
+        std::uintmax_t Size = 0;
+        FAgentKnowledgeRecord Record;
+    };
+
+    std::filesystem::path Root;
+    std::unordered_map<std::string, FCachedFile> Files;
+};
 }

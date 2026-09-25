@@ -241,6 +241,14 @@ std::uint64_t StableHash(std::string_view Text)
     return Hash;
 }
 
+std::string StableFingerprint(std::string_view Text)
+{
+    std::ostringstream Stream;
+    Stream << std::hex << std::setw(16) << std::setfill('0')
+        << StableHash(Text);
+    return Stream.str();
+}
+
 std::string MakeApiToolName(std::string_view PicoName)
 {
     std::string Result;
@@ -309,8 +317,20 @@ FAgentProviderResponse FOpenAICompatibleProvider::Generate(
     std::string Body;
     std::string Error;
     std::unordered_map<std::string, std::string> ApiToPicoToolNames;
-    if (!BuildRequestBody(Request, Body, ApiToPicoToolNames, Error))
+    FAgentProviderRequestDiagnostics Diagnostics;
+    const auto SerializationStarted = std::chrono::steady_clock::now();
+    if (!BuildRequestBody(Request, Body, ApiToPicoToolNames,
+            Diagnostics, Error))
         return {false, false, {}, std::move(Error), {}};
+    Diagnostics.SerializedBytes = Body.size();
+    Diagnostics.SerializationMicroseconds = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - SerializationStarted).count());
+    const auto WithDiagnostics = [&Diagnostics](FAgentProviderResponse Response)
+    {
+        Response.RequestDiagnostics = Diagnostics;
+        return Response;
+    };
 
     std::uint32_t RetryDelay = std::max<std::uint32_t>(
         Settings.InitialRetryDelayMilliseconds, 1);
@@ -339,7 +359,7 @@ FAgentProviderResponse FOpenAICompatibleProvider::Generate(
         }
         ClearSecret(HttpRequest.AuthorizationBearer);
         if (IsCancelled(CancellationToken) || HttpResponse.Error == "Cancelled")
-            return {false, false, {}, "Cancelled", {}};
+            return WithDiagnostics({false, false, {}, "Cancelled", {}});
 
         const bool bStreamParserRejected = HttpResponse.Error
             == "Provider stream parser rejected a response event";
@@ -350,23 +370,25 @@ FAgentProviderResponse FOpenAICompatibleProvider::Generate(
         if (HttpResponse.bTransportSucceeded
             && HttpResponse.StatusCode >= 200 && HttpResponse.StatusCode < 300)
         {
-            if (Stream && Stream->HasEvents()) return Stream->Finish();
+            if (Stream && Stream->HasEvents())
+                return WithDiagnostics(Stream->Finish());
             if (Stream) HttpResponse.Body = Stream->GetRawBody();
-            return ParseResponse(HttpResponse, ApiToPicoToolNames);
+            return WithDiagnostics(ParseResponse(HttpResponse, ApiToPicoToolNames));
         }
         if (!bTransient || Attempt == Settings.MaxRetries)
         {
-            return ParseResponse(HttpResponse, ApiToPicoToolNames);
+            return WithDiagnostics(ParseResponse(HttpResponse, ApiToPicoToolNames));
         }
         ++RetryCount;
         const std::uint32_t Delay = HttpResponse.RetryAfterMilliseconds > 0
             ? std::min<std::uint32_t>(HttpResponse.RetryAfterMilliseconds, 10000)
             : RetryDelay;
         if (!WaitCancelable(Delay, CancellationToken))
-            return {false, false, {}, "Cancelled", {}};
+            return WithDiagnostics({false, false, {}, "Cancelled", {}});
         RetryDelay = std::min<std::uint32_t>(RetryDelay * 2, 10000);
     }
-    return {false, false, {}, "Provider retry loop ended unexpectedly", {}};
+    return WithDiagnostics({false, false, {},
+        "Provider retry loop ended unexpectedly", {}});
 }
 
 std::size_t FOpenAICompatibleProvider::GetRequestCount() const { return RequestCount; }
@@ -376,6 +398,7 @@ bool FOpenAICompatibleProvider::BuildRequestBody(
     const FAgentProviderRequest& Request,
     std::string& OutBody,
     std::unordered_map<std::string, std::string>& OutApiToPicoToolNames,
+    FAgentProviderRequestDiagnostics& OutDiagnostics,
     std::string& OutError) const
 {
     try
@@ -397,6 +420,9 @@ bool FOpenAICompatibleProvider::BuildRequestBody(
         {
             Body["messages"].push_back(
                 {{"role", "system"}, {"content", Settings.SystemPrompt}});
+            OutDiagnostics.SystemPromptBytes = Settings.SystemPrompt.size();
+            OutDiagnostics.SystemPromptFingerprint =
+                StableFingerprint(Settings.SystemPrompt);
         }
         if (!Request.SkillContextJson.empty() && Request.SkillContextJson != "[]")
         {
@@ -420,9 +446,13 @@ bool FOpenAICompatibleProvider::BuildRequestBody(
         if (!Request.TaskStateJson.empty() && Request.TaskStateJson != "{}")
         {
             Body["messages"].push_back({{"role", "system"}, {"content",
-                "Pico task state for this turn. Treat the goal, constraints, current "
-                "step, and evidence references as authoritative state. Do not treat "
-                "this compact state as permission to bypass tool policy.\n"
+                "Pico task state for this turn. The current_editor_state is a "
+                "send-time editor snapshot, not proof that the state remained unchanged. "
+                "Current-run tool observations take precedence; earlier history and "
+                "retrieved knowledge are leads only. Check each requested outcome "
+                "against current evidence before a final answer, and report missing "
+                "items as unverified. Do not treat this state as permission to bypass "
+                "tool policy.\n"
                 + Request.TaskStateJson}});
         }
         if (!Request.ProgressLedgerJson.empty() && Request.ProgressLedgerJson != "{}")
@@ -483,6 +513,10 @@ bool FOpenAICompatibleProvider::BuildRequestBody(
         {
             Body["tools"] = std::move(Tools);
             Body["tool_choice"] = "auto";
+            const std::string SerializedTools = Body["tools"].dump();
+            OutDiagnostics.ToolSchemaBytes = SerializedTools.size();
+            OutDiagnostics.ToolSchemaFingerprint =
+                StableFingerprint(SerializedTools);
         }
         OutBody = Body.dump();
         return true;

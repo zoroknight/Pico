@@ -2419,7 +2419,7 @@ struct FEditorAgentToolExecutor::FImpl
         FAgentToolDefinition DescribeAsset;
         DescribeAsset.Name = "editor.asset.describe";
         DescribeAsset.Description =
-            "Describe one exact registered asset with its typed technical summary, dependencies, references, and content revision";
+            "Describe one exact registered asset with its typed technical summary, dependencies, registered-project-asset referencers, active-World references, and content revision; other Worlds are not scanned";
         DescribeAsset.Schema.Fields = {
             {"asset_path", EAgentToolValueType::String, true, {}, {}, 512,
                 EAgentToolStringFormat::AssetPath}};
@@ -2471,14 +2471,18 @@ struct FEditorAgentToolExecutor::FImpl
                 {"summary", std::move(Summary)},
                 {"dependencies", std::move(Dependencies)},
                 {"asset_referencers", std::move(Referencers)},
-                {"world_references", std::move(WorldReferences)}});
+                {"world_references", std::move(WorldReferences)},
+                {"reference_scope", {{"asset_referencers", "registered_project_assets"},
+                    {"world_references", "loaded_active_world"},
+                    {"other_worlds_scanned", false},
+                    {"indirect_references_included", false}}}});
         };
         bInitialized = RegisterTool(std::move(DescribeAsset)) && bInitialized;
 
         FAgentToolDefinition FindAssetReferences;
         FindAssetReferences.Name = "editor.asset.find_references";
         FindAssetReferences.Description =
-            "Report project assets and active-World properties that explicitly reference one exact asset; does not modify anything";
+            "Report registered project assets and loaded active-World properties that explicitly reference one exact asset; other Worlds and indirect references are not scanned";
         FindAssetReferences.Schema.Fields = {
             {"asset_path", EAgentToolValueType::String, true, {}, {}, 512,
                 EAgentToolStringFormat::AssetPath}};
@@ -2504,7 +2508,11 @@ struct FEditorAgentToolExecutor::FImpl
                     {"property", Reference.PropertyName.ToString()}});
             return Success(Call, {{"asset_path", Path.ToString()},
                 {"asset_referencers", std::move(Assets)},
-                {"world_references", std::move(World)}});
+                {"world_references", std::move(World)},
+                {"reference_scope", {{"asset_referencers", "registered_project_assets"},
+                    {"world_references", "loaded_active_world"},
+                    {"other_worlds_scanned", false},
+                    {"indirect_references_included", false}}}});
         };
         bInitialized = RegisterTool(std::move(FindAssetReferences)) && bInitialized;
 

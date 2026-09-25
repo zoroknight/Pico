@@ -195,6 +195,8 @@ struct FAgentContextMetrics
     std::uint64_t ObservationBytes = 0;
     std::uint64_t DroppedBytes = 0;
     std::uint64_t TotalBytes = 0;
+    std::uint64_t ProjectedHistoryBytes = 0;
+    std::uint64_t ProjectedMessages = 0;
 };
 
 struct FAgentRunResult
@@ -206,6 +208,7 @@ struct FAgentRunResult
     std::string RunId;
     std::uint64_t ContextBytes = 0;
     FAgentContextMetrics ContextMetrics;
+    bool bTaskBoundaryProjectionEnabled = false;
     std::string MetricsPath;
     EAgentFailureClass FailureClass = EAgentFailureClass::None;
     EAgentRecoveryAction RecoveryAction = EAgentRecoveryAction::Abort;

@@ -42,6 +42,7 @@ struct FAgentContextFeatureFlags
 {
     bool bTaskState = true;
     bool bContextAssembler = true;
+    bool bTaskBoundaryProjection = false;
     bool bContextMetrics = true;
     bool bObservationMapping = true;
     bool bEvidenceCompletionGate = true;
@@ -89,6 +90,8 @@ struct FAgentContextAssemblyInput
     std::string SkillContextJson = "[]";
     std::size_t MaxMessages = 48;
     std::uint64_t MaxBytes = 256 * 1024;
+    bool bTaskBoundaryProjection = false;
+    std::size_t MaxHistoricalEvidenceBytes = 4 * 1024;
 };
 
 struct FAgentAssembledContext

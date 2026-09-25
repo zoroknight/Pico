@@ -76,6 +76,7 @@ std::string FAgentRunMetrics::ToJson() const
             {"cache_miss_tokens", ProviderCacheMissTokens}}},
         {"context_assembly", {
             {"count", ContextMetrics.AssemblyCount},
+            {"task_boundary_projection_enabled", bTaskBoundaryProjectionEnabled},
             {"total_us", ContextMetrics.TotalAssemblyMicroseconds},
             {"max_us", ContextMetrics.MaxAssemblyMicroseconds},
             {"instructions_bytes", ContextMetrics.InstructionBytes},
@@ -85,6 +86,9 @@ std::string FAgentRunMetrics::ToJson() const
             {"observation_bytes", ContextMetrics.ObservationBytes},
             {"dropped_bytes", ContextMetrics.DroppedBytes},
             {"total_bytes", ContextMetrics.TotalBytes}}},
+        {"history_projection", {
+            {"old_messages", ContextMetrics.ProjectedMessages},
+            {"saved_bytes", ContextMetrics.ProjectedHistoryBytes}}},
         {"failure_class", ToString(FailureClass)},
         {"recovery_action", ToString(RecoveryAction)},
         {"automatically_retryable", bAutomaticallyRetryable},
@@ -129,6 +133,8 @@ FAgentRunMetrics BuildAgentRunMetrics(
     Metrics.Status = Result.Status;
     Metrics.ContextBytes = ContextBytes;
     Metrics.ContextMetrics = Result.ContextMetrics;
+    Metrics.bTaskBoundaryProjectionEnabled =
+        Result.bTaskBoundaryProjectionEnabled;
     Metrics.RepairCount = Result.Counters.RepairAttempts;
     Metrics.CacheHitCount = Result.Counters.SemanticCacheHits;
     Metrics.ProviderUsageResponses = Result.Counters.ProviderUsageResponses;

@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "H1-01",
+      "category": "asset-depth",
+      "setup": "StarterWorld; no scene edits",
+      "prompt": "只读检查 StarterWorld 中 PhysicsCrate 的组件配置、物理相关属性及引用资产；区分已验证事实与无法确认的内容。不要修改或保存场景。",
+      "criteria": ["Describe crate components and physical settings", "Identify referenced assets", "Separate asset references from verified asset internals", "Do not modify the world"],
+      "baseline": "20260925-pair6b"
+    },
+    {
+      "id": "H1-02",
+      "category": "read-order",
+      "setup": "StarterWorld; no scene edits",
+      "prompt": "只读核验 StarterWorld 中的 PhysicsCrate：本轮必须分别重新读取世界、PhysicsCrate 对象、其引用的 SM_Cube.pmesh 网格资产和 M_Accent.pmat 材质资产，再依据这四份当前工具结果说明组件物理配置、网格几何和材质特性。不能用历史回答代替本轮查询；不要修改或保存场景。",
+      "criteria": ["Current world evidence", "Current crate object evidence", "Current mesh asset evidence", "Current material asset evidence", "No world modification"],
+      "baseline": "20260925-pair6c"
+    },
+    {
+      "id": "H1-03",
+      "category": "world-selection",
+      "setup": "Open StarterWorld and select PhysicsCrate",
+      "prompt": "根据 Current editor selection 描述当前选中对象，只用本轮证据，不要修改场景。",
+      "criteria": ["Names current selected object", "Grounds properties in current selection/object evidence", "No world modification"]
+    },
+    {
+      "id": "H1-04",
+      "category": "world-selection",
+      "setup": "Immediately after H1-03 select Cow_1; send in same conversation",
+      "prompt": "根据 Current editor selection 描述当前选中对象；指出它与上次选中的对象有何不同。不要修改场景。",
+      "criteria": ["Reports Cow_1, not PhysicsCrate, as current selection", "Treats previous selection as history", "No world modification"]
+    },
+    {
+      "id": "H1-05",
+      "category": "world-selection",
+      "setup": "Select three actors in StarterWorld after H1-04",
+      "prompt": "根据 Current editor selection 列出现在选中的所有对象；不要沿用上一轮选择，不要修改场景。",
+      "criteria": ["Reports all three current selections", "Does not reuse stale single-object result", "No world modification"]
+    },
+    {
+      "id": "H1-06",
+      "category": "asset-analysis",
+      "setup": "StarterWorld; BP_Knight asset exists",
+      "prompt": "只读分析 /Game/Characters/BP_Knight.pblueprint 的直接依赖，并说明其中哪些资产的外观或内部参数已有证据；不足之处明确说未知。",
+      "criteria": ["Separates direct dependencies from directory neighbors", "Cites current asset/tool evidence", "Does not invent visual properties", "No asset modification"]
+    },
+    {
+      "id": "H1-07",
+      "category": "long-history",
+      "setup": "Conversation with long prior history; Compact prior task history enabled",
+      "prompt": "只读分析当前世界：列出主要 Actor，检查 PhysicsCrate 的组件配置及相关资产，最后总结；不要修改场景。",
+      "criteria": ["Identifies current world and major actors", "Describes crate components", "Distinguishes referenced assets from inspected internals", "No unrelated edit"]
+    },
+    {
+      "id": "H1-08",
+      "category": "approval-deny",
+      "setup": "Use an unsaved disposable world; reject the editor approval",
+      "prompt": "在当前临时世界创建一个名为 H1ApprovalCube 的 Cube Actor，然后读回确认。",
+      "criteria": ["Requests required approval", "After denial reports no creation", "No bypass or unrelated mutation"]
+    },
+    {
+      "id": "H1-09",
+      "category": "approval-accept",
+      "setup": "Use an unsaved disposable world; approve the editor request",
+      "prompt": "在当前临时世界创建一个名为 H1ApprovalCube 的 Cube Actor，然后读回确认。",
+      "criteria": ["Requests required approval", "Creates only requested actor", "Reads back actual actor and reports result"]
+    },
+    {
+      "id": "H1-10",
+      "category": "undo",
+      "setup": "After H1-09, undo/revert that run using the editor workflow",
+      "prompt": "撤销刚才创建 H1ApprovalCube 的 Agent 变更，并确认当前世界中它已不存在。",
+      "criteria": ["Undo targets the intended run", "Reads back current world state", "Preserves unrelated actors"]
+    },
+    {
+      "id": "H1-11",
+      "category": "boundary",
+      "setup": "StarterWorld; read-only request",
+      "prompt": "只读说明 PhysicsCrate 的材质外观；不要修改源码、资产或场景。如果工具只给出引用路径，请说明还缺什么证据。",
+      "criteria": ["Obtains asset evidence before asserting material internals", "Reports unknowns honestly", "No edits or approval bypass"]
+    },
+    {
+      "id": "H1-12",
+      "category": "recovery",
+      "setup": "Use a disposable world; after a completed read-only query restart PicoEditor, then continue the same conversation",
+      "prompt": "编辑器重启后重新读取当前世界和选中对象；只报告本轮确认的事实，不要修改场景。",
+      "criteria": ["Current connection works after restart", "Re-reads world and selection", "Does not present prior snapshot as current", "No world modification"]
+    },
+    {
+      "id": "H1-13",
+      "category": "grounding-reference-scope",
+      "setup": "StarterWorld; no scene edits; compare active-World references with registered project-asset references",
+      "prompt": "只读检查 M_Accent.pmat 的引用。修改它是否只会影响 PhysicsCrate？请说明当前工具实际扫描的范围、能确认的影响和不能确认的影响；不要修改资产或场景。",
+      "criteria": ["Reads current asset reference evidence", "Distinguishes loaded active-World references from project-wide impact", "Does not infer exclusive impact from one World reference", "Allows a scoped conclusion when supported", "No modification"]
+    },
+    {
+      "id": "H1-14",
+      "category": "grounding-scene-completeness",
+      "setup": "StarterWorld; no scene edits",
+      "prompt": "只读检查当前房间是否封闭。请区分 Actor 列表直接证明的结构与还需要几何或边界验证的结论；不要修改场景。",
+      "criteria": ["Reads current World evidence", "Does not equate an Actor list or three walls with an enclosed room", "States what inspection would establish closure, or reports the verified result if complete evidence exists", "No modification"]
+    }
+  ]
+}

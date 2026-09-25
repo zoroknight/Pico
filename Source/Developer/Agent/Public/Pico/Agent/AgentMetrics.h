@@ -26,6 +26,7 @@ struct FAgentRunMetrics
     std::uint64_t ToolResultCount = 0;
     std::uint64_t ContextBytes = 0;
     FAgentContextMetrics ContextMetrics;
+    bool bTaskBoundaryProjectionEnabled = false;
     std::uint64_t RepairCount = 0;
     std::uint64_t CacheHitCount = 0;
     std::uint64_t ProviderUsageResponses = 0;

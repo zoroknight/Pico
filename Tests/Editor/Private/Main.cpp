@@ -2621,8 +2621,19 @@ void TestEditorWorldDocument(FTestRunner& Runner)
                 != std::string::npos
             && DescribeAssetResult.OutputJson.find("Blue Metal Test")
                 != std::string::npos
+            && DescribeAssetResult.OutputJson.find(
+                "\"other_worlds_scanned\":false") != std::string::npos
+            && DescribeAssetResult.OutputJson.find(
+                "\"world_references\":\"loaded_active_world\"")
+                != std::string::npos
             && FindReferencesResult.bSucceeded,
         "Material CAS rejects stale writes while duplicate and asset-impact inspection remain available");
+    Runner.Expect(FindReferencesResult.OutputJson.find(
+            "\"indirect_references_included\":false") != std::string::npos
+            && FindReferencesResult.OutputJson.find(
+                "\"asset_referencers\":\"registered_project_assets\"")
+                != std::string::npos,
+        "Asset reference tools identify the active-World and registered-asset scan boundaries");
 
     Pico::FAssetPath CopiedMaterialPath;
     Pico::FAssetPath::TryParse(

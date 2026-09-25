@@ -56,6 +56,8 @@ private:
 
     std::filesystem::path Directory;
     mutable std::mutex Mutex;
+    mutable bool bIncompleteLoaded = false;
+    mutable std::vector<FAgentOperationRecord> IncompleteCache;
 };
 
 std::string_view ToString(EAgentOperationState State);

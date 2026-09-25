@@ -39,7 +39,8 @@ Pico 已经通过本机多进程和两台真实 Windows 电脑验证 UDP、Repli
  -> 阶段 A 第 1～4 周：资产理解、规格、Build Plan 与恢复（已完成）
  -> ReAct 轻量化加固门（R1～R5 已完成）
  -> 资产理解与安全创作 S0～S3（已完成）
- -> Agent 输入缓存与长会话上下文减重门 CE0～CE2（S4 前，待实施）
+ -> Agent 输入缓存与长会话上下文减重门 CE0～CE2（阶段验收通过，保留风险）
+ -> S4 前 Harness 整理 H1～H3（H1 评测基建与历史基线已完成；H2/H3 工程实现已完成，真实模型复测待验收；H4 按评测结果决定）
  -> 资产理解与安全创作 S4～S6（待实施）
  -> 阶段 A 第 5～8 周：玩法积木、Graph、组装与真实验收
  -> 阶段 C：Render Architecture（提前，四周）
@@ -702,8 +703,10 @@ DisplayName、Category、范围和权限元数据后，再将该适配器完全�
 第二套 Harness 或新的执行模式。加固门通过前，不以继续增加玩法 Tool、独立 Memory Service 或额外模型调用掩盖
 上下文、证据、振荡和恢复问题。
 
-ReAct R1～R5 已通过，资产理解与安全创作的 S0～S3 也已完成。在 S4 前先通过
-[Agent 输入缓存与长会话上下文减重门](AgentPromptCacheAndContextEfficiency.zh-CN.md) 的 CE0～CE2，再执行 S4～S6：
+ReAct R1～R5 已通过，资产理解与安全创作的 S0～S3 也已完成。
+[Agent 输入缓存与长会话上下文减重门](AgentPromptCacheAndContextEfficiency.zh-CN.md) 的 CE0～CE2
+已按风险接受决议放行 S4；但针对 `pair6b` 的回答深度差异、`pair6c` 的只读工具顺序差异、历史状态误判
+以及测试支撑代码混入正式目标的问题，先执行下述 H1～H3，再启动 S4～S6：
 [Agent 资产理解与安全创作纵向切片](AgentAssetUnderstandingAndSafeAuthoring.zh-CN.md)。该七周切片是阶段 A
 第 5 周前的最高优先级门：先补齐稳定目标、Revision 校验、字段级更新、引用影响分析、复合事务和读回验证，再依次
 开放 Material、通用组件、Actor 装配、语义元数据、标准预览和可选视觉分析。视觉 Provider 只提供只读候选语义，
@@ -715,16 +718,44 @@ ReAct R5
  -> S1 Material / Reference Tools（已完成）
  -> S2 Component / Actor Assembly（已完成）
  -> S3 Semantic Metadata（已完成）
- -> CE0 完整计量与固定基线（待实施）
- -> CE1 任务边界历史投影（待实施）
- -> CE2 知识源增量刷新与去重（待实施）
+ -> CE0 完整计量与固定基线（阶段验收通过，在线样本量例外）
+ -> CE1 任务边界历史投影（阶段验收通过，真实模型跨轮复测待补）
+ -> CE2 知识源增量刷新与去重（阶段验收通过，端到端归因待补）
+ -> H1 真实任务评测与判据校准（12 任务集/采集器/历史基线已完成，在线全集待验收）
+ -> H2 当前状态与完成证据修正（工程实现与离线回归已完成，真实模型复测待验收）
+ -> H3 上下文减重与测试/正式目标隔离（工程实现与离线回归已完成，真实模型复测待验收）
+ -> H4 检索与 Skill 定向增强（仅在 H1 证明必要时实施）
  -> S4 Preview Artifacts
  -> S5 Optional Vision Provider
  -> S6 Editor Golden Tasks
  -> 阶段 A 第 5～8 周
 ```
 
-CE0～CE2 是独立的上下文效率质量门，不冒充 S4 的资产预览缓存，也不改变 S0～S6 的原编号。已完成的 Provider 逐响应缓存 Token 采集、固定工具顺序和稳定前缀顺序是 CE0 的现有基础；CE0 尚需补齐完整请求组成、知识刷新与历史重放耗时及可比基线。长会话 4 工具本地测试为 135,759 输入 / 102,863 未命中 Token，新会话同类测试为 63,342 / 25,454；该差异提示历史成本，但不是已完成的因果 A/B。CE1/CE2 必须在任务质量不退化的前提下降低长会话未命中输入；工具目录按需加载须另有测量与能力回归证据，不进入默认实施范围。
+CE0～CE2 是独立的上下文效率质量门，不冒充 S4 的资产预览缓存，也不改变 S0～S6 的原编号。逐请求分区 Trace、任务边界历史投影和无变化知识源快路径已实现，离线 `PicoAgentTests` 208/208、`PicoEditorTests` 174/174。三组严格匹配的在线 A/B 中，Compact On/Off 未命中 Token 中位数为 19,413 / 172,152；同进程无变更知识刷新 1.740→0.268 秒且索引/审计不重复写入，Selection 变化后正确更新；48 条记录的隔离快路径基准为 1.81 ms 对 16.64 ms。真实 Editor UI 的审批拒绝、批准后读回和 Undo 已通过。**2026-09-25 按用户明确决议进行风险接受并放行 S4**：原定至少五组在线样本实际只有三组，不宣称完整缓存收益归因；CE2 旧/新实现的端到端延迟归因、跨轮比较错误的真实模型复测和编辑器崩溃恢复演练均待补。若这些风险在真实任务中转化为证据、审批或恢复退化，应重新打开质量门。工具目录按需加载须另有测量与能力回归证据，不进入默认实施范围。完整证据和边界见 [质量门记录](AgentPromptCacheAndContextEfficiency.zh-CN.md)。
+
+### S4 前 Harness 整理（H1～H4，预计 2～3 周）
+
+这是在现有 ReAct Runtime、Context Assembler、Knowledge Store 与 Tool Registry 上做的边界修正，
+**不是第二套 Harness，也不撤销 CE 的阶段验收**。先完成 H1～H3，H4 仅在真实任务证据表明检索或 Skill
+确实阻塞任务时启动；若 H4 不必要，直接进入 S4。保留 S0～S6 的原编号与 S6 完整 Editor Golden Tasks 的范围。
+
+| 节点 | 工作与产物 | 验收与停止条件 |
+| --- | --- | --- |
+| H1：真实任务评测与判据校准（3～4 天） | 从真实失败建立 10～12 个小型任务，覆盖资产分析、Selection/World 切换、长会话、审批拒绝/批准/Undo、越权与恢复；记录项目快照、Provider/模型、完整 Trace、工具事实和人工复核。任务质量按要求覆盖、证据、最终状态与安全评分，工具选择/顺序作诊断；缓存归因另列同条件对照，不用固定只读调用顺序定义正确答案。把 `pair6b` 的回答深度差异和 `pair6c` 的顺序差异作为两种不同失败类别。 | 同一任务允许多种有效只读路径；能分别报告成功率、漏答/无证据断言、无关修改、工具数、未命中 Token 和耗时。确定性 Golden/RAG 回归继续保留，但不得冒充真实模型成功率。该小集为 S4 前的 Harness 校准，不取代 S6 的端到端 Editor Golden Tasks。 |
+| H2：当前状态与完成证据（4～6 天） | 在现有 Context/Task State 内明确实时 World、Selection、Actor 读回优先，附 Revision 与来源；历史投影、Episode、RAG 只作线索，冲突时重读或报告未知。最终答复逐项核对用户要求是否有本轮证据，缺项则定向补查或明确未完成；保留自然语言任务的多种有效工具路径，不建固定 DAG 或每任务额外规划模型。 | 实际切换 `StarterWorld`→`Cow_1` 后不再错误声称“与上一轮一致”；只读到资产引用时不冒充已验证内部参数。审批、事务、Mutation Readback、Revision 与 Checkpoint 不退化。提示词修正单独不算通过，需真实模型复测。 |
+| H3：上下文减重与测试/正式目标隔离（3～5 天） | 用已有 Request Trace 定位 Task State、Progress Ledger、Episode 和旧 Tool Result 的重复部分，仅删除可证明冗余的发送视图；JSONL 保持审计与恢复事实源。将 Golden Runner、Fake Provider/夹具从正式 `PicoAgentCore` 迁至测试支撑目标；故障注入通过测试装配提供，Editor Fake 入口仅在开发构建展示。 | Debug/Release 构建及现有 Agent/Editor 测试通过；长会话证据与恢复不退化；正式 Editor 路径不依赖测试夹具。Tool Policy、审批、事务、Revision 校验、Trace 继续留在正式核心。 |
+| H4：检索与 Skill 定向增强（可选，2～4 天） | 仅在 H1 暴露召回或错误 Skill 激活时，改进“检索定位→工具精读”、元数据过滤、失败回退或 Skill 元数据/按需加载，并在固定任务上比较质量、延迟和输入量。 | 没有可复现失败或净收益则不实施；不预设向量数据库、代码图、LLM reranker、多级 Tool Router 或自动生成 Skill。 |
+
+H1 已建立 [12 项真实任务、采集和判据记录](AgentHarnessH1RealTaskEval.zh-CN.md)。历史 `pair6b/pair6c` 的 4 次 Run 经人工复核，2 次通过、2 次因无证据的材质唯一性断言未通过，只覆盖 2/12 项；回答深度差异与只读工具顺序差异分开记录。余下在线任务和审批/恢复状态核验未完成前，不把 H1 写成正式通过，也不将历史配对冒充完整真实任务成功率。
+
+H2 已完成 [当前编辑器快照与证据门工程修正](AgentHarnessH2CurrentStateAndCompletionEvidence.zh-CN.md)：World/Selection 的发送时快照与历史/RAG 区分，失败工具结果不再被绑定为完成证据；审批拒绝 Golden 夹具按真实失败语义修正。Debug 构建及 Agent/Editor 离线测试通过。`Cow_1` 跨轮比较、资产内部参数边界和审批/Undo 仍需真实 Provider 按 H1 判据复测，未复测前不宣称 H2 在线验收通过。
+
+H3 已完成 [发送视图局部去重和测试目标隔离](AgentHarnessH3ContextAndTestIsolation.zh-CN.md)：仅当匹配 Tool Result 留在本次有界模型消息中，才删除 Ledger 内相同的事实副本；JSONL 和恢复事实源保留。Golden/Fake 迁入 `PicoAgentTestSupport`，故障序列由测试装配提供，Release Editor 不显示 Fake 入口也不链接该目标。Debug/Release 构建及 Agent/Editor 离线回归通过；长会话真实模型质量、缓存未命中 Token 与端到端耗时仍需按 H1 判据实测，不把局部字节下降直接等同于收益。
+
+H1～H3 放行 S4 的原则是：安全回归零退化；真实任务的完成率、证据覆盖率和当前状态准确性不低于 H1 基线；
+成本与耗时和质量一起报告，不以单一缓存命中率替代任务成功。样本量小时不宣称稳定 P95 或严格因果收益。
+如果放行后出现必要资产/工具证据缺失、错误状态断言或审批/恢复回归，重新打开该问题并按 Trace 定位，
+而不是追加新的通用框架层。工具、Skill 和知识仍分别承担执行、经验与事实检索；工具权限、审批与事务仍由 Tool Pipeline 强制，预算与完成证据仍由 Runtime 管理。
 
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |

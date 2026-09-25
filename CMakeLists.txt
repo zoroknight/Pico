@@ -144,7 +144,6 @@ endif()
 add_library(PicoAgentCore STATIC
     Source/Developer/Agent/Private/AgentContext.cpp
     Source/Developer/Agent/Private/AgentCredentialStore.cpp
-    Source/Developer/Agent/Private/AgentEvaluation.cpp
     Source/Developer/Agent/Private/AgentGameAssembly.cpp
     Source/Developer/Agent/Private/AgentIntent.cpp
     Source/Developer/Agent/Private/AgentKnowledgeStore.cpp
@@ -157,7 +156,6 @@ add_library(PicoAgentCore STATIC
     Source/Developer/Agent/Private/AgentSkill.cpp
     Source/Developer/Agent/Private/AgentToolRegistry.cpp
     Source/Developer/Agent/Private/AgentTypes.cpp
-    Source/Developer/Agent/Private/FakeAgentProvider.cpp
     Source/Developer/Agent/Private/OpenAICompatibleProvider.cpp
     Source/Developer/Agent/Private/PlatformAgentHttpTransport.cpp
 )
@@ -179,6 +177,21 @@ if(MSVC)
     target_compile_options(PicoAgentCore PRIVATE /W4 /permissive-)
 else()
     target_compile_options(PicoAgentCore PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_library(PicoAgentTestSupport STATIC
+    Tests/Agent/Support/Private/AgentEvaluation.cpp
+    Tests/Agent/Support/Private/FakeAgentProvider.cpp
+)
+target_include_directories(PicoAgentTestSupport
+    PUBLIC Tests/Agent/Support/Public
+    PRIVATE ThirdParty/NlohmannJson/single_include)
+target_link_libraries(PicoAgentTestSupport PUBLIC PicoAgentCore)
+set_target_properties(PicoAgentTestSupport PROPERTIES FOLDER "Tests/Support")
+if(MSVC)
+    target_compile_options(PicoAgentTestSupport PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(PicoAgentTestSupport PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_library(PicoMcpCore STATIC
@@ -717,7 +730,7 @@ else()
 endif()
 
 target_include_directories(PicoAgentHost PRIVATE ThirdParty/NlohmannJson/single_include)
-target_link_libraries(PicoAgentHost PRIVATE PicoAgentCore)
+target_link_libraries(PicoAgentHost PRIVATE PicoAgentTestSupport)
 set_target_properties(PicoAgentHost PROPERTIES FOLDER "Programs")
 
 if(MSVC)
@@ -1019,6 +1032,8 @@ if(PICO_BUILD_INSPECTOR)
     )
 
     target_include_directories(PicoEditor PRIVATE ThirdParty/NlohmannJson/single_include)
+    target_compile_definitions(PicoEditor PRIVATE
+        $<$<CONFIG:Debug>:PICO_EDITOR_ENABLE_FAKE_AGENT>)
 
     add_dependencies(PicoEditor PicoPackager)
 
@@ -1078,6 +1093,7 @@ if(PICO_BUILD_INSPECTOR)
     target_link_libraries(PicoEditorTests
         PRIVATE
             PicoEditorCore
+            PicoAgentTestSupport
             PicoMcpHttp
             PicoRender
     )
@@ -1114,7 +1130,7 @@ add_executable(PicoAgentTests
 )
 
 target_include_directories(PicoAgentTests PRIVATE Tests/Common)
-target_link_libraries(PicoAgentTests PRIVATE PicoAgentCore)
+target_link_libraries(PicoAgentTests PRIVATE PicoAgentTestSupport)
 set_target_properties(PicoAgentTests PROPERTIES FOLDER "Tests/Developer")
 
 if(MSVC)

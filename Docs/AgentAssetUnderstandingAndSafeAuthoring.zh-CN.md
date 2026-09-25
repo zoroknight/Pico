@@ -6,7 +6,7 @@
 它位于 [ReAct 轻量化加固门](AgentReActLightweightHardeningRoadmap.zh-CN.md) 之后、
 [Agent 游戏制作链路](AgentGameCreationPipeline.zh-CN.md) 第 5～8 周之前，是后续玩法组装与 AI 视觉资产生产的前置门。
 
-> 状态：**S0～S3 已完成，S4～S6 待实施**。S4 前插入独立的 [Agent 输入缓存与长会话上下文减重门](AgentPromptCacheAndContextEfficiency.zh-CN.md) CE0～CE2；安全写入、Material 工具、反射驱动的通用组件装配和人工语义元数据已经进入主线，标准预览和外部视觉 API 尚未开放。
+> 状态：**S0～S3 已完成，S4～S6 待实施**。S4 前的 [Agent 输入缓存与长会话上下文减重门](AgentPromptCacheAndContextEfficiency.zh-CN.md) CE0～CE2 已完成代码与离线测试，在线质量门待验收；安全写入、Material 工具、反射驱动的通用组件装配和人工语义元数据已经进入主线，标准预览和外部视觉 API 尚未开放。
 
 ### 模型输入缓存与 S4 资产缓存
 
@@ -296,9 +296,9 @@ S0～S6 的编号和已完成状态保持不变；CE0～CE2 作为独立插入�
 
 | 插入门 | 工作 | 验收 |
 | --- | --- | --- |
-| CE0（待实施） | 完整请求分区、历史重放/知识刷新耗时与固定的新/长会话基线；逐响应 Provider 用量采集已完成 | 可按同类工具轨迹和回答证据解释 Token 成本，不用账户日报或零工具复述轮代替基线 |
-| CE1（待实施） | 现有 Context Assembler 中按任务边界投影历史，保留当前工具配对、审批与有效证据；去掉同会话 Episode 重复内容 | 长会话未命中输入下降，Golden Tasks、Revision 证据和恢复/回滚不退化 |
-| CE2（待实施） | Knowledge Source 无变更跳过重建、按 Revision 增量刷新，并审计 Ledger/Task State 重复信息 | 无变更不重复写 Snapshot/重建索引；刷新耗时与质量门达标 |
+| CE0（代码完成，在线基线待验收） | 完整请求分区、历史重放/知识刷新耗时与固定的新/长会话基线；逐响应 Provider 用量采集已完成 | 可按同类工具轨迹和回答证据解释 Token 成本，不用账户日报或零工具复述轮代替基线 |
+| CE1（代码完成，在线收益待验收） | 现有 Context Assembler 中按任务边界投影历史，保留当前工具配对、审批与有效证据；去掉同会话 Episode 重复内容 | 长会话未命中输入下降，Golden Tasks、Revision 证据和恢复/回滚不退化 |
+| CE2（代码完成，端到端收益待验收） | Knowledge Source 无变更跳过重建、项目文件和 Episode 按文件变化刷新；仅在评测发现重复时再压缩 Ledger/Task State | 无变更不重复写 Snapshot/重建索引；刷新耗时与质量门达标 |
 
 | 周次 | 任务 | 周末验收 |
 | --- | --- | --- |

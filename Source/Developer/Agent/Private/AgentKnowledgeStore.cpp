@@ -8,6 +8,7 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -51,6 +52,23 @@ FJson ToJson(const FAgentKnowledgeRecord& Record)
         {"entity_ids", Record.EntityIds},
         {"revision_domain", Record.RevisionDomain}, {"fields", Record.Fields},
         {"kind", ToString(Record.Kind)}};
+}
+
+bool SameRecord(const FAgentKnowledgeRecord& Left,
+    const FAgentKnowledgeRecord& Right)
+{
+    return Left.Id == Right.Id && Left.SourceType == Right.SourceType
+        && Left.SourcePath == Right.SourcePath && Left.Title == Right.Title
+        && Left.Content == Right.Content
+        && Left.ContentHash == Right.ContentHash
+        && Left.SourceRevision == Right.SourceRevision
+        && Left.Tags == Right.Tags && Left.Provenance == Right.Provenance
+        && Left.ParentId == Right.ParentId
+        && Left.ChunkIndex == Right.ChunkIndex
+        && Left.ChunkCount == Right.ChunkCount
+        && Left.EntityIds == Right.EntityIds
+        && Left.RevisionDomain == Right.RevisionDomain
+        && Left.Fields == Right.Fields && Left.Kind == Right.Kind;
 }
 
 bool FromJson(const FJson& Json, FAgentKnowledgeRecord& Out)
@@ -358,6 +376,26 @@ bool FAgentKnowledgeStore::ReplaceSource(
         }
     }
     NewRecords = std::move(ExpandedRecords);
+    std::sort(NewRecords.begin(), NewRecords.end(),
+        [](const auto& Left, const auto& Right) { return Left.Id < Right.Id; });
+    std::vector<const FAgentKnowledgeRecord*> ExistingSource;
+    for (const FAgentKnowledgeRecord& Record : Records)
+        if (Record.SourceType == SourceType)
+            ExistingSource.push_back(&Record);
+    std::sort(ExistingSource.begin(), ExistingSource.end(),
+        [](const auto* Left, const auto* Right) { return Left->Id < Right->Id; });
+    if (ExistingSource.size() == NewRecords.size()
+        && std::equal(ExistingSource.begin(), ExistingSource.end(),
+            NewRecords.begin(), [](const auto* Left, const auto& Right)
+            {
+                return SameRecord(*Left, Right);
+            }))
+    {
+        std::error_code SnapshotError;
+        if (Directory.empty()
+            || std::filesystem::exists(GetIndexPath(), SnapshotError))
+            return true;
+    }
     std::unordered_map<std::string, FAgentKnowledgeRecord> Previous;
     for (const FAgentKnowledgeRecord& Record : Records)
         if (Record.SourceType == SourceType) Previous[Record.Id] = Record;
@@ -378,13 +416,8 @@ bool FAgentKnowledgeStore::ReplaceSource(
     for (const FAgentKnowledgeRecord& Record : NewRecords)
     {
         const auto Existing = Previous.find(Record.Id);
-        if ((Existing == Previous.end()
-                || Existing->second.ContentHash != Record.ContentHash
-                || Existing->second.SourceRevision != Record.SourceRevision
-                || Existing->second.Kind != Record.Kind
-                || Existing->second.EntityIds != Record.EntityIds
-                || Existing->second.RevisionDomain != Record.RevisionDomain
-                || Existing->second.Fields != Record.Fields))
+        if (Existing == Previous.end()
+            || !SameRecord(Existing->second, Record))
             AuditChanges.emplace_back("upsert", Record);
         Candidate.push_back(Record);
     }
@@ -924,8 +957,24 @@ std::vector<FAgentKnowledgeRecord> CollectProjectTextKnowledge(
     std::size_t MaxFileBytes,
     std::size_t MaxFiles)
 {
+    FAgentProjectTextKnowledgeCollector Collector;
+    return Collector.Collect(ProjectRoot, MaxFileBytes, MaxFiles);
+}
+
+std::vector<FAgentKnowledgeRecord> FAgentProjectTextKnowledgeCollector::Collect(
+    const std::filesystem::path& ProjectRoot,
+    std::size_t MaxFileBytes,
+    std::size_t MaxFiles)
+{
     std::vector<FAgentKnowledgeRecord> Result;
     if (ProjectRoot.empty()) return Result;
+    const std::filesystem::path NormalizedRoot = ProjectRoot.lexically_normal();
+    if (Root != NormalizedRoot)
+    {
+        Root = NormalizedRoot;
+        Files.clear();
+    }
+    std::unordered_set<std::string> Seen;
     std::error_code Error;
     for (std::filesystem::recursive_directory_iterator It(ProjectRoot, Error), End;
          !Error && It != End && Result.size() < MaxFiles; It.increment(Error))
@@ -943,20 +992,39 @@ std::vector<FAgentKnowledgeRecord> CollectProjectTextKnowledge(
         if (FileName.ends_with(".pmeta.json")) continue;
         const std::uintmax_t Size = It->file_size(Error);
         if (Error || Size > MaxFileBytes) { Error.clear(); continue; }
-        std::ifstream Stream(It->path(), std::ios::binary);
-        std::string Content((std::istreambuf_iterator<char>(Stream)), {});
-        if (Content.empty()) continue;
         const std::filesystem::path Relative =
             std::filesystem::relative(It->path(), ProjectRoot, Error);
         if (Error) { Error.clear(); continue; }
+        const std::string Key = Relative.generic_string();
+        const auto Modified = It->last_write_time(Error);
+        if (Error) { Error.clear(); continue; }
+        Seen.insert(Key);
+        const auto Cached = Files.find(Key);
+        if (Cached != Files.end() && Cached->second.Size == Size
+            && Cached->second.Modified == Modified)
+        {
+            Result.push_back(Cached->second.Record);
+            continue;
+        }
+        std::ifstream Stream(It->path(), std::ios::binary);
+        std::string Content((std::istreambuf_iterator<char>(Stream)), {});
+        if (Content.empty()) { Files.erase(Key); continue; }
         FAgentKnowledgeRecord Record;
-        Record.SourcePath = Relative.generic_string();
+        Record.SourcePath = Key;
         Record.Title = It->path().filename().string();
         Record.Content = std::move(Content);
         Record.Tags = {"project", LowerAscii(It->path().extension().string())};
         Record.Provenance = "Project file " + Record.SourcePath;
+        Files[Key] = {Modified, Size, Record};
         Result.push_back(std::move(Record));
     }
+    for (auto It = Files.begin(); It != Files.end();)
+        It = Seen.contains(It->first) ? std::next(It) : Files.erase(It);
+    std::sort(Result.begin(), Result.end(),
+        [](const auto& Left, const auto& Right)
+        {
+            return Left.SourcePath < Right.SourcePath;
+        });
     return Result;
 }
 }

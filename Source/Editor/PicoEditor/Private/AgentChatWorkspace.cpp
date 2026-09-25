@@ -7,7 +7,6 @@
 #include "Pico/Agent/AgentKnowledgeStore.h"
 #include "Pico/Agent/AgentProjectHandoff.h"
 #include "Pico/Agent/AgentSkill.h"
-#include "Pico/Agent/FakeAgentProvider.h"
 #include "Pico/Agent/OpenAICompatibleProvider.h"
 #include "Pico/Core/Config.h"
 #include "Pico/Core/Paths.h"
@@ -31,6 +30,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <initializer_list>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -49,16 +49,26 @@ using FJson = nlohmann::json;
 
 enum class EChatProvider
 {
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
     Fake,
+#endif
     DeepSeek,
     Kimi
 };
+
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+constexpr EChatProvider DefaultChatProvider = EChatProvider::Fake;
+#else
+constexpr EChatProvider DefaultChatProvider = EChatProvider::DeepSeek;
+#endif
 
 const char* ProviderDisplayName(EChatProvider Provider)
 {
     switch (Provider)
     {
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
     case EChatProvider::Fake: return "Fake Scene Agent";
+#endif
     case EChatProvider::DeepSeek: return "DeepSeek";
     case EChatProvider::Kimi: return "Kimi";
     }
@@ -69,7 +79,9 @@ const char* ProviderSessionSlug(EChatProvider Provider)
 {
     switch (Provider)
     {
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
     case EChatProvider::Fake: return "fake";
+#endif
     case EChatProvider::DeepSeek: return "deepseek";
     case EChatProvider::Kimi: return "kimi";
     }
@@ -82,14 +94,18 @@ const char* DefaultModelForProvider(EChatProvider Provider)
     {
     case EChatProvider::DeepSeek: return "deepseek-v4-flash";
     case EChatProvider::Kimi: return "kimi-k2.6";
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
     case EChatProvider::Fake: return "offline-fake";
+#endif
     }
-    return "offline-fake";
+    return "unknown";
 }
 
 std::optional<EChatProvider> ParseProviderSessionSlug(std::string_view Provider)
 {
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
     if (Provider == "fake") return EChatProvider::Fake;
+#endif
     if (Provider == "deepseek") return EChatProvider::DeepSeek;
     if (Provider == "kimi") return EChatProvider::Kimi;
     return std::nullopt;
@@ -101,7 +117,9 @@ const char* CredentialProviderId(EChatProvider Provider)
     {
     case EChatProvider::DeepSeek: return "DeepSeek";
     case EChatProvider::Kimi: return "Kimi";
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
     case EChatProvider::Fake: return "";
+#endif
     }
     return "";
 }
@@ -112,7 +130,9 @@ const char* CredentialEnvironmentName(EChatProvider Provider)
     {
     case EChatProvider::DeepSeek: return "DEEPSEEK_API_KEY";
     case EChatProvider::Kimi: return "MOONSHOT_API_KEY";
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
     case EChatProvider::Fake: return "";
+#endif
     }
     return "";
 }
@@ -360,6 +380,7 @@ void DrawToolSummary(const FChatLine& Line)
     }
 }
 
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
 class FFakeSceneAgentProvider final : public IAgentProvider
 {
 public:
@@ -422,6 +443,7 @@ public:
 private:
     std::string Nonce;
 };
+#endif
 
 std::string EnvironmentValue(const char* Name)
 {
@@ -439,6 +461,7 @@ std::string EnvironmentValue(const char* Name)
 #endif
 }
 
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
 std::string MakeRunNonce()
 {
     static std::atomic<std::uint64_t> Sequence {1};
@@ -446,6 +469,7 @@ std::string MakeRunNonce()
         std::chrono::system_clock::now().time_since_epoch()).count();
     return std::to_string(Value) + "_" + std::to_string(Sequence.fetch_add(1));
 }
+#endif
 }
 
 struct FAgentChatWorkspace::FImpl
@@ -614,7 +638,8 @@ struct FAgentChatWorkspace::FImpl
         if (Path.empty() || !Config.Load(Path)) return;
         const std::optional<EChatProvider> SavedProvider =
             ParseProviderSessionSlug(
-                Config.GetString("Chat", "LastProvider", "fake"));
+                Config.GetString("Chat", "LastProvider",
+                    ProviderSessionSlug(DefaultChatProvider)));
         if (SavedProvider) Provider = *SavedProvider;
         const std::string SavedModel = Config.GetString("Models",
             ProviderSessionSlug(Provider), DefaultModelForProvider(Provider));
@@ -623,6 +648,8 @@ struct FAgentChatWorkspace::FImpl
             Config.GetInt("Request", "TimeoutSeconds", 30), 5, 120);
         MaxRetries = std::clamp(
             Config.GetInt("Request", "MaxRetries", 2), 0, 3);
+        bTaskBoundaryProjection = Config.GetBool(
+            "Request", "CompactPriorTaskHistory", true);
         bApiKeyPanelOpen = Config.GetBool("Panels", "ApiKeyOpen", true);
         bRequestSettingsOpen =
             Config.GetBool("Panels", "RequestSettingsOpen", false);
@@ -647,6 +674,8 @@ struct FAgentChatWorkspace::FImpl
         Config.SetString(
             "Request", "TimeoutSeconds", std::to_string(TimeoutSeconds));
         Config.SetString("Request", "MaxRetries", std::to_string(MaxRetries));
+        Config.SetString("Request", "CompactPriorTaskHistory",
+            bTaskBoundaryProjection ? "true" : "false");
         Config.SetString(
             "Panels", "ApiKeyOpen", bApiKeyPanelOpen ? "true" : "false");
         Config.SetString("Panels", "RequestSettingsOpen",
@@ -789,7 +818,17 @@ struct FAgentChatWorkspace::FImpl
         }
         std::lock_guard Lock(ViewMutex);
         Lines = std::move(NewLines);
+        HistoryPage = 0;
+        SelectableMessageIndex.reset();
         Status = std::string(ToString(Session->GetStatus()));
+        if (LastRunSessionId != SessionId)
+        {
+            LastRunCounters = {};
+            LastRunContextBytes = 0;
+            LastRunContextMetrics = {};
+            bLastRunTaskBoundaryProjectionEnabled = false;
+            LastRunId.clear();
+        }
         bScrollToBottom.store(true);
     }
 
@@ -799,8 +838,10 @@ struct FAgentChatWorkspace::FImpl
         std::string ToolCatalogJson,
         std::string& OutError)
     {
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
         if (ProviderType == EChatProvider::Fake)
             return std::make_unique<FFakeSceneAgentProvider>(MakeRunNonce());
+#endif
 
         FOpenAICompatibleProviderSettings Settings;
         Settings.Model = std::move(ModelName);
@@ -823,6 +864,10 @@ struct FAgentChatWorkspace::FImpl
             "Before editing reflected properties, call editor.object.describe and use the exact component object path, that same component entry's revision, property name, current compound value, units, semantic, and range it returns. Never use an Actor revision when editing one of its components. "
             "Treat compound Actor requests as incomplete until every requested component and property has a successful Tool Result. Creating an Empty Actor proves only that its scene root exists; it never proves that a light, camera, mesh, or other specialized component exists. "
             "After the final mutation, inspect the exact changed Actor or component with a fresh read-only describe or validation tool before claiming completion. "
+            "For each requested result, use current-run tool observations or the send-time editor state for identity only; if evidence is missing, inspect the relevant target or state precisely what remains unverified. "
+            "Current-run readbacks supersede the send-time snapshot. Earlier conversations, projected history, and retrieved knowledge are leads, not proof of current World or Selection state. "
+            "An asset reference proves a path, not the asset's internal geometry, material parameters, visual appearance, or uniqueness in the project. Read the asset before asserting those details. "
+            "Match each conclusion to the scope of its evidence: active-World references do not establish project-wide impact, and an Actor list alone does not establish that a room is enclosed. Qualify or leave unknown any exclusive, complete, or impact claim without a complete inspection of the relevant scope. "
             "Use plain Markdown without Emoji; the editor deliberately omits unsupported color Emoji. "
             "Do not repeat raw tool arguments, Tool Results, or execution traces in assistant prose; the editor provides one expandable tool summary after the turn. "
             "Never invent object paths or claim a tool succeeded before receiving its result.";
@@ -870,6 +915,7 @@ struct FAgentChatWorkspace::FImpl
         const std::string& Prompt,
         std::vector<FAgentKnowledgeHit>& OutHits,
         FAgentKnowledgeQueryResult& OutQueryResult,
+        std::string& OutCurrentEditorStateJson,
         std::string& OutError)
     {
         OutError.clear();
@@ -880,27 +926,63 @@ struct FAgentChatWorkspace::FImpl
         Sources["message-log"] = {};
         Sources["tool-schema"] = {};
         Sources["session-episode"] = {};
-        Sources["project-file"] = CollectProjectTextKnowledge(
+        Sources["project-file"] = ProjectTextCollector.Collect(
             FPaths::GetProjectRootDir(), 64 * 1024, 64);
+        FJson CurrentEditorState = {
+            {"capture_scope", "send_start"},
+            {"world", {{"source", "Live Game Thread World snapshot"},
+                {"path", nullptr}, {"revision", nullptr}}},
+            {"selection", {{"source", "Live editor selection"},
+                {"primary", nullptr}, {"paths", FJson::array()},
+                {"revision", nullptr}}}};
         for (FAgentKnowledgeRecord& Record : EditorTools.CollectKnowledgeRecords())
+        {
+            if (Record.SourceType == "world")
+            {
+                CurrentEditorState["world"]["path"] = Record.SourcePath;
+                CurrentEditorState["world"]["actor_count"] =
+                    Record.SourceRevision;
+            }
+            else if (Record.SourceType == "selection")
+            {
+                CurrentEditorState["selection"]["primary"] =
+                    Record.SourcePath;
+                CurrentEditorState["selection"]["paths"] = Record.EntityIds;
+                CurrentEditorState["selection"]["revision"] =
+                    Record.SourceRevision;
+            }
             Sources[Record.SourceType].push_back(std::move(Record));
+        }
+        OutCurrentEditorStateJson = CurrentEditorState.dump();
 
         std::vector<std::pair<std::string, std::filesystem::path>> EpisodeSessions;
         for (const FChatSessionEntry& Entry : SessionEntries)
         {
             if (EpisodeSessions.size() >= 8) break;
+            if (Entry.Id == SessionId) continue;
             EpisodeSessions.emplace_back(Entry.Id, Entry.Path);
         }
-        if (!SessionId.empty() && !SessionPath.empty()
-            && std::none_of(EpisodeSessions.begin(), EpisodeSessions.end(),
-                [this](const auto& Entry) { return Entry.first == SessionId; }))
-            EpisodeSessions.emplace_back(SessionId, SessionPath);
+        std::unordered_map<std::string, FCachedEpisode> NextEpisodeCache;
         for (const auto& [EpisodeSessionId, EpisodeSessionPath] : EpisodeSessions)
         {
             std::error_code SessionFileError;
             if (!std::filesystem::exists(EpisodeSessionPath, SessionFileError)
                 || SessionFileError)
                 continue;
+            const std::uintmax_t Size = std::filesystem::file_size(
+                EpisodeSessionPath, SessionFileError);
+            if (SessionFileError) continue;
+            const auto Modified = std::filesystem::last_write_time(
+                EpisodeSessionPath, SessionFileError);
+            if (SessionFileError) continue;
+            const auto Cached = EpisodeCache.find(EpisodeSessionId);
+            if (Cached != EpisodeCache.end() && Cached->second.Size == Size
+                && Cached->second.Modified == Modified)
+            {
+                Sources["session-episode"].push_back(Cached->second.Record);
+                NextEpisodeCache.emplace(EpisodeSessionId, Cached->second);
+                continue;
+            }
             std::string SessionError;
             std::optional<FAgentSession> Session = FAgentSession::OpenOrCreate(
                 EpisodeSessionId, EpisodeSessionPath, &SessionError);
@@ -928,10 +1010,13 @@ struct FAgentChatWorkspace::FImpl
                     Episode.Fields = {{"session_id", EpisodeSessionId},
                         {"message_count", std::to_string(EpisodeMessages.size())}};
                     Episode.Kind = EAgentKnowledgeKind::Episode;
+                    NextEpisodeCache.emplace(EpisodeSessionId,
+                        FCachedEpisode {Modified, Size, Episode});
                     Sources["session-episode"].push_back(std::move(Episode));
                 }
             }
         }
+        EpisodeCache = std::move(NextEpisodeCache);
 
         for (auto& [SourceType, Records] : Sources)
             if (!KnowledgeStore.ReplaceSource(
@@ -956,13 +1041,21 @@ struct FAgentChatWorkspace::FImpl
         const std::string SelectedModel = Model.data();
         const std::string SelectedProviderName =
             ProviderDisplayName(SelectedProvider);
+        const bool bSelectedTaskBoundaryProjection = bTaskBoundaryProjection;
         const std::string SelectedSessionId = SessionId;
         const std::filesystem::path SelectedSessionPath = SessionPath;
         std::vector<FAgentKnowledgeHit> KnowledgeHits;
         FAgentKnowledgeQueryResult KnowledgeQueryResult;
+        std::string CurrentEditorStateJson;
         std::string KnowledgeError;
+        const auto KnowledgeStarted = std::chrono::steady_clock::now();
         const std::string KnowledgeContext = RefreshKnowledge(
-            Prompt, KnowledgeHits, KnowledgeQueryResult, KnowledgeError);
+            Prompt, KnowledgeHits, KnowledgeQueryResult,
+            CurrentEditorStateJson, KnowledgeError);
+        const std::uint64_t KnowledgeRefreshMicroseconds =
+            static_cast<std::uint64_t>(std::chrono::duration_cast<
+                std::chrono::microseconds>(std::chrono::steady_clock::now()
+                    - KnowledgeStarted).count());
         if (!KnowledgeError.empty())
         {
             std::lock_guard Lock(ViewMutex);
@@ -1003,8 +1096,10 @@ struct FAgentChatWorkspace::FImpl
             "Pico Agent chat turn",
             [this, Prompt, AgentProvider = std::move(SharedProvider),
                 SelectedProvider, SelectedProviderName, SelectedModel, SelectedSessionId,
-                SelectedSessionPath, KnowledgeContext, SkillContext,
-                SelectedIntent, ActiveSkills](
+                SelectedSessionPath, KnowledgeContext, CurrentEditorStateJson,
+                SkillContext,
+                SelectedIntent, ActiveSkills, KnowledgeRefreshMicroseconds,
+                bSelectedTaskBoundaryProjection](
                 const FCancellationToken& Token) mutable
             {
                 std::string Error;
@@ -1028,8 +1123,14 @@ struct FAgentChatWorkspace::FImpl
                     Budget.MaxElapsedMilliseconds = 180000;
                     FAgentRuntimeContext RuntimeContext;
                     RuntimeContext.Features.bMutationReadbackGate = true;
+                    RuntimeContext.Features.bTaskBoundaryProjection =
+                        bSelectedTaskBoundaryProjection;
                     RuntimeContext.KnowledgeContextJson = KnowledgeContext;
+                    RuntimeContext.CurrentEditorStateJson =
+                        CurrentEditorStateJson;
                     RuntimeContext.SkillContextJson = SkillContext;
+                    RuntimeContext.KnowledgeRefreshMicroseconds =
+                        KnowledgeRefreshMicroseconds;
                     RuntimeContext.OnAssistantDelta = [this](std::string_view Delta)
                     {
                         std::lock_guard Lock(ViewMutex);
@@ -1100,7 +1201,10 @@ struct FAgentChatWorkspace::FImpl
                     LastRunCounters = Result.Counters;
                     LastRunContextBytes = Result.ContextBytes;
                     LastRunContextMetrics = Result.ContextMetrics;
+                    bLastRunTaskBoundaryProjectionEnabled =
+                        Result.bTaskBoundaryProjectionEnabled;
                     LastRunId = Result.RunId;
+                    LastRunSessionId = SelectedSessionId;
                 }
                 bRunning.store(false);
                 if (ProjectToOpen && Dispatcher && RequestProjectOpen)
@@ -1134,11 +1238,16 @@ struct FAgentChatWorkspace::FImpl
             return;
         }
 
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
         const char* ProviderNames[] = {"Fake Scene Agent", "DeepSeek", "Kimi"};
+#else
+        const char* ProviderNames[] = {"DeepSeek", "Kimi"};
+#endif
         int ProviderIndex = static_cast<int>(Provider);
         ImGui::SetNextItemWidth(180.0f);
         ImGui::BeginDisabled(bRunning.load());
-        if (ImGui::Combo("Provider", &ProviderIndex, ProviderNames, 3))
+        if (ImGui::Combo("Provider", &ProviderIndex, ProviderNames,
+                static_cast<int>(std::size(ProviderNames))))
         {
             Provider = static_cast<EChatProvider>(ProviderIndex);
             FConfigFile Config;
@@ -1153,12 +1262,15 @@ struct FAgentChatWorkspace::FImpl
             ApiKeyInput.fill('\0');
             SessionId.clear();
             SessionPath.clear();
+            HistoryPage = 0;
             RefreshSessionList(true);
             RefreshCredentialState();
             RefreshSessionView();
         }
         ImGui::EndDisabled();
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
         if (Provider != EChatProvider::Fake)
+#endif
         {
             ImGui::SameLine();
             std::string EnvironmentKey = EnvironmentValue(
@@ -1252,6 +1364,7 @@ struct FAgentChatWorkspace::FImpl
                 {
                     SessionId = Entry.Id;
                     SessionPath = Entry.Path;
+                    HistoryPage = 0;
                     RefreshSessionView();
                 }
                 if (bSelected) ImGui::SetItemDefaultFocus();
@@ -1301,12 +1414,19 @@ struct FAgentChatWorkspace::FImpl
             if (ImGui::IsItemDeactivatedAfterEdit()) SaveChatPreferences();
             ImGui::SliderInt("Retries", &MaxRetries, 0, 3);
             if (ImGui::IsItemDeactivatedAfterEdit()) SaveChatPreferences();
+            if (ImGui::Checkbox("Compact prior task history",
+                    &bTaskBoundaryProjection))
+                SaveChatPreferences();
             ImGui::TextDisabled(
                 "Environment variables override editor-local Saved/Editor/Agent/ApiKeys.ini values.");
         }
 
         std::string CurrentStatus;
         std::vector<FChatLine> CurrentLines;
+        std::size_t HistoryPageCount = 1;
+        std::size_t HistoryTurnCount = 0;
+        std::size_t FirstHistoryTurn = 0;
+        std::size_t EndHistoryTurn = 0;
         std::string CurrentStreamingText;
         std::vector<FAgentKnowledgeHit> CurrentKnowledgeHits;
         FAgentKnowledgeQueryResult CurrentKnowledgeQueryResult;
@@ -1314,7 +1434,29 @@ struct FAgentChatWorkspace::FImpl
         {
             std::lock_guard Lock(ViewMutex);
             CurrentStatus = Status;
-            CurrentLines = Lines;
+            std::vector<std::size_t> TurnStarts;
+            if (!Lines.empty()) TurnStarts.push_back(0);
+            for (std::size_t Index = 1; Index < Lines.size(); ++Index)
+            {
+                if (Lines[Index].Label == "You") TurnStarts.push_back(Index);
+            }
+            HistoryTurnCount = TurnStarts.size();
+            constexpr std::size_t TurnsPerPage = 12;
+            HistoryPageCount = std::max<std::size_t>(1,
+                (HistoryTurnCount + TurnsPerPage - 1) / TurnsPerPage);
+            HistoryPage = std::min(HistoryPage, HistoryPageCount - 1);
+            EndHistoryTurn = HistoryTurnCount > HistoryPage * TurnsPerPage
+                ? HistoryTurnCount - HistoryPage * TurnsPerPage : 0;
+            FirstHistoryTurn = EndHistoryTurn > TurnsPerPage
+                ? EndHistoryTurn - TurnsPerPage : 0;
+            if (HistoryTurnCount > 0)
+            {
+                const std::size_t FirstLine = TurnStarts[FirstHistoryTurn];
+                const std::size_t LastLine = EndHistoryTurn < HistoryTurnCount
+                    ? TurnStarts[EndHistoryTurn] : Lines.size();
+                CurrentLines.assign(Lines.begin() + FirstLine,
+                    Lines.begin() + LastLine);
+            }
             CurrentStreamingText = StreamingText;
             CurrentKnowledgeHits = LastKnowledgeHits;
             CurrentKnowledgeQueryResult = LastKnowledgeQueryResult;
@@ -1379,14 +1521,20 @@ struct FAgentChatWorkspace::FImpl
             FAgentCounters MetricsCounters;
             FAgentContextMetrics MetricsContext;
             std::uint64_t MetricsContextBytes = 0;
+            bool bMetricsTaskBoundaryProjectionEnabled = false;
             std::string MetricsRunId;
             {
                 std::lock_guard Lock(ViewMutex);
                 MetricsCounters = LastRunCounters;
                 MetricsContext = LastRunContextMetrics;
                 MetricsContextBytes = LastRunContextBytes;
+                bMetricsTaskBoundaryProjectionEnabled =
+                    bLastRunTaskBoundaryProjectionEnabled;
                 MetricsRunId = LastRunId;
             }
+            if (!MetricsRunId.empty())
+                ImGui::TextDisabled("This run Compact: %s",
+                    bMetricsTaskBoundaryProjectionEnabled ? "On" : "Off");
             ImGui::Text("Steps %zu | tools %zu | tool cache hits %zu",
                 MetricsCounters.Steps, MetricsCounters.ToolCalls,
                 MetricsCounters.SemanticCacheHits);
@@ -1435,6 +1583,10 @@ struct FAgentChatWorkspace::FImpl
                     static_cast<double>(MetricsContext.ConversationBytes) / 1024.0,
                     static_cast<double>(MetricsContext.MemoryBytes) / 1024.0,
                     static_cast<double>(MetricsContext.ObservationBytes) / 1024.0);
+                if (MetricsContext.ProjectedMessages > 0)
+                    ImGui::TextDisabled("History projection: %llu old messages | %.1f KB saved",
+                        static_cast<unsigned long long>(MetricsContext.ProjectedMessages),
+                        static_cast<double>(MetricsContext.ProjectedHistoryBytes) / 1024.0);
             }
             if (!MetricsRunId.empty()) ImGui::TextDisabled("Run: %s", MetricsRunId.c_str());
         }
@@ -1466,6 +1618,30 @@ struct FAgentChatWorkspace::FImpl
         }
         ImGui::Separator();
         ImGui::Text("Status: %s", CurrentStatus.c_str());
+        bool bScrollToTop = false;
+        if (HistoryPageCount > 1)
+        {
+            ImGui::BeginDisabled(HistoryPage + 1 >= HistoryPageCount);
+            if (ImGui::Button("Older messages"))
+            {
+                ++HistoryPage;
+                SelectableMessageIndex.reset();
+                bScrollToTop = true;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::BeginDisabled(HistoryPage == 0);
+            if (ImGui::Button("Newer messages"))
+            {
+                --HistoryPage;
+                SelectableMessageIndex.reset();
+                bScrollToTop = true;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("%zu-%zu / %zu",
+                FirstHistoryTurn + 1, EndHistoryTurn, HistoryTurnCount);
+        }
 
         const float ComposerHeight = 118.0f;
         ImGui::BeginChild("AgentConversation", ImVec2(0.0f,
@@ -1578,7 +1754,15 @@ struct FAgentChatWorkspace::FImpl
             ImGui::Separator();
             ImGui::PopID();
         }
-        if (bScrollToBottom.exchange(false)) ImGui::SetScrollHereY(1.0f);
+        if (bScrollToTop)
+        {
+            bScrollToBottom.store(false);
+            ImGui::SetScrollY(0.0f);
+        }
+        else if (bScrollToBottom.exchange(false))
+        {
+            ImGui::SetScrollHereY(1.0f);
+        }
         ImGui::EndChild();
 
         ImGui::InputTextMultiline("##AgentPrompt", Input.data(), Input.size(),
@@ -1609,6 +1793,14 @@ struct FAgentChatWorkspace::FImpl
     FGameThreadDispatcher* Dispatcher = nullptr;
     FAgentCredentialStore CredentialStore;
     FAgentKnowledgeStore KnowledgeStore;
+    FAgentProjectTextKnowledgeCollector ProjectTextCollector;
+    struct FCachedEpisode
+    {
+        std::filesystem::file_time_type Modified;
+        std::uintmax_t Size = 0;
+        FAgentKnowledgeRecord Record;
+    };
+    std::unordered_map<std::string, FCachedEpisode> EpisodeCache;
     FAgentSkillRegistry SkillRegistry;
     FEditorAgentToolExecutor& EditorTools;
     FEditorAgentExecutionService& ExecutionService;
@@ -1618,6 +1810,7 @@ struct FAgentChatWorkspace::FImpl
     std::filesystem::path SessionDirectory;
     std::vector<FChatSessionEntry> SessionEntries;
     std::optional<std::size_t> SelectableMessageIndex;
+    std::size_t HistoryPage = 0;
     std::mutex ViewMutex;
     std::vector<FChatLine> Lines;
     std::string StreamingText;
@@ -1628,15 +1821,18 @@ struct FAgentChatWorkspace::FImpl
     FAgentCounters LastRunCounters;
     std::uint64_t LastRunContextBytes = 0;
     FAgentContextMetrics LastRunContextMetrics;
+    bool bLastRunTaskBoundaryProjectionEnabled = false;
     std::string LastRunId;
+    std::string LastRunSessionId;
     std::array<char, 2048> Input {};
     std::array<char, 128> Model {};
     std::array<char, 640> ApiKeyInput {};
-    EChatProvider Provider = EChatProvider::Fake;
+    EChatProvider Provider = DefaultChatProvider;
     std::atomic<bool> bRunning {false};
     std::atomic<bool> bShutdown {false};
     int TimeoutSeconds = 30;
     int MaxRetries = 2;
+    bool bTaskBoundaryProjection = true;
     bool bApiKeyPanelOpen = true;
     bool bRequestSettingsOpen = false;
     bool bGroundingSkillsOpen = false;

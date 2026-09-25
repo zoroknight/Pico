@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <iomanip>
@@ -256,9 +257,13 @@ std::optional<FAgentToolResult> FAgentOperationJournal::FindApplied(
 std::vector<FAgentOperationRecord> FAgentOperationJournal::ListIncomplete() const
 {
     std::lock_guard Lock(Mutex);
-    std::vector<FAgentOperationRecord> Records;
+    if (bIncompleteLoaded) return IncompleteCache;
     std::error_code Error;
-    if (!std::filesystem::is_directory(Directory, Error)) return Records;
+    if (!std::filesystem::is_directory(Directory, Error))
+    {
+        if (!Error) bIncompleteLoaded = true;
+        return {};
+    }
     for (const auto& Entry : std::filesystem::directory_iterator(Directory, Error))
     {
         if (Error || !Entry.is_regular_file() || Entry.path().extension() != ".json")
@@ -266,10 +271,16 @@ std::vector<FAgentOperationRecord> FAgentOperationJournal::ListIncomplete() cons
         if (auto Record = ReadRecord(Entry.path(), nullptr);
             Record && Record->State != EAgentOperationState::Committed)
         {
-            Records.push_back(std::move(*Record));
+            IncompleteCache.push_back(std::move(*Record));
         }
     }
-    return Records;
+    if (Error)
+    {
+        IncompleteCache.clear();
+        return {};
+    }
+    bIncompleteLoaded = true;
+    return IncompleteCache;
 }
 
 std::filesystem::path FAgentOperationJournal::RecordPath(
@@ -302,7 +313,18 @@ bool FAgentOperationJournal::Save(
             {"structured_result", FJson::parse(
                 SerializeAgentToolResult(*Record.Result))}};
     }
-    return AtomicWrite(RecordPath(Record.OperationId), Json.dump(2), OutError);
+    if (!AtomicWrite(RecordPath(Record.OperationId), Json.dump(2), OutError))
+        return false;
+    if (bIncompleteLoaded)
+    {
+        std::erase_if(IncompleteCache, [&Record](const FAgentOperationRecord& Item)
+        {
+            return Item.OperationId == Record.OperationId;
+        });
+        if (Record.State != EAgentOperationState::Committed)
+            IncompleteCache.push_back(Record);
+    }
+    return true;
 }
 
 std::string_view ToString(EAgentOperationState State)

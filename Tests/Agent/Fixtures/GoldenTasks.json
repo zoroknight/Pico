@@ -56,7 +56,7 @@
       "prompt": "修改对象属性，但我拒绝这次审批",
       "fixture": "selected-cube",
       "verifier": "no-mutation-after-denial",
-      "expected_status": "Completed",
+      "expected_status": "Failed",
       "required_tools": ["editor.object.set_properties"],
       "forbidden_tools": ["editor.world.save", "editor.project.package"],
       "max_tool_calls": 3

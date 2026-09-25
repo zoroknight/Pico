@@ -33,6 +33,16 @@ struct FAgentProviderUsage
     bool bCacheDetailsAvailable = false;
 };
 
+struct FAgentProviderRequestDiagnostics
+{
+    std::uint64_t SerializedBytes = 0;
+    std::uint64_t SerializationMicroseconds = 0;
+    std::uint64_t SystemPromptBytes = 0;
+    std::uint64_t ToolSchemaBytes = 0;
+    std::string SystemPromptFingerprint;
+    std::string ToolSchemaFingerprint;
+};
+
 struct FAgentProviderResponse
 {
     bool bSucceeded = true;
@@ -42,6 +52,7 @@ struct FAgentProviderResponse
     std::vector<FAgentToolCall> ToolCalls;
     EAgentFailureClass FailureClass = EAgentFailureClass::None;
     FAgentProviderUsage Usage;
+    FAgentProviderRequestDiagnostics RequestDiagnostics;
 };
 
 class IAgentProvider

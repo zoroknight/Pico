@@ -75,6 +75,7 @@ private:
         const FAgentProviderRequest& Request,
         std::string& OutBody,
         std::unordered_map<std::string, std::string>& OutApiToPicoToolNames,
+        FAgentProviderRequestDiagnostics& OutDiagnostics,
         std::string& OutError) const;
     FAgentProviderResponse ParseResponse(
         const FAgentHttpResponse& Response,
