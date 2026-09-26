@@ -438,8 +438,11 @@ FAgentToolResult FAgentToolRegistry::Execute(
         return Failure(Call, Error.empty() ? "Tool verification failed" : Error,
             EAgentFailureClass::VerificationFailed);
     }
+    Result.bPostconditionVerified = Result.bPostconditionVerified
+        || Definition->bVerifierChecksPostcondition;
     Trace(EAgentToolStage::Verify, true,
-        Definition->Verifier ? "Postcondition verified" : "No extra verifier required");
+        Result.bPostconditionVerified ? "Postcondition verified"
+            : "Basic success check only; target readback is still required");
 
     if (bTransactional)
     {

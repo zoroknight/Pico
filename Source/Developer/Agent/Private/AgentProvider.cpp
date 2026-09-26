@@ -32,6 +32,21 @@ std::vector<std::string> IAgentToolExecutor::GetRevisionWriteSet(
     return {"State.Revision"};
 }
 
+FAgentPendingReadback IAgentToolExecutor::BuildPendingReadback(
+    const FAgentToolCall& Call, const FAgentToolResult&) const
+{
+    FAgentPendingReadback Pending;
+    Pending.ToolName = Call.Name;
+    return Pending;
+}
+
+bool IAgentToolExecutor::ReadbackContainsTarget(
+    const FAgentToolCall&, const FAgentToolResult&,
+    const FAgentPendingReadback&, std::string_view) const
+{
+    return false;
+}
+
 void IAgentToolExecutor::PrepareApproval(const FAgentToolCall&)
 {
 }

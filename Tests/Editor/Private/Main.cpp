@@ -49,6 +49,8 @@
 
 #include "TestRunner.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -1272,7 +1274,7 @@ void TestEditorCommandService(FTestRunner& Runner)
     };
     Runner.Expect(
         AgentTools.IsInitialized()
-            && AgentToolNames.size() == 45
+            && AgentToolNames.size() == 48
             && HasAgentTool("editor.world.describe")
             && HasAgentTool("editor.asset.describe_catalog")
             && HasAgentTool("editor.asset.describe")
@@ -1291,9 +1293,95 @@ void TestEditorCommandService(FTestRunner& Runner)
             && HasAgentTool("editor.actor_blueprint.describe_defaults")
             && HasAgentTool("editor.actor_blueprint.set_defaults")
             && HasAgentTool("editor.world.save")
+            && HasAgentTool("editor.scene.preview_room_plan")
+            && HasAgentTool("editor.scene.describe_room_plan")
+            && HasAgentTool("editor.scene.apply_room_plan")
             && HasAgentTool("editor.play.start")
             && HasAgentTool("editor.project.package"),
         "Editor Agent adapter registers inspection, scene, gameplay, save, project, and package tools");
+
+    const Pico::FAgentToolCall CreateProbe {
+        "ag1-create", "editor.actor.spawn", R"({"name":"AG1Probe","kind":"Cube"})"};
+    const Pico::FAgentToolResult CreatedProbe {
+        CreateProbe.Id, true,
+        R"({"object_path":"StarterWorld.PersistentLevel.AG1Probe"})"};
+    const auto CreatedPending = AgentTools.BuildPendingReadback(
+        CreateProbe, CreatedProbe);
+    const Pico::FAgentToolCall DescribeOther {
+        "ag1-other", "editor.object.describe",
+        R"({"object_path":"StarterWorld.PersistentLevel.Other"})"};
+    const Pico::FAgentToolResult OtherResult {
+        DescribeOther.Id, true,
+        R"({"object_path":"StarterWorld.PersistentLevel.Other"})"};
+    const Pico::FAgentToolCall DescribeProbe {
+        "ag1-probe", "editor.object.describe",
+        R"({"object_path":"StarterWorld.PersistentLevel.AG1Probe"})"};
+    const Pico::FAgentToolResult ProbeResult {
+        DescribeProbe.Id, true,
+        R"({"object_path":"StarterWorld.PersistentLevel.AG1Probe"})"};
+    Runner.Expect(CreatedPending.bContractAvailable
+            && !AgentTools.ReadbackContainsTarget(DescribeOther, OtherResult,
+                CreatedPending, CreatedPending.Targets.front())
+            && AgentTools.ReadbackContainsTarget(DescribeProbe, ProbeResult,
+                CreatedPending, CreatedPending.Targets.front()),
+        "Editor readback matches the changed Actor path, not an unrelated object");
+
+    const Pico::FAgentToolCall DeleteProbe {
+        "ag1-delete", "editor.actor.delete",
+        R"({"object_path":"StarterWorld.PersistentLevel.AG1Probe"})"};
+    const Pico::FAgentToolResult DeletedProbe {
+        DeleteProbe.Id, true,
+        R"({"deleted_object_path":"StarterWorld.PersistentLevel.AG1Probe"})"};
+    const auto DeletedPending = AgentTools.BuildPendingReadback(
+        DeleteProbe, DeletedProbe);
+    const Pico::FAgentToolCall DescribeWorld {
+        "ag1-world", "editor.world.describe", "{}"};
+    const Pico::FAgentToolResult WrongWorld {
+        DescribeWorld.Id, true, R"({"world":"OtherWorld","actors":[]})"};
+    const Pico::FAgentToolResult CorrectWorld {
+        DescribeWorld.Id, true, R"({"world":"StarterWorld","actors":[]})"};
+    Runner.Expect(DeletedPending.bExpectAbsent
+            && !AgentTools.ReadbackContainsTarget(DescribeWorld, WrongWorld,
+                DeletedPending, DeletedPending.Targets.front())
+            && AgentTools.ReadbackContainsTarget(DescribeWorld, CorrectWorld,
+                DeletedPending, DeletedPending.Targets.front()),
+        "Deleted Actor absence is verified only in its active World");
+
+    const Pico::FAgentToolCall UpdateMaterialProbe {
+        "ag1-material", "editor.material.update", "{}"};
+    const Pico::FAgentToolResult UpdatedMaterialProbe {
+        UpdateMaterialProbe.Id, true,
+        R"({"asset_path":"/Game/Materials/AG1.pmat","revision_after":"r2","after":{"roughness":0.5}})"};
+    const auto MaterialPending = AgentTools.BuildPendingReadback(
+        UpdateMaterialProbe, UpdatedMaterialProbe);
+    const Pico::FAgentToolCall DescribeMaterialProbe {
+        "ag1-material-read", "editor.material.describe", "{}"};
+    const Pico::FAgentToolResult WrongMaterialProbe {
+        DescribeMaterialProbe.Id, true,
+        R"({"asset_path":"/Game/Materials/AG1.pmat","revision":"r2","values":{"roughness":0.8}})"};
+    Runner.Expect(MaterialPending.bContractAvailable
+            && !AgentTools.ReadbackContainsTarget(DescribeMaterialProbe,
+                WrongMaterialProbe, MaterialPending,
+                MaterialPending.Targets.front()),
+        "A matching Material path and revision do not conceal wrong parameter values");
+
+    const Pico::FAgentToolCall AddGraphNodeProbe {
+        "ag1-node", "editor.graph.add_node", "{}"};
+    const Pico::FAgentToolResult AddedGraphNodeProbe {
+        AddGraphNodeProbe.Id, true,
+        R"({"graph_path":"/Game/Graphs/AG1.pgraph","node_id":"node-new"})"};
+    const auto GraphPending = AgentTools.BuildPendingReadback(
+        AddGraphNodeProbe, AddedGraphNodeProbe);
+    const Pico::FAgentToolCall DescribeGraphProbe {
+        "ag1-graph-read", "editor.graph.describe", "{}"};
+    const Pico::FAgentToolResult MissingGraphNodeProbe {
+        DescribeGraphProbe.Id, true,
+        R"({"graph_path":"/Game/Graphs/AG1.pgraph","nodes":[{"id":"node-old"}]})"};
+    Runner.Expect(GraphPending.bContractAvailable
+            && !AgentTools.ReadbackContainsTarget(DescribeGraphProbe,
+                MissingGraphNodeProbe, GraphPending,
+                GraphPending.Targets.front()),
+        "Graph readback requires the new node, not just the same Graph path");
     const Pico::FAgentToolResult DescribeAssetCatalogResult = AgentTools.Execute(
         {"agent-asset-catalog", "editor.asset.describe_catalog", "{}"}, nullptr);
     Runner.Expect(
@@ -1306,6 +1394,12 @@ void TestEditorCommandService(FTestRunner& Runner)
                 != std::string::npos,
         "Editor Agent exposes versioned asset descriptors with live World provenance");
     const std::string AgentCatalog = AgentTools.BuildToolCatalogJson();
+    Runner.Expect(
+        AgentCatalog.find("a null base_color_texture only describes that input")
+                != std::string::npos
+            && AgentCatalog.find("names and paths alone do not prove internal shape")
+                != std::string::npos,
+        "Asset inspection tool contracts preserve field-level and asset-identity evidence boundaries");
     const std::vector<Pico::FAgentKnowledgeRecord> CapabilityKnowledge =
         AgentTools.CollectKnowledgeRecords();
     std::size_t CapabilityManifestCount = 0;
@@ -2754,6 +2848,122 @@ void TestEditorWorldDocument(FTestRunner& Runner)
     std::error_code Error;
     std::filesystem::remove_all(TestProjectRoot.parent_path(), Error);
 }
+void TestAgentRoomPlan(FTestRunner& Runner)
+{
+    char Program[] = "PicoRoomPlanTests";
+    char MaxFPS[] = "-maxfps=0";
+    char* Arguments[] = {Program, MaxFPS};
+    Pico::FEngineLoop EngineLoop;
+    Runner.Expect(EngineLoop.PreInit(2, Arguments) == 0
+            && EngineLoop.Init() == 0,
+        "Room plan test initializes a disposable Editor World");
+    Pico::FEditorSelection Selection;
+    Selection.Set(EngineLoop.GetWorld());
+    Pico::FEditorTransactionManager Transactions;
+    FEditorAgentApproval Approval;
+    Pico::FEditorAgentToolExecutor Tools(
+        &EngineLoop, &Selection, &Transactions, &Approval);
+    const auto NoPlan = Tools.Execute({"ag3-no-plan",
+        "editor.scene.describe_room_plan", "{}"}, nullptr);
+    const auto NoPlanJson = nlohmann::json::parse(
+        NoPlan.OutputJson, nullptr, false);
+    Runner.Expect(NoPlan.bSucceeded && NoPlanJson.is_object()
+            && !NoPlanJson.value("current", true)
+            && NoPlanJson.value("plan_hash", "missing").empty()
+            && NoPlanJson.at("continuation").at("state") == "closed",
+        "Missing Room Plan is an observable read-only state");
+    const auto CountActors = [&EngineLoop]()
+    {
+        std::size_t Count = 0;
+        if (Pico::PWorld* World = EngineLoop.GetWorld())
+            for (Pico::PLevel* Level : World->GetLevels())
+                if (Level) Count += Level->GetActors().size();
+        return Count;
+    };
+    const std::size_t Before = CountActors();
+    const std::string RoomArgs =
+        R"({"name":"AG3Room","center_x":0,"center_y":0,"width":600,"depth":600,"wall_height":300})";
+    const Pico::FAgentToolCall PreviewCall {
+        "ag3-preview", "editor.scene.preview_room_plan", RoomArgs};
+    const auto PreviewResult = Tools.Execute(PreviewCall, nullptr);
+    const auto PreviewJson = nlohmann::json::parse(
+        PreviewResult.OutputJson, nullptr, false);
+    const std::string PlanHash = PreviewJson.is_object()
+        ? PreviewJson.value("plan_hash", "") : std::string {};
+    Runner.Expect(PreviewResult.bSucceeded && !PlanHash.empty()
+            && PreviewJson.at("support_diagnosis").at("supported") == true
+            && PreviewJson.at("dry_run").at("expected_actor_names").size() == 5
+            && PreviewJson.at("continuation").at("state") == "open"
+            && CountActors() == Before,
+        "Room Plan preview returns support diagnosis and DryRun without edits");
+    const auto Recalled = Tools.Execute({"ag3-recall",
+        "editor.scene.describe_room_plan", "{}"}, nullptr);
+    const auto RecalledJson = nlohmann::json::parse(
+        Recalled.OutputJson, nullptr, false);
+    Runner.Expect(Recalled.bSucceeded && RecalledJson.is_object()
+            && RecalledJson.value("current", false)
+            && RecalledJson.value("plan_hash", "") == PlanHash
+            && RecalledJson.at("room_parameters").at("name") == "AG3Room"
+            && CountActors() == Before,
+        "Room Plan can be recalled without relying on chat history");
+
+    auto ApplyArgs = nlohmann::json::parse(RoomArgs);
+    ApplyArgs["plan_hash"] = PlanHash;
+    const Pico::FAgentToolCall ApplyCall {
+        "ag3-apply", "editor.scene.apply_room_plan", ApplyArgs.dump()};
+    Runner.Expect(!Tools.RequiresApproval(PreviewCall)
+            && !Tools.RequiresApproval({"ag3-recall-policy",
+                "editor.scene.describe_room_plan", "{}"})
+            && Tools.RequiresApproval(ApplyCall),
+        "Only applying the Room Plan requires ModifyWorld approval");
+    const auto Denied = Tools.Execute(ApplyCall, nullptr);
+    Runner.Expect(!Denied.bSucceeded && CountActors() == Before,
+        "Denying Room Plan approval leaves the World unchanged");
+    Approval.bApprove = true;
+    const auto Applied = Tools.Execute(ApplyCall, nullptr);
+    const auto AppliedJson = nlohmann::json::parse(
+        Applied.OutputJson, nullptr, false);
+    Runner.Expect(Applied.bSucceeded && Applied.bPostconditionVerified
+            && AppliedJson.is_object()
+            && AppliedJson.value("plan_hash", "") == PlanHash
+            && AppliedJson.at("continuation").at("state") == "closed"
+            && AppliedJson.at("actors").size() == 5
+            && CountActors() == Before + 5,
+        "Approved Room Plan creates and verifies five parts as one transaction");
+
+    Pico::FEditorSceneClipboard Clipboard;
+    Pico::FEditorCommandService Commands(
+        &EngineLoop, &Selection, &Transactions, &Clipboard);
+    Runner.Expect(Commands.Undo().bSucceeded && CountActors() == Before,
+        "One Undo reverts all Room Plan parts");
+
+    const Pico::FAgentToolCall StalePreviewCall {
+        "ag3-stale-preview", "editor.scene.preview_room_plan", RoomArgs};
+    const auto StalePreview = Tools.Execute(StalePreviewCall, nullptr);
+    const auto StaleJson = nlohmann::json::parse(
+        StalePreview.OutputJson, nullptr, false);
+    const std::string StaleHash = StaleJson.is_object()
+        ? StaleJson.value("plan_hash", "") : std::string {};
+    if (Pico::PWorld* World = EngineLoop.GetWorld())
+        World->SpawnActor<Pico::PActor>("ExternalChange");
+    const auto StaleRecall = Tools.Execute({"ag3-stale-recall",
+        "editor.scene.describe_room_plan", "{}"}, nullptr);
+    const auto StaleRecallJson = nlohmann::json::parse(
+        StaleRecall.OutputJson, nullptr, false);
+    Runner.Expect(StaleRecall.bSucceeded && StaleRecallJson.is_object()
+            && !StaleRecallJson.value("current", true)
+            && StaleRecallJson.at("continuation").at("state") == "closed"
+            && StaleRecallJson.value("plan_hash", "") == StaleHash,
+        "Room Plan recall flags a changed World as stale");
+    ApplyArgs["plan_hash"] = StaleHash;
+    const auto StaleApply = Tools.Execute({"ag3-stale-apply",
+        "editor.scene.apply_room_plan", ApplyArgs.dump()}, nullptr);
+    Runner.Expect(StalePreview.bSucceeded && !StaleApply.bSucceeded
+            && CountActors() == Before + 1,
+        "A changed World invalidates the previewed Room Plan before side effects");
+
+    EngineLoop.Exit();
+}
 }
 
 int main()
@@ -2768,5 +2978,6 @@ int main()
     TestEditorCommandService(Runner);
     TestEditorTransactions(Runner);
     TestEditorWorldDocument(Runner);
+    TestAgentRoomPlan(Runner);
     return Runner.Finish();
 }

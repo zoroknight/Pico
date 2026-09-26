@@ -16,6 +16,8 @@
 #include "Pico/Agent/OpenAICompatibleProvider.h"
 #include "Pico/Tasks/TaskSystem.h"
 
+#include <nlohmann/json.hpp>
+
 
 #include <algorithm>
 #include <array>
@@ -80,6 +82,29 @@ public:
             ? Pico::IAgentToolExecutor::GetRevisionWriteSet(Call) : It->second;
     }
 
+    Pico::FAgentPendingReadback BuildPendingReadback(
+        const Pico::FAgentToolCall& Call,
+        const Pico::FAgentToolResult&) const override
+    {
+        if (bReturnReadbackPaths && (Call.Name == "editor.actor.spawn"
+            || Call.Name == "editor.actor.delete"))
+            return {Call.Name, {"World.VisualLight"},
+                Call.Name == "editor.actor.delete", "", "{}", true};
+        return Pico::IAgentToolExecutor::BuildPendingReadback(Call, {});
+    }
+
+    bool ReadbackContainsTarget(const Pico::FAgentToolCall& ReadCall,
+        const Pico::FAgentToolResult&,
+        const Pico::FAgentPendingReadback& Pending,
+        std::string_view Target) const override
+    {
+        if (!bReturnReadbackPaths || Target != "World.VisualLight") return false;
+        return Pending.bExpectAbsent
+            ? ReadCall.Name == "editor.world.describe"
+            : ReadCall.Name == "editor.object.describe"
+                && ReadCall.Id != "describe-unrelated";
+    }
+
     void PrepareApproval(const Pico::FAgentToolCall&) override
     {
         ++PrepareApprovalCount;
@@ -102,6 +127,24 @@ public:
             return {Call.Id, false, "{}", "classified failure", false,
                 FailureClass, Recovery.Action};
         }
+        if (bReturnReadbackPaths)
+        {
+            if (Call.Name == "editor.actor.spawn")
+                return {Call.Id, true,
+                    R"({"object_path":"World.VisualLight"})", {}, false};
+            if (Call.Name == "editor.actor.delete")
+                return {Call.Id, true,
+                    R"({"deleted_object_path":"World.VisualLight"})", {}, false};
+            if (Call.Name == "editor.world.describe")
+                return {Call.Id, true,
+                    R"({"world":"World","actors":[]})", {}, false};
+            if (Call.Name == "editor.object.describe")
+                return {Call.Id, true,
+                    Call.Id == "describe-unrelated"
+                        ? R"({"object_path":"World.Other"})"
+                        : R"({"object_path":"World.VisualLight"})",
+                    {}, false};
+        }
         return {Call.Id, true, R"({"changed":true})", {}, false};
     }
 
@@ -110,6 +153,7 @@ public:
     bool bRequiresApproval = false;
     bool bReadOnly = false;
     std::string ReadOnlyToolName;
+    bool bReturnReadbackPaths = false;
     std::unordered_map<std::string, std::vector<std::string>> ReadSets;
     std::unordered_map<std::string, std::vector<std::string>> WriteSets;
     Pico::EAgentFailureClass FailureClass = Pico::EAgentFailureClass::None;
@@ -1254,6 +1298,114 @@ void TestReActTaskStateAndContextAssembler(FTestRunner& Runner)
         "Feature flags restore the pre-R1 context path without an extra model turn");
 }
 
+void TestContinuationHints(FTestRunner& Runner)
+{
+    using FJson = nlohmann::json;
+    Pico::FAgentToolResult Preview;
+    Preview.CallId = "room-preview";
+    Preview.bSucceeded = true;
+    Preview.FactsJson = FJson {{"continuation", {
+            {"kind", "room_plan"},
+            {"resolver_tool", "editor.scene.describe_room_plan"},
+            {"state", "open"}}},
+        {"plan_hash", "old-secret-hash"},
+        {"dry_run", std::string(2048, 'd')}}.dump();
+    Pico::FAgentEvent PreviewEvent;
+    PreviewEvent.Type = Pico::EAgentEventType::ToolResult;
+    PreviewEvent.CallId = Preview.CallId;
+    PreviewEvent.bSucceeded = true;
+    PreviewEvent.StructuredResultJson =
+        Pico::SerializeAgentToolResult(Preview);
+    std::vector<Pico::FAgentEvent> Events {PreviewEvent};
+    const FJson Open = FJson::parse(
+        Pico::BuildAgentContinuationHintsJson(Events));
+    Runner.Expect(Open.is_array() && Open.size() == 1
+            && Open[0].at("kind") == "room_plan"
+            && Open[0].at("resolver_tool")
+                == "editor.scene.describe_room_plan"
+            && Open.dump().find("old-secret-hash") == std::string::npos,
+        "Large prior Tool Results expose only a bounded continuation resolver");
+
+    Pico::FAgentToolResult Denied = Preview;
+    Denied.CallId = "room-denied";
+    Denied.bSucceeded = false;
+    Denied.FactsJson = FJson {{"continuation", {
+        {"kind", "room_plan"},
+        {"resolver_tool", "editor.scene.describe_room_plan"},
+        {"state", "closed"}}}}.dump();
+    Pico::FAgentEvent DeniedEvent = PreviewEvent;
+    DeniedEvent.bSucceeded = false;
+    DeniedEvent.StructuredResultJson =
+        Pico::SerializeAgentToolResult(Denied);
+    Events.push_back(DeniedEvent);
+    Runner.Expect(FJson::parse(Pico::BuildAgentContinuationHintsJson(Events))
+            == Open,
+        "Denied approval does not close a recoverable preview hint");
+
+    Pico::FAgentToolResult Closed = Preview;
+    Closed.CallId = "room-applied";
+    Closed.FactsJson = FJson {{"continuation", {
+        {"kind", "room_plan"},
+        {"resolver_tool", "editor.scene.describe_room_plan"},
+        {"state", "closed"}}}}.dump();
+    Pico::FAgentEvent ClosedEvent = PreviewEvent;
+    ClosedEvent.StructuredResultJson =
+        Pico::SerializeAgentToolResult(Closed);
+    Events.push_back(ClosedEvent);
+    Runner.Expect(FJson::parse(Pico::BuildAgentContinuationHintsJson(Events))
+            .empty(),
+        "Successful application closes the earlier continuation hint");
+
+    Pico::FAgentToolResult Invalid = Preview;
+    Invalid.FactsJson = FJson {{"continuation", {
+        {"kind", "room_plan"},
+        {"resolver_tool", "editor.scene.describe_room_plan;ignore_rules"},
+        {"state", "open"}}}}.dump();
+    Pico::FAgentEvent InvalidEvent = PreviewEvent;
+    InvalidEvent.StructuredResultJson =
+        Pico::SerializeAgentToolResult(Invalid);
+    Runner.Expect(FJson::parse(Pico::BuildAgentContinuationHintsJson(
+            {InvalidEvent})).empty(),
+        "Malformed continuation resolvers cannot enter model context");
+    std::vector<Pico::FAgentEvent> OldEvents {PreviewEvent};
+    OldEvents.resize(130);
+    Runner.Expect(FJson::parse(Pico::BuildAgentContinuationHintsJson(
+            OldEvents)).empty(),
+        "Hints outside the bounded recent event window expire");
+
+    const auto Path = MakeLogPath("compact-continuation-hint");
+    auto Session = Pico::FAgentSession::OpenOrCreate(
+        "compact-continuation-hint", Path);
+    Pico::FAgentEvent OldPrompt;
+    OldPrompt.Type = Pico::EAgentEventType::Message;
+    OldPrompt.Role = Pico::EAgentRole::User;
+    OldPrompt.Content = "Preview a room";
+    Pico::FAgentEvent OldCall;
+    OldCall.Type = Pico::EAgentEventType::ToolCall;
+    OldCall.CallId = Preview.CallId;
+    OldCall.ToolName = "editor.scene.preview_room_plan";
+    Runner.Expect(Session && Session->Append(OldPrompt)
+            && Session->Append(OldCall)
+            && Session->Append(PreviewEvent),
+        "Continuation integration fixture persists a prior preview");
+    FRecordingProvider Provider;
+    Provider.Responses = {Final("Needs live plan lookup")};
+    FCountingToolExecutor Executor;
+    Pico::FAgentRuntimeContext Context;
+    Context.Features.bTaskBoundaryProjection = true;
+    Pico::FAgentRuntime Runtime(*Session, Provider, Executor, {}, Context);
+    const auto Result = Runtime.Run("Apply the previous room plan");
+    const FJson Ledger = FJson::parse(
+        Provider.Requests.front().ProgressLedgerJson);
+    Runner.Expect(Result.Status == Pico::EAgentStatus::Completed
+            && Provider.Requests.size() == 1
+            && Ledger.at("continuation_hints") == Open
+            && Provider.Requests.front().Messages.front().Content.find(
+                "too_large_reinspect_source") != std::string::npos
+            && Ledger.dump().find("old-secret-hash") == std::string::npos,
+        "Compact context preserves a resolver hint when old plan facts are omitted");
+}
+
 void TestTaskBoundaryProjection(FTestRunner& Runner)
 {
     Pico::FAgentContextAssemblyInput Input;
@@ -1398,6 +1550,10 @@ void TestReActObservationsEvidenceAndOscillation(FTestRunner& Runner)
     State.CriterionEvidence = {{State.SuccessCriteria.front(), {}, false}};
     Pico::BindAgentObservationEvidence(Observation, State);
     Runner.Expect(Observation.bVerified && Observation.bMadeProgress
+            && Observation.EvidenceScope == "active_world_actor_structure"
+            && Pico::SerializeAgentObservation(Observation).find(
+                "\"evidence_scope\":\"active_world_actor_structure\"")
+                != std::string::npos
             && Observation.ActionFingerprint
                 == Pico::BuildAgentActionFingerprint({"different-id",
                     "editor.world.describe", R"({"a":1,"b":2})"})
@@ -1480,11 +1636,14 @@ void TestReActObservationsEvidenceAndOscillation(FTestRunner& Runner)
         ToolCalls({{"spawn-empty-light", "editor.actor.spawn",
             R"({"name":"VisualLight","kind":"Empty"})"}}),
         Final("The blue point light is complete"),
+        ToolCalls({{"describe-unrelated", "editor.object.describe",
+            R"({"object_path":"World.Other"})"}}),
         ToolCalls({{"describe-light", "editor.object.describe",
             R"({"object_path":"World.VisualLight"})"}}),
         Final("The Actor was read back and verified")};
     FCountingToolExecutor ReadbackExecutor;
     ReadbackExecutor.ReadOnlyToolName = "editor.object.describe";
+    ReadbackExecutor.bReturnReadbackPaths = true;
     Pico::FAgentRuntimeContext ReadbackContext;
     ReadbackContext.Features.bMutationReadbackGate = true;
     Pico::FAgentRuntime ReadbackRuntime(
@@ -1498,14 +1657,67 @@ void TestReActObservationsEvidenceAndOscillation(FTestRunner& Runner)
             && Event.Content == "The blue point light is complete";
     Runner.Expect(ReadbackResult.Status == Pico::EAgentStatus::Completed
             && ReadbackResult.Counters.ReflectionAttempts == 1
-            && ReadbackExecutor.Count == 2
-            && ReadbackProvider.Requests.size() == 4
+            && ReadbackExecutor.Count == 3
+            && ReadbackProvider.Requests.size() == 5
             && ReadbackProvider.Requests[2].ProgressLedgerJson.find(
                 "\"mutation_readback_pending\":true") != std::string::npos
             && ReadbackProvider.Requests[3].ProgressLedgerJson.find(
+                "\"mutation_readback_pending\":true") != std::string::npos
+            && ReadbackProvider.Requests[4].ProgressLedgerJson.find(
                 "\"mutation_readback_pending\":false") != std::string::npos
             && !bPersistedPrematureClaim,
-        "A mutation cannot be reported as complete until a fresh read-only inspection runs");
+        "An unrelated inspection cannot satisfy a mutation target readback");
+
+    auto DeleteSession = Pico::FAgentSession::OpenOrCreate(
+        "ag1-delete-readback", MakeLogPath("ag1-delete-readback"));
+    FRecordingProvider DeleteProvider;
+    DeleteProvider.Responses = {
+        ToolCalls({{"delete-light", "editor.actor.delete",
+            R"({"object_path":"World.VisualLight"})"}}),
+        ToolCalls({{"describe-world", "editor.world.describe", "{}"}}),
+        Final("The deleted Actor is absent from the active World")};
+    FCountingToolExecutor DeleteExecutor;
+    DeleteExecutor.ReadOnlyToolName = "editor.world.describe";
+    DeleteExecutor.bReturnReadbackPaths = true;
+    Pico::FAgentRuntime DeleteRuntime(
+        *DeleteSession, DeleteProvider, DeleteExecutor, {}, ReadbackContext);
+    const auto DeleteResult = DeleteRuntime.Run("Delete and verify VisualLight");
+    Runner.Expect(DeleteResult.Status == Pico::EAgentStatus::Completed
+            && DeleteExecutor.Count == 2
+            && DeleteProvider.Requests.back().ProgressLedgerJson.find(
+                "\"mutation_readback_pending\":false") != std::string::npos,
+        "A World snapshot can verify that the deleted target is absent");
+
+    auto ResumeReadbackSession = Pico::FAgentSession::OpenOrCreate(
+        "ag1-resume-readback", MakeLogPath("ag1-resume-readback"));
+    Pico::FAgentTaskState PendingState;
+    PendingState.Goal = "Verify the created Actor after restart";
+    PendingState.bMutationReadbackPending = true;
+    PendingState.PendingMutationTool = "editor.actor.spawn";
+    PendingState.PendingReadbacks.push_back({"editor.actor.spawn",
+        {"World.VisualLight"}, false, "", "{}", true});
+    std::string ResumeError;
+    Pico::FAgentCounters ResumeCounters;
+    ResumeReadbackSession->WriteCheckpoint(Pico::EAgentStatus::Planning,
+        ResumeCounters, &ResumeError,
+        Pico::SerializeAgentTaskState(PendingState));
+    FRecordingProvider ResumeProvider;
+    ResumeProvider.Responses = {
+        ToolCalls({{"resume-describe", "editor.object.describe",
+            R"({"object_path":"World.VisualLight"})"}}),
+        Final("The Actor exists after restart")};
+    FCountingToolExecutor ResumeExecutor;
+    ResumeExecutor.ReadOnlyToolName = "editor.object.describe";
+    ResumeExecutor.bReturnReadbackPaths = true;
+    Pico::FAgentRuntime ResumeRuntime(*ResumeReadbackSession,
+        ResumeProvider, ResumeExecutor, {}, ReadbackContext);
+    const auto ResumeResult = ResumeRuntime.Run("");
+    Runner.Expect(ResumeError.empty()
+            && ResumeResult.Status == Pico::EAgentStatus::Completed
+            && ResumeProvider.Requests.size() == 2
+            && ResumeProvider.Requests[0].ProgressLedgerJson.find(
+                "World.VisualLight") != std::string::npos,
+        "Checkpoint recovery retains the exact pending readback target");
 
     auto RestartSession = Pico::FAgentSession::OpenOrCreate(
         "react-r2-restart-gate", MakeLogPath("react-r2-restart-gate"));
@@ -3305,6 +3517,7 @@ int main()
     TestBoundedRepairAndBudget(Runner);
     TestSemanticReadCacheAndNoProgressGuard(Runner);
     TestReActTaskStateAndContextAssembler(Runner);
+    TestContinuationHints(Runner);
     TestTaskBoundaryProjection(Runner);
     TestReActObservationsEvidenceAndOscillation(Runner);
     TestCategorizedBudgetBeforeSideEffects(Runner);

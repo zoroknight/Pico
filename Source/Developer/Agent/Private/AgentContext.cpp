@@ -1,4 +1,5 @@
 #include "Pico/Agent/AgentContext.h"
+#include "Pico/Agent/AgentSession.h"
 
 #include <nlohmann/json.hpp>
 
@@ -231,6 +232,63 @@ std::vector<FAgentMessage> ProjectHistoryByTaskBoundary(
 }
 }
 
+std::string BuildAgentContinuationHintsJson(
+    const std::vector<FAgentEvent>& Events, std::size_t MaxRecentEvents)
+{
+    FJson Hints = FJson::array();
+    std::unordered_set<std::string> SeenKinds;
+    const auto ValidIdentifier = [](const std::string& Value)
+    {
+        return !Value.empty() && Value.size() <= 80
+            && std::all_of(Value.begin(), Value.end(), [](unsigned char Character)
+            {
+                return (Character >= 'a' && Character <= 'z')
+                    || (Character >= 'A' && Character <= 'Z')
+                    || (Character >= '0' && Character <= '9')
+                    || Character == '_'
+                    || Character == '-' || Character == '.';
+            });
+    };
+    const std::size_t First = Events.size() > MaxRecentEvents
+        ? Events.size() - MaxRecentEvents : 0;
+    for (std::size_t Index = Events.size(); Index-- > First;)
+    {
+        const FAgentEvent& Event = Events[Index];
+        if (Event.Type != EAgentEventType::ToolResult
+            || !Event.bSucceeded
+            || Event.StructuredResultJson.find("\"continuation\"")
+                == std::string::npos)
+            continue;
+        FAgentToolResult Result;
+        if (!DeserializeAgentToolResult(Event.StructuredResultJson, Result)
+            || !Result.bSucceeded)
+            continue;
+        const FJson Facts = FJson::parse(Result.FactsJson, nullptr, false);
+        if (!Facts.is_object() || !Facts.contains("continuation")
+            || !Facts["continuation"].is_object())
+            continue;
+        const FJson& Continuation = Facts["continuation"];
+        if (!Continuation.contains("kind")
+            || !Continuation["kind"].is_string()
+            || !Continuation.contains("resolver_tool")
+            || !Continuation["resolver_tool"].is_string()
+            || !Continuation.contains("state")
+            || !Continuation["state"].is_string())
+            continue;
+        const std::string Kind = Continuation.value("kind", "");
+        const std::string Resolver = Continuation.value("resolver_tool", "");
+        const std::string State = Continuation.value("state", "");
+        if (!ValidIdentifier(Kind) || !ValidIdentifier(Resolver)
+            || (State != "open" && State != "closed")
+            || !SeenKinds.insert(Kind).second)
+            continue;
+        if (State == "open")
+            Hints.push_back({{"kind", Kind}, {"resolver_tool", Resolver}});
+        if (Hints.size() == 2) break;
+    }
+    return Hints.dump();
+}
+
 std::string SerializeAgentTaskState(const FAgentTaskState& State)
 {
     FJson CriterionEvidence = FJson::array();
@@ -240,7 +298,14 @@ std::string SerializeAgentTaskState(const FAgentTaskState& State)
             {"evidence_refs", Binding.EvidenceRefs},
             {"satisfied", Binding.bSatisfied}});
     }
-    return FJson {{"version", 3},
+    FJson PendingReadbacks = FJson::array();
+    for (const FAgentPendingReadback& Pending : State.PendingReadbacks)
+        PendingReadbacks.push_back({{"tool", Pending.ToolName},
+            {"targets", Pending.Targets}, {"expect_absent", Pending.bExpectAbsent},
+            {"expected_revision", Pending.ExpectedRevision},
+            {"expected_state", FJson::parse(Pending.ExpectedStateJson)},
+            {"contract_available", Pending.bContractAvailable}});
+    return FJson {{"version", 4},
         {"goal", State.Goal},
         {"success_criteria", State.SuccessCriteria},
         {"constraints", State.Constraints},
@@ -251,6 +316,7 @@ std::string SerializeAgentTaskState(const FAgentTaskState& State)
         {"open_questions", State.OpenQuestions},
         {"mutation_readback_pending", State.bMutationReadbackPending},
         {"pending_mutation_tool", State.PendingMutationTool},
+        {"pending_readbacks", std::move(PendingReadbacks)},
         {"observation_count", State.ObservationCount},
         {"revision", State.Revision}}.dump();
 }
@@ -266,7 +332,7 @@ bool DeserializeAgentTaskState(
         const FJson Value = FJson::parse(Json);
         const int Version = Value.value("version", 0);
         if (!Value.is_object()
-            || (Version != 1 && Version != 2 && Version != 3))
+            || (Version < 1 || Version > 4))
         {
             if (OutError) *OutError = "Unsupported Agent Task State version";
             return false;
@@ -306,6 +372,20 @@ bool DeserializeAgentTaskState(
             State.PendingMutationTool = Value.value(
                 "pending_mutation_tool", "");
         }
+        if (Version >= 4)
+        {
+            for (const FJson& Item : Value.value(
+                    "pending_readbacks", FJson::array()))
+            {
+                if (!Item.is_object()) continue;
+                State.PendingReadbacks.push_back({Item.value("tool", ""),
+                    Item.value("targets", std::vector<std::string>{}),
+                    Item.value("expect_absent", false),
+                    Item.value("expected_revision", ""),
+                    Item.value("expected_state", FJson::object()).dump(),
+                    Item.value("contract_available", false)});
+            }
+        }
         State.ObservationCount = Value.value(
             "observation_count", std::uint64_t {0});
         State.Revision = Value.value("revision", std::uint64_t {0});
@@ -335,6 +415,20 @@ FAgentObservation BuildAgentObservation(
     FAgentObservation Observation;
     Observation.CallId = Call.Id;
     Observation.ToolName = Call.Name;
+    if (Call.Name == "editor.world.describe")
+        Observation.EvidenceScope = "active_world_actor_structure";
+    else if (Call.Name == "editor.selection.describe")
+        Observation.EvidenceScope = "current_editor_selection";
+    else if (Call.Name == "editor.asset.describe"
+        || Call.Name == "editor.asset.describe_catalog")
+        Observation.EvidenceScope = "asset_metadata_and_references";
+    else if (Call.Name == "editor.material.describe")
+        Observation.EvidenceScope = "serialized_material_parameters";
+    else if (Call.Name == "editor.object.describe"
+        || Call.Name == "editor.object.get_property")
+        Observation.EvidenceScope = "live_reflected_object_properties";
+    else if (Call.Name == "editor.graph.describe")
+        Observation.EvidenceScope = "serialized_graph_structure";
     Observation.ActionFingerprint = BuildAgentActionFingerprint(Call);
     Observation.FactsJson = Result.FactsJson;
     Observation.bSucceeded = Result.bSucceeded;
@@ -380,6 +474,7 @@ std::string SerializeAgentObservation(const FAgentObservation& Observation)
         {"tool", Observation.ToolName},
         {"action_fingerprint", Observation.ActionFingerprint},
         {"evidence_ref", Observation.EvidenceRef},
+        {"evidence_scope", Observation.EvidenceScope},
         {"succeeded", Observation.bSucceeded},
         {"verified", Observation.bVerified},
         {"read_only", Observation.bReadOnly},

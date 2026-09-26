@@ -9,6 +9,12 @@
 
 namespace Pico
 {
+struct FAgentEvent;
+
+std::string BuildAgentContinuationHintsJson(
+    const std::vector<FAgentEvent>& Events,
+    std::size_t MaxRecentEvents = 128);
+
 struct FAgentCriterionEvidence
 {
     std::string Criterion;
@@ -28,6 +34,7 @@ struct FAgentTaskState
     std::vector<std::string> OpenQuestions;
     bool bMutationReadbackPending = false;
     std::string PendingMutationTool;
+    std::vector<FAgentPendingReadback> PendingReadbacks;
     std::uint64_t ObservationCount = 0;
     std::uint64_t Revision = 0;
 };
@@ -57,6 +64,7 @@ struct FAgentObservation
     std::string ToolName;
     std::string ActionFingerprint;
     std::string EvidenceRef;
+    std::string EvidenceScope;
     std::string FactsJson = "{}";
     bool bSucceeded = false;
     bool bVerified = false;

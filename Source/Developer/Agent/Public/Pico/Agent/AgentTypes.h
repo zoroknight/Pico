@@ -143,6 +143,17 @@ struct FAgentToolResult
     std::vector<std::string> StateChanges;
     std::vector<FAgentRevisionChange> RevisionChanges;
     std::string RecoveryHint;
+    bool bPostconditionVerified = false;
+};
+
+struct FAgentPendingReadback
+{
+    std::string ToolName;
+    std::vector<std::string> Targets;
+    bool bExpectAbsent = false;
+    std::string ExpectedRevision;
+    std::string ExpectedStateJson = "{}";
+    bool bContractAvailable = false;
 };
 
 struct FAgentBudget

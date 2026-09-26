@@ -464,6 +464,23 @@ std::vector<std::string> FEditorAgentExecutionService::GetRevisionWriteSet(
         : std::vector<std::string> {"State.Revision"};
 }
 
+FAgentPendingReadback FEditorAgentExecutionService::BuildPendingReadback(
+    const FAgentToolCall& Call, const FAgentToolResult& Result) const
+{
+    IAgentToolExecutor* Tools = Impl ? Impl->GetTools() : nullptr;
+    return Tools ? Tools->BuildPendingReadback(Call, Result)
+        : IAgentToolExecutor::BuildPendingReadback(Call, Result);
+}
+
+bool FEditorAgentExecutionService::ReadbackContainsTarget(
+    const FAgentToolCall& ReadCall, const FAgentToolResult& ReadResult,
+    const FAgentPendingReadback& Pending, std::string_view Target) const
+{
+    IAgentToolExecutor* Tools = Impl ? Impl->GetTools() : nullptr;
+    return Tools && Tools->ReadbackContainsTarget(
+        ReadCall, ReadResult, Pending, Target);
+}
+
 void FEditorAgentExecutionService::PrepareApproval(
     const FAgentToolCall& Call)
 {

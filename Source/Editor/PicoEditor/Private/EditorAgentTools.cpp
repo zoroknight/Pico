@@ -71,6 +71,13 @@ FAgentToolResult Success(const FAgentToolCall& Call, FJson Output)
     return {Call.Id, true, Output.dump(), {}, false};
 }
 
+FAgentToolResult VerifiedSuccess(const FAgentToolCall& Call, FJson Output)
+{
+    FAgentToolResult Result = Success(Call, std::move(Output));
+    Result.bPostconditionVerified = true;
+    return Result;
+}
+
 FAgentToolResult Failure(const FAgentToolCall& Call, std::string Error)
 {
     return {Call.Id, false, "{}", std::move(Error), false};
@@ -1141,6 +1148,7 @@ public:
         if (Definition.Permission != EAgentToolPermission::ReadOnly
             && Definition.RevisionWriteSet.empty())
             Definition.RevisionWriteSet = RevisionWriteSet;
+        Definition.bVerifierChecksPostcondition = static_cast<bool>(Definition.Verifier);
         if (!Definition.Verifier)
         {
             Definition.Verifier = [](
@@ -1235,6 +1243,166 @@ public:
         {"ProjectDescriptor.Revision", "WorldAsset.Revision", "Process.State"},
         {"ProjectDescriptor.Revision", "WorldAsset.Revision", "Process.State"}) {}
 };
+std::string JsonString(const FJson& Value, std::string_view Key)
+{
+    const auto It = Value.find(std::string(Key));
+    return It != Value.end() && It->is_string()
+        ? It->get<std::string>() : std::string {};
+}
+
+FAgentPendingReadback BuildPendingReadback(
+    const FAgentToolCall& Call, const FAgentToolResult& Result)
+{
+    FAgentPendingReadback Pending;
+    Pending.ToolName = Call.Name;
+    const FJson Output = FJson::parse(Result.OutputJson, nullptr, false);
+    if (!Output.is_object()) return Pending;
+    const std::string Deleted = JsonString(Output, "deleted_object_path");
+    Pending.bExpectAbsent = !Deleted.empty()
+        || (Output.contains("deleted_object_paths")
+            && Output["deleted_object_paths"].is_array());
+    if (!Deleted.empty()) Pending.Targets.push_back(Deleted);
+    const auto AddArray = [&Pending, &Output](std::string_view Key)
+    {
+        const auto It = Output.find(std::string(Key));
+        if (It == Output.end() || !It->is_array()) return;
+        for (const FJson& Item : *It)
+            if (Item.is_string()) Pending.Targets.push_back(Item.get<std::string>());
+    };
+    if (Pending.bExpectAbsent)
+        AddArray("deleted_object_paths");
+    else
+    {
+        for (std::string_view Key : {"object_path", "asset_path", "graph_path",
+                 "actor_path", "blueprint_asset", "pawn", "player_start"})
+        {
+            const std::string Path = JsonString(Output, Key);
+            if (!Path.empty()) Pending.Targets.push_back(Path);
+        }
+        AddArray("actors");
+    }
+    Pending.ExpectedRevision = JsonString(Output, "revision_after");
+    FJson Expected = FJson::object();
+    if (Call.Name == "editor.graph.add_node")
+        Expected["node_id"] = JsonString(Output, "node_id");
+    else if (Call.Name == "editor.graph.connect_pins")
+    {
+        const FJson Arguments = FJson::parse(Call.ArgumentsJson, nullptr, false);
+        if (Arguments.is_object())
+        {
+            Expected["output_pin_id"] = JsonString(Arguments, "output_pin_id");
+            Expected["input_pin_id"] = JsonString(Arguments, "input_pin_id");
+        }
+    }
+    else if (Call.Name == "editor.graph.set_default")
+    {
+        Expected["pin_id"] = JsonString(Output, "pin_id");
+        Expected["value"] = JsonString(Output, "value");
+    }
+    else if (Call.Name == "editor.material.update"
+        || Call.Name == "editor.material.create"
+        || Call.Name == "editor.material.duplicate")
+    {
+        const auto After = Output.find("after");
+        if (After != Output.end()) Expected["material_values"] = *After;
+        if (Pending.ExpectedRevision.empty())
+            Pending.ExpectedRevision = JsonString(Output, "revision");
+    }
+    Pending.ExpectedStateJson = Expected.dump();
+    std::sort(Pending.Targets.begin(), Pending.Targets.end());
+    Pending.Targets.erase(std::unique(Pending.Targets.begin(),
+        Pending.Targets.end()), Pending.Targets.end());
+    Pending.bContractAvailable = !Pending.Targets.empty();
+    return Pending;
+}
+
+bool ReadbackContainsTarget(const FAgentToolCall& Call,
+    const FAgentToolResult& Result, const FAgentPendingReadback& Pending,
+    std::string_view Target)
+{
+    const FJson Output = FJson::parse(Result.OutputJson, nullptr, false);
+    if (!Output.is_object()) return false;
+    if (Call.Name == "editor.world.describe")
+    {
+        const std::string World = JsonString(Output, "world");
+        if (World.empty() || !Target.starts_with(World + ".")) return false;
+        const auto Actors = Output.find("actors");
+        if (Actors == Output.end() || !Actors->is_array()) return false;
+        const bool bFound = std::any_of(Actors->begin(), Actors->end(),
+            [Target](const FJson& Actor)
+            {
+                return Actor.is_object()
+                    && JsonString(Actor, "object_path") == Target;
+            });
+        return Pending.bExpectAbsent ? !bFound : bFound;
+    }
+    if (Pending.bExpectAbsent) return false;
+    const bool bExact = (Call.Name == "editor.object.describe"
+            || Call.Name == "editor.object.get_property")
+            && JsonString(Output, "object_path") == Target
+        || (Call.Name == "editor.asset.describe"
+            || Call.Name == "editor.material.describe")
+            && JsonString(Output, "asset_path") == Target
+        || Call.Name == "editor.graph.describe"
+            && JsonString(Output, "graph_path") == Target;
+    if (!bExact) return false;
+    if (!Pending.ExpectedRevision.empty()
+        && JsonString(Output, "revision") != Pending.ExpectedRevision)
+        return false;
+    const FJson Expected = FJson::parse(
+        Pending.ExpectedStateJson, nullptr, false);
+    if (!Expected.is_object()) return false;
+    if (Expected.contains("material_values"))
+        return Call.Name == "editor.material.describe"
+            && Output.value("values", FJson::object())
+                == Expected["material_values"];
+    if (Expected.contains("node_id"))
+    {
+        const auto Nodes = Output.find("nodes");
+        return Nodes != Output.end() && Nodes->is_array()
+            && std::any_of(Nodes->begin(), Nodes->end(),
+                [&Expected](const FJson& Node)
+                {
+                    return Node.is_object()
+                        && JsonString(Node, "id")
+                            == Expected.value("node_id", std::string {});
+                });
+    }
+    if (Expected.contains("output_pin_id"))
+    {
+        const auto Links = Output.find("links");
+        return Links != Output.end() && Links->is_array()
+            && std::any_of(Links->begin(), Links->end(),
+                [&Expected](const FJson& Link)
+                {
+                    return Link.is_object()
+                        && JsonString(Link, "output_pin_id")
+                            == Expected.value("output_pin_id", std::string {})
+                        && JsonString(Link, "input_pin_id")
+                            == Expected.value("input_pin_id", std::string {});
+                });
+    }
+    if (Expected.contains("pin_id"))
+    {
+        const auto Nodes = Output.find("nodes");
+        if (Nodes == Output.end() || !Nodes->is_array()) return false;
+        for (const FJson& Node : *Nodes)
+        {
+            if (!Node.is_object()) continue;
+            const auto Pins = Node.find("pins");
+            if (Pins == Node.end() || !Pins->is_array()) continue;
+            for (const FJson& Pin : *Pins)
+                if (Pin.is_object()
+                    && JsonString(Pin, "id")
+                        == Expected.value("pin_id", std::string {})
+                    && JsonString(Pin, "default")
+                        == Expected.value("value", std::string {}))
+                    return true;
+        }
+        return false;
+    }
+    return true;
+}
 }
 
 struct FEditorAgentToolExecutor::FImpl
@@ -1870,6 +2038,108 @@ struct FEditorAgentToolExecutor::FImpl
         return false;
     }
 
+    struct FRoomPlanPreview
+    {
+        FAgentGameSpec Spec;
+        FAgentSupportDiagnosis Diagnosis;
+        FAgentBuildPlanDryRun DryRun;
+        FJson RoomArguments;
+        std::string WorldFingerprint;
+        std::vector<std::string> ExpectedActorNames;
+    };
+
+    static FJson RoomPlanContinuation(bool bOpen)
+    {
+        return {{"kind", "room_plan"},
+            {"resolver_tool", "editor.scene.describe_room_plan"},
+            {"state", bOpen ? "open" : "closed"}};
+    }
+
+    std::optional<FRoomPlanPreview> BuildRoomPlan(
+        const FJson& Arguments, std::string& OutError) const
+    {
+        if (!Arguments.is_object())
+        {
+            OutError = "Room plan arguments must be an object";
+            return std::nullopt;
+        }
+        const std::string Name = Arguments.value("name", "");
+        if (!IsSafeObjectName(Name))
+        {
+            OutError = "Room name is invalid";
+            return std::nullopt;
+        }
+        PWorld* World = EngineLoop ? EngineLoop->GetWorld() : nullptr;
+        if (!World)
+        {
+            OutError = "No active World";
+            return std::nullopt;
+        }
+        FRoomPlanPreview Preview;
+        Preview.RoomArguments = Arguments;
+        for (std::string_view Suffix : {"Floor", "WallNorth", "WallSouth",
+                 "WallEast", "WallWest"})
+            Preview.ExpectedActorNames.push_back(Name + "_" + std::string(Suffix));
+        for (PLevel* Level : World->GetLevels())
+        {
+            if (!Level) continue;
+            for (PActor* Actor : Level->GetActors())
+                if (Actor && std::find(Preview.ExpectedActorNames.begin(),
+                        Preview.ExpectedActorNames.end(),
+                        Actor->GetName().ToString())
+                    != Preview.ExpectedActorNames.end())
+                {
+                    OutError = "Room part name already exists; choose a unique room name";
+                    return std::nullopt;
+                }
+        }
+        FWorldAssetData Snapshot;
+        EWorldSerializationError CaptureError = EWorldSerializationError::None;
+        if (!CaptureWorld(*World, Snapshot, &CaptureError))
+        {
+            OutError = "Could not capture World for room plan: "
+                + std::string(ToString(CaptureError));
+            return std::nullopt;
+        }
+        if (!FingerprintWorld(Snapshot, Preview.WorldFingerprint, OutError))
+            return std::nullopt;
+        Preview.Spec.Id = "room-spec-" + StableOperationSuffix(
+            Arguments.dump() + World->GetPathName());
+        Preview.Spec.SourcePrompt = "Create one collision-enabled room shell";
+        Preview.Spec.Requirements.push_back(
+            {"room-shell", {"room-shell"}, true, Preview.Spec.SourcePrompt});
+        Preview.Spec.AcceptanceCriteria = {
+            "Five named room parts exist in the active World",
+            "Each part has a static collision-enabled Cube root"};
+        FAgentCapabilityCatalog Catalog;
+        FAgentCapabilityDescriptor Capability;
+        Capability.Id = "editor.world.room-shell";
+        Capability.DisplayName = "Collision-enabled room shell";
+        Capability.Category = "World";
+        Capability.ProducerId = "WorldProducer";
+        Capability.Tags = {"room-shell"};
+        Capability.SideEffect = "ModifyWorld";
+        Capability.Approval = "ModifyWorld";
+        Capability.VerifierId = "editor.room.parts";
+        Capability.Provenance = "PicoEditor";
+        if (!Catalog.AddCapability(std::move(Capability), &OutError))
+            return std::nullopt;
+        Preview.Diagnosis = Catalog.Diagnose(Preview.Spec, {});
+        auto Plan = BuildAgentBuildPlan(
+            Preview.Spec, Catalog, Preview.Diagnosis, &OutError);
+        if (!Plan || Plan->Steps.size() != 1) return std::nullopt;
+        FJson PlanArguments = Arguments;
+        PlanArguments["world_path"] = World->GetPathName();
+        PlanArguments["world_fingerprint"] = Preview.WorldFingerprint;
+        Plan->Steps.front().ArgumentsJson = PlanArguments.dump();
+        Plan->Steps.front().IdempotencyKey += ":" + Preview.WorldFingerprint;
+        Plan->Steps.front().ExpectedArtifactKinds = {"WorldActors"};
+        auto DryRun = BuildAgentBuildPlanDryRun(*Plan, &OutError);
+        if (!DryRun) return std::nullopt;
+        Preview.DryRun = std::move(*DryRun);
+        return Preview;
+    }
+
     void RegisterTools()
     {
         FAgentToolDefinition DescribeWorld;
@@ -2419,7 +2689,7 @@ struct FEditorAgentToolExecutor::FImpl
         FAgentToolDefinition DescribeAsset;
         DescribeAsset.Name = "editor.asset.describe";
         DescribeAsset.Description =
-            "Describe one exact registered asset with its typed technical summary, dependencies, registered-project-asset referencers, active-World references, and content revision; other Worlds are not scanned";
+            "Describe one exact registered asset with its typed technical summary, dependencies, registered-project-asset referencers, active-World references, and content revision; names and paths alone do not prove internal shape or appearance; other Worlds are not scanned";
         DescribeAsset.Schema.Fields = {
             {"asset_path", EAgentToolValueType::String, true, {}, {}, 512,
                 EAgentToolStringFormat::AssetPath}};
@@ -2640,7 +2910,7 @@ struct FEditorAgentToolExecutor::FImpl
             }
             FJson Changed = FJson::object();
             for (const std::string& Field : Seen) Changed[Field] = Values.at(Field);
-            return Success(Call, {{"asset_path", Path.ToString()},
+            return VerifiedSuccess(Call, {{"asset_path", Path.ToString()},
                 {"operation_id", Call.Id},
                 {"before", SemanticMetadataToJson(Before)},
                 {"after", SemanticMetadataToJson(ReadBack)},
@@ -2655,7 +2925,7 @@ struct FEditorAgentToolExecutor::FImpl
         FAgentToolDefinition DescribeMaterial;
         DescribeMaterial.Name = "editor.material.describe";
         DescribeMaterial.Description =
-            "Read one exact Material's editable PBR inputs, content revision, and reference impact before changing it";
+            "Read one exact Material's editable PBR inputs, content revision, and reference impact before changing it; a null base_color_texture only describes that input, not all textures or rendered appearance";
         DescribeMaterial.Schema.Fields = {
             {"asset_path", EAgentToolValueType::String, true, {}, {}, 512,
                 EAgentToolStringFormat::AssetPath}};
@@ -2744,7 +3014,7 @@ struct FEditorAgentToolExecutor::FImpl
                 Service.RefreshRegistry();
                 return Failure(Call, "Created Material failed read-back verification");
             }
-            return Success(Call, {{"asset_path", Path.ToString()},
+            return VerifiedSuccess(Call, {{"asset_path", Path.ToString()},
                 {"operation_id", Call.Id}, {"before", nullptr},
                 {"after", MaterialToJson(ReadBack)},
                 {"changed_fields", Values.is_object()
@@ -2818,7 +3088,7 @@ struct FEditorAgentToolExecutor::FImpl
                 return Failure(Call,
                     "Could not copy semantic metadata; duplicated Material was removed");
             }
-            return Success(Call, {{"source_path", Source.ToString()},
+            return VerifiedSuccess(Call, {{"source_path", Source.ToString()},
                 {"asset_path", Destination.ToString()}, {"operation_id", Call.Id},
                 {"after", MaterialToJson(ReadBack)},
                 {"revision", CreatedRecord
@@ -2910,7 +3180,7 @@ struct FEditorAgentToolExecutor::FImpl
             FJson Changed = FJson::object();
             for (const std::string& Field : Seen)
                 Changed[Field] = Values.at(Field);
-            return Success(Call, {{"asset_path", Path.ToString()},
+            return VerifiedSuccess(Call, {{"asset_path", Path.ToString()},
                 {"operation_id", Call.Id}, {"before", MaterialToJson(Before)},
                 {"after", MaterialToJson(ReadBack)},
                 {"changed_fields", std::move(Changed)},
@@ -4191,7 +4461,143 @@ struct FEditorAgentToolExecutor::FImpl
             if (!bCreated) return Failure(Call, "Could not create every room part");
             return Success(Call, {{"actors", std::move(Paths)}, {"parts", 5}});
         };
+        const FAgentToolHandler RoomHandler = CreateRoom.Handler;
         bInitialized = RegisterTool(std::move(CreateRoom)) && bInitialized;
+
+        FAgentToolDefinition PreviewRoomPlan;
+        PreviewRoomPlan.Name = "editor.scene.preview_room_plan";
+        PreviewRoomPlan.Description =
+            "Preview a collision-enabled room shell in the active World without editing it; returns support diagnosis, expected actors, World fingerprint, and a PlanHash for approval";
+        PreviewRoomPlan.Schema.Fields = {
+            {"name", EAgentToolValueType::String, true, {}, {}, 48},
+            {"center_x", EAgentToolValueType::Number, true, -100000.0, 100000.0},
+            {"center_y", EAgentToolValueType::Number, true, -100000.0, 100000.0},
+            {"width", EAgentToolValueType::Number, true, 200.0, 100000.0},
+            {"depth", EAgentToolValueType::Number, true, 200.0, 100000.0},
+            {"wall_height", EAgentToolValueType::Number, true, 100.0, 10000.0}
+        };
+        PreviewRoomPlan.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            std::string Error;
+            auto Preview = BuildRoomPlan(FJson::parse(Call.ArgumentsJson), Error);
+            if (!Preview) return Failure(Call, Error);
+            LastPreviewedRoomPlan = *Preview;
+            FJson DryRun = FJson::parse(Preview->DryRun.ReportJson);
+            DryRun["room_parameters"] = Preview->RoomArguments;
+            DryRun["expected_actor_names"] = Preview->ExpectedActorNames;
+            DryRun["world_fingerprint"] = Preview->WorldFingerprint;
+            return Success(Call, {{"spec", FJson::parse(
+                    SerializeAgentGameSpec(Preview->Spec))},
+                {"support_diagnosis", FJson::parse(
+                    SerializeAgentSupportDiagnosis(Preview->Diagnosis))},
+                {"dry_run", std::move(DryRun)},
+                {"plan_hash", Preview->DryRun.PlanHash},
+                {"continuation", RoomPlanContinuation(true)}});
+        };
+        bInitialized = RegisterTool(std::move(PreviewRoomPlan)) && bInitialized;
+
+        FAgentToolDefinition DescribeRoomPlan;
+        DescribeRoomPlan.Name = "editor.scene.describe_room_plan";
+        DescribeRoomPlan.Description =
+            "Read the latest room plan preview and check whether its PlanHash still matches the active World; use this when a follow-up asks to apply a preview whose details were omitted from chat history";
+        DescribeRoomPlan.Handler = [this](
+            const FAgentToolCall& Call, const FCancellationToken*)
+        {
+            if (!LastPreviewedRoomPlan)
+                return Success(Call, {{"current", false},
+                    {"plan_hash", ""},
+                    {"reason", "No room plan is currently previewed"},
+                    {"continuation", RoomPlanContinuation(false)}});
+            const FRoomPlanPreview& Saved = *LastPreviewedRoomPlan;
+            std::string Error;
+            auto Current = BuildRoomPlan(Saved.RoomArguments, Error);
+            const bool bCurrent = Current
+                && Current->DryRun.PlanHash == Saved.DryRun.PlanHash;
+            return Success(Call, {{"room_parameters", Saved.RoomArguments},
+                {"expected_actor_names", Saved.ExpectedActorNames},
+                {"plan_hash", Saved.DryRun.PlanHash},
+                {"world_fingerprint", Saved.WorldFingerprint},
+                {"current", bCurrent},
+                {"continuation", RoomPlanContinuation(bCurrent)},
+                {"reason", bCurrent ? "" : Error.empty()
+                    ? "Room plan or active World changed after preview" : Error}});
+        };
+        bInitialized = RegisterTool(std::move(DescribeRoomPlan)) && bInitialized;
+
+        FAgentToolDefinition ApplyRoomPlan;
+        ApplyRoomPlan.Name = "editor.scene.apply_room_plan";
+        ApplyRoomPlan.Description =
+            "Apply only the latest previewed room plan after approval; rejects a changed PlanHash or World and creates all five parts in one Undo transaction";
+        ApplyRoomPlan.Permission = EAgentToolPermission::ModifyWorld;
+        ApplyRoomPlan.Schema.Fields = {
+            {"name", EAgentToolValueType::String, true, {}, {}, 48},
+            {"center_x", EAgentToolValueType::Number, true, -100000.0, 100000.0},
+            {"center_y", EAgentToolValueType::Number, true, -100000.0, 100000.0},
+            {"width", EAgentToolValueType::Number, true, 200.0, 100000.0},
+            {"depth", EAgentToolValueType::Number, true, 200.0, 100000.0},
+            {"wall_height", EAgentToolValueType::Number, true, 100.0, 10000.0},
+            {"plan_hash", EAgentToolValueType::String, true, {}, {}, 128}
+        };
+        ApplyRoomPlan.Handler = [this, RoomHandler](
+            const FAgentToolCall& Call, const FCancellationToken* Token)
+        {
+            FJson Arguments = FJson::parse(Call.ArgumentsJson);
+            const std::string ApprovedHash = Arguments.at("plan_hash").get<std::string>();
+            Arguments.erase("plan_hash");
+            if (!LastPreviewedRoomPlan
+                || LastPreviewedRoomPlan->DryRun.PlanHash != ApprovedHash)
+                return Failure(Call, "Room plan was not previewed or its approval hash changed");
+            std::string Error;
+            auto Preview = BuildRoomPlan(Arguments, Error);
+            if (!Preview) return Failure(Call, Error);
+            if (Preview->DryRun.PlanHash != ApprovedHash)
+                return Failure(Call, "Room plan or active World changed after preview");
+            FAgentToolCall InnerCall {Call.Id, "editor.scene.create_room",
+                Arguments.dump()};
+            FAgentToolResult Result = RoomHandler(InnerCall, Token);
+            if (!Result.bSucceeded) return Result;
+            FJson Output = FJson::parse(Result.OutputJson);
+            Output["plan_hash"] = ApprovedHash;
+            Output["world_fingerprint_before"] = Preview->WorldFingerprint;
+            Output["expected_actor_names"] = Preview->ExpectedActorNames;
+            Output["continuation"] = RoomPlanContinuation(false);
+            Result.OutputJson = Output.dump();
+            LastPreviewedRoomPlan.reset();
+            return Result;
+        };
+        ApplyRoomPlan.Verifier = [this](const FAgentToolCall&,
+            const FAgentToolResult& Result, std::string& Error)
+        {
+            const FJson Output = FJson::parse(Result.OutputJson);
+            const FJson& Actors = Output.at("actors");
+            if (!Actors.is_array() || Actors.size() != 5)
+            {
+                Error = "Room plan did not create exactly five parts";
+                return false;
+            }
+            PWorld* World = EngineLoop ? EngineLoop->GetWorld() : nullptr;
+            for (const FJson& Path : Actors)
+            {
+                PObject* Object = World && Path.is_string()
+                    ? FindEditorWorldObjectByPath(World, Path.get<std::string>())
+                    : nullptr;
+                PActor* Actor = Object && Object->IsA(PActor::StaticClass())
+                    ? static_cast<PActor*>(Object) : nullptr;
+                PCubeComponent* Cube = Actor && Actor->GetRootComponent()
+                    && Actor->GetRootComponent()->IsA(PCubeComponent::StaticClass())
+                    ? static_cast<PCubeComponent*>(Actor->GetRootComponent()) : nullptr;
+                if (!Cube || Cube->GetCollisionEnabled()
+                        != ECollisionEnabled::QueryAndPhysics
+                    || Cube->GetPhysicsBodyType() != EPhysicsBodyType::Static)
+                {
+                    Error = "Room part postcondition failed: " + Path.dump();
+                    return false;
+                }
+            }
+            return true;
+        };
+        bInitialized = RegisterTool(std::move(ApplyRoomPlan)) && bInitialized;
 
         FAgentToolDefinition CreateThirdPerson;
         CreateThirdPerson.Name = "editor.gameplay.create_third_person_character";
@@ -4345,7 +4751,7 @@ struct FEditorAgentToolExecutor::FImpl
                 return Failure(Call, "Editor Play service is unavailable");
             const auto Result = HostServices.StartPlay();
             return Result.first
-                ? Success(Call, {{"started", true}, {"message", Result.second}})
+                ? VerifiedSuccess(Call, {{"started", true}, {"message", Result.second}})
                 : Failure(Call, Result.second);
         };
         bInitialized = RegisterTool(std::move(StartPlay)) && bInitialized;
@@ -4362,7 +4768,7 @@ struct FEditorAgentToolExecutor::FImpl
                 return Failure(Call, "Editor Play service is unavailable");
             const auto Result = HostServices.StopPlay();
             return Result.first
-                ? Success(Call, {{"stopped", true}, {"message", Result.second}})
+                ? VerifiedSuccess(Call, {{"stopped", true}, {"message", Result.second}})
                 : Failure(Call, Result.second);
         };
         bInitialized = RegisterTool(std::move(StopPlay)) && bInitialized;
@@ -4378,11 +4784,13 @@ struct FEditorAgentToolExecutor::FImpl
             if (!HostServices.WorldDocument)
                 return Failure(Call, "Editor World document service is unavailable");
             const FEditorDocumentResult Result = HostServices.WorldDocument->Save();
-            return Result.bSucceeded
-                ? Success(Call, {{"saved", true},
-                    {"asset_path", HostServices.WorldDocument->GetAssetPath().ToString()},
-                    {"file", HostServices.WorldDocument->GetFilePath().string()}})
-                : Failure(Call, Result.Message);
+            if (!Result.bSucceeded) return Failure(Call, Result.Message);
+            const std::filesystem::path File = HostServices.WorldDocument->GetFilePath();
+            if (!std::filesystem::is_regular_file(File))
+                return Failure(Call, "Saved World file is missing after save");
+            return VerifiedSuccess(Call, {{"saved", true},
+                {"asset_path", HostServices.WorldDocument->GetAssetPath().ToString()},
+                {"file", File.string()}});
         };
         bInitialized = RegisterTool(std::move(SaveWorld)) && bInitialized;
 
@@ -4550,7 +4958,7 @@ struct FEditorAgentToolExecutor::FImpl
             const auto Result = HostServices.StartPackage(OutputRoot, PackageName,
                 Arguments.at("smoke_test").get<bool>());
             return Result.first
-                ? Success(Call, {{"state", "running"}, {"started", true},
+                ? VerifiedSuccess(Call, {{"state", "running"}, {"started", true},
                     {"message", Result.second},
                     {"output", (OutputRoot / PackageName).string()}})
                 : Failure(Call, Result.second);
@@ -4570,6 +4978,7 @@ struct FEditorAgentToolExecutor::FImpl
     FProjectProcessToolProvider ProjectProcessTools;
     FAgentToolRegistry Registry;
     mutable std::unordered_map<std::string, FCachedTypedSummary> TypedSummaryCache;
+    std::optional<FRoomPlanPreview> LastPreviewedRoomPlan;
     std::optional<FPendingChangeSet> PendingChangeSet;
     std::string LastChangeSetError;
     bool bInitialized = true;
@@ -4634,6 +5043,17 @@ std::vector<std::string> FEditorAgentToolExecutor::GetRevisionWriteSet(
 {
     return Impl ? Impl->Registry.GetRevisionWriteSet(Call)
         : std::vector<std::string>{"State.Revision"};
+}
+FAgentPendingReadback FEditorAgentToolExecutor::BuildPendingReadback(
+    const FAgentToolCall& Call, const FAgentToolResult& Result) const
+{
+    return Pico::BuildPendingReadback(Call, Result);
+}
+bool FEditorAgentToolExecutor::ReadbackContainsTarget(
+    const FAgentToolCall& ReadCall, const FAgentToolResult& ReadResult,
+    const FAgentPendingReadback& Pending, std::string_view Target) const
+{
+    return Pico::ReadbackContainsTarget(ReadCall, ReadResult, Pending, Target);
 }
 void FEditorAgentToolExecutor::PrepareApproval(const FAgentToolCall& Call)
 {

@@ -76,6 +76,11 @@ public:
         const FAgentToolCall& Call) const;
     virtual std::vector<std::string> GetRevisionWriteSet(
         const FAgentToolCall& Call) const;
+    virtual FAgentPendingReadback BuildPendingReadback(
+        const FAgentToolCall& Call, const FAgentToolResult& Result) const;
+    virtual bool ReadbackContainsTarget(
+        const FAgentToolCall& ReadCall, const FAgentToolResult& ReadResult,
+        const FAgentPendingReadback& Pending, std::string_view Target) const;
     virtual void PrepareApproval(const FAgentToolCall& Call);
     virtual bool PrepareApprovalDecision(
         const FAgentToolCall& Call, bool bApproved);

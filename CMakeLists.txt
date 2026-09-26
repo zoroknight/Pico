@@ -1088,7 +1088,8 @@ if(PICO_BUILD_INSPECTOR)
         target_compile_options(PicoEditorAssetTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 
-    target_include_directories(PicoEditorTests PRIVATE Tests/Common)
+    target_include_directories(PicoEditorTests PRIVATE Tests/Common
+        ThirdParty/NlohmannJson/single_include)
 
     target_link_libraries(PicoEditorTests
         PRIVATE
@@ -1129,7 +1130,8 @@ add_executable(PicoAgentTests
     Tests/Agent/Private/Main.cpp
 )
 
-target_include_directories(PicoAgentTests PRIVATE Tests/Common)
+target_include_directories(PicoAgentTests PRIVATE Tests/Common
+    ThirdParty/NlohmannJson/single_include)
 target_link_libraries(PicoAgentTests PRIVATE PicoAgentTestSupport)
 set_target_properties(PicoAgentTests PROPERTIES FOLDER "Tests/Developer")
 

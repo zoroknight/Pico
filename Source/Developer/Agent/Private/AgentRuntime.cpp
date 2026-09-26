@@ -112,6 +112,7 @@ FJson BuildRequestProfile(const FAgentProviderRequest& Request,
         {"history_replay_us", HistoryReplayMicroseconds},
         {"knowledge_refresh_us", KnowledgeRefreshMicroseconds} };
 }
+
 }
 
 FAgentRuntime::FAgentRuntime(
@@ -713,15 +714,38 @@ FAgentRunResult FAgentRuntime::Run(
                 {
                     if (!bReadOnly)
                     {
-                        TaskState.bMutationReadbackPending = true;
-                        TaskState.PendingMutationTool = Call.Name;
+                        if (!Result.bPostconditionVerified)
+                            TaskState.PendingReadbacks.push_back(
+                                ToolExecutor.BuildPendingReadback(Call, Result));
                     }
                     else if (!Existing.has_value() && !bSemanticCacheHit
                         && TaskState.bMutationReadbackPending)
                     {
-                        TaskState.bMutationReadbackPending = false;
-                        TaskState.PendingMutationTool.clear();
+                        for (FAgentPendingReadback& Pending : TaskState.PendingReadbacks)
+                        {
+                            Pending.Targets.erase(std::remove_if(
+                                Pending.Targets.begin(), Pending.Targets.end(),
+                                [this, &Call, &Result, &Pending](const std::string& Target)
+                                {
+                                    return ToolExecutor.ReadbackContainsTarget(
+                                        Call, Result, Pending, Target);
+                                }), Pending.Targets.end());
+                        }
+                        TaskState.PendingReadbacks.erase(std::remove_if(
+                            TaskState.PendingReadbacks.begin(),
+                            TaskState.PendingReadbacks.end(),
+                            [](const FAgentPendingReadback& Pending)
+                            {
+                                return Pending.bContractAvailable
+                                    && Pending.Targets.empty();
+                            }), TaskState.PendingReadbacks.end());
                     }
+                    TaskState.bMutationReadbackPending =
+                        !TaskState.PendingReadbacks.empty();
+                    TaskState.PendingMutationTool =
+                        TaskState.bMutationReadbackPending
+                            ? TaskState.PendingReadbacks.back().ToolName
+                            : std::string {};
                 }
                 if (Context.Features.bObservationMapping)
                 {
@@ -1037,7 +1061,7 @@ std::string FAgentRuntime::BuildProgressLedgerJson() const
         Criteria.push_back({{"criterion", Binding.Criterion},
             {"satisfied", Binding.bSatisfied},
             {"evidence_refs", Binding.EvidenceRefs}});
-    return FJson {{"goal", TaskState.Goal},
+    FJson Ledger = {{"goal", TaskState.Goal},
         {"revisions", Revisions},
         {"revision_epoch", RevisionEpoch},
         {"recent_failure", Session.GetMostRecentError()},
@@ -1048,6 +1072,15 @@ std::string FAgentRuntime::BuildProgressLedgerJson() const
         {"success_criteria", std::move(Criteria)},
         {"mutation_readback_pending", TaskState.bMutationReadbackPending},
         {"pending_mutation_tool", TaskState.PendingMutationTool},
+        {"pending_readback_targets", [&]()
+            {
+                FJson Targets = FJson::array();
+                for (const FAgentPendingReadback& Pending : TaskState.PendingReadbacks)
+                    Targets.push_back({{"tool", Pending.ToolName},
+                        {"targets", Pending.Targets},
+                        {"expect_absent", Pending.bExpectAbsent}});
+                return Targets;
+            }()},
         {"budget", {{"steps_used", Counters.Steps},
             {"steps_remaining", Counters.Steps < Budget.MaxSteps
                 ? Budget.MaxSteps - Counters.Steps : 0},
@@ -1075,7 +1108,21 @@ std::string FAgentRuntime::BuildProgressLedgerJson() const
             "with a fresh read-only tool before finishing. Skills are recommendations, "
             "not capability restrictions; compose other available tools when needed. "
             "If a required capability is truly absent, state the exact gap and provide "
-            "concrete executable alternatives instead of a generic refusal."}}.dump();
+            "concrete executable alternatives instead of a generic refusal."}};
+    if (Context.Features.bTaskBoundaryProjection)
+    {
+        FJson Hints = FJson::parse(
+            BuildAgentContinuationHintsJson(Session.GetEvents()));
+        if (!Hints.empty())
+        {
+            Ledger["continuation_hints"] = std::move(Hints);
+            Ledger["continuation_rule"] =
+                "Use only when the latest user request continues that operation. "
+                "These are leads, not current validity evidence. Call the resolver "
+                "tool and check the live target before applying.";
+        }
+    }
+    return Ledger.dump();
 }
 
 std::string FAgentRuntime::BuildTaskStateJson() const

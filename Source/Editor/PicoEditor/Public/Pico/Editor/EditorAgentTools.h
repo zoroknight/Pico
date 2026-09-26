@@ -68,6 +68,11 @@ public:
         const FAgentToolCall& Call) const override;
     std::vector<std::string> GetRevisionWriteSet(
         const FAgentToolCall& Call) const override;
+    FAgentPendingReadback BuildPendingReadback(
+        const FAgentToolCall& Call, const FAgentToolResult& Result) const override;
+    bool ReadbackContainsTarget(
+        const FAgentToolCall& ReadCall, const FAgentToolResult& ReadResult,
+        const FAgentPendingReadback& Pending, std::string_view Target) const override;
     void PrepareApproval(const FAgentToolCall& Call) override;
     bool PrepareApprovalDecision(
         const FAgentToolCall& Call, bool bApproved) override;

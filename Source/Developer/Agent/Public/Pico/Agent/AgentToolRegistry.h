@@ -126,6 +126,7 @@ struct FAgentToolDefinition
     FAgentToolPreflight Preflight;
     FAgentToolHandler Handler;
     FAgentToolVerifier Verifier;
+    bool bVerifierChecksPostcondition = false;
     std::string CapabilityProvider;
     std::vector<std::string> RevisionReadSet;
     std::vector<std::string> RevisionWriteSet;

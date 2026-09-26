@@ -278,6 +278,7 @@ std::string SerializeAgentToolResult(const FAgentToolResult& Input)
         {"diagnostics", std::move(Diagnostics)},
         {"state_changes", Result.StateChanges},
         {"revision_changes", std::move(Revisions)},
+        {"postcondition_verified", Result.bPostconditionVerified},
         {"recovery_hint", Result.RecoveryHint}, {"reused", Result.bReused}}.dump();
 }
 
@@ -306,6 +307,7 @@ bool DeserializeAgentToolResult(
         OutResult.FactsJson = Root.value("facts", FJson::object()).dump();
         OutResult.OutputJson = OutResult.FactsJson;
         OutResult.bReused = Root.value("reused", false);
+        OutResult.bPostconditionVerified = Root.value("postcondition_verified", false);
         OutResult.RecoveryHint = Root.value("recovery_hint", "");
         OutResult.StateChanges = Root.value(
             "state_changes", std::vector<std::string> {});
