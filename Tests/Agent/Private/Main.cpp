@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <initializer_list>
 #include <memory>
 #include <sstream>
@@ -1255,13 +1256,13 @@ void TestReActTaskStateAndContextAssembler(FTestRunner& Runner)
         Final("Cow_1 inspected")};
     Pico::FAgentRuntimeContext FirstLiveContext;
     FirstLiveContext.CurrentEditorStateJson =
-        R"({"capture_scope":"send_start","world":{"path":"StarterWorld","revision":null},"selection":{"primary":"StarterWorld.PersistentLevel.PhysicsCrate","paths":["StarterWorld.PersistentLevel.PhysicsCrate"],"revision":5}})";
+        R"({"capture_scope":"send_start","world":{"path":"StarterWorld","revision":null,"content_fingerprint":"world-before"},"selection":{"primary":"StarterWorld.PersistentLevel.PhysicsCrate","paths":["StarterWorld.PersistentLevel.PhysicsCrate"],"revision":5}})";
     Pico::FAgentRuntime FirstLiveRuntime(*LiveSession, LiveProvider,
         Executor, {}, FirstLiveContext);
     const auto FirstLiveResult = FirstLiveRuntime.Run("Describe selection");
     Pico::FAgentRuntimeContext SecondLiveContext;
     SecondLiveContext.CurrentEditorStateJson =
-        R"({"capture_scope":"send_start","world":{"path":"StarterWorld","revision":null},"selection":{"primary":"StarterWorld.PersistentLevel.Cow_1","paths":["StarterWorld.PersistentLevel.Cow_1"],"revision":6}})";
+        R"({"capture_scope":"send_start","world":{"path":"StarterWorld","revision":null,"content_fingerprint":"world-after"},"selection":{"primary":"StarterWorld.PersistentLevel.Cow_1","paths":["StarterWorld.PersistentLevel.Cow_1"],"revision":6}})";
     Pico::FAgentRuntime SecondLiveRuntime(*LiveSession, LiveProvider,
         Executor, {}, SecondLiveContext);
     const auto SecondLiveResult = SecondLiveRuntime.Run("Describe current selection");
@@ -1277,6 +1278,32 @@ void TestReActTaskStateAndContextAssembler(FTestRunner& Runner)
             && LiveProvider.Requests[1].TaskStateJson.find(
                 "PhysicsCrate") == std::string::npos,
         "Each turn receives its own send-time Selection snapshot, not the previous one");
+    std::vector<nlohmann::json> LiveProfiles;
+    for (const Pico::FAgentEvent& Event : LiveSession->GetEvents())
+    {
+        if (Event.Type != Pico::EAgentEventType::TraceSpan
+            || Event.SpanName != "Model.Generate") continue;
+        LiveProfiles.push_back(nlohmann::json::parse(Event.PayloadJson)
+            .at("request_profile"));
+    }
+    Runner.Expect(LiveProfiles.size() == 2
+            && LiveProfiles[0]["agent_step"] == 1
+            && LiveProfiles[1]["agent_step"] == 1
+            && LiveProfiles[0]["source_event_first_sequence"] == 1
+            && LiveProfiles[0]["editor_snapshot"]["selection_revision"] == 5
+            && LiveProfiles[1]["editor_snapshot"]["selection_revision"] == 6
+            && LiveProfiles[0]["editor_snapshot"]["world_content_fingerprint"]
+                == "world-before"
+            && LiveProfiles[1]["editor_snapshot"]["world_content_fingerprint"]
+                == "world-after"
+            && LiveProfiles[0]["replay_contract"]["external_snapshot_persisted"]
+                == false
+            && LiveProfiles[0]["editor_snapshot"]["fingerprint"]
+                != LiveProfiles[1]["editor_snapshot"]["fingerprint"]
+            && LiveProfiles[0]["source_event_sequence"].get<std::uint64_t>()
+                < LiveProfiles[1]["source_event_sequence"].get<std::uint64_t>()
+            && LiveProfiles[1].dump().find("Cow_1") == std::string::npos,
+        "Model request profiles attribute each send-time editor snapshot without storing raw paths");
 
     auto LegacySession = Pico::FAgentSession::OpenOrCreate(
         "react-r1-legacy", MakeLogPath("react-r1-legacy"));
@@ -1401,7 +1428,11 @@ void TestContinuationHints(FTestRunner& Runner)
             && Provider.Requests.size() == 1
             && Ledger.at("continuation_hints") == Open
             && Provider.Requests.front().Messages.front().Content.find(
-                "too_large_reinspect_source") != std::string::npos
+                "plan_hash_requires_live_lookup") != std::string::npos
+            && Provider.Requests.front().Messages.front().Content.find(
+                "editor.scene.describe_room_plan") != std::string::npos
+            && Provider.Requests.front().Messages.front().Content.find(
+                "old-secret-hash") == std::string::npos
             && Ledger.dump().find("old-secret-hash") == std::string::npos,
         "Compact context preserves a resolver hint when old plan facts are omitted");
 }
@@ -1485,6 +1516,25 @@ void TestTaskBoundaryProjection(FTestRunner& Runner)
             && PureChatResult.Metrics.ProjectedMessages == 0,
         "Projection preserves old conversation when no verified tool evidence exists");
 
+    Pico::FAgentContextAssemblyInput SmallPlan;
+    SmallPlan.bTaskBoundaryProjection = true;
+    SmallPlan.Messages = {
+        {Pico::EAgentRole::User, "Preview room"},
+        {Pico::EAgentRole::Assistant, {}, {},
+            {{"old-plan", "editor.scene.preview_room_plan", "{}"}}},
+        {Pico::EAgentRole::Tool,
+            R"({"status":"Succeeded","facts":{"plan":{"PlanHash":"stale-small-hash"}}})",
+            "old-plan"},
+        {Pico::EAgentRole::User, "Continue the room task"}};
+    const auto ProjectedPlan = Pico::FAgentContextAssembler::Assemble(SmallPlan);
+    Runner.Expect(ProjectedPlan.Messages.size() == 2
+            && ProjectedPlan.Messages.front().Content.find("stale-small-hash")
+                == std::string::npos
+            && ProjectedPlan.Messages.front().Content.find(
+                "editor.scene.describe_room_plan") != std::string::npos
+            && ProjectedPlan.Messages.back().Content == "Continue the room task",
+        "Small historical PlanHash is omitted and replaced with a live resolver hint");
+
     Input.MaxMessages = 2;
     const auto OverBudget = Pico::FAgentContextAssembler::Assemble(Input);
     Runner.Expect(OverBudget.Metrics.ProjectedMessages == 0,
@@ -1533,6 +1583,321 @@ void TestTaskBoundaryProjection(FTestRunner& Runner)
             && TrimmedObservation.ObservationContextJson.find(
                 "\"facts\":{\"actor\":\"Cow_1\"}") != std::string::npos,
         "Ledger retains observation facts when the corresponding Tool Result is trimmed");
+}
+
+void TestPressureToolResultProjection(FTestRunner& Runner)
+{
+    Pico::FAgentContextAssemblyInput Input;
+    Input.bPressureToolResultProjection = true;
+    Input.MaxBytes = 30000;
+    Input.Messages.push_back({Pico::EAgentRole::User,
+        "Inspect five objects and summarize the current evidence"});
+    for (int Index = 0; Index < 5; ++Index)
+    {
+        const std::string CallId = "read-" + std::to_string(Index);
+        Input.Messages.push_back({Pico::EAgentRole::Assistant, {}, {},
+            {{CallId, Index == 2 ? "editor.actor.modify"
+                : "editor.object.describe", "{}"}}});
+        Pico::FAgentToolResult Result;
+        Result.CallId = CallId;
+        Result.bSucceeded = true;
+        Result.FactsJson = nlohmann::json {
+            {"name", CallId}, {"description", std::string(5400, 'x')}}.dump();
+        if (Index == 2) Result.StateChanges.push_back("World changed");
+        Input.Messages.push_back({Pico::EAgentRole::Tool,
+            Pico::BuildAgentToolResultModelJson(Result), CallId});
+        if (Index != 2) Input.ReadOnlyToolCallIds.push_back(CallId);
+    }
+    const auto Original = Input.Messages;
+    Input.ObservationContextJson = nlohmann::json {
+        {"latest_observations", nlohmann::json::array({
+            {{"call_id", "read-0"}, {"tool", "editor.object.describe"},
+                {"facts", nlohmann::json::parse(Original[2].Content)["facts"]}}})}}.dump();
+    const auto Projected = Pico::FAgentContextAssembler::Assemble(Input);
+    const auto First = nlohmann::json::parse(Projected.Messages[2].Content);
+    Runner.Expect(Projected.Metrics.ProjectedToolResults == 2
+            && Projected.Metrics.ProjectedToolResultBytes > 10000
+            && First["context_projection"] == "older_read_result"
+            && First["facts"]["source_call_id"] == "read-0"
+            && Projected.Messages[2].ToolCallId == "read-0"
+            && Projected.Messages[6].Content == Original[6].Content
+            && Projected.Messages[8].Content == Original[8].Content
+            && Projected.Messages[10].Content == Original[10].Content
+            && Projected.ObservationContextJson.find("description")
+                == std::string::npos
+            && Original[2].Content.find(std::string(5400, 'x'))
+                != std::string::npos,
+        "Pressure projection keeps tool pairs and latest evidence, omits only older reads from the send view");
+
+    const auto SessionPath = MakeLogPath("pressure-projection-source");
+    auto Session = Pico::FAgentSession::OpenOrCreate(
+        "pressure-projection-source", SessionPath);
+    Pico::FAgentEvent SourceCall;
+    SourceCall.Type = Pico::EAgentEventType::ToolCall;
+    SourceCall.CallId = "read-0";
+    SourceCall.ToolName = "editor.object.describe";
+    Pico::FAgentEvent SourceResult;
+    SourceResult.Type = Pico::EAgentEventType::ToolResult;
+    SourceResult.CallId = "read-0";
+    SourceResult.ToolName = "editor.object.describe";
+    SourceResult.bSucceeded = true;
+    SourceResult.StructuredResultJson = Original[2].Content;
+    Runner.Expect(Session && Session->Append(std::move(SourceCall))
+            && Session->Append(std::move(SourceResult)),
+        "Full tool-result source is persisted independently of its send projection");
+    auto RestoredSession = Pico::FAgentSession::OpenOrCreate(
+        "pressure-projection-source", SessionPath);
+    const auto Restored = RestoredSession
+        ? RestoredSession->FindToolResult("read-0") : std::nullopt;
+    Runner.Expect(Restored && Restored->FactsJson.find(
+                std::string(5400, 'x')) != std::string::npos
+            && First["facts"]["source_call_id"] == Restored->CallId,
+        "Projected Call ID resolves to complete evidence in the durable Session");
+
+    auto ReusedCallId = Input;
+    ReusedCallId.MaxBytes = 36000;
+    ReusedCallId.Messages.insert(ReusedCallId.Messages.begin(), {
+        {Pico::EAgentRole::User, "Previous task"},
+        {Pico::EAgentRole::Assistant, {}, {},
+            {{"read-0", "editor.object.describe", "{}"}}},
+        {Pico::EAgentRole::Tool, Original[2].Content, "read-0"}});
+    const auto CrossTurn = Pico::FAgentContextAssembler::Assemble(ReusedCallId);
+    Runner.Expect(CrossTurn.Messages.size() == ReusedCallId.Messages.size()
+            && CrossTurn.Messages[2].Content == Original[2].Content
+            && CrossTurn.Metrics.ProjectedToolResults > 0,
+        "Reused Call IDs in older tasks do not project cross-turn evidence");
+
+    Input.MaxBytes = 128 * 1024;
+    const auto Unpressured = Pico::FAgentContextAssembler::Assemble(Input);
+    Runner.Expect(Unpressured.Metrics.ProjectedToolResults == 0
+            && Unpressured.Messages[2].Content == Original[2].Content,
+        "Tool results remain exact when the request is below pressure threshold");
+
+    Input.MaxBytes = 30000;
+    Input.TaskStateJson =
+        R"({"mutation_readback_pending":true,"pending_readbacks":[{"tool":"editor.object.describe"}]})";
+    const auto ReadbackPending = Pico::FAgentContextAssembler::Assemble(Input);
+    Runner.Expect(ReadbackPending.Metrics.ProjectedToolResults == 0,
+        "Pending mutation readback suppresses tool-result projection");
+    Input.TaskStateJson = "{}";
+
+    Input.Messages.push_back({Pico::EAgentRole::Assistant, {}, {},
+        {{"pending", "editor.object.describe", "{}"}}});
+    const auto Pending = Pico::FAgentContextAssembler::Assemble(Input);
+    Runner.Expect(Pending.Metrics.ProjectedToolResults == 0,
+        "Unmatched ToolCalls suppress tool-result projection");
+
+    Input.Messages.pop_back();
+    Input.Messages[2].Content = R"({"call_id":"read-0","status":"Failed","facts":{"error":"failed"}})";
+    const auto Failed = Pico::FAgentContextAssembler::Assemble(Input);
+    Runner.Expect(Failed.Messages[2].Content == Input.Messages[2].Content,
+        "Failed ToolResults are never projected");
+}
+
+void TestRuntimePressureProjection(FTestRunner& Runner)
+{
+    class FLargeReadExecutor final : public Pico::IAgentToolExecutor
+    {
+    public:
+        bool IsReadOnly(const Pico::FAgentToolCall&) const override
+        {
+            return true;
+        }
+        Pico::FAgentToolResult Execute(const Pico::FAgentToolCall& Call,
+            const Pico::FCancellationToken*) override
+        {
+            return {Call.Id, true, nlohmann::json {
+                {"call", Call.Id}, {"description", std::string(5400, 'x')}}.dump()};
+        }
+    } Executor;
+    auto Session = Pico::FAgentSession::OpenOrCreate(
+        "runtime-pressure-projection", MakeLogPath("runtime-pressure-projection"));
+    FRecordingProvider Provider;
+    Pico::FAgentProviderResponse Reads;
+    for (int Index = 0; Index < 5; ++Index)
+        Reads.ToolCalls.push_back({"runtime-read-" + std::to_string(Index),
+            "editor.object.describe", nlohmann::json {
+                {"index", Index}}.dump()});
+    Provider.Responses = {Reads, Final("Five reads inspected")};
+    Pico::FAgentBudget Budget;
+    Budget.MaxContextBytesPerRequest = 30000;
+    Pico::FAgentRuntimeContext Context;
+    Context.Features.bTaskBoundaryProjection = true;
+    Pico::FAgentRuntime Runtime(*Session, Provider, Executor, Budget, Context);
+    const auto Result = Runtime.Run("Inspect five distinct objects");
+    bool bTraceProjected = false;
+    for (const Pico::FAgentEvent& Event : Session->GetEvents())
+        if (Event.Type == Pico::EAgentEventType::TraceSpan
+            && Event.SpanName == "Model.Generate")
+        {
+            const auto Profile = nlohmann::json::parse(Event.PayloadJson)
+                .at("request_profile");
+            bTraceProjected |= Profile["tool_result_projection"]["results"]
+                .get<std::uint64_t>() > 0;
+        }
+    const auto FullResult = Session->FindToolResult("runtime-read-0");
+    auto OffSession = Pico::FAgentSession::OpenOrCreate(
+        "runtime-pressure-projection-off", MakeLogPath("runtime-pressure-projection-off"));
+    FRecordingProvider OffProvider;
+    OffProvider.Responses = {Reads, Final("Five reads inspected")};
+    Pico::FAgentRuntimeContext OffContext = Context;
+    OffContext.Features.bPressureToolResultProjection = false;
+    Pico::FAgentRuntime OffRuntime(*OffSession, OffProvider, Executor, Budget, OffContext);
+    const auto OffResult = OffRuntime.Run("Inspect five distinct objects");
+    bool bOffTraceDisabled = false;
+    for (const Pico::FAgentEvent& Event : OffSession->GetEvents())
+        if (Event.Type == Pico::EAgentEventType::TraceSpan
+            && Event.SpanName == "Model.Generate")
+        {
+            const auto Profile = nlohmann::json::parse(Event.PayloadJson)
+                .at("request_profile");
+            bOffTraceDisabled = !Profile["tool_result_projection"]["enabled"]
+                .get<bool>()
+                && Profile["tool_result_projection"]["results"]
+                    .get<std::uint64_t>() == 0;
+        }
+    Runner.Expect(Result.Status == Pico::EAgentStatus::Completed
+            && Provider.Requests.size() == 2
+            && Result.ContextMetrics.ProjectedToolResults > 0
+            && Provider.Requests[1].Messages[2].Content.find(
+                "older_read_result") != std::string::npos
+            && bTraceProjected && FullResult
+            && FullResult->FactsJson.find(std::string(5400, 'x'))
+                != std::string::npos,
+        "Runtime sends pressure projections while retaining full Session evidence and trace counters");
+    Runner.Expect(OffResult.Status == Pico::EAgentStatus::Completed
+            && OffProvider.Requests.size() == 2
+            && OffResult.ContextMetrics.ProjectedToolResults == 0
+            && bOffTraceDisabled
+            && OffProvider.Requests[1].Messages[2].Content.find(
+                std::string(5400, 'x')) != std::string::npos
+            && Provider.Requests[1].Messages[2].Content.size()
+                < OffProvider.Requests[1].Messages[2].Content.size(),
+        "P1-only switch preserves CE1 while comparing projected and full read results");
+}
+
+void TestP3ScriptedContinuationTrajectories(FTestRunner& Runner)
+{
+    class FSelectionExecutor final : public Pico::IAgentToolExecutor
+    {
+    public:
+        bool IsReadOnly(const Pico::FAgentToolCall&) const override { return true; }
+        Pico::FAgentToolResult Execute(const Pico::FAgentToolCall& Call,
+            const Pico::FCancellationToken*) override
+        {
+            ++Reads;
+            return {Call.Id, true, nlohmann::json {
+                {"primary", Primary}, {"revision", Revision}}.dump()};
+        }
+        std::string Primary = "PhysicsCrate";
+        int Revision = 1;
+        int Reads = 0;
+    } Selection;
+
+    const auto Path = MakeLogPath("p3-selection-restart-compact");
+    auto Session = Pico::FAgentSession::OpenOrCreate("p3-selection-restart-compact", Path);
+    FRecordingProvider FirstProvider;
+    FirstProvider.Responses = {
+        ToolCalls({{"p3-selection-before", "editor.selection.describe", "{}"}}),
+        Final("PhysicsCrate is selected")};
+    Pico::FAgentRuntimeContext FirstContext;
+    FirstContext.Features.bTaskBoundaryProjection = true;
+    FirstContext.CurrentEditorStateJson =
+        R"({"capture_scope":"send_start","selection":{"primary":"PhysicsCrate","revision":1}})";
+    Pico::FAgentRuntime FirstRuntime(*Session, FirstProvider, Selection, {}, FirstContext);
+    const auto First = FirstRuntime.Run("Describe the current selection");
+    Session.reset();
+
+    Selection.Primary = "Cow_1";
+    Selection.Revision = 2;
+    auto Restored = Pico::FAgentSession::OpenOrCreate(
+        "p3-selection-restart-compact", Path);
+    FRecordingProvider SecondProvider;
+    SecondProvider.Responses = {
+        ToolCalls({{"p3-selection-after", "editor.selection.describe", "{}"}}),
+        Final("Cow_1 is now selected")};
+    Pico::FAgentRuntimeContext SecondContext;
+    SecondContext.Features.bTaskBoundaryProjection = true;
+    SecondContext.CurrentEditorStateJson =
+        R"({"capture_scope":"send_start","selection":{"primary":"Cow_1","revision":2}})";
+    Pico::FAgentRuntime SecondRuntime(
+        *Restored, SecondProvider, Selection, {}, SecondContext);
+    const auto Second = SecondRuntime.Run("Describe the current selection again");
+    const auto OldResult = Restored->FindToolResult("p3-selection-before");
+    const auto NewResult = Restored->FindToolResult("p3-selection-after");
+    const auto& LastRequest = SecondProvider.Requests.back();
+    Runner.Expect(First.Status == Pico::EAgentStatus::Completed
+            && Second.Status == Pico::EAgentStatus::Completed
+            && Selection.Reads == 2
+            && OldResult && NewResult
+            && OldResult->FactsJson.find("PhysicsCrate") != std::string::npos
+            && NewResult->FactsJson.find("Cow_1") != std::string::npos
+            && LastRequest.Messages.back().Content.find("Cow_1")
+                != std::string::npos
+            && LastRequest.TaskStateJson.find("\"revision\":2")
+                != std::string::npos
+            && Second.ContextMetrics.ProjectedMessages > 0
+            && LastRequest.Messages.front().Role == Pico::EAgentRole::System,
+        "P3 scripted restart keeps prior evidence but re-reads changed Selection under Compact");
+
+    class FApprovalExecutor final : public Pico::IAgentToolExecutor
+    {
+    public:
+        bool RequiresApproval(const Pico::FAgentToolCall&) const override
+        {
+            return true;
+        }
+        void PrepareApproval(const Pico::FAgentToolCall&) override
+        {
+            ++ApprovalRequests;
+        }
+        Pico::FAgentToolResult Execute(const Pico::FAgentToolCall& Call,
+            const Pico::FCancellationToken*) override
+        {
+            ++Executions;
+            if (!bApproved)
+                return {Call.Id, false, "{}", "Approval denied", false,
+                    Pico::EAgentFailureClass::ApprovalRejected,
+                    Pico::EAgentRecoveryAction::WaitForApproval};
+            ++WorldWrites;
+            return {Call.Id, true, R"({"created":true})"};
+        }
+        bool bApproved = false;
+        int ApprovalRequests = 0;
+        int Executions = 0;
+        int WorldWrites = 0;
+    } Approval;
+    Pico::FAgentBudget Budget;
+    Budget.MaxRepairAttempts = 0;
+    auto DeniedSession = Pico::FAgentSession::OpenOrCreate(
+        "p3-denied", MakeLogPath("p3-denied"));
+    FRecordingProvider DeniedProvider;
+    DeniedProvider.Responses = {ToolCalls({{
+        "p3-denied-room", "editor.scene.apply_room_plan", "{}"}})};
+    Pico::FAgentRuntime DeniedRuntime(
+        *DeniedSession, DeniedProvider, Approval, Budget);
+    const auto Denied = DeniedRuntime.Run("Apply the room plan");
+    Runner.Expect(Denied.Status == Pico::EAgentStatus::Failed
+            && Denied.FailureClass == Pico::EAgentFailureClass::ApprovalRejected
+            && Approval.ApprovalRequests == 1
+            && Approval.WorldWrites == 0,
+        "P3 scripted approval denial has no World write or automatic retry");
+
+    Approval.bApproved = true;
+    auto ApprovedSession = Pico::FAgentSession::OpenOrCreate(
+        "p3-approved", MakeLogPath("p3-approved"));
+    FRecordingProvider ApprovedProvider;
+    ApprovedProvider.Responses = {
+        ToolCalls({{"p3-approved-room", "editor.scene.apply_room_plan", "{}"}}),
+        Final("Room created")};
+    Pico::FAgentRuntime ApprovedRuntime(
+        *ApprovedSession, ApprovedProvider, Approval, Budget);
+    const auto Approved = ApprovedRuntime.Run("Apply the room plan");
+    Runner.Expect(Approved.Status == Pico::EAgentStatus::Completed
+            && Approval.ApprovalRequests == 2
+            && Approval.Executions == 2
+            && Approval.WorldWrites == 1,
+        "P3 scripted approved mutation executes exactly once after a new approval");
 }
 
 void TestReActObservationsEvidenceAndOscillation(FTestRunner& Runner)
@@ -2224,6 +2589,10 @@ void TestOpenAICompatibleProviderProtocolAndRetry(FTestRunner& Runner)
             && Result.Usage.CacheHitTokens == 90
             && Result.Usage.CacheMissTokens == 30,
         "OpenAI-compatible provider retries HTTP 429 and maps API-safe tool names back to Pico names");
+    Runner.Expect(Result.RequestDiagnostics.HttpAttempts == 2
+            && Transport->Bodies.size() == 2
+            && Transport->Bodies[0] == Transport->Bodies[1],
+        "Retry attempts reuse the same serialized provider request");
     Runner.Expect(
         Transport->Bodies.size() == 2
             && Transport->Bodies[0].find("Authorization") == std::string::npos
@@ -2269,6 +2638,18 @@ void TestOpenAICompatibleProviderProtocolAndRetry(FTestRunner& Runner)
     const auto SecondPrefixResponse = PrefixProvider.Generate(PrefixRequest, nullptr);
     const std::string& FirstBody = PrefixTransport->Bodies[0];
     const std::string& SecondBody = PrefixTransport->Bodies[1];
+    const auto BodyFingerprint = [](std::string_view Body)
+    {
+        std::uint64_t Hash = 1469598103934665603ULL;
+        for (const unsigned char Byte : Body)
+        {
+            Hash ^= Byte;
+            Hash *= 1099511628211ULL;
+        }
+        std::ostringstream Stream;
+        Stream << std::hex << std::setw(16) << std::setfill('0') << Hash;
+        return Stream.str();
+    };
     const auto SkillPosition = FirstBody.find("Active Pico Skills");
     const auto KnowledgePosition = FirstBody.find("Pico Project Knowledge");
     const auto StatePosition = FirstBody.find("Pico task state");
@@ -2280,12 +2661,126 @@ void TestOpenAICompatibleProviderProtocolAndRetry(FTestRunner& Runner)
         "Stable instructions, Skills, and knowledge precede mutable per-step task state");
     Runner.Expect(FirstPrefixResponse.RequestDiagnostics.SerializedBytes
             == FirstBody.size()
+            && FirstPrefixResponse.RequestDiagnostics.ProviderFamily
+                == "openai_compatible"
+            && FirstPrefixResponse.RequestDiagnostics.Model == "test-model"
+            && FirstPrefixResponse.RequestDiagnostics.ToolNames
+                == std::vector<std::string> {"editor.actor.spawn"}
+            && FirstPrefixResponse.RequestDiagnostics.SerializedFingerprint
+                == BodyFingerprint(FirstBody)
+            && FirstPrefixResponse.RequestDiagnostics.SerializedFingerprint
+                != SecondPrefixResponse.RequestDiagnostics.SerializedFingerprint
+            && SecondPrefixResponse.RequestDiagnostics.SerializedFingerprint
+                == BodyFingerprint(SecondBody)
             && FirstPrefixResponse.RequestDiagnostics.ToolSchemaBytes > 0
             && FirstPrefixResponse.RequestDiagnostics.ToolSchemaFingerprint
                 == SecondPrefixResponse.RequestDiagnostics.ToolSchemaFingerprint
             && FirstPrefixResponse.RequestDiagnostics.SystemPromptFingerprint
                 == SecondPrefixResponse.RequestDiagnostics.SystemPromptFingerprint,
-        "Provider reports serialized request size and stable static fingerprints");
+        "Provider reports the actual serialized request, model, tool order, and stable static fingerprints");
+}
+
+void TestRequestReplayFromSessionSeed(FTestRunner& Runner)
+{
+    const auto FirstPath = MakeLogPath("request-replay-first");
+    const auto SecondPath = MakeLogPath("request-replay-second");
+    const auto ChangedPath = MakeLogPath("request-replay-changed");
+    auto FirstSession = Pico::FAgentSession::OpenOrCreate(
+        "request-replay", FirstPath);
+    Pico::FAgentEvent PriorUser;
+    PriorUser.Type = Pico::EAgentEventType::Message;
+    PriorUser.Role = Pico::EAgentRole::User;
+    PriorUser.Content = "Earlier task";
+    FirstSession->Append(std::move(PriorUser));
+    Pico::FAgentEvent PriorAnswer;
+    PriorAnswer.Type = Pico::EAgentEventType::Message;
+    PriorAnswer.Role = Pico::EAgentRole::Assistant;
+    PriorAnswer.Content = "Earlier result";
+    FirstSession->Append(std::move(PriorAnswer));
+    std::filesystem::copy_file(FirstPath, SecondPath,
+        std::filesystem::copy_options::overwrite_existing);
+    std::filesystem::copy_file(FirstPath, ChangedPath,
+        std::filesystem::copy_options::overwrite_existing);
+    auto SecondSession = Pico::FAgentSession::OpenOrCreate(
+        "request-replay", SecondPath);
+    auto ChangedSession = Pico::FAgentSession::OpenOrCreate(
+        "request-replay", ChangedPath);
+
+    Pico::FOpenAICompatibleProviderSettings Settings;
+    Settings.Endpoint = "https://example.invalid/chat/completions";
+    Settings.Model = "replay-test";
+    Settings.ApiKey = "not-a-real-key";
+    Settings.SystemPrompt = "Use observed facts.";
+    Settings.ToolCatalogJson = "[]";
+    const auto MakeTransport = []()
+    {
+        auto Transport = std::make_shared<FScriptedHttpTransport>();
+        Transport->Responses.push_back({true, 200,
+            R"({"choices":[{"finish_reason":"stop","message":{"content":"done"}}]})",
+            0, {}});
+        return Transport;
+    };
+    auto FirstTransport = MakeTransport();
+    auto SecondTransport = MakeTransport();
+    auto ChangedTransport = MakeTransport();
+    Pico::FOpenAICompatibleProvider FirstProvider(Settings, FirstTransport);
+    Pico::FOpenAICompatibleProvider SecondProvider(Settings, SecondTransport);
+    Pico::FOpenAICompatibleProvider ChangedProvider(Settings, ChangedTransport);
+    Pico::FAgentRuntimeContext Context;
+    Context.KnowledgeContextJson = R"({"source_revision":7,"fact":"same"})";
+    Context.CurrentEditorStateJson =
+        R"({"capture_scope":"send_start","world":{"path":"ReplayWorld","revision":4},"selection":{"paths":["ReplayWorld.Actor"],"revision":9}})";
+    FCountingToolExecutor Executor;
+    Pico::FAgentRuntime FirstRuntime(*FirstSession, FirstProvider,
+        Executor, {}, Context);
+    Pico::FAgentRuntime SecondRuntime(*SecondSession, SecondProvider,
+        Executor, {}, Context);
+    Pico::FAgentRuntimeContext ChangedContext = Context;
+    ChangedContext.KnowledgeContextJson =
+        R"({"source_revision":8,"fact":"changed"})";
+    Pico::FAgentRuntime ChangedRuntime(*ChangedSession, ChangedProvider,
+        Executor, {}, ChangedContext);
+    const auto FirstResult = FirstRuntime.Run("Inspect the current selection");
+    const auto SecondResult = SecondRuntime.Run("Inspect the current selection");
+    const auto ChangedResult = ChangedRuntime.Run("Inspect the current selection");
+    Runner.Expect(FirstResult.Status == Pico::EAgentStatus::Completed
+            && SecondResult.Status == Pico::EAgentStatus::Completed
+            && FirstTransport->Bodies.size() == 1
+            && SecondTransport->Bodies.size() == 1
+            && FirstTransport->Bodies[0] == SecondTransport->Bodies[0],
+        "Persisted Session seed and identical external snapshot rebuild an identical provider request");
+    const auto FindProfile = [](const Pico::FAgentSession& Session)
+    {
+        for (const auto& Event : Session.GetEvents())
+            if (Event.Type == Pico::EAgentEventType::TraceSpan
+                && Event.SpanName == "Model.Generate")
+                return nlohmann::json::parse(Event.PayloadJson)
+                    .at("request_profile");
+        return nlohmann::json::object();
+    };
+    const auto FirstProfile = FindProfile(*FirstSession);
+    const auto SecondProfile = FindProfile(*SecondSession);
+    const auto ChangedProfile = FindProfile(*ChangedSession);
+    Runner.Expect(FirstProfile.value("serialized_fingerprint", "")
+            == SecondProfile.value("serialized_fingerprint", "")
+            && !FirstProfile.value("serialized_fingerprint", "").empty()
+            && FirstProfile["editor_snapshot"]["world_revision"] == 4
+            && FirstProfile["editor_snapshot"]["selection_revision"] == 9
+            && FirstProfile["source_event_sequence"]
+                == SecondProfile["source_event_sequence"]
+            && FirstProfile["replay_contract"]["external_inputs"]
+                == "snapshot_required"
+            && FirstProfile["replay_contract"]["external_snapshot_persisted"]
+                == false,
+        "Replayed requests retain matching body and external Revision evidence");
+    Runner.Expect(ChangedResult.Status == Pico::EAgentStatus::Completed
+            && ChangedTransport->Bodies.size() == 1
+            && ChangedTransport->Bodies[0] != FirstTransport->Bodies[0]
+            && ChangedProfile["knowledge"]["fingerprint"]
+                != FirstProfile["knowledge"]["fingerprint"]
+            && ChangedProfile["serialized_fingerprint"]
+                != FirstProfile["serialized_fingerprint"],
+        "A changed external knowledge snapshot is detected instead of silently replaying stale input");
 }
 
 void TestStreamingProviderAggregatesSse(FTestRunner& Runner)
@@ -3519,6 +4014,9 @@ int main()
     TestReActTaskStateAndContextAssembler(Runner);
     TestContinuationHints(Runner);
     TestTaskBoundaryProjection(Runner);
+    TestPressureToolResultProjection(Runner);
+    TestRuntimePressureProjection(Runner);
+    TestP3ScriptedContinuationTrajectories(Runner);
     TestReActObservationsEvidenceAndOscillation(Runner);
     TestCategorizedBudgetBeforeSideEffects(Runner);
     TestProjectHandoffIsOneShotAndCredentialFree(Runner);
@@ -3530,6 +4028,7 @@ int main()
     TestToolPipelineCommitAndRollback(Runner);
     TestToolCallIdCollisionFailsClosed(Runner);
     TestOpenAICompatibleProviderProtocolAndRetry(Runner);
+    TestRequestReplayFromSessionSeed(Runner);
     TestStreamingProviderAggregatesSse(Runner);
     TestKnowledgeStoreAndRagLite(Runner);
     TestKnowledgeFastPathBenchmark(Runner);

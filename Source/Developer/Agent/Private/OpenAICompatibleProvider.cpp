@@ -323,6 +323,7 @@ FAgentProviderResponse FOpenAICompatibleProvider::Generate(
             Diagnostics, Error))
         return {false, false, {}, std::move(Error), {}};
     Diagnostics.SerializedBytes = Body.size();
+    Diagnostics.SerializedFingerprint = StableFingerprint(Body);
     Diagnostics.SerializationMicroseconds = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - SerializationStarted).count());
@@ -337,6 +338,7 @@ FAgentProviderResponse FOpenAICompatibleProvider::Generate(
     for (std::size_t Attempt = 0; Attempt <= Settings.MaxRetries; ++Attempt)
     {
         ++RequestCount;
+        ++Diagnostics.HttpAttempts;
         FAgentHttpRequest HttpRequest;
         HttpRequest.Url = Settings.Endpoint;
         HttpRequest.AuthorizationBearer = Settings.ApiKey;
@@ -405,6 +407,8 @@ bool FOpenAICompatibleProvider::BuildRequestBody(
     {
         FJson Body;
         Body["model"] = Settings.Model;
+        OutDiagnostics.ProviderFamily = "openai_compatible";
+        OutDiagnostics.Model = Settings.Model;
         Body["stream"] = static_cast<bool>(Request.OnTextDelta);
         if (Request.OnTextDelta && Settings.bRequestStreamingUsage)
             Body["stream_options"] = {{"include_usage", true}};
@@ -475,6 +479,7 @@ bool FOpenAICompatibleProvider::BuildRequestBody(
             if (ApiName.empty() || UsedApiNames.contains(ApiName))
                 ApiName = AddHashSuffix(ApiName.empty() ? "pico_tool" : ApiName, PicoName);
             UsedApiNames.insert(ApiName);
+            OutDiagnostics.ToolNames.push_back(PicoName);
             PicoToApiToolNames[PicoName] = ApiName;
             OutApiToPicoToolNames[ApiName] = PicoName;
             Tools.push_back({{"type", "function"}, {"function", {

@@ -52,6 +52,13 @@ function Get-Answer($Events) {
     return [string]$answers[-1].content
 }
 
+function Get-OptionalProperty($Object, [string]$Name) {
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
 switch ($Action) {
     'List' {
         $fixture.tasks | Select-Object id, category, setup, baseline | Format-Table -Wrap
@@ -120,9 +127,48 @@ switch ($Action) {
         $toolResults = @($events | Where-Object { $_.type -eq 'ToolResult' } | ForEach-Object {
             [ordered]@{ sequence = $_.sequence; name = $_.tool_name; status = $_.status }
         })
+        $requestProfiles = @($events | Where-Object {
+            $_.type -eq 'TraceSpan' -and $_.span_name -eq 'Model.Generate' -and
+            $null -ne (Get-OptionalProperty $_.payload 'request_profile')
+        } | ForEach-Object {
+            $profile = $_.payload.request_profile
+            $sourceSequence = Get-OptionalProperty $profile 'source_event_sequence'
+            $serializedBytes = Get-OptionalProperty $profile 'serialized_bytes'
+            $serializedFingerprint = Get-OptionalProperty $profile 'serialized_fingerprint'
+            if ($null -ne $sourceSequence -and
+                [long]$sourceSequence -ge [long]$_.sequence) {
+                throw "Request source event sequence is not before Model.Generate trace sequence $($_.sequence)."
+            }
+            if ($null -ne $serializedFingerprint -and
+                [long]$serializedBytes -gt 0 -and
+                [string]::IsNullOrEmpty([string]$serializedFingerprint)) {
+                throw "Serialized request lacks a fingerprint at trace sequence $($_.sequence)."
+            }
+            $toolSchema = Get-OptionalProperty $profile 'tool_schema'
+            $toolNames = Get-OptionalProperty $profile 'tool_names'
+            [ordered]@{
+                trace_sequence = $_.sequence
+                agent_step = Get-OptionalProperty $profile 'agent_step'
+                source_event_first_sequence = Get-OptionalProperty $profile 'source_event_first_sequence'
+                source_event_sequence = $sourceSequence
+                provider_model = Get-OptionalProperty $profile 'provider_model'
+                provider_family = Get-OptionalProperty $profile 'provider_family'
+                serialized_bytes = $serializedBytes
+                serialized_fingerprint = $serializedFingerprint
+                tool_schema_fingerprint = Get-OptionalProperty $toolSchema 'fingerprint'
+                tool_names = @($toolNames | Where-Object { $null -ne $_ })
+                history_bytes = (Get-OptionalProperty (Get-OptionalProperty $profile 'history') 'bytes')
+                tool_result_bytes = (Get-OptionalProperty (Get-OptionalProperty $profile 'tool_results') 'bytes')
+                knowledge_bytes = (Get-OptionalProperty (Get-OptionalProperty $profile 'knowledge') 'bytes')
+                editor_snapshot = Get-OptionalProperty $profile 'editor_snapshot'
+                replay_contract = Get-OptionalProperty $profile 'replay_contract'
+                tool_result_projection = Get-OptionalProperty $profile 'tool_result_projection'
+                compact = Get-OptionalProperty $profile 'task_boundary_projection_enabled'
+            }
+        })
         $usage = $metrics.provider_usage
         $report = [ordered]@{
-            schema_version = 1
+            schema_version = 2
             task_id = $TaskId
             source = $source
             run_id = $RunId
@@ -153,6 +199,7 @@ switch ($Action) {
             }
             tool_calls = $toolCalls
             tool_results = $toolResults
+            request_profiles = $requestProfiles
             final_answer = Get-Answer $events
             review = [ordered]@{
                 criteria = @($task.criteria | ForEach-Object { [ordered]@{ item = $_; verdict = 'Unreviewed'; evidence_sequences = @(); note = '' } })

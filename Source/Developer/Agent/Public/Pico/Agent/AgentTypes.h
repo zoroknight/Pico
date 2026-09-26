@@ -208,6 +208,8 @@ struct FAgentContextMetrics
     std::uint64_t TotalBytes = 0;
     std::uint64_t ProjectedHistoryBytes = 0;
     std::uint64_t ProjectedMessages = 0;
+    std::uint64_t ProjectedToolResultBytes = 0;
+    std::uint64_t ProjectedToolResults = 0;
 };
 
 struct FAgentRunResult

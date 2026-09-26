@@ -238,6 +238,8 @@ FAgentRunResult FAgentRuntime::Run(
         BeginTurn();
         FAgentProviderRequest Request;
         std::uint64_t HistoryReplayMicroseconds = 0;
+        std::uint64_t ProjectedToolResultBytes = 0;
+        std::uint64_t ProjectedToolResults = 0;
         if (Context.Features.bContextAssembler)
         {
             FAgentContextAssemblyInput AssemblyInput;
@@ -254,8 +256,36 @@ FAgentRunResult FAgentRuntime::Run(
             AssemblyInput.MaxBytes = Budget.MaxContextBytesPerRequest;
             AssemblyInput.bTaskBoundaryProjection =
                 Context.Features.bTaskBoundaryProjection;
+            AssemblyInput.bPressureToolResultProjection =
+                Context.Features.bTaskBoundaryProjection
+                && Context.Features.bPressureToolResultProjection;
+            if (AssemblyInput.bPressureToolResultProjection)
+            {
+                const auto LatestUser = std::find_if(
+                    AssemblyInput.Messages.rbegin(), AssemblyInput.Messages.rend(),
+                    [](const FAgentMessage& Message)
+                    {
+                        return Message.Role == EAgentRole::User;
+                    });
+                if (LatestUser != AssemblyInput.Messages.rend())
+                {
+                    const std::size_t FirstCurrent = AssemblyInput.Messages.size() - 1
+                        - static_cast<std::size_t>(std::distance(
+                            AssemblyInput.Messages.rbegin(), LatestUser));
+                    for (std::size_t Index = FirstCurrent;
+                         Index < AssemblyInput.Messages.size(); ++Index)
+                        for (const FAgentToolCall& Call :
+                            AssemblyInput.Messages[Index].ToolCalls)
+                            if (ToolExecutor.IsReadOnly(Call))
+                                AssemblyInput.ReadOnlyToolCallIds.push_back(Call.Id);
+                }
+            }
             FAgentAssembledContext Assembled =
                 FAgentContextAssembler::Assemble(std::move(AssemblyInput));
+            ProjectedToolResultBytes =
+                Assembled.Metrics.ProjectedToolResultBytes;
+            ProjectedToolResults =
+                Assembled.Metrics.ProjectedToolResults;
             Request.Messages = std::move(Assembled.Messages);
             Request.TaskStateJson = std::move(Assembled.TaskStateJson);
             Request.ProgressLedgerJson =
@@ -291,10 +321,56 @@ FAgentRunResult FAgentRuntime::Run(
         Request.OnTextDelta = Context.OnAssistantDelta;
         Request.Step = Counters.Steps;
         Request.RepairAttempt = Counters.RepairAttempts;
+        const auto& SourceEvents = Session.GetEvents();
+        const std::uint64_t SourceFirstSequence = SourceEvents.empty()
+            ? 0 : SourceEvents.front().Sequence;
+        const std::uint64_t SourceSequence = SourceEvents.empty()
+            ? 0 : SourceEvents.back().Sequence;
         FActiveSpan ModelSpan = BeginSpan("Model.Generate", TurnSpan.Id);
         FJson RequestProfile = BuildRequestProfile(Request,
             HistoryReplayMicroseconds,
             bFirstModelRequest ? Context.KnowledgeRefreshMicroseconds : 0);
+        RequestProfile["agent_step"] = Request.Step;
+        RequestProfile["source_event_first_sequence"] = SourceFirstSequence;
+        RequestProfile["source_event_sequence"] = SourceSequence;
+        RequestProfile["tool_result_projection"] = {
+            {"enabled", Context.Features.bContextAssembler
+                && Context.Features.bTaskBoundaryProjection
+                && Context.Features.bPressureToolResultProjection},
+            {"results", ProjectedToolResults},
+            {"saved_bytes", ProjectedToolResultBytes}};
+        if (!Context.CurrentEditorStateJson.empty()
+            && Context.CurrentEditorStateJson != "{}")
+        {
+            const FJson EditorState = FJson::parse(
+                Context.CurrentEditorStateJson, nullptr, false);
+            if (EditorState.is_object())
+            {
+                const FJson World = EditorState.value("world", FJson::object());
+                const FJson Assets = EditorState.value("assets", FJson::object());
+                const FJson Selection = EditorState.value("selection", FJson::object());
+                RequestProfile["editor_snapshot"] = {
+                    {"capture_scope", EditorState.value("capture_scope", "")},
+                    {"world_revision", World.is_object()
+                        ? World.value("revision", FJson()) : FJson()},
+                    {"selection_revision", Selection.is_object()
+                        ? Selection.value("revision", FJson()) : FJson()},
+                    {"world_content_fingerprint", World.is_object()
+                        ? World.value("content_fingerprint", FJson()) : FJson()},
+                    {"asset_content_fingerprint", Assets.is_object()
+                        ? Assets.value("content_fingerprint", FJson()) : FJson()},
+                    {"asset_descriptor_count", Assets.is_object()
+                        ? Assets.value("descriptor_count", FJson()) : FJson()},
+                    {"selection_content_fingerprint", Selection.is_object()
+                        ? Selection.value("content_fingerprint", FJson()) : FJson()},
+                    {"fingerprint", Fingerprint(Context.CurrentEditorStateJson)}};
+            }
+        }
+        RequestProfile["replay_contract"] = {
+            {"version", 1},
+            {"session_events", "persisted"},
+            {"external_inputs", "snapshot_required"},
+            {"external_snapshot_persisted", false}};
         bFirstModelRequest = false;
         FAgentProviderResponse Response;
         const bool bInjectedProviderTimeout = ConsumeFailureInjection(
@@ -339,6 +415,13 @@ FAgentRunResult FAgentRuntime::Run(
         RequestProfile["tool_schema"] = {
             {"bytes", Diagnostics.ToolSchemaBytes},
             {"fingerprint", Diagnostics.ToolSchemaFingerprint}};
+        RequestProfile["provider_model"] = Diagnostics.Model;
+        RequestProfile["provider_family"] = Diagnostics.ProviderFamily.empty()
+            ? "unreported" : Diagnostics.ProviderFamily;
+        RequestProfile["serialized_fingerprint"] =
+            Diagnostics.SerializedFingerprint;
+        RequestProfile["tool_names"] = Diagnostics.ToolNames;
+        RequestProfile["http_attempts"] = Diagnostics.HttpAttempts;
         RequestProfile["task_boundary_projection_enabled"] =
             Context.Features.bContextAssembler
                 && Context.Features.bTaskBoundaryProjection;
@@ -1163,6 +1246,8 @@ void FAgentRuntime::AccumulateContextMetrics(
     ContextMetrics.TotalBytes += Metrics.TotalBytes;
     ContextMetrics.ProjectedHistoryBytes += Metrics.ProjectedHistoryBytes;
     ContextMetrics.ProjectedMessages += Metrics.ProjectedMessages;
+    ContextMetrics.ProjectedToolResultBytes += Metrics.ProjectedToolResultBytes;
+    ContextMetrics.ProjectedToolResults += Metrics.ProjectedToolResults;
 }
 
 FAgentToolResult FAgentRuntime::MakeSemanticCacheResult(

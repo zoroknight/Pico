@@ -50,6 +50,7 @@ struct FAgentContextFeatureFlags
     bool bTaskState = true;
     bool bContextAssembler = true;
     bool bTaskBoundaryProjection = false;
+    bool bPressureToolResultProjection = true;
     bool bContextMetrics = true;
     bool bObservationMapping = true;
     bool bEvidenceCompletionGate = true;
@@ -99,7 +100,9 @@ struct FAgentContextAssemblyInput
     std::size_t MaxMessages = 48;
     std::uint64_t MaxBytes = 256 * 1024;
     bool bTaskBoundaryProjection = false;
+    bool bPressureToolResultProjection = false;
     std::size_t MaxHistoricalEvidenceBytes = 4 * 1024;
+    std::vector<std::string> ReadOnlyToolCallIds;
 };
 
 struct FAgentAssembledContext

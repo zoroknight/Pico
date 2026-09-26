@@ -4,7 +4,7 @@
 
 这是 S4 前的 **小型真实 Provider 任务集**，不是 S6 的完整 Editor Golden Tasks，也不是新 Agent Runtime。确定性 `GoldenTasks.json` 和 RAG Benchmark 继续作为代码回归；它们不能代表真实模型任务完成率。H1 不规定唯一 Tool 序列，不在运行时加入固定 DAG 或回答模板。
 
-用例位于 `Tests/Agent/Fixtures/RealTaskEvalH1.json`（14 项），只读采集器位于 `Scripts/TestAgentRealTaskEval.ps1`。采集输出写入项目 `Projects/PicoSandbox/Saved/Agent/Evals/H1`，保留原始会话和 Metrics 的路径、SHA-256、Run ID、事件序号、Provider/模型、工具调用、最终回答和用量。采集器不修改世界、会话或原有 A/B 记录。输出可能包含对话内容，属于本机测试记录，不应直接提交。
+用例位于 `Tests/Agent/Fixtures/RealTaskEvalH1.json`（14 项），只读采集器位于 `Scripts/TestAgentRealTaskEval.ps1`。采集输出写入项目 `Projects/PicoSandbox/Saved/Agent/Evals/H1`，保留原始会话和 Metrics 的路径、SHA-256、Run ID、事件序号、Provider/模型、工具调用、逐步请求指纹与来源、Editor 内容指纹、投影次数、最终回答和用量。新采集报告为 Schema v2；旧报告仍可汇总，旧 Trace 缺少的请求字段保持空值。采集器不修改世界、会话或原有 A/B 记录。输出可能包含对话内容，属于本机测试记录，不应直接提交。
 
 ## 判据
 

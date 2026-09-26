@@ -5,6 +5,8 @@
 
 本文记录一次从服务商用量截图、AI Chat 面板到逐请求 Trace 的排查链路，并规定后续优化和验收。这里的 **Prompt Cache** 是服务商对相同输入前缀的复用；它不同于只读工具语义缓存，也不同于 S4 的资产预览/视觉推断缓存。
 
+后续增量工作按 [P0～P3 Harness 轻量化计划](AgentHarnessReferenceIntegrationPlan.zh-CN.md) 执行：请求归因与受压只读 Tool Result 投影已落地，使用 [P0/P1 验收流程](AgentHarnessP0P1Validation.zh-CN.md) 检查真实 Provider 的成本和质量；工具按需披露仍须先看测得的输入分布。本页 CE0～CE2 的历史测试结果和风险接受结论不因此改写。
+
 ## 问题与排查过程
 
 1. 服务商按天统计曾显示缓存命中 908,928、未命中 4,612,743 输入 Token，命中率约 16.5%。这是账户级汇总，可能包含不同任务和客户端，不能单独归因为 Pico。

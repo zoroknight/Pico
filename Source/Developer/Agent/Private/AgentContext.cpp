@@ -31,6 +31,16 @@ bool IsEmptyJson(std::string_view Value, std::string_view EmptyValue)
     return Value.empty() || Value == EmptyValue;
 }
 
+bool HasPendingMutationReadback(std::string_view TaskStateJson)
+{
+    const FJson State = FJson::parse(TaskStateJson, nullptr, false);
+    if (!State.is_object()) return false;
+    return State.value("mutation_readback_pending", false)
+        || (State.contains("pending_readbacks")
+            && State["pending_readbacks"].is_array()
+            && !State["pending_readbacks"].empty());
+}
+
 bool IncludeWithinBudget(
     std::string& Output,
     std::string Input,
@@ -77,6 +87,23 @@ std::string StableHash(std::string_view Value)
     return Stream.str();
 }
 
+bool ContainsPlanHash(const FJson& Value)
+{
+    if (Value.is_object())
+    {
+        for (auto It = Value.begin(); It != Value.end(); ++It)
+        {
+            if (It.key() == "plan_hash" || It.key() == "PlanHash"
+                || It.key() == "planHash" || ContainsPlanHash(It.value()))
+                return true;
+        }
+    }
+    else if (Value.is_array())
+        for (const FJson& Item : Value)
+            if (ContainsPlanHash(Item)) return true;
+    return false;
+}
+
 std::uint64_t CompactObservationLedger(std::string& Ledger,
     const std::vector<FAgentMessage>& Messages,
     FAgentContextMetrics& Metrics)
@@ -104,6 +131,16 @@ std::uint64_t CompactObservationLedger(std::string& Ledger,
         if (CallId == Observation.end() || !CallId->is_string()) continue;
         const auto Result = RetainedResults.find(CallId->get<std::string>());
         if (Result == RetainedResults.end()) continue;
+        if (Result->second.value("context_projection", "")
+            == "older_read_result")
+        {
+            if (Observation.contains("facts"))
+            {
+                Observation.erase("facts");
+                bChanged = true;
+            }
+            continue;
+        }
         for (const char* Field : {"facts", "state_changes", "revision_changes"})
         {
             if (Observation.contains(Field) && Result->second.contains(Field)
@@ -179,7 +216,15 @@ std::vector<FAgentMessage> ProjectHistoryByTaskBoundary(
                 {"tool", ToolName->second}};
             if (Root.contains("facts") && !Root["facts"].empty())
             {
-                if (Root["facts"].dump().size() <= 1024)
+                if (ContainsPlanHash(Root["facts"]))
+                {
+                    Item["facts_omitted"] = "plan_hash_requires_live_lookup";
+                    if (ToolName->second == "editor.scene.preview_room_plan"
+                        || ToolName->second == "editor.scene.describe_room_plan")
+                        Item["resolver_tool"] =
+                            "editor.scene.describe_room_plan";
+                }
+                else if (Root["facts"].dump().size() <= 1024)
                     Item["facts"] = Root["facts"];
                 else
                     Item["facts_omitted"] = "too_large_reinspect_source";
@@ -229,6 +274,92 @@ std::vector<FAgentMessage> ProjectHistoryByTaskBoundary(
     Metrics.ProjectedHistoryBytes = OriginalBytes > ProjectedBytes
         ? OriginalBytes - ProjectedBytes : 0;
     return Projected;
+}
+
+void ProjectOlderReadResults(std::vector<FAgentMessage>& History,
+    const std::vector<std::string>& ReadOnlyToolCallIds,
+    std::uint64_t MessageBudget, FAgentContextMetrics& Metrics)
+{
+    std::uint64_t UsedBytes = 0;
+    for (const FAgentMessage& Message : History)
+        UsedBytes += MeasureMessageBytes(Message);
+    const std::uint64_t TriggerBytes = MessageBudget * 65 / 100;
+    if (UsedBytes <= TriggerBytes || ReadOnlyToolCallIds.empty()) return;
+    const auto LatestUser = std::find_if(History.rbegin(), History.rend(),
+        [](const FAgentMessage& Message)
+        {
+            return Message.Role == EAgentRole::User;
+        });
+    if (LatestUser == History.rend()) return;
+    const std::size_t CurrentTaskStart = History.size() - 1
+        - static_cast<std::size_t>(std::distance(History.rbegin(), LatestUser));
+
+    std::unordered_set<std::string> ReadOnlyCalls(
+        ReadOnlyToolCallIds.begin(), ReadOnlyToolCallIds.end());
+    std::unordered_map<std::string, std::string> ToolNames;
+    std::unordered_set<std::string> UnmatchedCalls;
+    for (const FAgentMessage& Message : History)
+    {
+        for (const FAgentToolCall& Call : Message.ToolCalls)
+        {
+            ToolNames[Call.Id] = Call.Name;
+            UnmatchedCalls.insert(Call.Id);
+        }
+        if (Message.Role == EAgentRole::Tool)
+        {
+            if (!UnmatchedCalls.erase(Message.ToolCallId)) return;
+        }
+    }
+    if (!UnmatchedCalls.empty()) return;
+
+    std::size_t ResultsAfter = 0;
+    std::unordered_set<std::string> OlderResults;
+    for (auto It = History.rbegin(); It != History.rend(); ++It)
+    {
+        const std::size_t Index = History.size() - 1
+            - static_cast<std::size_t>(std::distance(History.rbegin(), It));
+        if (Index < CurrentTaskStart) break;
+        if (It->Role != EAgentRole::Tool) continue;
+        if (++ResultsAfter > 2) OlderResults.insert(It->ToolCallId);
+    }
+    for (std::size_t Index = CurrentTaskStart; Index < History.size(); ++Index)
+    {
+        FAgentMessage& Message = History[Index];
+        if (UsedBytes <= TriggerBytes) break;
+        if (Message.Role != EAgentRole::Tool
+            || Message.Content.size() <= 4096
+            || !OlderResults.contains(Message.ToolCallId)
+            || !ReadOnlyCalls.contains(Message.ToolCallId))
+            continue;
+        const auto Tool = ToolNames.find(Message.ToolCallId);
+        if (Tool == ToolNames.end()) continue;
+        FJson Result = FJson::parse(Message.Content, nullptr, false);
+        if (!Result.is_object() || Result.value("status", "") != "Succeeded"
+            || Result.value("call_id", "") != Message.ToolCallId
+            || (Result.contains("state_changes")
+                && !Result["state_changes"].empty())
+            || (Result.contains("revision_changes")
+                && !Result["revision_changes"].empty()))
+            continue;
+        const std::size_t OriginalBytes = Message.Content.size();
+        Result["facts"] = {
+            {"context_projection", "older_read_result"},
+            {"source_call_id", Message.ToolCallId},
+            {"source_tool", Tool->second},
+            {"source_fingerprint", StableHash(Message.Content)},
+            {"source_bytes", OriginalBytes},
+            {"requery_rule", "Original facts are omitted from this request. "
+                "Re-run the read-only tool for current evidence before citing facts."}};
+        Result["context_projection"] = "older_read_result";
+        std::string Projected = Result.dump();
+        if (Projected.size() >= OriginalBytes || Projected.size() > 2048)
+            continue;
+        const std::uint64_t Saved = OriginalBytes - Projected.size();
+        Message.Content = std::move(Projected);
+        UsedBytes -= Saved;
+        Metrics.ProjectedToolResultBytes += Saved;
+        ++Metrics.ProjectedToolResults;
+    }
 }
 }
 
@@ -553,6 +684,8 @@ FAgentAssembledContext FAgentContextAssembler::Assemble(
 {
     const auto StartedAt = std::chrono::steady_clock::now();
     FAgentAssembledContext Result;
+    const bool bPendingMutationReadback =
+        HasPendingMutationReadback(Input.TaskStateJson);
     const std::uint64_t ExternalLimit = Input.MaxBytes / 2;
     std::uint64_t ExternalBytes = 0;
 
@@ -578,6 +711,10 @@ FAgentAssembledContext FAgentContextAssembler::Assemble(
             std::move(Input.Messages), Input.MaxHistoricalEvidenceBytes,
             Input.MaxMessages, MessageBudget,
             Result.Metrics);
+    if (Input.bPressureToolResultProjection
+        && !bPendingMutationReadback)
+        ProjectOlderReadResults(Input.Messages, Input.ReadOnlyToolCallIds,
+            MessageBudget, Result.Metrics);
     Result.Messages = BuildBoundedAgentMessageHistory(
         std::move(Input.Messages), Input.MaxMessages, MessageBudget,
         &Result.TrimmedMessages);

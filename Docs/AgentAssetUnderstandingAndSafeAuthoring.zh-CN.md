@@ -6,7 +6,7 @@
 它位于 [ReAct 轻量化加固门](AgentReActLightweightHardeningRoadmap.zh-CN.md) 之后、
 [Agent 游戏制作链路](AgentGameCreationPipeline.zh-CN.md) 第 5～8 周之前，是后续玩法组装与 AI 视觉资产生产的前置门。
 
-> 状态：**S0～S3 已完成，S4～S6 待实施**。S4 前的 [Agent 输入缓存与长会话上下文减重门](AgentPromptCacheAndContextEfficiency.zh-CN.md) CE0～CE2 已完成代码与离线测试，在线质量门待验收；安全写入、Material 工具、反射驱动的通用组件装配和人工语义元数据已经进入主线，标准预览和外部视觉 API 尚未开放。
+> 状态：**S0～S3 已完成，S4～S6 待实施**。[Agent 输入缓存与长会话上下文减重门](AgentPromptCacheAndContextEfficiency.zh-CN.md) CE0～CE2 已按风险接受决议允许进入 S4，原定五组严格在线 A/B 未完成；安全写入、Material 工具、反射驱动的通用组件装配和人工语义元数据已经进入主线，标准预览和外部视觉 API 尚未开放。
 
 ### 模型输入缓存与 S4 资产缓存
 
@@ -292,7 +292,7 @@ Destructive
 
 ## 七周实施计划
 
-S0～S6 的编号和已完成状态保持不变；CE0～CE2 作为独立插入门，完成后再开始 S4，不把模型输入缓存优化算成 S4 的资产预览工作。
+S0～S6 的编号和已完成状态保持不变；CE0～CE2 作为独立插入门，按既有风险接受决议允许进入 S4，不把模型输入缓存优化算成 S4 的资产预览工作。新增的 [P0～P3 Harness 轻量化计划](AgentHarnessReferenceIntegrationPlan.zh-CN.md) 是并行加固路线；其 P0/P1 新代码合入前须过相关安全回归，不反向增加 S4 启动门槛，也不要求 P2 工具目录实验或重复同类缓存 A/B 全部完成。
 
 | 插入门 | 工作 | 验收 |
 | --- | --- | --- |

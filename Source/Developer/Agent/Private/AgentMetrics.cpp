@@ -89,6 +89,9 @@ std::string FAgentRunMetrics::ToJson() const
         {"history_projection", {
             {"old_messages", ContextMetrics.ProjectedMessages},
             {"saved_bytes", ContextMetrics.ProjectedHistoryBytes}}},
+        {"tool_result_projection", {
+            {"results", ContextMetrics.ProjectedToolResults},
+            {"saved_bytes", ContextMetrics.ProjectedToolResultBytes}}},
         {"failure_class", ToString(FailureClass)},
         {"recovery_action", ToString(RecoveryAction)},
         {"automatically_retryable", bAutomaticallyRetryable},

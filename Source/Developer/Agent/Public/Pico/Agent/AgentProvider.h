@@ -37,10 +37,15 @@ struct FAgentProviderRequestDiagnostics
 {
     std::uint64_t SerializedBytes = 0;
     std::uint64_t SerializationMicroseconds = 0;
+    std::uint64_t HttpAttempts = 0;
     std::uint64_t SystemPromptBytes = 0;
     std::uint64_t ToolSchemaBytes = 0;
+    std::string ProviderFamily;
+    std::string Model;
+    std::string SerializedFingerprint;
     std::string SystemPromptFingerprint;
     std::string ToolSchemaFingerprint;
+    std::vector<std::string> ToolNames;
 };
 
 struct FAgentProviderResponse

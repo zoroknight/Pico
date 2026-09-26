@@ -47,6 +47,17 @@ namespace
 {
 using FJson = nlohmann::json;
 
+std::string SnapshotFingerprint(std::string_view Content)
+{
+    std::uint64_t Hash = 1469598103934665603ULL;
+    for (const unsigned char Byte : Content)
+    {
+        Hash ^= Byte;
+        Hash *= 1099511628211ULL;
+    }
+    return std::to_string(Hash);
+}
+
 enum class EChatProvider
 {
 #if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
@@ -443,6 +454,87 @@ public:
 private:
     std::string Nonce;
 };
+
+constexpr const char* P1FixtureToolName = "editor.harness.read_fixture";
+
+std::string BuildP1FixtureToolCatalog()
+{
+    return FJson::array({{{"name", P1FixtureToolName},
+        {"description", "Read one deterministic, synthetic evaluation record. No World access."},
+        {"permission", "ReadOnly"},
+        {"input_schema", {{"type", "object"},
+            {"properties", {{"index", {{"type", "integer"},
+                {"minimum", 1}, {"maximum", 5}}}}},
+            {"required", FJson::array({"index"})},
+            {"additionalProperties", false}}}}}).dump();
+}
+
+class FP1FixtureProvider final : public IAgentProvider
+{
+public:
+    explicit FP1FixtureProvider(std::unique_ptr<IAgentProvider> InProvider)
+        : Provider(std::move(InProvider)) {}
+
+    FAgentProviderResponse Generate(const FAgentProviderRequest& Request,
+        const FCancellationToken* Token) override
+    {
+        if (!bSeeded)
+        {
+            bSeeded = true;
+            FAgentProviderResponse Response;
+            for (int Index = 1; Index <= 5; ++Index)
+                Response.ToolCalls.push_back({"p1-fixture-" + std::to_string(Index),
+                    P1FixtureToolName, FJson {{"index", Index}}.dump()});
+            return Response;
+        }
+        return Provider->Generate(Request, Token);
+    }
+
+private:
+    std::unique_ptr<IAgentProvider> Provider;
+    bool bSeeded = false;
+};
+
+class FP1FixtureToolExecutor final : public IAgentToolExecutor
+{
+public:
+    bool IsReadOnly(const FAgentToolCall&) const override { return true; }
+    bool RequiresApproval(const FAgentToolCall&) const override { return false; }
+
+    FAgentToolResult Execute(const FAgentToolCall& Call,
+        const FCancellationToken*) override
+    {
+        FAgentToolResult Result;
+        Result.CallId = Call.Id;
+        const FJson Arguments = FJson::parse(Call.ArgumentsJson, nullptr, false);
+        if (Call.Name != P1FixtureToolName || !Arguments.is_object()
+            || !Arguments.contains("index") || !Arguments["index"].is_number_integer())
+        {
+            Result.Error = "Only the synthetic read fixture is available";
+            Result.FailureClass = EAgentFailureClass::PermissionDenied;
+            return Result;
+        }
+        const int Index = Arguments["index"].get<int>();
+        if (Index < 1 || Index > 5)
+        {
+            Result.Error = "Fixture index must be 1 through 5";
+            Result.FailureClass = EAgentFailureClass::InvalidArguments;
+            return Result;
+        }
+        std::string Detail;
+        Detail.reserve(14000);
+        for (int Segment = 0; Detail.size() < 14000; ++Segment)
+            Detail += "Record " + std::to_string(Index) + " segment "
+                + std::to_string(Segment)
+                + ": synthetic diagnostic text; no editor state is represented. ";
+        Result.bSucceeded = true;
+        Result.OutputJson = FJson {{"index", Index},
+            {"status", Index == 5 ? "ready" : "checked"},
+            {"detail", std::move(Detail)}}.dump();
+        Result.FactsJson = Result.OutputJson;
+        return Result;
+    }
+};
 #endif
 
 std::string EnvironmentValue(const char* Name)
@@ -836,11 +928,14 @@ struct FAgentChatWorkspace::FImpl
         EChatProvider ProviderType,
         std::string ModelName,
         std::string ToolCatalogJson,
-        std::string& OutError)
+        std::string& OutError,
+        bool bUseP1Fixture = false)
     {
 #if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
         if (ProviderType == EChatProvider::Fake)
             return std::make_unique<FFakeSceneAgentProvider>(MakeRunNonce());
+#else
+        (void)bUseP1Fixture;
 #endif
 
         FOpenAICompatibleProviderSettings Settings;
@@ -874,6 +969,14 @@ struct FAgentChatWorkspace::FImpl
             "Use plain Markdown without Emoji; the editor deliberately omits unsupported color Emoji. "
             "Do not repeat raw tool arguments, Tool Results, or execution traces in assistant prose; the editor provides one expandable tool summary after the turn. "
             "Never invent object paths or claim a tool succeeded before receiving its result.";
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+        if (bUseP1Fixture)
+            Settings.SystemPrompt =
+                "You are evaluating Pico Agent context projection. The only available "
+                "tool reads deterministic synthetic records; it never accesses the "
+                "editor World. Answer in the user's language. Use only observed facts. "
+                "Do not infer omitted details or request unrelated tools.";
+#endif
         Settings.TimeoutMilliseconds = static_cast<std::uint32_t>(TimeoutSeconds * 1000);
         Settings.MaxRetries = static_cast<std::size_t>(MaxRetries);
         if (ProviderType == EChatProvider::DeepSeek)
@@ -934,10 +1037,13 @@ struct FAgentChatWorkspace::FImpl
         FJson CurrentEditorState = {
             {"capture_scope", "send_start"},
             {"world", {{"source", "Live Game Thread World snapshot"},
-                {"path", nullptr}, {"revision", nullptr}}},
+                {"path", nullptr}, {"revision", nullptr},
+                {"content_fingerprint", nullptr}}},
+            {"assets", {{"source", "Live project asset descriptors"},
+                {"descriptor_count", nullptr}, {"content_fingerprint", nullptr}}},
             {"selection", {{"source", "Live editor selection"},
                 {"primary", nullptr}, {"paths", FJson::array()},
-                {"revision", nullptr}}}};
+                {"revision", nullptr}, {"content_fingerprint", nullptr}}}};
         for (FAgentKnowledgeRecord& Record : EditorTools.CollectKnowledgeRecords())
         {
             if (Record.SourceType == "world")
@@ -945,6 +1051,15 @@ struct FAgentChatWorkspace::FImpl
                 CurrentEditorState["world"]["path"] = Record.SourcePath;
                 CurrentEditorState["world"]["actor_count"] =
                     Record.SourceRevision;
+                CurrentEditorState["world"]["content_fingerprint"] =
+                    SnapshotFingerprint(Record.Content);
+            }
+            else if (Record.SourceType == "asset-descriptor")
+            {
+                CurrentEditorState["assets"]["descriptor_count"] =
+                    Record.SourceRevision;
+                CurrentEditorState["assets"]["content_fingerprint"] =
+                    SnapshotFingerprint(Record.Content);
             }
             else if (Record.SourceType == "selection")
             {
@@ -953,6 +1068,8 @@ struct FAgentChatWorkspace::FImpl
                 CurrentEditorState["selection"]["paths"] = Record.EntityIds;
                 CurrentEditorState["selection"]["revision"] =
                     Record.SourceRevision;
+                CurrentEditorState["selection"]["content_fingerprint"] =
+                    SnapshotFingerprint(Record.Content);
             }
             Sources[Record.SourceType].push_back(std::move(Record));
         }
@@ -1038,13 +1155,24 @@ struct FAgentChatWorkspace::FImpl
     {
         if (!TaskSystem || bRunning.load() || Input[0] == '\0') return;
         const std::string Prompt = Input.data();
-        Input.fill('\0');
         const EAgentTurnIntent SelectedIntent = ClassifyAgentTurnIntent(Prompt);
         const EChatProvider SelectedProvider = Provider;
         const std::string SelectedModel = Model.data();
         const std::string SelectedProviderName =
             ProviderDisplayName(SelectedProvider);
         const bool bSelectedTaskBoundaryProjection = bTaskBoundaryProjection;
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+        const bool bSelectedP1Fixture = bP1Fixture;
+        const bool bSelectedP1Projection = bP1Projection;
+        if (bSelectedP1Fixture && (SelectedProvider == EChatProvider::Fake
+            || !bSelectedTaskBoundaryProjection))
+        {
+            std::lock_guard Lock(ViewMutex);
+            Status = "P1 fixture needs DeepSeek/Kimi and Compact prior task history enabled";
+            Lines.push_back({"Error", Status, ImVec4(1.0f, 0.42f, 0.36f, 1.0f)});
+            return;
+        }
+#endif
         const std::string SelectedSessionId = SessionId;
         const std::filesystem::path SelectedSessionPath = SessionPath;
         std::vector<FAgentKnowledgeHit> KnowledgeHits;
@@ -1052,9 +1180,12 @@ struct FAgentChatWorkspace::FImpl
         std::string CurrentEditorStateJson;
         std::string KnowledgeError;
         const auto KnowledgeStarted = std::chrono::steady_clock::now();
-        const std::string KnowledgeContext = RefreshKnowledge(
-            Prompt, KnowledgeHits, KnowledgeQueryResult,
-            CurrentEditorStateJson, KnowledgeError);
+        const std::string KnowledgeContext =
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+            bSelectedP1Fixture ? "{}" :
+#endif
+            RefreshKnowledge(Prompt, KnowledgeHits, KnowledgeQueryResult,
+                CurrentEditorStateJson, KnowledgeError);
         const std::uint64_t KnowledgeRefreshMicroseconds =
             static_cast<std::uint64_t>(std::chrono::duration_cast<
                 std::chrono::microseconds>(std::chrono::steady_clock::now()
@@ -1067,13 +1198,30 @@ struct FAgentChatWorkspace::FImpl
                 ImVec4(1.0f, 0.42f, 0.36f, 1.0f)});
             return;
         }
-        const std::vector<FAgentSkill> ActiveSkills = SkillRegistry.Select(Prompt);
+        const std::vector<FAgentSkill> ActiveSkills =
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+            bSelectedP1Fixture ? std::vector<FAgentSkill> {} :
+#endif
+            SkillRegistry.Select(Prompt);
         const std::string SkillContext =
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+            bSelectedP1Fixture ? "[]" :
+#endif
             SkillRegistry.BuildSkillContextJson(ActiveSkills);
-        const std::string ToolCatalog = EditorTools.BuildToolCatalogJson();
+        const std::string ToolCatalog =
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+            bSelectedP1Fixture ? BuildP1FixtureToolCatalog() :
+#endif
+            EditorTools.BuildToolCatalogJson();
         std::string ProviderError;
         std::unique_ptr<IAgentProvider> NewProvider = CreateProvider(
-            SelectedProvider, SelectedModel, ToolCatalog, ProviderError);
+            SelectedProvider, SelectedModel, ToolCatalog, ProviderError,
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+            bSelectedP1Fixture
+#else
+            false
+#endif
+        );
         if (!NewProvider)
         {
             std::lock_guard Lock(ViewMutex);
@@ -1081,6 +1229,11 @@ struct FAgentChatWorkspace::FImpl
             Lines.push_back({"Error", ProviderError, ImVec4(1.0f, 0.42f, 0.36f, 1.0f)});
             return;
         }
+        Input.fill('\0');
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+        if (bSelectedP1Fixture)
+            NewProvider = std::make_unique<FP1FixtureProvider>(std::move(NewProvider));
+#endif
         {
             std::lock_guard Lock(ViewMutex);
             Status = "Planning with " + SelectedProviderName + " / "
@@ -1102,7 +1255,11 @@ struct FAgentChatWorkspace::FImpl
                 SelectedSessionPath, KnowledgeContext, CurrentEditorStateJson,
                 SkillContext,
                 SelectedIntent, ActiveSkills, KnowledgeRefreshMicroseconds,
-                bSelectedTaskBoundaryProjection](
+                bSelectedTaskBoundaryProjection
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+                , bSelectedP1Fixture, bSelectedP1Projection
+#endif
+                ](
                 const FCancellationToken& Token) mutable
             {
                 std::string Error;
@@ -1128,6 +1285,15 @@ struct FAgentChatWorkspace::FImpl
                     RuntimeContext.Features.bMutationReadbackGate = true;
                     RuntimeContext.Features.bTaskBoundaryProjection =
                         bSelectedTaskBoundaryProjection;
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+                    FP1FixtureToolExecutor FixtureExecutor;
+                    if (bSelectedP1Fixture)
+                    {
+                        RuntimeContext.Features.bPressureToolResultProjection =
+                            bSelectedP1Projection;
+                        Budget.MaxContextBytesPerRequest = 96 * 1024;
+                    }
+#endif
                     RuntimeContext.KnowledgeContextJson = KnowledgeContext;
                     RuntimeContext.CurrentEditorStateJson =
                         CurrentEditorStateJson;
@@ -1141,7 +1307,14 @@ struct FAgentChatWorkspace::FImpl
                         bScrollToBottom.store(true);
                     };
                     FAgentRuntime Runtime(*Session, *AgentProvider,
-                        ExecutionService, Budget, std::move(RuntimeContext));
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+                        bSelectedP1Fixture
+                            ? static_cast<IAgentToolExecutor&>(FixtureExecutor)
+                            : static_cast<IAgentToolExecutor&>(ExecutionService),
+#else
+                        ExecutionService,
+#endif
+                        Budget, std::move(RuntimeContext));
                     Result = Runtime.Run(Prompt, &Token);
                     if (Result.Status == EAgentStatus::Completed)
                     {
@@ -1420,6 +1593,12 @@ struct FAgentChatWorkspace::FImpl
             if (ImGui::Checkbox("Compact prior task history",
                     &bTaskBoundaryProjection))
                 SaveChatPreferences();
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+            ImGui::BeginDisabled(bRunning.load());
+            ImGui::Checkbox("P1 controlled fixture (Debug only)", &bP1Fixture);
+            ImGui::Checkbox("P1 projection (fixture only)", &bP1Projection);
+            ImGui::EndDisabled();
+#endif
             ImGui::TextDisabled(
                 "Environment variables override editor-local Saved/Editor/Agent/ApiKeys.ini values.");
         }
@@ -1590,6 +1769,10 @@ struct FAgentChatWorkspace::FImpl
                     ImGui::TextDisabled("History projection: %llu old messages | %.1f KB saved",
                         static_cast<unsigned long long>(MetricsContext.ProjectedMessages),
                         static_cast<double>(MetricsContext.ProjectedHistoryBytes) / 1024.0);
+                if (MetricsContext.ProjectedToolResults > 0)
+                    ImGui::TextDisabled("Tool result projection: %llu older reads | %.1f KB saved",
+                        static_cast<unsigned long long>(MetricsContext.ProjectedToolResults),
+                        static_cast<double>(MetricsContext.ProjectedToolResultBytes) / 1024.0);
             }
             if (!MetricsRunId.empty()) ImGui::TextDisabled("Run: %s", MetricsRunId.c_str());
         }
@@ -1836,6 +2019,10 @@ struct FAgentChatWorkspace::FImpl
     int TimeoutSeconds = 30;
     int MaxRetries = 2;
     bool bTaskBoundaryProjection = true;
+#if defined(PICO_EDITOR_ENABLE_FAKE_AGENT)
+    bool bP1Fixture = false;
+    bool bP1Projection = true;
+#endif
     bool bApiKeyPanelOpen = true;
     bool bRequestSettingsOpen = false;
     bool bGroundingSkillsOpen = false;

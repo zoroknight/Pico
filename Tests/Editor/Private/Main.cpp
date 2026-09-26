@@ -2535,6 +2535,35 @@ void TestEditorWorldDocument(FTestRunner& Runner)
             && bSelectionContainsEveryObject
             && SelectionRecord->Fields.at("selection_count") == "3",
         "Agent Selection knowledge preserves every selected object and its monotonic revision");
+    const auto WorldKnowledgeBefore = std::find_if(
+        SelectionKnowledge.begin(), SelectionKnowledge.end(),
+        [](const Pico::FAgentKnowledgeRecord& Record)
+        {
+            return Record.SourceType == "world";
+        });
+    if (!MultiSelectedObjects.empty()
+        && WorldKnowledgeBefore != SelectionKnowledge.end())
+    {
+        auto* Actor = static_cast<Pico::PActor*>(MultiSelectedObjects.front());
+        const Pico::FVector3 OriginalLocation = Actor->GetActorLocation();
+        const Pico::FVector3 MovedLocation(
+            OriginalLocation.X + 1.0f, OriginalLocation.Y, OriginalLocation.Z);
+        const bool bMoved = Actor->SetActorLocation(MovedLocation);
+        const auto MovedKnowledge = AgentTools.CollectKnowledgeRecords();
+        const auto WorldKnowledgeAfter = std::find_if(
+            MovedKnowledge.begin(), MovedKnowledge.end(),
+            [](const Pico::FAgentKnowledgeRecord& Record)
+            {
+                return Record.SourceType == "world";
+            });
+        Runner.Expect(bMoved && WorldKnowledgeAfter != MovedKnowledge.end()
+                && WorldKnowledgeBefore->SourceRevision
+                    == WorldKnowledgeAfter->SourceRevision
+                && WorldKnowledgeBefore->Content != WorldKnowledgeAfter->Content,
+            "World snapshot source changes on Actor movement even when actor count does not");
+        Runner.Expect(Actor->SetActorLocation(OriginalLocation),
+            "World snapshot test restores the Actor location");
+    }
     const Pico::FAgentToolResult TypedCatalogResult = AgentTools.Execute(
         {"typed-project-asset-catalog", "editor.asset.describe_catalog", "{}"},
         nullptr);
@@ -2961,6 +2990,21 @@ void TestAgentRoomPlan(FTestRunner& Runner)
     Runner.Expect(StalePreview.bSucceeded && !StaleApply.bSucceeded
             && CountActors() == Before + 1,
         "A changed World invalidates the previewed Room Plan before side effects");
+
+    Pico::FEditorAgentToolExecutor RestartedTools(
+        &EngineLoop, &Selection, &Transactions, &Approval);
+    const auto AfterRestart = RestartedTools.Execute({"ag3-restart-recall",
+        "editor.scene.describe_room_plan", "{}"}, nullptr);
+    const auto AfterRestartJson = nlohmann::json::parse(
+        AfterRestart.OutputJson, nullptr, false);
+    const auto RestartApply = RestartedTools.Execute({"ag3-restart-apply",
+        "editor.scene.apply_room_plan", ApplyArgs.dump()}, nullptr);
+    Runner.Expect(AfterRestart.bSucceeded && AfterRestartJson.is_object()
+            && !AfterRestartJson.value("current", true)
+            && AfterRestartJson.value("plan_hash", "missing").empty()
+            && !RestartApply.bSucceeded
+            && CountActors() == Before + 1,
+        "A new Editor tool instance cannot reuse a prior instance Room Plan or create partial geometry");
 
     EngineLoop.Exit();
 }
